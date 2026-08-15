@@ -578,7 +578,8 @@ impl Root {
 
         self.residual_scanning = true;
         self.residual_result = None;
-        self.status = format!("正在记录「{name}」的关联痕迹，随后运行官方卸载程序…");
+        self.status =
+            format!("已记录「{name}」的关联痕迹，正在等待官方卸载程序结束…");
         self.start_tick(cx);
         cx.notify();
 

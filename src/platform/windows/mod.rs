@@ -2,6 +2,7 @@
 
 pub mod apps;
 pub mod mft;
+pub mod process;
 pub mod recycle;
 pub mod registry;
 pub mod residuals;

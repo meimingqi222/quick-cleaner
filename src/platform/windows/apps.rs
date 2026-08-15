@@ -783,10 +783,44 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
                 .map_err(|e| format!("启动卸载程序失败（{exe}）: {e}"))?
         };
 
-        let _ = child.wait().map_err(|e| format!("等待卸载程序退出失败: {e}"))?;
+        let _ = child
+            .wait()
+            .map_err(|e| format!("等待卸载程序退出失败: {e}"))?;
+
+        // child.wait() 返回不代表卸载完成。绝大多数安装器会把自己复制到
+        // 临时目录、以管理员身份重启，然后原进程立刻退出——于是这里马上
+        // 就返回了，而卸载向导才刚弹出来，残留清理界面就会和它撞在一起。
+        //
+        // 真正的判据是相关进程是否还活着：映像路径在安装目录内的，或者与
+        // 卸载器同名的（Inno 会把 unins000.exe 复制成 unins000.tmp，
+        // 扩展名变了但主名不变）。
+        // 安装目录若是 Program Files 这类公共骨架目录，就不能拿来当判据——
+        // 那样会把一堆无关进程都算成「还在卸载」，一直等到超时。
+        let install_dir = app
+            .install_location
+            .as_ref()
+            .filter(|p| !is_system_root_dir(p))
+            .map(|p| crate::core::safety::norm(p))
+            .filter(|s| s.len() > 3)
+            .unwrap_or_default();
+        let uninstaller_stem = split_command(cmd)
+            .0
+            .rsplit(['\\', '/'])
+            .next()
+            .and_then(|f| f.rsplit_once('.').map(|(s, _)| s.to_lowercase()))
+            .unwrap_or_default();
+
+        crate::platform::windows::process::wait_until_finished(
+            &install_dir,
+            &uninstaller_stem,
+            // 提权重启需要点时间，给足宽限期再判定
+            std::time::Duration::from_secs(5),
+            // 大型软件卸载可能很久；超时只是兜底，不会一直卡住界面
+            std::time::Duration::from_secs(30 * 60),
+        );
+
         Ok(())
     }
-
 }
 
 #[cfg(test)]
