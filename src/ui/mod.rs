@@ -633,6 +633,11 @@ impl Root {
 
         let total_bytes: u64 = items_to_clean.iter().map(|it| it.size()).sum();
         let prog = Arc::new(CleanProgress::new(items_to_clean.len() as u64, total_bytes));
+        // 用来读实际删掉的字节数——按预期值记账会在有删除失败时虚报释放量
+        let progress = prog.clone();
+        // 残留项被全部选中时，这个软件才算真的清干净了，行才能从列表移除
+        let cleaned_everything = items_to_clean.len() == res.items.len();
+        let app_name = res.app_name.clone();
         self.status = format!("正在彻底清除「{}」的 {} 项残留…", res.app_name, items_to_clean.len());
         cx.notify();
 
@@ -643,15 +648,33 @@ impl Root {
         self.residual_task = Some(cx.spawn(async move |this, cx| {
             let report = clean.await;
             this.update(cx, |this, cx| {
-                this.freed_total += total_bytes;
-                this.status = format!(
-                    "已彻底清除「{}」的 {} 项残留，释放 {}",
-                    res.app_name,
-                    report.ok,
-                    fmt_size(total_bytes)
-                );
+                let snap = progress.snapshot();
+                this.freed_total += snap.bytes;
                 this.residual_selected.clear();
-                this.start_apps_scan(cx);
+
+                // 局部更新：软件确实被清干净时，直接把它从内存里的软件表
+                // 摘掉，不再触发一轮完整的注册表枚举 + 全盘安装目录遍历。
+                let removed = cleaned_everything && report.failed.is_empty();
+                if removed {
+                    this.apps.retain(|a| a.name != app_name);
+                    this.apps_gen += 1;
+                }
+
+                this.status = if report.failed.is_empty() {
+                    format!(
+                        "已彻底清除「{}」的 {} 项残留，释放 {}",
+                        app_name,
+                        report.ok,
+                        fmt_size(snap.bytes)
+                    )
+                } else {
+                    format!(
+                        "「{}」清除完成，释放 {}（{} 项被占用或权限不足已跳过）",
+                        app_name,
+                        fmt_size(snap.bytes),
+                        report.failed.len()
+                    )
+                };
                 cx.notify();
             })
             .ok();
