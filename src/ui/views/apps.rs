@@ -231,6 +231,8 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     let search_box = div()
         .id("apps-search-box")
         .track_focus(&root.apps_focus_handle)
+        // 输入处理器所借的 canvas 是绝对定位的，需要这个定位上下文
+        .relative()
         .w(px(240.))
         .h(px(32.))
         .px_3()
@@ -262,7 +264,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                     .hover(|h| h.text_color(rgb(ERROR)))
                     .child("✕")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.apps_search.clear();
+                        this.search_clear();
                         cx.notify();
                     })),
             )
@@ -271,32 +273,44 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             this.apps_focus_handle.focus(window);
             cx.notify();
         }))
+        // 只处理编辑键。字符输入（含输入法组合）全部由 EntityInputHandler
+        // 接管，见 ui::text_input——这里再追加一次会让每个字母输入两遍。
         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-            let key = event.keystroke.key.as_str();
-            match key {
+            match event.keystroke.key.as_str() {
                 "backspace" => {
-                    this.apps_search.pop();
+                    this.search_backspace();
                     cx.notify();
                 }
                 "escape" => {
-                    this.apps_search.clear();
+                    this.search_clear();
                     cx.notify();
                 }
-                "enter" | "tab" => {}
-                _ => {
-                    if let Some(c) = &event.keystroke.key_char {
-                        this.apps_search.push_str(c);
-                        cx.notify();
-                    } else if key.chars().count() == 1 {
-                        let c = key.chars().next().unwrap();
-                        if !c.is_control() {
-                            this.apps_search.push(c);
-                            cx.notify();
-                        }
-                    }
-                }
+                _ => {}
             }
-        }));
+        }))
+        // 把输入处理器挂到焦点上。必须在绘制阶段调用 Window::handle_input，
+        // 所以借一个零尺寸 canvas 拿到 bounds 并在它的 paint 回调里注册。
+        .child(
+            gpui::canvas(
+                move |bounds, _window, _cx| bounds,
+                {
+                    let handle = root.apps_focus_handle.clone();
+                    let entity = cx.entity();
+                    move |_, bounds: gpui::Bounds<gpui::Pixels>, window, cx| {
+                        entity.update(cx, |this, _| {
+                            this.apps_search_bounds = Some(bounds);
+                        });
+                        window.handle_input(
+                            &handle,
+                            gpui::ElementInputHandler::new(bounds, entity.clone()),
+                            cx,
+                        );
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
+        );
 
     let filter_stats_tag = div()
         .px_2()

@@ -1,7 +1,7 @@
 //! Windows 已安装软件注册表枚举与卸载引擎
 
 use crate::core::apps::{
-    parse_cmd_line, parse_install_date, AppRegRoot, InstalledApp,
+    parse_cmd_line, parse_install_date, split_command, AppRegRoot, InstalledApp,
 };
 use crate::core::safety::is_system_root_dir;
 use crate::platform::windows::registry::{from_wide, read_reg_dword, read_reg_string, to_wide};
@@ -203,6 +203,8 @@ fn parse_app_entry(
         registry_root: reg_root,
         registry_subpath: subpath.to_string(),
         is_system_component: false,
+        // 需要先知道最终的卸载命令，统一在 dedup_and_enrich_apps 里判定
+        uninstaller_missing: false,
     })
 }
 
@@ -428,6 +430,32 @@ pub fn extract_app_tokens(name: &str) -> Vec<String> {
         }
     }
     tokens
+}
+
+/// 卸载命令指向的程序是不是已经没了。
+///
+/// 三种情况都算「能跑」：msiexec 走 MSI 数据库、不依赖单个文件；解析出的
+/// 路径确实存在；命令是 winget / powershell 这类靠 PATH 解析的裸命令名。
+fn uninstaller_is_missing(app: &InstalledApp) -> bool {
+    let Some(cmd) = app
+        .quiet_uninstall_string
+        .as_ref()
+        .or(app.uninstall_string.as_ref())
+    else {
+        return true;
+    };
+    if cmd.to_lowercase().contains("msiexec") {
+        return false;
+    }
+    let (exe, _) = split_command(cmd);
+    if exe.is_empty() {
+        return true;
+    }
+    // 不含路径分隔符 = 靠 PATH 解析的命令名，不能按文件存在与否来判断
+    if !exe.contains('\\') && !exe.contains('/') {
+        return false;
+    }
+    !Path::new(&exe).exists()
 }
 
 /// 一趟遍历同时算出安装目录的总体积和「最近被访问过」的时间。
@@ -660,6 +688,8 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
             }
         }
 
+        app.uninstaller_missing = uninstaller_is_missing(app);
+
         if max_used_ts > 0 {
             app.last_used_raw = max_used_ts;
             let dt: chrono::DateTime<chrono::Local> =
@@ -738,15 +768,19 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
                 .spawn()
                 .map_err(|e| format!("启动卸载程序失败: {e}"))?
         } else {
-            let parts = parse_cmd_line(cmd);
-            if parts.is_empty() {
+            // split_command 能正确处理没加引号的带空格路径。按空格切的老办法
+            // 会把 `C:\Program Files\X\unins000.exe` 截成 `C:\Program`，
+            // 本机 145 款软件里有 24 款会因此直接卸载失败。
+            let (exe, args) = split_command(cmd);
+            if exe.is_empty() {
                 return Err("无效的卸载命令".into());
             }
-            let mut c = std::process::Command::new(&parts[0]);
-            for arg in &parts[1..] {
+            let mut c = std::process::Command::new(&exe);
+            for arg in &args {
                 c.arg(arg);
             }
-            c.spawn().map_err(|e| format!("启动卸载程序失败: {e}"))?
+            c.spawn()
+                .map_err(|e| format!("启动卸载程序失败（{exe}）: {e}"))?
         };
 
         let _ = child.wait().map_err(|e| format!("等待卸载程序退出失败: {e}"))?;
@@ -785,5 +819,55 @@ mod tests {
         if let Some(pot) = apps.iter().find(|a| a.name.contains("PotPlayer")) {
             assert!(pot.estimated_size > 0 || pot.last_used_date.is_some() || pot.install_location.is_some());
         }
+    }
+}
+
+#[cfg(test)]
+mod uninstaller_probe {
+    use super::*;
+
+    /// 手动跑：打印某个软件的卸载命令及其可执行文件是否存在。
+    #[test]
+    #[ignore]
+    fn probe_uninstaller() {
+        let kw = std::env::var("QC_APP").unwrap_or_else(|_| "Kiro".into());
+        let live = AtomicBool::new(true);
+        for a in list_installed_apps(&live).iter().filter(|a| a.name.contains(&kw)) {
+            println!("名称: {}", a.name);
+            println!("  UninstallString      : {:?}", a.uninstall_string);
+            println!("  QuietUninstallString : {:?}", a.quiet_uninstall_string);
+            if let Some(u) = &a.uninstall_string {
+                let parts = parse_cmd_line(u);
+                if let Some(exe) = parts.first() {
+                    println!("  解析出的可执行文件   : {exe}");
+                    println!("  该文件是否存在       : {}", Path::new(exe).exists());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod uninstaller_stats {
+    use super::*;
+
+    /// 手动跑：列出卸载器确实失效的软件。
+    #[test]
+    #[ignore]
+    fn count_missing_uninstallers() {
+        let live = AtomicBool::new(true);
+        let apps = list_installed_apps(&live);
+        let broken: Vec<_> = apps.iter().filter(|a| a.uninstaller_missing).collect();
+        for a in &broken {
+            let cmd = a
+                .quiet_uninstall_string
+                .as_ref()
+                .or(a.uninstall_string.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            let (exe, _) = split_command(&cmd);
+            println!("[卸载器失效] {} -> {}", a.name, exe);
+        }
+        println!("共 {} 款，其中卸载器失效 {} 款", apps.len(), broken.len());
     }
 }

@@ -902,6 +902,7 @@ mod tests {
             registry_root: AppRegRoot::Hklm,
             registry_subpath: String::new(),
             is_system_component: false,
+            uninstaller_missing: false,
         }
     }
 

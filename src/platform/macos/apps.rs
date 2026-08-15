@@ -36,6 +36,7 @@ pub fn list_installed_apps(_live: &AtomicBool) -> Vec<InstalledApp> {
                         registry_root: AppRegRoot::SystemApp,
                         registry_subpath: String::new(),
                         is_system_component: false,
+                        uninstaller_missing: false,
                     });
                 }
             }

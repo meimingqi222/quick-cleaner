@@ -44,6 +44,12 @@ pub struct InstalledApp {
     pub registry_root: AppRegRoot,
     pub registry_subpath: String,
     pub is_system_component: bool,
+    /// 卸载命令指向的可执行文件已经不存在。
+    ///
+    /// 这类软件在「程序和功能」里点卸载同样会失败，是真正意义上的
+    /// 「无官方卸载器」，只能靠强力清理。枚举时算一次，避免渲染时反复
+    /// 碰磁盘。
+    pub uninstaller_missing: bool,
 }
 
 /// 排序字段
@@ -149,7 +155,7 @@ impl AppFilterPreset {
             AppFilterPreset::All => "全部软件",
             AppFilterPreset::Large => "大型软件 (>500MB)",
             AppFilterPreset::Recent => "有安装日期",
-            AppFilterPreset::Orphan => "无官方卸载器",
+            AppFilterPreset::Orphan => "卸载器失效",
         }
     }
 
@@ -159,8 +165,11 @@ impl AppFilterPreset {
             AppFilterPreset::All => true,
             AppFilterPreset::Large => app.estimated_size >= 500 * 1024 * 1024,
             AppFilterPreset::Recent => app.install_date.is_some(),
+            // 光看「有没有卸载命令」没有意义——注册表里几乎每一项都有。
+            // 真正需要关注的是命令跑不起来的：可执行文件已经没了。
             AppFilterPreset::Orphan => {
-                app.uninstall_string.is_none() && app.quiet_uninstall_string.is_none()
+                (app.uninstall_string.is_none() && app.quiet_uninstall_string.is_none())
+                    || app.uninstaller_missing
             }
         }
     }
@@ -404,6 +413,72 @@ pub fn is_safe_app_token(name: &str) -> bool {
     !BLACKLIST.contains(&lower.as_str())
 }
 
+/// 把命令行拆成 (可执行文件, 参数)。
+///
+/// 注册表里的 `UninstallString` **经常不给路径加引号**，比如
+/// `C:\Program Files\DAUM\PotPlayer\unins000.exe /SILENT`。按空格切会得到
+/// `C:\Program`，于是卸载直接跑不起来——本机 145 款软件里有 24 款中招。
+///
+/// Windows 自己的处理办法是：从左往右逐段拼接，第一个「拼出来确实存在
+/// 的文件」就是可执行文件，其余算参数。带引号的路径按引号切，最省事。
+///
+/// `exists` 注入是为了可测试——生产用 [`split_command`]。
+pub fn split_command_with(cmd: &str, exists: impl Fn(&str) -> bool) -> (String, Vec<String>) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    // 带引号：优先按引号边界切
+    if let Some(rest) = cmd.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            let exe = &rest[..end];
+            // 但有些厂商会把「程序 + 参数」整条塞进一对引号里
+            // （联想应用商店就是 `"...\StoreUninstaller.exe /SLIENT"`）。
+            // 判据是引号内容**是否以可执行扩展名结尾**：格式正确的路径
+            // 一定以 .exe/.bat 之类收尾，把参数也包进来的则不会。
+            // 只用「文件是否存在」判断不行——卸载器真的丢失时也会落到
+            // 错误分支，把好好的路径切碎。
+            if exists(exe) || ends_with_executable_ext(exe) {
+                return (exe.to_string(), parse_cmd_line(rest[end + 1..].trim()));
+            }
+        }
+    }
+
+    // 不带引号（或引号内混着参数）：逐段延长，直到拼出一个真实存在的文件
+    let cmd = cmd.trim_matches('"');
+    let tokens: Vec<&str> = cmd.split(' ').filter(|t| !t.is_empty()).collect();
+    for take in 1..=tokens.len() {
+        let candidate = tokens[..take].join(" ");
+        if exists(&candidate) {
+            let args = tokens[take..].iter().map(|s| s.to_string()).collect();
+            return (candidate, args);
+        }
+    }
+
+    // 都不存在（例如 winget / powershell 这类靠 PATH 解析的命令），
+    // 退回「第一段是命令」的常规解释
+    let exe = tokens.first().copied().unwrap_or("").to_string();
+    let args = tokens[1.min(tokens.len())..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    (exe, args)
+}
+
+/// 是否以 Windows 可执行文件扩展名结尾。
+fn ends_with_executable_ext(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    [".exe", ".com", ".bat", ".cmd", ".msi", ".scr", ".ps1"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// [`split_command_with`] 的生产版本：用真实文件系统判断存在性。
+pub fn split_command(cmd: &str) -> (String, Vec<String>) {
+    split_command_with(cmd, |p| std::path::Path::new(p).exists())
+}
+
 /// 解析命令行参数
 pub fn parse_cmd_line(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -489,6 +564,7 @@ mod tests {
             registry_root: AppRegRoot::Hklm,
             registry_subpath: String::new(),
             is_system_component: false,
+            uninstaller_missing: false,
         }
     }
 
@@ -596,5 +672,101 @@ mod tests {
         assert_eq!(f.size(), 1024);
         assert_eq!(d.size(), 2048);
         assert_eq!(rk.size(), 0);
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    /// 未加引号的带空格路径必须整段识别出来。
+    ///
+    /// 这是让本机 24 款软件卸载失败的根因：按空格切会得到 `C:\Program`。
+    #[test]
+    fn unquoted_path_with_spaces_is_recovered() {
+        let cmd = r"C:\Program Files\DAUM\PotPlayer\unins000.exe /SILENT";
+        let real = r"C:\Program Files\DAUM\PotPlayer\unins000.exe";
+        let (exe, args) = split_command_with(cmd, |p| p == real);
+        assert_eq!(exe, real);
+        assert_eq!(args, vec!["/SILENT"]);
+    }
+
+    #[test]
+    fn quoted_path_is_split_on_quotes() {
+        let cmd = r#""C:\Program Files\Foo\unins.exe" /S /NORESTART"#;
+        let (exe, args) = split_command_with(cmd, |_| false);
+        assert_eq!(exe, r"C:\Program Files\Foo\unins.exe");
+        assert_eq!(args, vec!["/S", "/NORESTART"]);
+    }
+
+    /// winget / powershell 这类靠 PATH 解析的裸命令名，文件系统里查不到，
+    /// 必须退回「第一段是命令」而不是把整行当成路径。
+    #[test]
+    fn bare_command_falls_back_to_first_token() {
+        let (exe, args) = split_command_with("winget uninstall --id Foo", |_| false);
+        assert_eq!(exe, "winget");
+        assert_eq!(args, vec!["uninstall", "--id", "Foo"]);
+    }
+
+    #[test]
+    fn no_args_is_handled() {
+        let real = r"C:\Foo\unins.exe";
+        let (exe, args) = split_command_with(real, |p| p == real);
+        assert_eq!(exe, real);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn empty_command_yields_nothing() {
+        let (exe, args) = split_command_with("   ", |_| true);
+        assert!(exe.is_empty());
+        assert!(args.is_empty());
+    }
+
+    /// 短前缀和长前缀都存在时取**短**的——与 Windows 从左往右
+    /// 取第一个命中的解析规则一致，否则会把参数吃进路径里。
+    #[test]
+    fn shortest_existing_prefix_wins() {
+        let short = r"C:\Foo.exe";
+        let long = r"C:\Foo.exe bar";
+        let (exe, args) = split_command_with(
+            r"C:\Foo.exe bar --flag",
+            |p| p == short || p == long,
+        );
+        assert_eq!(exe, short);
+        assert_eq!(args, vec!["bar", "--flag"]);
+    }
+
+    /// 带空格的路径不存在时不能误判：应退回第一段，而不是把整行当路径。
+    #[test]
+    fn nonexistent_path_does_not_swallow_arguments() {
+        let (exe, args) = split_command_with(r"C:\Gone\unins.exe /S", |_| false);
+        assert_eq!(exe, r"C:\Gone\unins.exe");
+        assert_eq!(args, vec!["/S"]);
+    }
+}
+
+#[cfg(test)]
+mod quoted_command_tests {
+    use super::*;
+
+    /// 厂商把「程序 + 参数」整条塞进一对引号里（联想应用商店的真实写法）。
+    /// 引号内容不是真实文件，必须继续切分，否则会误报「卸载器不存在」。
+    #[test]
+    fn quotes_wrapping_whole_command_are_split_further() {
+        let real = r"C:\Program Files (x86)\Lenovo\LeAppStore\StoreUninstaller.exe";
+        let cmd = format!(r#""{real} /SLIENT""#);
+        let (exe, args) = split_command_with(&cmd, |p| p == real);
+        assert_eq!(exe, real);
+        assert_eq!(args, vec!["/SLIENT"]);
+    }
+
+    /// 正常的引号写法不受影响：即使文件当前不存在也按引号切。
+    #[test]
+    fn well_formed_quotes_still_win_when_file_is_gone() {
+        let cmd = r#""C:\Gone\unins 2.exe" /S"#;
+        let (exe, args) = split_command_with(cmd, |_| false);
+        assert_eq!(exe, r"C:\Gone\unins 2.exe");
+        assert_eq!(args, vec!["/S"]);
     }
 }

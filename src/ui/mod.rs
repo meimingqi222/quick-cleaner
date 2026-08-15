@@ -1,6 +1,7 @@
 //! GPUI 界面根视图与状态管理
 
 pub mod components;
+pub mod text_input;
 pub mod theme;
 pub mod views;
 
@@ -71,6 +72,12 @@ pub struct Root {
     pub apps_sort: AppSortState,
     pub apps_preset: AppFilterPreset,
     pub apps_search: String,
+    /// 搜索框光标/选区的**字节**范围
+    pub apps_search_sel: std::ops::Range<usize>,
+    /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
+    pub apps_search_marked: Option<std::ops::Range<usize>>,
+    /// 搜索框最近一次绘制的位置，用来定位输入法候选窗口
+    pub apps_search_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 软件表每次被整体替换就自增，用来判定渲染缓存是否失效
     pub apps_gen: u64,
     /// 过滤 + 排序后的 `apps` 下标，渲染直接读这里
@@ -176,6 +183,9 @@ impl Root {
             apps_sort: AppSortState::default(),
             apps_preset: AppFilterPreset::All,
             apps_search: String::new(),
+            apps_search_sel: 0..0,
+            apps_search_marked: None,
+            apps_search_bounds: None,
             apps_gen: 0,
             apps_view: Vec::new(),
             apps_view_key: None,
