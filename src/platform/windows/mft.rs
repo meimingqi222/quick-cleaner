@@ -297,7 +297,7 @@ impl MftTree {
         // 沿父链向上一路扣减各级祖先目录的大小和计数
         let mut cur = self.entries[idx as usize].parent;
         let mut visited = 0;
-        while cur != idx && self.valid(cur) && visited < 1000 {
+        while cur != idx && self.valid(cur) && visited < MAX_DEPTH {
             visited += 1;
             let ci = cur as usize;
             if ci < self.dir_size.len() {
@@ -924,6 +924,9 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
                 break 'outer;
             }
             let remain = run_bytes - done;
+            // 按 MFT 记录（1024 字节）对齐读取。标准 NTFS 簇大小 ≥4KB，
+            // 每一个 run 的字节数必然是簇大小的整数倍，因而也是 1024 的整数倍；
+            // 单条记录不会跨越物理 run 边界，entries.len() 可安全作为连续记录号。
             let want = (CHUNK_BYTES as u64).min(remain) / rec_size as u64 * rec_size as u64;
             if want == 0 {
                 break;

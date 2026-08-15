@@ -174,7 +174,10 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
                 }
             }
         }
-        Err(_) => return CleanResult::Failed,
+        Err(_) => {
+            p.failed.fetch_add(1, Ordering::Relaxed);
+            return CleanResult::Failed;
+        }
     }
 
     let files_failed = files

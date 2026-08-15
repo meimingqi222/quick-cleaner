@@ -11,8 +11,11 @@ actions!(quick_cleaner, [Quit]);
 
 fn main() {
     #[cfg(windows)]
-    if !std::env::args().any(|a| a == "--no-elevate") {
-        quick_cleaner::platform::relaunch_as_admin_if_needed();
+    {
+        quick_cleaner::platform::windows::init_user_context();
+        if !std::env::args().any(|a| a == "--no-elevate") {
+            quick_cleaner::platform::relaunch_as_admin_if_needed();
+        }
     }
 
     Application::new().run(move |cx: &mut App| {

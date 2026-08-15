@@ -19,6 +19,8 @@ pub fn from_wide(w: &[u16]) -> String {
 }
 
 pub fn read_reg_string(h_key: HKEY, value_name: &str) -> Option<String> {
+    use winapi::shared::winerror::ERROR_MORE_DATA;
+
     let wide_val = to_wide(value_name);
     let mut buf = [0u16; 1024];
     let mut buf_size = (buf.len() * 2) as DWORD;
@@ -36,6 +38,23 @@ pub fn read_reg_string(h_key: HKEY, value_name: &str) -> Option<String> {
 
         if res as u32 == ERROR_SUCCESS {
             Some(from_wide(&buf[..(buf_size as usize / 2)]))
+        } else if res as u32 == ERROR_MORE_DATA {
+            // 超长字符串（如超长 UninstallString 或复杂命令行）：按系统返回的实际字节数动态扩容
+            let words = (buf_size as usize + 1) / 2;
+            let mut dyn_buf = vec![0u16; words];
+            let res2 = RegQueryValueExW(
+                h_key,
+                wide_val.as_ptr(),
+                std::ptr::null_mut(),
+                &mut val_type,
+                dyn_buf.as_mut_ptr() as *mut _,
+                &mut buf_size,
+            );
+            if res2 as u32 == ERROR_SUCCESS {
+                Some(from_wide(&dyn_buf[..(buf_size as usize / 2)]))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -126,7 +145,7 @@ pub fn enum_subkeys(root: HKEY, subpath: &str, sam: DWORD) -> Vec<String> {
 /// 非字符串类型的值会被跳过——残留判定全部基于路径文本匹配，
 /// 二进制值没有参考价值。
 pub fn enum_string_values(root: HKEY, subpath: &str, sam: DWORD) -> Vec<(String, String)> {
-    use winapi::shared::winerror::ERROR_NO_MORE_ITEMS;
+    use winapi::shared::winerror::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS};
     use winapi::um::winnt::{KEY_QUERY_VALUE, REG_EXPAND_SZ, REG_SZ};
     use winapi::um::winreg::{RegCloseKey, RegEnumValueW, RegOpenKeyExW};
 
@@ -161,13 +180,34 @@ pub fn enum_string_values(root: HKEY, subpath: &str, sam: DWORD) -> Vec<(String,
             if res as u32 == ERROR_NO_MORE_ITEMS {
                 break;
             }
-            if res as u32 != ERROR_SUCCESS {
-                break;
-            }
-            if val_type == REG_SZ || val_type == REG_EXPAND_SZ {
-                let name = from_wide(&name_buf[..name_len as usize]);
-                let data = from_wide(&data_buf[..(data_len as usize / 2).min(data_buf.len())]);
-                out.push((name, data));
+            if res as u32 == ERROR_SUCCESS {
+                if val_type == REG_SZ || val_type == REG_EXPAND_SZ {
+                    let name = from_wide(&name_buf[..name_len as usize]);
+                    let data = from_wide(&data_buf[..(data_len as usize / 2).min(data_buf.len())]);
+                    out.push((name, data));
+                }
+            } else if res as u32 == ERROR_MORE_DATA {
+                // 超长注册表值（如 Windows 防火墙长规则）：动态扩容当前条目缓冲区重试，
+                // 即使单项失败也绝不中断 loop，确保后续条目继续被枚举。
+                let dyn_words = ((data_len as usize + 1) / 2).max(8192);
+                let mut dyn_data_buf = vec![0u16; dyn_words];
+                let mut dyn_data_len = (dyn_data_buf.len() * 2) as DWORD;
+                name_len = name_buf.len() as DWORD;
+                let retry_res = RegEnumValueW(
+                    h,
+                    idx,
+                    name_buf.as_mut_ptr(),
+                    &mut name_len,
+                    std::ptr::null_mut(),
+                    &mut val_type,
+                    dyn_data_buf.as_mut_ptr() as *mut u8,
+                    &mut dyn_data_len,
+                );
+                if retry_res as u32 == ERROR_SUCCESS && (val_type == REG_SZ || val_type == REG_EXPAND_SZ) {
+                    let name = from_wide(&name_buf[..name_len as usize]);
+                    let data = from_wide(&dyn_data_buf[..(dyn_data_len as usize / 2).min(dyn_data_buf.len())]);
+                    out.push((name, data));
+                }
             }
             idx += 1;
         }

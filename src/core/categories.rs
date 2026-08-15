@@ -205,13 +205,17 @@ pub struct ScanTarget {
 
 /// 返回所有类别对应的扫描目标（支持跨平台）。
 pub fn all_targets() -> Vec<ScanTarget> {
+    #[cfg(windows)]
+    let home = crate::platform::windows::real_user_home().to_path_buf();
+    #[cfg(not(windows))]
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+
     let mut t: Vec<ScanTarget> = Vec::new();
 
     #[cfg(windows)]
     {
-        let local = dirs::cache_dir().unwrap_or_else(|| home.join("AppData\\Local"));
-        let roaming = dirs::data_dir().unwrap_or_else(|| home.join("AppData\\Roaming"));
+        let local = crate::platform::windows::real_user_local_appdata();
+        let roaming = crate::platform::windows::real_user_roaming_appdata();
         let windows = PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()));
 
         // 系统临时
@@ -220,15 +224,14 @@ pub fn all_targets() -> Vec<ScanTarget> {
         t.push(target(windows.join("SystemTemp"), "SystemTemp", CategoryId::SystemTemp));
         t.push(target(PathBuf::from("C:\\tmp"), "C:\\tmp", CategoryId::SystemTemp));
 
-        // 用户临时
-        t.push(target(std::env::temp_dir(), "%TEMP%", CategoryId::UserTemp));
+        // 用户临时（精确锚定真实前台用户）
+        t.push(target(crate::platform::windows::real_user_temp(), "%TEMP%", CategoryId::UserTemp));
         t.push(target(local.join("CrashDumps"), "CrashDumps 崩溃转储", CategoryId::UserTemp));
 
-        // 浏览器缓存
-        t.push(target(local.join("Google\\Chrome\\User Data\\Default\\Cache"), "Chrome 缓存", CategoryId::BrowserCache));
-        t.push(target(local.join("Google\\Chrome\\User Data\\Default\\Code Cache"), "Chrome Code Cache", CategoryId::BrowserCache));
-        t.push(target(local.join("Microsoft\\Edge\\User Data\\Default\\Cache"), "Edge 缓存", CategoryId::BrowserCache));
-        t.push(target(local.join("Microsoft\\Edge\\User Data\\Default\\Code Cache"), "Edge Code Cache", CategoryId::BrowserCache));
+        // 浏览器缓存（全量覆盖 Default 及所有 Profile 1, Profile 2 ... 配置文件）
+        push_chromium_browser_targets(&mut t, &local.join("Google\\Chrome\\User Data"), "Chrome");
+        push_chromium_browser_targets(&mut t, &local.join("Microsoft\\Edge\\User Data"), "Edge");
+        push_chromium_browser_targets(&mut t, &local.join("BraveSoftware\\Brave-Browser\\User Data"), "Brave");
 
         // 包管理缓存
         t.push(target(local.join("npm-cache"), "npm 缓存", CategoryId::PackageCache));
@@ -249,14 +252,10 @@ pub fn all_targets() -> Vec<ScanTarget> {
 
         // 日志
         t.push(target(windows.join("Logs"), "Windows\\Logs", CategoryId::Logs));
-        // 注意：曾经这里还有 System32\LogFiles 与 System32\winevt\Logs。
-        // 它们位于 System32 这棵受保护子树内，清理时每个子项都会被安全
-        // 规则拦下——界面上显示「可清理 N MB」却一个字节也删不掉。
-        // 事件日志本身也被 Event Log 服务独占，删不动。已移除。
         t.push(target(local.join("D3DSCache"), "D3D 着色器缓存", CategoryId::Logs));
 
-        // 回收站（只统计当前用户自己的 SID 子目录）
-        if let Some(sid) = crate::platform::windows::security::current_user_sid() {
+        // 回收站（只统计真实前台用户自己的 SID 子目录）
+        if let Some(sid) = crate::platform::windows::real_user_sid() {
             for letter in 'A'..='Z' {
                 let rb = PathBuf::from(format!("{letter}:\\$Recycle.Bin")).join(&sid);
                 if rb.exists() {
@@ -304,6 +303,41 @@ pub fn all_targets() -> Vec<ScanTarget> {
     }
 
     t
+}
+
+#[cfg(windows)]
+fn push_chromium_browser_targets(
+    t: &mut Vec<ScanTarget>,
+    user_data_dir: &std::path::Path,
+    browser_name: &str,
+) {
+    if !user_data_dir.exists() {
+        return;
+    }
+    // 1. 常规默认 profile
+    let default_cache = user_data_dir.join("Default\\Cache");
+    let default_code_cache = user_data_dir.join("Default\\Code Cache");
+    t.push(target(default_cache, &format!("{browser_name} 缓存"), CategoryId::BrowserCache));
+    t.push(target(default_code_cache, &format!("{browser_name} Code Cache"), CategoryId::BrowserCache));
+
+    // 2. 动态枚举多用户 Profile（如 Profile 1, Profile 2, System Profile 等）
+    if let Ok(entries) = std::fs::read_dir(user_data_dir) {
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if !ft.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name != "Default" && (name.starts_with("Profile ") || name == "Guest Profile" || name == "System Profile") {
+                let cache = entry.path().join("Cache");
+                let code_cache = entry.path().join("Code Cache");
+                if cache.exists() || code_cache.exists() {
+                    t.push(target(cache, &format!("{browser_name} 缓存 ({name})"), CategoryId::BrowserCache));
+                    t.push(target(code_cache, &format!("{browser_name} Code Cache ({name})"), CategoryId::BrowserCache));
+                }
+            }
+        }
+    }
 }
 
 /// CLI 型 agent：`~/.<目录>` 下可安全清理的子目录。

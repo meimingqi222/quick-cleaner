@@ -80,6 +80,40 @@ pub fn current_user_sid() -> Option<String> {
     }
 }
 
+/// 符合 Windows `CommandLineToArgvW` 规范的参数转义
+pub fn quote_win_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '\x0b', '\"']) {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        if c == '\\' {
+            backslashes += 1;
+        } else if c == '"' {
+            // 紧随双引号前的反斜杠需要翻倍，外加转义双引号本身的一记反斜杠
+            for _ in 0..backslashes * 2 + 1 {
+                out.push('\\');
+            }
+            out.push('"');
+            backslashes = 0;
+        } else {
+            for _ in 0..backslashes {
+                out.push('\\');
+            }
+            out.push(c);
+            backslashes = 0;
+        }
+    }
+    // 结尾若有反斜杠，在闭合双引号前也需翻倍
+    for _ in 0..backslashes * 2 {
+        out.push('\\');
+    }
+    out.push('"');
+    out
+}
+
 /// 若当前未提权，通过 Windows UAC (runas) 自重启当前进程并退出当前无权限进程。
 /// 若提权成功，返回 true；若用户取消或提权失败，返回 false。
 pub fn relaunch_as_admin_if_needed() -> bool {
@@ -105,16 +139,26 @@ pub fn relaunch_as_admin_if_needed() -> bool {
         .chain(std::iter::once(0))
         .collect();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+
+    // 跨账户提权（OTS）支持：提权前捕获真实前台用户的目录与 SID，
+    // 传递给提权子进程，防止提权后路径错位指向管理员 Profile。
+    if !args.iter().any(|a| a == "--orig-user-home") {
+        if let Some(home) = dirs::home_dir().or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)) {
+            args.push("--orig-user-home".into());
+            args.push(home.to_string_lossy().to_string());
+        }
+    }
+    if !args.iter().any(|a| a == "--orig-user-sid") {
+        if let Some(sid) = current_user_sid() {
+            args.push("--orig-user-sid".into());
+            args.push(sid);
+        }
+    }
+
     let args_str = args
         .iter()
-        .map(|a| {
-            if a.contains(' ') || a.contains('\t') || a.contains('"') {
-                format!("\"{}\"", a.replace('"', "\\\""))
-            } else {
-                a.clone()
-            }
-        })
+        .map(|a| quote_win_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
     let args_wide: Vec<u16> = std::ffi::OsStr::new(&args_str)
@@ -141,5 +185,30 @@ pub fn relaunch_as_admin_if_needed() -> bool {
         std::process::exit(0);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_quote_win_arg_simple() {
+        assert_eq!(quote_win_arg("hello"), "hello");
+        assert_eq!(quote_win_arg("--no-elevate"), "--no-elevate");
+    }
+
+    #[test]
+    fn test_quote_win_arg_with_spaces() {
+        assert_eq!(quote_win_arg("hello world"), "\"hello world\"");
+        assert_eq!(quote_win_arg("C:\\Program Files\\App"), "\"C:\\Program Files\\App\"");
+    }
+
+    #[test]
+    fn test_quote_win_arg_with_quotes_and_slashes() {
+        assert_eq!(quote_win_arg("a\"b"), "\"a\\\"b\"");
+        assert_eq!(quote_win_arg("a\\\"b"), "\"a\\\\\\\"b\"");
+        assert_eq!(quote_win_arg("C:\\dir\\"), "C:\\dir\\");
+        assert_eq!(quote_win_arg("C:\\dir with spaces\\"), "\"C:\\dir with spaces\\\\\"");
+    }
 }
 

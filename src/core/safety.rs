@@ -66,17 +66,27 @@ const HOME_EXACT: &[&str] = &[
 struct Guards {
     /// 归一化后的 %SystemRoot%，如 `c:\windows`
     windows: String,
-    /// 归一化后的用户主目录，如 `c:\users\alice`
+    /// 归一化后的当前进程用户主目录，如 `c:\users\administrator`
     home: Option<String>,
+    /// 归一化后的真实前台操作用户主目录（跨账户提权时为原登录用户，如 `c:\users\alice`）
+    orig_home: Option<String>,
 }
 
 fn guards() -> &'static Guards {
     static GUARDS: OnceLock<Guards> = OnceLock::new();
-    GUARDS.get_or_init(|| Guards {
-        windows: norm_str(
-            &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
-        ),
-        home: dirs::home_dir().map(|h| norm(&h)),
+    GUARDS.get_or_init(|| {
+        #[cfg(windows)]
+        let orig_home = Some(norm(crate::platform::windows::real_user_home()));
+        #[cfg(not(windows))]
+        let orig_home = None;
+
+        Guards {
+            windows: norm_str(
+                &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
+            ),
+            home: dirs::home_dir().map(|h| norm(&h)),
+            orig_home,
+        }
     })
 }
 
@@ -191,14 +201,21 @@ pub fn is_protected(path: &Path) -> bool {
         }
     }
 
-    // ---- 用户主目录锚定 ----
-    if let Some(home) = &g.home {
-        if at_or_under(&lower, home) {
-            let rest = &lower[home.len()..];
-            if HOME_EXACT.contains(&rest) {
-                return true;
+    // ---- 用户主目录锚定（同时严格保护当前进程 Home 与真实前台用户 Home） ----
+    let check_home = |home_opt: &Option<String>| -> bool {
+        if let Some(home) = home_opt {
+            if at_or_under(&lower, home) {
+                let rest = &lower[home.len()..];
+                if HOME_EXACT.contains(&rest) {
+                    return true;
+                }
             }
         }
+        false
+    };
+
+    if check_home(&g.home) || check_home(&g.orig_home) {
+        return true;
     }
 
     false
