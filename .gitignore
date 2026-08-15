@@ -1,0 +1,7 @@
+/target
+
+# WizTree 导出的基准数据（单个文件数百 MB，只作本地正确性比对用）
+WizTree_*.csv
+
+# 误创建的无关目录（某次带 -InstallDir 参数的命令留下的产物）
+-InstallDir/

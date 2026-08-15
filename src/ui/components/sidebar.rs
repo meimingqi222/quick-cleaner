@@ -1,0 +1,224 @@
+//! 侧边栏导航控件 (CleanFlow / Modern macOS & Windows 11 设计风格)
+
+use crate::ui::components::icons::*;
+use crate::ui::theme::*;
+use crate::ui::Root;
+use gpui::{
+    div, linear_gradient, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString,
+};
+
+/// 主区域当前显示哪个视图
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    Dashboard,
+    Junk,
+    Apps,
+    Disk,
+}
+
+impl View {
+    pub const ALL: [View; 4] = [View::Dashboard, View::Junk, View::Apps, View::Disk];
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            View::Dashboard => "概览扫描",
+            View::Junk => "系统垃圾",
+            View::Apps => "软件管理",
+            View::Disk => "磁盘透镜",
+        }
+    }
+
+    pub fn render_icon(&self, fg: u32) -> AnyElement {
+        match self {
+            View::Dashboard => icon_dashboard(fg, 18.),
+            View::Junk => icon_trash(fg, 18.),
+            View::Apps => icon_apps(fg, 18.),
+            View::Disk => icon_disk(fg, 18.),
+        }
+    }
+}
+
+pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
+    let current = root.view;
+
+    let nav_item = |v: View, cx: &mut Context<Root>| {
+        let active = current == v;
+        let fg_color = if active { PRIMARY } else { MUTED };
+
+        div()
+            .id(SharedString::from(format!("nav-{}", v.title())))
+            .h(px(44.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .rounded_xl()
+            .cursor_pointer()
+            .when(active, |d| {
+                d.bg(rgb(PRIMARY_FIXED))
+                    .border_l_4()
+                    .border_color(rgb(PRIMARY))
+            })
+            .when(!active, |d| {
+                d.hover(|h| h.bg(rgb(SURF_LOW)))
+            })
+            .child(
+                div()
+                    .w(px(24.))
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(v.render_icon(fg_color)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .font_weight(if active {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::MEDIUM
+                    })
+                    .text_color(rgb(fg_color))
+                    .child(v.title()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.view = v;
+                if v == View::Disk && this.mft.is_none() && this.mft_error.is_none() {
+                    this.start_mft_scan(cx);
+                }
+                if v == View::Apps && !this.apps_scanned && !this.apps_scanning {
+                    this.start_apps_scan(cx);
+                }
+                cx.notify();
+            }))
+    };
+
+    let items: Vec<gpui::AnyElement> = View::ALL
+        .into_iter()
+        .map(|v| nav_item(v, cx).into_any_element())
+        .collect();
+
+    div()
+        .w(px(240.))
+        .flex_none()
+        .h_full()
+        .bg(rgb(BG))
+        .border_r_1()
+        .border_color(rgba(OUTLINE_VAR, 0.5))
+        .flex()
+        .flex_col()
+        .justify_between()
+        // 顶部品牌与导航
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .p_4()
+                // 品牌区
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_2()
+                        .py_2()
+                        .child(
+                            div()
+                                .w(px(38.))
+                                .h(px(38.))
+                                .flex_none()
+                                .rounded_xl()
+                                .bg(linear_gradient(
+                                    135.,
+                                    gpui::linear_color_stop(rgb(PRIMARY_BRIGHT), 0.),
+                                    gpui::linear_color_stop(rgb(PRIMARY), 1.),
+                                ))
+                                .shadow_sm()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon_sparkle(ON_PRIMARY, 20.)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child("QuickCleaner"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(OUTLINE))
+                                        .child("极速磁盘与软件清理"),
+                                ),
+                        ),
+                )
+                // 导航项列表
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(items),
+                ),
+        )
+        // 底栏统计与辅助信息
+        .child(
+            div()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .border_t_1()
+                .border_color(rgba(OUTLINE_VAR, 0.4))
+                .child(
+                    div()
+                        .px_3()
+                        .py_3()
+                        .rounded_xl()
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgba(OUTLINE_VAR, 0.4))
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .rounded_lg()
+                                .bg(rgb(PRIMARY_FIXED))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon_sparkle(PRIMARY, 16.)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("本次已释放空间"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(PRIMARY))
+                                        .child(crate::core::model::fmt_size(root.freed_total)),
+                                ),
+                        ),
+                ),
+        )
+}
