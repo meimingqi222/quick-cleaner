@@ -10,6 +10,11 @@ use quick_cleaner::ui::Root;
 actions!(quick_cleaner, [Quit]);
 
 fn main() {
+    #[cfg(windows)]
+    if !std::env::args().any(|a| a == "--no-elevate") {
+        quick_cleaner::platform::relaunch_as_admin_if_needed();
+    }
+
     Application::new().run(move |cx: &mut App| {
         #[cfg(not(target_os = "macos"))]
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);

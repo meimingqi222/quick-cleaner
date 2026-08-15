@@ -28,3 +28,8 @@ pub fn scan_volume(_vol: char, _top_n: usize) -> Result<MftScan, MftError> {
 pub fn get_volume_space(_vol: char) -> Option<(u64, u64)> {
     None
 }
+
+pub fn relaunch_as_admin_if_needed() -> bool {
+    true
+}
+

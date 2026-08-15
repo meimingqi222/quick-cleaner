@@ -14,4 +14,4 @@ pub use mft::{scan_volume, MftError, MftTree};
 pub use volume::{get_volume_space, list_ntfs_volumes};
 pub use recycle::{empty_recycle_bin, is_recycle_bin, is_recycle_junk_entry, sweep_orphaned_recycle};
 pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
-pub use security::{current_user_sid, is_elevated};
+pub use security::{current_user_sid, is_elevated, relaunch_as_admin_if_needed};

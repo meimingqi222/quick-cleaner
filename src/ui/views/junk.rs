@@ -127,13 +127,14 @@ fn render_category_items(
         .relative()
         .h(px(list_h))
         .border_t_1()
-        .border_color(rgba(OUTLINE_VAR, 0.3))
+        .border_color(rgba(OUTLINE_VAR, 0.4))
+        .bg(rgb(CARD))
         .child(list)
         .children(bar)
         .into_any_element()
 }
 
-/// 展开区里的单行条目。
+/// 展开区里的单行条目（统一纯净背景、行底微分割线、整行可点交互）
 #[allow(clippy::too_many_arguments)]
 fn item_row(
     idx: usize,
@@ -146,7 +147,6 @@ fn item_row(
     cx: &mut Context<Root>,
 ) -> AnyElement {
     let dim = size == 0;
-    let is_even = idx % 2 == 0;
     let toggle_path = path.clone();
 
     div()
@@ -157,18 +157,20 @@ fn item_row(
         .items_center()
         .gap_3()
         .px_5()
-        .bg(if is_even { rgb(CARD) } else { rgb(SURF_LOW) })
-        .hover(|h| h.bg(rgb(SURF)))
+        .bg(rgb(CARD))
+        .hover(|h| h.bg(rgb(SURF_LOW)))
+        .cursor_pointer()
+        .border_b_1()
+        .border_color(rgba(OUTLINE_VAR, 0.25))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_item(&toggle_path);
+            cx.notify();
+        }))
         .child(
             div()
                 .id(SharedString::from(format!("cb-item-{idx}")))
                 .flex_none()
-                .cursor_pointer()
-                .child(checkbox(if checked { Check::On } else { Check::Off }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_item(&toggle_path);
-                    cx.notify();
-                })),
+                .child(checkbox(if checked { Check::On } else { Check::Off })),
         )
         .child(
             div()
@@ -179,26 +181,32 @@ fn item_row(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(TEXT))
                         .child(label),
                 )
                 .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text)),
         )
         .child(right_cell(
-            70.,
+            85.,
             if file_count > 0 {
                 format!("{} 个文件", commas(file_count))
             } else {
-                String::from("0")
+                String::from("—")
             },
             OUTLINE,
             false,
         ))
         .child(right_cell(
-            85.,
+            95.,
             if size > 0 { fmt_size(size) } else { String::from("0 B") },
-            if dim { OUTLINE } else { TEXT },
+            if dim {
+                OUTLINE
+            } else if size >= 1024 * 1024 * 1024 {
+                PRIMARY
+            } else {
+                TEXT
+            },
             !dim,
         ))
         .into_any_element()
@@ -462,7 +470,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(ERROR))
                                 .child(format!(
-                                    "⚠️ 上次清理有 {} 处项目被占用或受系统保护而安全跳过",
+                                    "上次清理有 {} 处项目被占用或受系统保护而跳过",
                                     root.last_failed.len()
                                 )),
                         )
@@ -628,7 +636,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                             if root.cleaning {
                                 String::from("清理中…")
                             } else {
-                                String::from("✨ 立即清理")
+                                String::from("立即清理")
                             },
                             enabled,
                         ))

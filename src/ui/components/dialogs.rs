@@ -1,9 +1,10 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
 use crate::core::model::{fmt_size, Check};
-use crate::ui::components::buttons::{danger_button, ghost_button};
+use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
+use crate::ui::components::icons::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, SharedString};
@@ -29,7 +30,7 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
         .absolute()
         .inset_0()
         .occlude()
-        .bg(rgba(0x000000, 0.35))
+        .bg(rgba(0x000000, 0.45))
         .flex()
         .items_center()
         .justify_center()
@@ -46,18 +47,7 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(
-                            div()
-                                .w(px(36.))
-                                .h(px(36.))
-                                .flex_none()
-                                .rounded_full()
-                                .bg(rgb(ERROR_CONTAINER))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child("⚠"),
-                        )
+                        .child(icon_badge(icon_trash(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.))
                         .child(
                             div()
                                 .text_lg()
@@ -108,8 +98,12 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
 pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl IntoElement> {
     let res = root.residual_result.as_ref()?;
     let total_items = res.items.len();
+    let is_empty = total_items == 0;
+
     let selected_count = root.residual_selected.len();
     let all_selected = selected_count == total_items && total_items > 0;
+    let rec_selection = res.default_selection();
+    let is_recommended = root.residual_selected == rec_selection;
 
     let selected_bytes: u64 = root
         .residual_selected
@@ -118,7 +112,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
         .map(|it| it.size())
         .sum();
 
-    let item_rows: Vec<gpui::AnyElement> = if res.items.is_empty() {
+    let item_rows: Vec<gpui::AnyElement> = if is_empty {
         vec![div()
             .w_full()
             .p_8()
@@ -127,12 +121,19 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .items_center()
             .justify_center()
             .gap_2()
+            .child(icon_badge(icon_sparkle(PRIMARY, 24.), PRIMARY_FIXED, PRIMARY, 52.))
             .child(
                 div()
                     .text_base()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(PRIMARY))
-                    .child("✨ 该软件非常干净，未发现关联的文件或注册表残留！"),
+                    .text_color(rgb(TEXT))
+                    .child("该软件未发现关联的文件或注册表残留"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child("官方卸载已彻底清理所有文件与配置注册表。"),
             )
             .into_any_element()]
     } else {
@@ -158,8 +159,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .cursor_pointer()
                     .hover(|h| h.bg(rgb(SURF_LOW)))
                     .child(checkbox(check_state))
-                    // 把握程度直接标在行首：模糊匹配出来的默认不勾选，
-                    // 用户需要一眼看出哪些是「确定」哪些只是「可能」
+                    // 置信度标签
                     .child(
                         div()
                             .flex_none()
@@ -179,6 +179,29 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 CAUTION
                             }))
                             .child(item.confidence.label()),
+                    )
+                    // 来源标签
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_2()
+                            .py(px(1.))
+                            .rounded_md()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .bg(rgb(SURF_HIGH))
+                            .text_color(rgb(MUTED))
+                            .child(item.source),
+                    )
+                    // 类别标签 (文件/目录/注册表项/注册表值)
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(OUTLINE))
+                            .child(item.kind.kind_label()),
                     )
                     .child(
                         div()
@@ -211,6 +234,123 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .collect()
     };
 
+    let footer = if is_empty {
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgba(OUTLINE_VAR, 0.4))
+            .child(
+                div()
+                    .id("resid-done-btn")
+                    .child(primary_button(String::from("完成"), true))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.residual_result = None;
+                        this.residual_selected.clear();
+                        cx.notify();
+                    })),
+            )
+    } else {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgba(OUTLINE_VAR, 0.4))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    // 1. 推荐选中
+                    .child(
+                        div()
+                            .id("resid-select-rec")
+                            .child(small_button(
+                                String::from("推荐选中"),
+                                if is_recommended { PRIMARY_FIXED } else { SURF_HIGH },
+                                if is_recommended { PRIMARY } else { TEXT },
+                                true,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(r) = &this.residual_result {
+                                    this.residual_selected = r.default_selection();
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    // 2. 全选所有
+                    .child(
+                        div()
+                            .id("resid-select-all")
+                            .child(small_button(
+                                String::from("全选"),
+                                if all_selected { PRIMARY_FIXED } else { SURF_HIGH },
+                                if all_selected { PRIMARY } else { TEXT },
+                                true,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(r) = &this.residual_result {
+                                    this.residual_selected = (0..r.items.len()).collect();
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    // 3. 清空
+                    .child(
+                        div()
+                            .id("resid-select-none")
+                            .child(small_button(
+                                String::from("清空"),
+                                SURF_HIGH,
+                                MUTED,
+                                selected_count > 0,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.residual_selected.clear();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id("resid-cancel")
+                            .child(ghost_button(
+                                String::from("取消"),
+                                true,
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.residual_result = None;
+                                this.residual_selected.clear();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("resid-clean")
+                            .child(danger_button(
+                                format!(
+                                    "彻底清除所选 ({}) · 释放 {}",
+                                    selected_count,
+                                    fmt_size(selected_bytes)
+                                ),
+                                selected_count > 0,
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.clean_selected_residuals(cx);
+                            })),
+                    ),
+            )
+    };
+
     Some(
         div()
             .id("residual-modal-backdrop")
@@ -222,15 +362,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .items_center()
             .justify_center()
             .child(
-                div()
+                card()
                     .id("residual-modal-card")
-                    .w(px(720.))
+                    .w(px(760.))
                     .max_h(px(580.))
-                    .rounded_2xl()
-                    .bg(rgb(CARD))
-                    .border_1()
-                    .border_color(rgba(OUTLINE_VAR, 0.6))
-                    .shadow_xl()
+                    .shadow_2xl()
                     .p_6()
                     .flex()
                     .flex_col()
@@ -240,19 +376,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .flex()
                             .items_start()
                             .gap_4()
-                            .child(
-                                div()
-                                    .w(px(40.))
-                                    .h(px(40.))
-                                    .flex_none()
-                                    .rounded_full()
-                                    .bg(rgb(PRIMARY_FIXED))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_lg()
-                                    .child("🔍"),
-                            )
+                            .child(icon_badge(icon_search(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 44.))
                             .child(
                                 div()
                                     .flex_1()
@@ -294,72 +418,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .gap_1()
                             .children(item_rows),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(rgba(OUTLINE_VAR, 0.4))
-                            .child(
-                                div()
-                                    .id("resid-toggle-all")
-                                    .child(ghost_button(
-                                        if all_selected {
-                                            String::from("取消全选")
-                                        } else {
-                                            String::from("全选所有")
-                                        },
-                                        total_items > 0,
-                                    ))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if all_selected {
-                                            this.residual_selected.clear();
-                                        } else {
-                                            if let Some(r) = &this.residual_result {
-                                                this.residual_selected =
-                                                    (0..r.items.len()).collect();
-                                            }
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .id("resid-cancel")
-                                            .child(ghost_button(
-                                                String::from("取消 / 关闭"),
-                                                true,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.residual_result = None;
-                                                this.residual_selected.clear();
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("resid-clean")
-                                            .child(danger_button(
-                                                format!(
-                                                    "彻底清除所选 ({}) · 释放 {}",
-                                                    selected_count,
-                                                    fmt_size(selected_bytes)
-                                                ),
-                                                selected_count > 0,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.clean_selected_residuals(cx);
-                                            })),
-                                    ),
-                            ),
-                    ),
+                    .child(footer),
             )
             .into_any_element(),
     )

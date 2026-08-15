@@ -44,11 +44,11 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .min_w(px(0.))
                 .child(page_heading(
                     "软件管理与深度卸载",
-                    "查看本机已安装软件与最近使用情况，点击表头直接排序，支持深度残留清理",
+                    "查看本机已安装软件、占用体积与最后使用时间",
                 )),
         );
 
-    // 顶部 3 个指标卡片 (CleanFlow 风格)
+    // 顶部 3 个指标卡片
     let stats_row = div()
         .flex()
         .gap_4()
@@ -92,7 +92,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_apps(0x7547ab, 20.), 0xf3e8ff, 0x7547ab, 44.))
+                .child(icon_badge(icon_apps(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 44.))
                 .child(
                     div()
                         .flex()
@@ -110,7 +110,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                             div()
                                 .text_xl()
                                 .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(0x7547ab))
+                                .text_color(rgb(TEXT))
                                 .child(format!("{total_apps} 款")),
                         ),
                 ),
@@ -123,7 +123,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_clock(0x974700, 20.), 0xffedd5, 0x974700, 44.))
+                .child(icon_badge(icon_clock(CAUTION, 20.), CAUTION_CONTAINER, CAUTION, 44.))
                 .child(
                     div()
                         .flex()
@@ -141,7 +141,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                             div()
                                 .text_xl()
                                 .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(0x974700))
+                                .text_color(rgb(CAUTION))
                                 .child(format!("{stale_apps_count} 款")),
                         ),
                 ),
@@ -456,7 +456,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .text_base()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(MUTED))
-                        .child("📦 未找到匹配的已安装软件"),
+                        .child("未找到匹配的已安装软件"),
                 )
                 .into_any_element(),
         )
@@ -611,7 +611,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .when(!has_location, |d| {
                             d.text_color(rgb(OUTLINE))
                         })
-                        .child("📂  打开安装文件夹")
+                        .child("打开安装目录")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_loc {
                                 crate::platform::reveal_in_explorer(loc);
@@ -642,7 +642,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .when(!has_uninstaller, |d| {
                             d.text_color(rgb(OUTLINE))
                         })
-                        .child("🗑️  官方常规卸载")
+                        .child("官方常规卸载")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_context_menu();
                             this.request_uninstall_app(app_for_uninst.clone(), cx);
@@ -663,7 +663,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(PRIMARY))
                         .hover(|h| h.bg(rgba(PRIMARY, 0.08)))
-                        .child("⚡  强力残留清理")
+                        .child("强力残留清理")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_context_menu();
                             this.start_residual_scan(app_for_resid.clone(), cx);
@@ -684,7 +684,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(MUTED))
                         .hover(|h| h.bg(rgb(SURF_HIGH)))
-                        .child("📋  复制安装路径")
+                        .child("复制安装路径")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_copy.install_location {
                                 this.status = format!("已获取安装路径：{}", loc.display());

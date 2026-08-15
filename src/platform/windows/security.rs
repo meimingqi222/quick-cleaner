@@ -79,3 +79,67 @@ pub fn current_user_sid() -> Option<String> {
         Some(sid)
     }
 }
+
+/// 若当前未提权，通过 Windows UAC (runas) 自重启当前进程并退出当前无权限进程。
+/// 若提权成功，返回 true；若用户取消或提权失败，返回 false。
+pub fn relaunch_as_admin_if_needed() -> bool {
+    if is_elevated() {
+        return true;
+    }
+
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::um::shellapi::ShellExecuteW;
+    use winapi::um::winuser::SW_SHOWNORMAL;
+
+    let Ok(exe_path) = std::env::current_exe() else {
+        return false;
+    };
+
+    let exe_wide: Vec<u16> = exe_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let op_wide: Vec<u16> = std::ffi::OsStr::new("runas")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args_str = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') || a.contains('\t') || a.contains('"') {
+                format!("\"{}\"", a.replace('"', "\\\""))
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let args_wide: Vec<u16> = std::ffi::OsStr::new(&args_str)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let res = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            op_wide.as_ptr(),
+            exe_wide.as_ptr(),
+            if args.is_empty() {
+                ptr::null()
+            } else {
+                args_wide.as_ptr()
+            },
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if res as usize > 32 {
+        std::process::exit(0);
+    }
+    false
+}
+

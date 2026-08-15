@@ -32,6 +32,7 @@ macro_rules! platform_contract {
             use std::sync::atomic::AtomicBool;
 
             let _: fn() -> bool = is_elevated;
+            let _: fn() -> bool = relaunch_as_admin_if_needed;
             let _: fn() -> Vec<char> = list_ntfs_volumes;
             let _: fn(char, usize) -> Result<MftScan, MftError> = scan_volume;
             let _: fn(char) -> Option<(u64, u64)> = get_volume_space;
@@ -69,6 +70,10 @@ pub mod fallback {
     use std::sync::atomic::AtomicBool;
 
     pub fn is_elevated() -> bool {
+        false
+    }
+
+    pub fn relaunch_as_admin_if_needed() -> bool {
         false
     }
 

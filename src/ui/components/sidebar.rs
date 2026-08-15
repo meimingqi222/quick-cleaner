@@ -56,8 +56,6 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             .cursor_pointer()
             .when(active, |d| {
                 d.bg(rgb(PRIMARY_FIXED))
-                    .border_l_4()
-                    .border_color(rgb(PRIMARY))
             })
             .when(!active, |d| {
                 d.hover(|h| h.bg(rgb(SURF_LOW)))

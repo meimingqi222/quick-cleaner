@@ -33,7 +33,7 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .min_w(px(0.))
                 .child(page_heading(
                     "Disk Lens 磁盘透镜",
-                    "直观可视化分析磁盘空间分布，逐层定位并安全批量清理大文件与冗余目录",
+                    "分析磁盘各层级空间占用，定位大文件与冗余目录",
                 )),
         );
 
@@ -70,6 +70,38 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     } else if let Some(ref scan) = root.mft {
         render_disk_lens_panes(root, scan, cx)
     } else {
+        let vol_buttons: Vec<_> = root.volumes.iter().map(|&v| {
+            let active = root.disk_volume == v;
+            div()
+                .id(SharedString::from(format!("init-vol-pill-{v}")))
+                .px_4()
+                .py_2()
+                .rounded_lg()
+                .text_sm()
+                .font_weight(if active {
+                    gpui::FontWeight::BOLD
+                } else {
+                    gpui::FontWeight::MEDIUM
+                })
+                .cursor_pointer()
+                .border_1()
+                .when(active, |d| {
+                    d.bg(rgb(PRIMARY_FIXED))
+                        .border_color(rgb(PRIMARY))
+                        .text_color(rgb(PRIMARY))
+                })
+                .when(!active, |d| {
+                    d.bg(rgb(CARD))
+                        .border_color(rgba(OUTLINE_VAR, 0.6))
+                        .text_color(rgb(TEXT))
+                        .hover(|h| h.bg(rgb(SURF_HIGH)))
+                })
+                .child(format!("{v}: 盘 (NTFS)"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.switch_disk_volume(v, cx);
+                }))
+        }).collect();
+
         div()
             .flex_1()
             .flex()
@@ -84,7 +116,26 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .text_base()
                     .font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(TEXT))
-                    .child("点击开始分析磁盘空间"),
+                    .child(format!("选择磁盘并开始深度分析（当前选择 {}: 盘）", root.disk_volume)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .children(vol_buttons),
+            )
+            .child(
+                div()
+                    .id("start-mft-scan-btn")
+                    .pt_2()
+                    .child(crate::ui::components::buttons::primary_button(
+                        format!("开始分析 {}: 盘空间占用", root.disk_volume),
+                        true,
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.start_mft_scan(cx);
+                    })),
             )
             .into_any_element()
     };
@@ -172,10 +223,7 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
             })
             .child(format!("{v}: 盘"))
             .on_click(cx.listener(move |this, _, _, cx| {
-                if this.disk_volume != v {
-                    this.disk_volume = v;
-                    this.start_mft_scan(cx);
-                }
+                this.switch_disk_volume(v, cx);
             }))
     }).collect();
 
@@ -632,7 +680,7 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 .when(root.disk_tab != DiskTab::Tree, |d| {
                     d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                 })
-                .child("📁 目录树")
+                .child("目录树")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.disk_tab = DiskTab::Tree;
                     cx.notify();
@@ -659,7 +707,7 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 .when(root.disk_tab != DiskTab::Files, |d| {
                     d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                 })
-                .child("🔥 全盘大文件")
+                .child("全盘大文件")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.disk_tab = DiskTab::Files;
                     cx.notify();
@@ -947,7 +995,7 @@ fn render_lens_row(
                         } else if size >= 1024 * 1024 * 1024 {
                             icon_badge(icon_trash(ERROR, 14.), ERROR_CONTAINER, ERROR, 28.)
                         } else {
-                            icon_badge(icon_disk(0x7547ab, 14.), 0xf3e8ff, 0x7547ab, 28.)
+                            icon_badge(icon_disk(PRIMARY, 14.), PRIMARY_FIXED, PRIMARY, 28.)
                         }),
                 )
                 .child(
@@ -1131,7 +1179,7 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
                         div()
                             .id("clear-disk-selection-btn")
                             .child(small_button(
-                                String::from("✕ 清空选择"),
+                                String::from("清空选择"),
                                 SURF_HIGH,
                                 TEXT,
                                 true,

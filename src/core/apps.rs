@@ -224,15 +224,25 @@ impl ResidualKind {
         }
     }
 
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            ResidualKind::File(..) => "文件",
+            ResidualKind::Directory(..) => "目录",
+            ResidualKind::RegistryKey(..) => "注册表项",
+            ResidualKind::RegistryValue(..) => "注册表值",
+        }
+    }
+
     pub fn display_label(&self) -> String {
         match self {
-            ResidualKind::File(p, _) => format!("📄 残留文件: {}", p.display()),
-            ResidualKind::Directory(p, _) => format!("📁 残留目录: {}", p.display()),
+            ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                p.to_string_lossy().into_owned()
+            }
             ResidualKind::RegistryKey(root, sub) => {
-                format!("🗝️ 注册表项: {}\\{}", root.label(), sub)
+                format!("{}\\{}", root.label(), sub)
             }
             ResidualKind::RegistryValue(root, sub, name) => {
-                format!("🔑 注册表值: {}\\{} → {}", root.label(), sub, name)
+                format!("{}\\{} → {}", root.label(), sub, name)
             }
         }
     }

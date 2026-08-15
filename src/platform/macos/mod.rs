@@ -9,6 +9,6 @@ pub mod residuals;
 pub mod trash;
 
 pub use apps::{list_installed_apps, reveal_in_explorer, run_uninstaller_and_wait};
-pub use disk::{get_volume_space, is_elevated, list_ntfs_volumes, scan_volume};
+pub use disk::{get_volume_space, is_elevated, list_ntfs_volumes, relaunch_as_admin_if_needed, scan_volume};
 pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
 pub use trash::empty_trash;

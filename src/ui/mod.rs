@@ -430,6 +430,19 @@ impl Root {
         }
     }
 
+    pub fn switch_disk_volume(&mut self, vol: char, cx: &mut Context<Self>) {
+        if self.disk_volume == vol && (self.mft.is_some() || self.mft_scanning) {
+            return;
+        }
+        self.disk_volume = vol;
+        self.mft = None;
+        self.disk_rows.clear();
+        self.disk_rows_key = None;
+        self.disk_path = vec![5];
+        self.disk_sel.clear();
+        self.start_mft_scan(cx);
+    }
+
     pub fn start_mft_scan(&mut self, cx: &mut Context<Self>) {
         if self.mft_scanning {
             return;
@@ -459,13 +472,21 @@ impl Root {
                             s.file_count,
                             fmt_size(s.total_size)
                         );
-                        if let Some(target_path) = saved_path {
-                            let resolved = s.tree.find_path(&target_path);
-                            this.disk_path = if resolved.is_empty() {
-                                vec![s.tree.root()]
+                        // 仅当 saved_path 确实属于当前卷时才尝试恢复层级；跨盘切换时直接回到新盘根目录
+                        let is_same_vol = saved_path.as_ref().map_or(false, |p| {
+                            p.to_string_lossy().starts_with(&format!("{vol}:"))
+                        });
+                        if is_same_vol {
+                            if let Some(target_path) = saved_path {
+                                let resolved = s.tree.find_path(&target_path);
+                                this.disk_path = if resolved.is_empty() {
+                                    vec![s.tree.root()]
+                                } else {
+                                    resolved
+                                };
                             } else {
-                                resolved
-                            };
+                                this.disk_path = vec![s.tree.root()];
+                            }
                         } else {
                             this.disk_path = vec![s.tree.root()];
                         }

@@ -29,6 +29,10 @@ pub(super) fn render_app_row(
         .to_uppercase()
         .to_string();
 
+    let is_busy = root.residual_scanning || root.cleaning;
+    let uninst_enabled = has_uninstaller && !is_busy;
+    let resid_enabled = !is_busy;
+
     div()
         .id(SharedString::from(format!("app-row-{idx}")))
         .w_full()
@@ -165,7 +169,7 @@ pub(super) fn render_app_row(
                             String::from("卸载"),
                             SURF_HIGH,
                             TEXT,
-                            has_uninstaller,
+                            uninst_enabled,
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.request_uninstall_app(app_for_uninst.clone(), cx);
@@ -178,7 +182,7 @@ pub(super) fn render_app_row(
                             String::from("强力清理"),
                             PRIMARY_FIXED,
                             PRIMARY,
-                            !root.residual_scanning,
+                            resid_enabled,
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_residual_scan(app_for_resid.clone(), cx);

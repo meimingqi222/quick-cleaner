@@ -118,17 +118,17 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let ring = ring.child(inner);
 
     let blurb = if root.scanning {
-        String::from("正在并行扫描系统缓存、应用日志、临时文件与浏览器数据…")
+        String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…")
     } else if scanned && total > 0 {
         format!(
-            "已在 {} 个类别中发现 {} 可以清理。清理为安全永久删除，释放宝贵存储空间。",
+            "已在 {} 个类别中发现 {} 可清理内容。",
             root.categories.iter().filter(|c| c.total_size > 0).count(),
             fmt_size(total)
         )
     } else if scanned {
-        String::from("未发现可清理的残留垃圾，系统当前处于极佳状态。")
+        String::from("未发现可清理的冗余缓存，系统状态良好。")
     } else {
-        String::from("系统运行稳定。点击中心大圆盘，一键扫描垃圾、分析软件与优化空间。")
+        String::from("快速扫描系统缓存、开发依赖产物与磁盘占用。")
     };
 
     // 底部 3 块快速入口卡片
@@ -185,7 +185,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_apps(0x7547ab, 18.), 0xf3e8ff, 0x7547ab, 38.))
+                .child(icon_badge(icon_apps(PRIMARY, 18.), PRIMARY_FIXED, PRIMARY, 38.))
                 .child(
                     div()
                         .flex()
@@ -228,7 +228,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_disk(0x974700, 18.), 0xffedd5, 0x974700, 38.))
+                .child(icon_badge(icon_disk(PRIMARY, 18.), PRIMARY_FIXED, PRIMARY, 38.))
                 .child(
                     div()
                         .flex()

@@ -1,7 +1,44 @@
+# Rust 构建产物
 /target
+*.pdb
+*.ilk
+*.rs.bk
 
-# WizTree 导出的基准数据（单个文件数百 MB，只作本地正确性比对用）
+# 测试与覆盖率分析产物
+*.profraw
+*.profdata
+coverage/
+
+# 本地临时数据与对比基准（如 WizTree 导出的数百 MB 校验 CSV）
 WizTree_*.csv
+*.csv
+*.tmp
+*.bak
+*.log
 
-# 误创建的无关目录（某次带 -InstallDir 参数的命令留下的产物）
+# 操作系统自动生成文件
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
 -InstallDir/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# 编辑器与 IDE 配置文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
