@@ -1,10 +1,10 @@
-//! 系统垃圾清理视图与操作底栏 (CleanFlow 质感分层清理)
+//! 智能清理视图与操作底栏 (CleanFlow 质感分层清理)
 
 use crate::core::categories::CategoryId;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::danger_button;
 use crate::ui::components::cards::card;
-use crate::ui::components::controls::{checkbox, loading_state_view, page_heading};
+use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
 use crate::ui::components::icons::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -29,6 +29,9 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
         CategoryId::Logs => icon_clock(fg, size),
         CategoryId::RecycleBin => icon_trash(fg, size),
         CategoryId::Thumbnails => icon_sparkle(fg, size),
+        CategoryId::AiAgents => icon_sparkle(fg, size),
+        CategoryId::DevBuild => icon_gear(fg, size),
+        CategoryId::DevWorktrees => icon_shield(fg, size),
     }
 }
 
@@ -51,7 +54,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(OUTLINE))
-                        .child("共发现系统垃圾"),
+                        .child("共发现可清理"),
                 )
                 .child(
                     div()
@@ -88,8 +91,8 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .flex_1()
                 .min_w(px(0.))
                 .child(page_heading(
-                    "系统垃圾清理",
-                    "安全扫描系统缓存、应用日志与临时文件白名单，勾选后彻底释放空间",
+                    "智能清理",
+                    "系统缓存、浏览器与包管理缓存默认已勾选；AI 助手缓存与项目构建产物需手动勾选",
                 )),
         )
         .child(found);
@@ -143,10 +146,25 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .flex_col()
                             .child(
                                 div()
-                                    .text_base()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(rgb(TEXT))
-                                    .child(id.name()),
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(rgb(TEXT))
+                                            .child(id.name()),
+                                    )
+                                    // 开发者类目默认不勾选，用徽标说明「要自己勾」，
+                                    // 免得用户以为扫出来了却没被清掉是 bug
+                                    .when(id.is_developer(), |d| {
+                                        d.child(badge(
+                                            "需手动勾选".into(),
+                                            safety_container(safety),
+                                            safety_color(safety),
+                                        ))
+                                    }),
                             )
                             .child(div().text_xs().text_color(rgb(MUTED)).child(id.desc())),
                     )

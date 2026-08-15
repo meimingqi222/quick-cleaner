@@ -22,11 +22,11 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let scanned = root.scanned;
 
     let (big, sub) = if root.scanning {
-        (String::from("扫描中…"), String::from("正在检查系统垃圾与缓存"))
+        (String::from("扫描中…"), String::from("正在检查系统缓存与开发环境残留"))
     } else if root.cleaning {
         (String::from("清理中…"), String::from("正在彻底移除选中垃圾"))
     } else if scanned && total > 0 {
-        (fmt_size(total), String::from("发现可清理系统垃圾"))
+        (fmt_size(total), String::from("发现可清理内容"))
     } else if scanned {
         (String::from("系统很干净"), String::from("暂无可清理垃圾"))
     } else {
@@ -157,7 +157,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child("系统垃圾"),
+                                .child("智能清理"),
                         )
                         .child(
                             div()

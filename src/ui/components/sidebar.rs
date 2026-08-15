@@ -22,7 +22,7 @@ impl View {
     pub fn title(&self) -> &'static str {
         match self {
             View::Dashboard => "概览扫描",
-            View::Junk => "系统垃圾",
+            View::Junk => "智能清理",
             View::Apps => "软件管理",
             View::Disk => "磁盘透镜",
         }

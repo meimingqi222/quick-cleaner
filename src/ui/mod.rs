@@ -258,8 +258,33 @@ impl Root {
         self.categories.iter().flat_map(|c| c.items.iter())
     }
 
+    /// 按各类目的默认策略预勾选。
+    ///
+    /// 开发者类目（AI 助手缓存、构建产物、worktree）一律不默认勾选：
+    /// 它们删掉不会坏系统，但会让下次构建重来，甚至丢掉未提交的改动。
     pub fn select_all(&mut self) {
-        self.selected = self.items().map(|i| i.path.clone()).collect();
+        self.selected = self
+            .items()
+            .filter(|i| i.category.default_selected())
+            .map(|i| i.path.clone())
+            .collect();
+    }
+
+    /// 把某一批类目整体勾上或取消（供「全选开发项」这类快捷操作用）。
+    pub fn set_category_selected(&mut self, id: CategoryId, on: bool) {
+        let paths: Vec<PathBuf> = self
+            .categories
+            .iter()
+            .filter(|c| c.category == id)
+            .flat_map(|c| c.items.iter().map(|i| i.path.clone()))
+            .collect();
+        for p in paths {
+            if on {
+                self.selected.insert(p);
+            } else {
+                self.selected.remove(&p);
+            }
+        }
     }
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {

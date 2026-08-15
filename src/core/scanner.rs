@@ -27,20 +27,30 @@ pub struct CategorySummary {
 ///
 /// 并行有两层：目标之间（`par_iter`）和单棵树内部（`walk` 里对子目录再 `par_iter`）。
 pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummary> {
-    let results: Vec<ScanItem> = targets
-        .par_iter()
-        .filter(|t| t.path.exists())
-        .filter_map(|t| scan_dir(&t.path, &t.label, t.category, live))
-        .collect();
+    // 两个来源并行跑：固定路径表，以及代码目录里的发现式扫描。
+    let (mut results, discovered) = rayon::join(
+        || -> Vec<ScanItem> {
+            targets
+                .par_iter()
+                .filter(|t| t.path.exists())
+                .filter_map(|t| scan_dir(&t.path, &t.label, t.category, live))
+                .collect()
+        },
+        || crate::core::devscan::discover(live),
+    );
+    results.extend(discovered);
 
-    // 按类别聚合
+    // 按类别聚合。发现式类目条目可能上百，按体积降序更实用。
     let mut out: Vec<CategorySummary> = Vec::new();
     for cat in CategoryId::ALL {
-        let items: Vec<ScanItem> = results
+        let mut items: Vec<ScanItem> = results
             .iter()
             .filter(|it| it.category == cat)
             .cloned()
             .collect();
+        if cat.is_discovered() {
+            items.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        }
         let total: u64 = items.iter().map(|it| it.size).sum();
         out.push(CategorySummary {
             category: cat,
@@ -82,6 +92,15 @@ fn scan_dir(dir: &Path, label: &str, category: CategoryId, live: &AtomicBool) ->
         category,
         last_modified: acc.newest,
     })
+}
+
+/// 测算一个目录的子树体积。
+///
+/// 返回 `(总字节数, 文件数, 最新修改时间)`。`devscan` 用它给发现出来的
+/// 目录称重，避免再写一份并行遍历。
+pub fn measure_dir(dir: &Path, live: &AtomicBool) -> (u64, u64, u64) {
+    let acc = walk(dir, live);
+    (acc.size, acc.files, acc.newest)
 }
 
 /// 递归遍历，子目录之间用 rayon 并行。

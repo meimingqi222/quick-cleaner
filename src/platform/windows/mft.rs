@@ -147,6 +147,23 @@ impl MftTree {
         crate::core::safety::is_ntfs_meta_name(name)
     }
 
+    /// 子节点的原始下标切片，不分配、不排序。
+    ///
+    /// [`MftTree::children`] 会克隆每个子节点的名字并按体积排序，适合渲染
+    /// 一屏列表；全树遍历（如开发垃圾发现）必须用这个，否则光是构造
+    /// `Vec<Node>` 就会淹没遍历本身。
+    pub fn child_indices(&self, idx: u32) -> &[u32] {
+        self.child_slice(idx)
+    }
+
+    /// 借用某条记录的名字，不复制。
+    pub fn entry_name(&self, idx: u32) -> &str {
+        if !self.valid(idx) {
+            return "";
+        }
+        &self.entries[idx as usize].name
+    }
+
     pub fn children(&self, idx: u32) -> Vec<Node> {
         let mut out: Vec<Node> = self
             .child_slice(idx)

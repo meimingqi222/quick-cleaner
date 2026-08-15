@@ -5,6 +5,7 @@
 pub mod apps;
 pub mod categories;
 pub mod cleaner;
+pub mod devscan;
 pub mod disk;
 pub mod model;
 pub mod safety;
