@@ -1,0 +1,81 @@
+name: CI & Windows Release Build
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-windows:
+    name: Build & Package (Windows x86_64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run automated test suite
+        run: cargo test --verbose
+
+      - name: Build release binaries
+        run: cargo build --release --verbose
+
+      - name: Prepare distribution package
+        shell: pwsh
+        run: |
+          $distDir = "dist/quick-cleaner-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+          
+          # 复制二进制程序
+          Copy-Item "target/release/quick-cleaner.exe" "$distDir/"
+          Copy-Item "target/release/mftscan.exe" "$distDir/"
+          
+          # 复制双语文档与开源协议
+          if (Test-Path "README.md") { Copy-Item "README.md" "$distDir/" }
+          if (Test-Path "README_en.md") { Copy-Item "README_en.md" "$distDir/" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$distDir/" }
+          
+          # 压缩为 zip
+          Compress-Archive -Path "$distDir/*" -DestinationPath "dist/quick-cleaner-windows-x86_64.zip" -Force
+          
+          # 计算 SHA256 校验和
+          $hash = (Get-FileHash -Path "dist/quick-cleaner-windows-x86_64.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  quick-cleaner-windows-x86_64.zip" | Out-File -Encoding utf8 "dist/quick-cleaner-windows-x86_64.zip.sha256"
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-cleaner-windows-x86_64
+          path: |
+            dist/quick-cleaner-windows-x86_64.zip
+            dist/quick-cleaner-windows-x86_64.zip.sha256
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/quick-cleaner-windows-x86_64.zip
+            dist/quick-cleaner-windows-x86_64.zip.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: false
