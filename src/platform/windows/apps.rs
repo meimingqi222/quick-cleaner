@@ -269,7 +269,7 @@ impl UserAssistIndex {
             }
         }
         // 路径中的每一段目录名，用来匹配「安装目录叫软件名」的常见情况
-        for seg in path_lower.split(|c| c == '\\' || c == '/') {
+        for seg in path_lower.split(['\\', '/']) {
             if seg.len() >= 3 {
                 self.record(seg, ts);
             }
@@ -535,13 +535,9 @@ fn deduce_install_location(app: &InstalledApp) -> Option<PathBuf> {
     candidates.push(PathBuf::from(r"C:\Program Files").join(clean_name));
     candidates.push(PathBuf::from(r"C:\Program Files (x86)").join(clean_name));
 
-    for cand in candidates {
-        if cand.exists() && cand.is_dir() && !is_system_root_dir(&cand) {
-            return Some(cand);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|cand| cand.exists() && cand.is_dir() && !is_system_root_dir(cand))
 }
 
 /// 预先扫描桌面与开始菜单中的快捷方式 (.lnk) 活跃时间

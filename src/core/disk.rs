@@ -1,7 +1,9 @@
 //! 磁盘空间分析通用领域模型
 
 #[cfg(windows)]
-pub use crate::platform::windows::mft::{DirUsage, MftError, MftScan, MftTree, Node};
+pub use crate::platform::windows::mft::{
+    DirUsage, MftError, MftScan, MftTree, Node, ROOT_RECORD as ROOT_NODE,
+};
 
 #[cfg(not(windows))]
 pub mod fallback {
@@ -21,6 +23,9 @@ pub mod fallback {
         pub file_count: u64,
         pub own_size: u64,
     }
+
+    /// 目录树根节点的下标。Windows 上是 `$MFT` 的 5 号记录，这里没有 MFT，用 0。
+    pub const ROOT_NODE: u32 = 0;
 
     /// 非 Windows 平台的空目录树。
     ///

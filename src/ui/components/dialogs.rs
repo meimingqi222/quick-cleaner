@@ -214,7 +214,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .font_weight(gpui::FontWeight::NORMAL)
                             .bg(rgb(SURF_HIGH))
                             .text_color(rgb(MUTED))
-                            .child(item.source),
+                            .child(item.source.label_lang(lang)),
                     )
                     // 类别标签 (文件/目录/注册表项/注册表值)
                     .child(
@@ -232,7 +232,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .min_w(px(0.))
                             .text_xs()
                             .text_color(rgb(TEXT))
-                            .child(item.display_label()),
+                            // 来源已经在上面的徽章里显示过了，这里只要路径本身
+                            .child(item.kind.display_label()),
                     )
                     .when(item.size() > 0, |d| {
                         d.child(

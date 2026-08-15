@@ -4,40 +4,21 @@ use crate::core::model::fmt_size;
 use crate::ui::components::buttons::ghost_button;
 use crate::ui::components::icons::*;
 use crate::ui::components::sidebar::View;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
 
 pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
+    let lang = root.language;
     let is_apps_busy = root.apps_scanning || root.residual_scanning;
     let is_mft_busy = root.mft_scanning;
     let is_junk_busy = root.scanning || root.cleaning;
 
     let (busy, label) = match root.view {
-        View::Dashboard | View::Junk => (
-            is_junk_busy,
-            if is_junk_busy {
-                "扫描中…"
-            } else {
-                "重新扫描"
-            },
-        ),
-        View::Apps => (
-            is_apps_busy,
-            if is_apps_busy {
-                "读取中…"
-            } else {
-                "刷新软件列表"
-            },
-        ),
-        View::Disk => (
-            is_mft_busy,
-            if is_mft_busy {
-                "扫描中…"
-            } else {
-                "重新分析磁盘"
-            },
-        ),
+        View::Dashboard | View::Junk => (is_junk_busy, tr_btn_rescan(lang, is_junk_busy)),
+        View::Apps => (is_apps_busy, tr_btn_refresh_apps(lang, is_apps_busy)),
+        View::Disk => (is_mft_busy, tr_btn_reanalyze_disk(lang, is_mft_busy)),
     };
 
     div()
@@ -63,7 +44,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .text_lg()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(TEXT))
-                        .child(root.view.title()),
+                        .child(root.view.title_lang(lang)),
                 )
                 .child(
                     div()
@@ -87,11 +68,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .items_center()
                         .gap_1()
                         .child(icon_shield(if root.elevated { PRIMARY } else { OUTLINE }, 12.))
-                        .child(if root.elevated {
-                            "管理员模式"
-                        } else {
-                            "普通模式"
-                        }),
+                        .child(tr_elevation_mode(lang, root.elevated)),
                 ),
         )
         // 右侧操作
@@ -110,7 +87,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                             .text_xs()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(PRIMARY))
-                            .child(format!("本次已释放 {}", fmt_size(root.freed_total))),
+                            .child(tr_freed_pill(lang, &fmt_size(root.freed_total))),
                     )
                 })
                 .child(

@@ -33,12 +33,16 @@
   - **Post-uninstall verification**: Compares remaining files/registry keys, surfacing orphaned configuration and cache files for one-click deep cleanup.
 
 ### 4. Robust Safety & Protection System
-- **Core System Protection**: Built-in strict path whitelists and protected directories. Critical Windows system files, drivers, and libraries can be browsed and analyzed but are strictly prevented from accidental deletion.
+- **Deletion is permanent — nothing goes to the Recycle Bin.** This is a deliberate decision, not an oversight: QuickCleaner elevates itself through UAC, and when the administrator account differs from the signed-in user, `FOF_ALLOWUNDO` would drop files into the *administrator's* Recycle Bin where the user can never find them. On top of that, moving tens of gigabytes of cache into the Recycle Bin frees no space at all. What you delete here is gone, so every confirmation dialog says so explicitly.
+- **Four steps before anything is removed**: scan → preview the exact paths → tick what you want → confirm. Developer-oriented categories (AI caches, build artifacts, agent worktrees) are never pre-selected.
+- **Core System Protection**: One single source of truth for path rules (`core/safety.rs`) guards volume roots, `%SystemRoot%`, `System32`, `WinSxS`, `Program Files`, `ProgramData`, user home and NTFS metadata. They stay browsable and analyzable, but cannot be deleted. Deletion never follows symlinks or junctions.
 - **Smart UAC Elevation**: Automatically prompts for administrator privileges on startup to unlock direct raw sector NTFS $MFT parsing and deep cleaning. Supports `--no-elevate` flag for standard user execution.
 
 ### 5. Modern Native Desktop Experience & Internationalization
 - **GPUI High-Performance Native UI**: Powered by Zed's GPUI rendering engine in pure Rust. Delivers sub-millisecond cold starts and smooth 60/120fps micro-animations.
-- **Seamless Multilingual Support**: Fully internationalized UI and core analysis engine supporting English and Chinese (`中文 / English`) with instant live switching via the sidebar pill.
+- **Two-Phase Scan**: The system-junk categories appear in about a second so the app is usable immediately; the expensive whole-disk hunt for build artifacts continues in the background and merges in when it finishes. (Measured on the dev machine: 33s before, first results in under 3s now.)
+- **Remembers Your Choices**: Language is detected from the Windows display language on first launch (Chinese system → Chinese, anything else → English) and persisted to `%APPDATA%\QuickCleaner\settings.json` once you pick one.
+- **Seamless Multilingual Support**: Every string — including the status bar, scan result labels and residual source badges — is bilingual (English / `中文`), switchable live from the sidebar pill. Scan results carry both languages with them, so switching never triggers a re-scan.
 - **Refined Material / Fluent Aesthetic**: Free of excessive decorations or generic AI tropes, featuring a clean color token system and PerMonitorV2 High-DPI screen scaling.
 
 ---
@@ -58,6 +62,7 @@ quick-cleaner/
 │   ├── core/                   # Pure domain logic (independent of GPUI & OS specifics)
 │   │   ├── i18n.rs             # Core multilingual definitions (Language enum)
 │   │   ├── categories.rs       # 10 junk categories & scan definitions
+│   │   ├── devscan.rs          # Discovery scan for build artifacts (MFT / walk)
 │   │   ├── scanner.rs          # Parallel directory scanner with walkdir + rayon
 │   │   ├── cleaner.rs          # Cleanup executor with atomic progress tracking
 │   │   ├── safety.rs           # Single source of truth for path safety rules
@@ -118,7 +123,7 @@ cargo run --bin mftscan -- C 20
 
 ## Quality & Testing
 
-QuickCleaner maintains a comprehensive automated testing suite (100 unit tests) covering:
+QuickCleaner maintains a comprehensive automated testing suite (102 unit tests, enforced in CI together with `cargo clippy --all-targets -- -D warnings`) covering:
 - NTFS `$MFT` record decoding, fixup tail validation, non-resident data fragment reconstruction, and tree assembly;
 - Path and registry security rules, preventing destructive operations on critical system directories;
 - App uninstaller residual fuzzy-matching and confidence scoring algorithms;

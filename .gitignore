@@ -15,7 +15,6 @@ coverage/
 
 # 本地临时数据与对比基准（如 WizTree 导出的数百 MB 校验 CSV）
 WizTree_*.csv
-*.csv
 *.tmp
 *.bak
 *.log

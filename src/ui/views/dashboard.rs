@@ -106,6 +106,11 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         .child(icon_dashboard(ON_PRIMARY, 28.))
         .child(
             div()
+                // 圆里的可用宽度是**弦长**，不是直径：内圆直径 RING-56=224，
+                // 主标题横跨圆心上下约 ±22px，那里的弦约 219px，留点余量取 200。
+                // 不给上限的话，英文那些长句会直接顶出圆边。
+                .max_w(px(RING - 56. - 24.))
+                .text_center()
                 .text_2xl()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(rgb(ON_PRIMARY))
@@ -113,6 +118,11 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         )
         .child(
             div()
+                // 副标题落在圆心下方 28~44px，那里的弦约 206px，取 180：
+                // 既能让中文那句「正在检查系统缓存与开发环境残留」保持一行，
+                // 又能让更长的英文换成两行——换行后第二行仍在圆内（弦还有 198px）。
+                .max_w(px(RING - 56. - 44.))
+                .text_center()
                 .text_xs()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgba(ON_PRIMARY, 0.85))

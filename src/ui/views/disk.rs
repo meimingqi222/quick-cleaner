@@ -80,7 +80,7 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .text_base()
                     .font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(ERROR))
-                    .child(format!("{err_prefix}{err}")),
+                    .child(format!("{err_prefix}{}", tr_mft_error(lang, err))),
             )
             .child(
                 div()
@@ -211,7 +211,7 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
     let cur = *root.disk_path.last().unwrap_or(&tree.root());
     let cur_size = tree.size_of(cur);
     let cur_name = if cur == tree.root() {
-        format!("{}: 根目录", tree.volume())
+        tr_volume_root(root.language, tree.volume())
     } else {
         tree.name_of(cur)
     };
@@ -637,8 +637,8 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
                                 .justify_between()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child("空间占比分布")
-                                .child(format!("Top {} 分类", breakdown.len())),
+                                .child(tr_space_breakdown(lang))
+                                .child(tr_top_n_categories(lang, breakdown.len())),
                         )
                         .child(proportion_bar),
                 ),

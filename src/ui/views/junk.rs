@@ -62,7 +62,7 @@ fn render_category_items(
             .border_color(rgba(OUTLINE_VAR, 0.3))
             .text_xs()
             .text_color(rgb(OUTLINE))
-            .child("此类别未发现可清理内容")
+            .child(tr_category_empty(root.language))
             .into_any_element();
     }
 
@@ -80,17 +80,19 @@ fn render_category_items(
         SharedString::from(format!("junk-items-{id:?}")),
         count,
         cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+            let lang = this.language;
             let Some(summary) = this.categories.iter().find(|c| c.category == id) else {
                 return Vec::new();
             };
-            // 先把这一段要用的数据拷出来，避免在 cx.listener 闭包里继续借用 this
+            // 先把这一段要用的数据拷出来，避免在 cx.listener 闭包里继续借用 this。
+            // 双语标签在这里就按当前语言定下来，行渲染不必再认识 Text。
             let rows: Vec<(usize, std::path::PathBuf, String, String, u64, u64)> = range
                 .filter_map(|i| {
                     let item = summary.items.get(i)?;
                     Some((
                         i,
                         item.path.clone(),
-                        item.label.clone(),
+                        item.label.get(lang).to_string(),
                         truncate(&item.path.to_string_lossy(), 70),
                         item.file_count,
                         item.size,
@@ -101,7 +103,7 @@ fn render_category_items(
             rows.into_iter()
                 .map(|(i, path, label, path_text, file_count, size)| {
                     let checked = this.selected.contains(&path);
-                    item_row(i, path, label, path_text, file_count, size, checked, cx)
+                    item_row(i, path, label, path_text, file_count, size, checked, lang, cx)
                 })
                 .collect()
         }),
@@ -146,6 +148,7 @@ fn item_row(
     file_count: u64,
     size: u64,
     checked: bool,
+    lang: Language,
     cx: &mut Context<Root>,
 ) -> AnyElement {
     let dim = size == 0;
@@ -192,7 +195,7 @@ fn item_row(
         .child(right_cell(
             85.,
             if file_count > 0 {
-                format!("{} 个文件", commas(file_count))
+                tr_file_count(lang, &commas(file_count))
             } else {
                 String::from("—")
             },
@@ -214,6 +217,9 @@ fn item_row(
         .into_any_element()
 }
 
+/// 批量选择工具栏上的一个动作：(标签, 元素 ID, 是否为当前状态, 点击后执行什么)
+type BatchAction = (&'static str, &'static str, bool, fn(&mut Root));
+
 /// 批量选择工具栏。
 ///
 /// 扫描完默认只勾「推荐」那一套，但用户常常想一次性全清、或者把默认
@@ -225,8 +231,7 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
     let enabled = root.scanned && !root.cleaning;
     let is_recommended = root.selection_is_recommended();
 
-    // (标签, 英文ID, 是否高亮为当前状态, 动作)
-    let actions: [(&'static str, &'static str, bool, fn(&mut Root)); 4] = [
+    let actions: [BatchAction; 4] = [
         (tr_batch_rec(lang), "rec", is_recommended, Root::select_recommended),
         (tr_batch_all(lang), "all", picked == total && total > 0, Root::select_every),
         (tr_batch_invert(lang), "invert", false, Root::invert_selection),
@@ -428,7 +433,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .text_sm()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(if dim { OUTLINE } else { safety_color(safety) }))
-                            .child(if size > 0 {
+                            // 构建产物走第二阶段异步检索，没跑完之前显示「检索中」
+                            // 而不是 0 B——后者看起来像「扫过了，没东西」。
+                            .child(if root.discovering && id.is_discovered() {
+                                String::from(tr_discovering(lang))
+                            } else if size > 0 {
                                 fmt_size(size)
                             } else {
                                 String::from("0 B")
@@ -486,10 +495,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(ERROR))
-                                .child(format!(
-                                    "上次清理有 {} 处项目被占用或受系统保护而跳过",
-                                    root.last_failed.len()
-                                )),
+                                .child(tr_last_clean_skipped(lang, root.last_failed.len())),
                         )
                         .child(
                             div()
@@ -498,11 +504,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(ERROR))
                                 .cursor_pointer()
-                                .child(if root.show_failed_details {
-                                    "收起详情 ▴"
-                                } else {
-                                    "查看详情 ▾"
-                                })
+                                .child(tr_toggle_details(lang, root.show_failed_details))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.show_failed_details = !this.show_failed_details;
                                     cx.notify();

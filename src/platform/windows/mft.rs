@@ -3,7 +3,9 @@ use std::time::Instant;
 
 use std::os::windows::ffi::OsStrExt;
 
-const ROOT_RECORD: u32 = 5;
+/// NTFS 把卷根目录固定放在 `$MFT` 的 5 号记录上。
+/// 对外以 `core::disk::ROOT_NODE` 的名字导出，UI 层不该直接写字面量 5。
+pub const ROOT_RECORD: u32 = 5;
 const MAX_DEPTH: usize = 256;
 const CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
@@ -207,10 +209,8 @@ impl MftTree {
             }
             // 堆已满时，先和当前最小值比一次，绝大多数记录到这里就被淘汰了，
             // 连元数据名字符串比较都省掉。
-            if heap.len() == n {
-                if e.size <= heap.peek().map(|Reverse((s, _))| *s).unwrap_or(0) {
-                    continue;
-                }
+            if heap.len() == n && e.size <= heap.peek().map(|Reverse((s, _))| *s).unwrap_or(0) {
+                continue;
             }
             if Self::is_ntfs_system_meta(i as u32, &e.name) {
                 continue;

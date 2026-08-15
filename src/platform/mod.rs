@@ -11,6 +11,7 @@
 //! | 函数 | 用途 |
 //! | --- | --- |
 //! | `is_elevated` | 当前进程是否已提权 |
+//! | `detect_system_language` | 系统显示语言（首次启动的默认界面语言） |
 //! | `list_ntfs_volumes` | 可供深度分析的卷 |
 //! | `scan_volume` | 卷的整树空间分析 |
 //! | `get_volume_space` | 卷的总容量 / 可用容量 |
@@ -28,10 +29,12 @@ macro_rules! platform_contract {
             use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
             use crate::core::cleaner::{CleanProgress, CleanReport};
             use crate::core::disk::{MftError, MftScan};
+            use crate::core::i18n::Language;
             use std::path::Path;
             use std::sync::atomic::AtomicBool;
 
             let _: fn() -> bool = is_elevated;
+            let _: fn() -> Language = detect_system_language;
             let _: fn() -> bool = relaunch_as_admin_if_needed;
             let _: fn() -> Vec<char> = list_ntfs_volumes;
             let _: fn(char, usize) -> Result<MftScan, MftError> = scan_volume;
@@ -44,6 +47,20 @@ macro_rules! platform_contract {
             let _: fn(&Path) = reveal_in_explorer;
         };
     };
+}
+
+/// 类 Unix 系统上的语言标记：按 POSIX 优先级读 `LC_ALL` → `LC_MESSAGES` → `LANG`。
+///
+/// 返回 `en_US.UTF-8`、`zh_CN.UTF-8` 这类原始串，交给
+/// [`Language::from_locale_tag`](crate::core::i18n::Language::from_locale_tag) 判定。
+/// 一个都没设时返回空串，落到英文。
+#[cfg(not(windows))]
+fn posix_locale_tag() -> String {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -66,11 +83,17 @@ pub mod fallback {
     use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
     use crate::core::cleaner::{CleanProgress, CleanReport};
     use crate::core::disk::{MftError, MftScan};
+    use crate::core::i18n::Language;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
 
     pub fn is_elevated() -> bool {
         false
+    }
+
+    /// 按 POSIX 环境变量推断界面语言。
+    pub fn detect_system_language() -> Language {
+        Language::from_locale_tag(&crate::platform::posix_locale_tag())
     }
 
     pub fn relaunch_as_admin_if_needed() -> bool {

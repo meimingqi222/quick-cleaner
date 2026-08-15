@@ -1,7 +1,7 @@
 //! 垃圾清理类别与扫描目标规则定义
 
-use crate::core::i18n::Language;
-use std::path::PathBuf;
+use crate::core::i18n::{Language, Text};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Safety {
@@ -98,6 +98,7 @@ impl CategoryId {
         matches!(self, CategoryId::DevBuild)
     }
 
+    /// 中文文案。**仅供日志与命令行**，界面上用 `name_lang(lang)`。
     pub fn name(&self) -> &'static str {
         self.name_lang(Language::Zh)
     }
@@ -146,6 +147,7 @@ impl CategoryId {
         }
     }
 
+    /// 中文文案。**仅供日志与命令行**，界面上用 `desc_lang(lang)`。
     pub fn desc(&self) -> &'static str {
         self.desc_lang(Language::Zh)
     }
@@ -196,10 +198,13 @@ impl CategoryId {
 }
 
 /// 一个清理目标：一个具体目录路径 + 描述
+///
+/// `label` 是双语的：扫描在后台线程上跑，那时还不知道用户之后会切到哪种
+/// 语言，而语言开关必须立刻生效、不能触发重扫。
 #[derive(Clone, Debug)]
 pub struct ScanTarget {
     pub path: PathBuf,
-    pub label: String,
+    pub label: Text,
     pub category: CategoryId,
 }
 
@@ -220,13 +225,13 @@ pub fn all_targets() -> Vec<ScanTarget> {
 
         // 系统临时
         t.push(target(windows.join("Temp"), "Windows\\Temp", CategoryId::SystemTemp));
-        t.push(target(windows.join("SoftwareDistribution\\Download"), "Windows 更新缓存", CategoryId::SystemTemp));
+        t.push(target(windows.join("SoftwareDistribution\\Download"), Text::new("Windows 更新缓存", "Windows Update cache"), CategoryId::SystemTemp));
         t.push(target(windows.join("SystemTemp"), "SystemTemp", CategoryId::SystemTemp));
         t.push(target(PathBuf::from("C:\\tmp"), "C:\\tmp", CategoryId::SystemTemp));
 
         // 用户临时（精确锚定真实前台用户）
         t.push(target(crate::platform::windows::real_user_temp(), "%TEMP%", CategoryId::UserTemp));
-        t.push(target(local.join("CrashDumps"), "CrashDumps 崩溃转储", CategoryId::UserTemp));
+        t.push(target(local.join("CrashDumps"), Text::new("CrashDumps 崩溃转储", "CrashDumps"), CategoryId::UserTemp));
 
         // 浏览器缓存（全量覆盖 Default 及所有 Profile 1, Profile 2 ... 配置文件）
         push_chromium_browser_targets(&mut t, &local.join("Google\\Chrome\\User Data"), "Chrome");
@@ -234,38 +239,42 @@ pub fn all_targets() -> Vec<ScanTarget> {
         push_chromium_browser_targets(&mut t, &local.join("BraveSoftware\\Brave-Browser\\User Data"), "Brave");
 
         // 包管理缓存
-        t.push(target(local.join("npm-cache"), "npm 缓存", CategoryId::PackageCache));
-        t.push(target(home.join("npm-cache"), "npm 缓存(home)", CategoryId::PackageCache));
+        t.push(target(local.join("npm-cache"), Text::new("npm 缓存", "npm cache"), CategoryId::PackageCache));
+        t.push(target(home.join("npm-cache"), Text::new("npm 缓存 (home)", "npm cache (home)"), CategoryId::PackageCache));
         t.push(target(home.join(".pnpm-store"), "pnpm store", CategoryId::PackageCache));
         t.push(target(home.join(".pnpm-cache"), "pnpm cache", CategoryId::PackageCache));
-        t.push(target(home.join(".cargo\\registry"), "cargo registry 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".rustup\\downloads"), "rustup 下载缓存", CategoryId::PackageCache));
-        t.push(target(home.join("go\\pkg\\mod"), "go module 缓存", CategoryId::PackageCache));
-        t.push(target(local.join("go-build"), "go build 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".bun"), "bun 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".gradle\\caches"), "gradle 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".nuget\\packages"), "nuget 包缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".m2\\repository"), "maven 本地仓库", CategoryId::PackageCache));
+        t.push(target(home.join(".cargo\\registry"), Text::new("cargo registry 缓存", "cargo registry cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".rustup\\downloads"), Text::new("rustup 下载缓存", "rustup downloads"), CategoryId::PackageCache));
+        t.push(target(home.join("go\\pkg\\mod"), Text::new("go module 缓存", "go module cache"), CategoryId::PackageCache));
+        t.push(target(local.join("go-build"), Text::new("go build 缓存", "go build cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".bun"), Text::new("bun 缓存", "bun cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".gradle\\caches"), Text::new("gradle 缓存", "gradle cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".nuget\\packages"), Text::new("nuget 包缓存", "nuget package cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".m2\\repository"), Text::new("maven 本地仓库", "maven local repository"), CategoryId::PackageCache));
         t.push(target(home.join(".cache"), "~/.cache", CategoryId::PackageCache));
-        t.push(target(local.join("uv\\cache"), "uv 缓存", CategoryId::PackageCache));
-        t.push(target(local.join("pip\\cache"), "pip 缓存", CategoryId::PackageCache));
+        t.push(target(local.join("uv\\cache"), Text::new("uv 缓存", "uv cache"), CategoryId::PackageCache));
+        t.push(target(local.join("pip\\cache"), Text::new("pip 缓存", "pip cache"), CategoryId::PackageCache));
 
         // 日志
         t.push(target(windows.join("Logs"), "Windows\\Logs", CategoryId::Logs));
-        t.push(target(local.join("D3DSCache"), "D3D 着色器缓存", CategoryId::Logs));
+        t.push(target(local.join("D3DSCache"), Text::new("D3D 着色器缓存", "D3D shader cache"), CategoryId::Logs));
 
         // 回收站（只统计真实前台用户自己的 SID 子目录）
         if let Some(sid) = crate::platform::windows::real_user_sid() {
             for letter in 'A'..='Z' {
                 let rb = PathBuf::from(format!("{letter}:\\$Recycle.Bin")).join(&sid);
                 if rb.exists() {
-                    t.push(target(rb, &format!("{letter}: 回收站"), CategoryId::RecycleBin));
+                    t.push(target(
+                        rb,
+                        Text::new(format!("{letter}: 回收站"), format!("{letter}: Recycle Bin")),
+                        CategoryId::RecycleBin,
+                    ));
                 }
             }
         }
 
         // 缩略图
-        t.push(target(local.join("Microsoft\\Windows\\Explorer"), "缩略图/图标缓存", CategoryId::Thumbnails));
+        t.push(target(local.join("Microsoft\\Windows\\Explorer"), Text::new("缩略图/图标缓存", "Thumbnail / icon cache"), CategoryId::Thumbnails));
 
         // AI 编程助手的会话记录与缓存
         push_ai_agent_targets(&mut t, &home, &local, &roaming);
@@ -282,24 +291,24 @@ pub fn all_targets() -> Vec<ScanTarget> {
         t.push(target(cache.clone(), "~/Library/Caches", CategoryId::UserTemp));
 
         // 浏览器缓存
-        t.push(target(cache.join("Google/Chrome/Default"), "Chrome 缓存", CategoryId::BrowserCache));
-        t.push(target(cache.join("com.apple.Safari"), "Safari 缓存", CategoryId::BrowserCache));
-        t.push(target(cache.join("com.microsoft.edgemac"), "Edge 缓存", CategoryId::BrowserCache));
+        t.push(target(cache.join("Google/Chrome/Default"), Text::new("Chrome 缓存", "Chrome cache"), CategoryId::BrowserCache));
+        t.push(target(cache.join("com.apple.Safari"), Text::new("Safari 缓存", "Safari cache"), CategoryId::BrowserCache));
+        t.push(target(cache.join("com.microsoft.edgemac"), Text::new("Edge 缓存", "Edge cache"), CategoryId::BrowserCache));
 
         // 包管理缓存
-        t.push(target(home.join(".npm/_cacache"), "npm 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".cargo/registry"), "cargo 缓存", CategoryId::PackageCache));
-        t.push(target(home.join(".rustup/downloads"), "rustup 缓存", CategoryId::PackageCache));
-        t.push(target(home.join("go/pkg/mod"), "go 缓存", CategoryId::PackageCache));
+        t.push(target(home.join(".npm/_cacache"), Text::new("npm 缓存", "npm cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".cargo/registry"), Text::new("cargo 缓存", "cargo cache"), CategoryId::PackageCache));
+        t.push(target(home.join(".rustup/downloads"), Text::new("rustup 缓存", "rustup cache"), CategoryId::PackageCache));
+        t.push(target(home.join("go/pkg/mod"), Text::new("go 缓存", "go cache"), CategoryId::PackageCache));
         t.push(target(home.join(".cache"), "~/.cache", CategoryId::PackageCache));
-        t.push(target(home.join("Library/Caches/Homebrew"), "Homebrew 缓存", CategoryId::PackageCache));
+        t.push(target(home.join("Library/Caches/Homebrew"), Text::new("Homebrew 缓存", "Homebrew cache"), CategoryId::PackageCache));
 
         // 日志
         t.push(target(logs, "~/Library/Logs", CategoryId::Logs));
         t.push(target(PathBuf::from("/Library/Logs"), "/Library/Logs", CategoryId::Logs));
 
         // 废纸篓
-        t.push(target(home.join(".Trash"), "废纸篓", CategoryId::RecycleBin));
+        t.push(target(home.join(".Trash"), Text::new("废纸篓", "Trash"), CategoryId::RecycleBin));
     }
 
     t
@@ -317,8 +326,12 @@ fn push_chromium_browser_targets(
     // 1. 常规默认 profile
     let default_cache = user_data_dir.join("Default\\Cache");
     let default_code_cache = user_data_dir.join("Default\\Code Cache");
-    t.push(target(default_cache, &format!("{browser_name} 缓存"), CategoryId::BrowserCache));
-    t.push(target(default_code_cache, &format!("{browser_name} Code Cache"), CategoryId::BrowserCache));
+    t.push(target(
+        default_cache,
+        Text::new(format!("{browser_name} 缓存"), format!("{browser_name} cache")),
+        CategoryId::BrowserCache,
+    ));
+    t.push(target(default_code_cache, format!("{browser_name} Code Cache"), CategoryId::BrowserCache));
 
     // 2. 动态枚举多用户 Profile（如 Profile 1, Profile 2, System Profile 等）
     if let Ok(entries) = std::fs::read_dir(user_data_dir) {
@@ -332,8 +345,15 @@ fn push_chromium_browser_targets(
                 let cache = entry.path().join("Cache");
                 let code_cache = entry.path().join("Code Cache");
                 if cache.exists() || code_cache.exists() {
-                    t.push(target(cache, &format!("{browser_name} 缓存 ({name})"), CategoryId::BrowserCache));
-                    t.push(target(code_cache, &format!("{browser_name} Code Cache ({name})"), CategoryId::BrowserCache));
+                    t.push(target(
+                        cache,
+                        Text::new(
+                            format!("{browser_name} 缓存 ({name})"),
+                            format!("{browser_name} cache ({name})"),
+                        ),
+                        CategoryId::BrowserCache,
+                    ));
+                    t.push(target(code_cache, format!("{browser_name} Code Cache ({name})"), CategoryId::BrowserCache));
                 }
             }
         }
@@ -407,28 +427,29 @@ const ROAMING_AGENT_APPS: &[&str] = &[
     "@genie", "devin", "Devin - Next", "anythingllm-desktop", "crush-gui",
 ];
 
-/// `%LOCALAPPDATA%` 下的 agent 缓存目录：(目录名, 可清子目录, 展示名)。
-/// 子目录为空表示整个目录都是缓存。
-const LOCAL_AGENT_DIRS: &[(&str, &[&str], &str)] = &[
-    ("claude-cli-nodejs", &["Cache"], "Claude Code Node"),
-    ("amp", &["logs", "traces"], "Amp"),
-    ("Zed", &["logs", "hang_traces"], "Zed"),
-    ("WorkBuddy", &["logs"], "WorkBuddy"),
-    ("cursor-updater", &[], "Cursor 更新包"),
-    ("antigravity-updater", &[], "Antigravity 更新包"),
-    ("@genieworkbuddy-desktop-updater", &[], "WorkBuddy 更新包"),
-    ("@makadesktop-updater", &[], "Maka 更新包"),
-    ("@zcodedesktop-updater", &[], "zCode 更新包"),
-    ("adspower_global-updater", &[], "AdsPower 更新包"),
+/// `%LOCALAPPDATA%` 下的 agent 缓存目录：(目录名, 可清子目录, 中文展示名, 英文展示名)。
+/// 子目录为空表示整个目录都是缓存；中英一致的条目两列写同一个字符串。
+const LOCAL_AGENT_DIRS: &[(&str, &[&str], &str, &str)] = &[
+    ("claude-cli-nodejs", &["Cache"], "Claude Code Node", "Claude Code Node"),
+    ("amp", &["logs", "traces"], "Amp", "Amp"),
+    ("Zed", &["logs", "hang_traces"], "Zed", "Zed"),
+    ("WorkBuddy", &["logs"], "WorkBuddy", "WorkBuddy"),
+    ("cursor-updater", &[], "Cursor 更新包", "Cursor updates"),
+    ("antigravity-updater", &[], "Antigravity 更新包", "Antigravity updates"),
+    ("@genieworkbuddy-desktop-updater", &[], "WorkBuddy 更新包", "WorkBuddy updates"),
+    ("@makadesktop-updater", &[], "Maka 更新包", "Maka updates"),
+    ("@zcodedesktop-updater", &[], "zCode 更新包", "zCode updates"),
+    ("adspower_global-updater", &[], "AdsPower 更新包", "AdsPower updates"),
 ];
 
 /// VS Code 系编辑器里 AI 插件的全局存储（会话缓存都存这儿）。
 const VSCODE_HOSTS: &[&str] = &["Code", "Trae", "Trae CN", "Cursor", "Windsurf - Next"];
-const VSCODE_AI_EXTENSIONS: &[(&str, &str)] = &[
-    ("saoudrizwan.claude-dev", "Cline 会话缓存"),
-    ("rooveterinaryinc.roo-cline", "Roo Code 会话缓存"),
-    ("kilocode.kilo-code", "Kilo Code 会话缓存"),
-    ("github.copilot-chat", "Copilot Chat 缓存"),
+/// (插件 ID, 中文展示名, 英文展示名)
+const VSCODE_AI_EXTENSIONS: &[(&str, &str, &str)] = &[
+    ("saoudrizwan.claude-dev", "Cline 会话缓存", "Cline sessions"),
+    ("rooveterinaryinc.roo-cline", "Roo Code 会话缓存", "Roo Code sessions"),
+    ("kilocode.kilo-code", "Kilo Code 会话缓存", "Kilo Code sessions"),
+    ("github.copilot-chat", "Copilot Chat 缓存", "Copilot Chat cache"),
 ];
 
 /// 各 agent 存放临时 git worktree 的位置。
@@ -454,9 +475,9 @@ const AGENT_WORKTREE_DIRS: &[(&str, &str)] = &[
 #[cfg(windows)]
 fn push_ai_agent_targets(
     t: &mut Vec<ScanTarget>,
-    home: &PathBuf,
-    local: &PathBuf,
-    roaming: &PathBuf,
+    home: &Path,
+    local: &Path,
+    roaming: &Path,
 ) {
     const AGENT: CategoryId = CategoryId::AiAgents;
 
@@ -465,7 +486,7 @@ fn push_ai_agent_targets(
         for sub in *subs {
             t.push(target(
                 home.join(dir).join(sub),
-                &format!("{label} · {sub}"),
+                format!("{label} · {sub}"),
                 AGENT,
             ));
         }
@@ -476,21 +497,21 @@ fn push_ai_agent_targets(
         for cache in ELECTRON_CACHE_DIRS {
             t.push(target(
                 roaming.join(app).join(cache),
-                &format!("{app} · {cache}"),
+                format!("{app} · {cache}"),
                 AGENT,
             ));
         }
     }
 
     // ---- LocalAppData 下的缓存与更新包 ----
-    for (dir, subs, label) in LOCAL_AGENT_DIRS {
+    for (dir, subs, zh, en) in LOCAL_AGENT_DIRS {
         if subs.is_empty() {
-            t.push(target(local.join(dir), label, AGENT));
+            t.push(target(local.join(dir), Text::new(*zh, *en), AGENT));
         } else {
             for sub in *subs {
                 t.push(target(
                     local.join(dir).join(sub),
-                    &format!("{label} · {sub}"),
+                    Text::new(format!("{zh} · {sub}"), format!("{en} · {sub}")),
                     AGENT,
                 ));
             }
@@ -499,14 +520,14 @@ fn push_ai_agent_targets(
 
     // ---- VS Code 系 AI 插件的全局存储 ----
     for host in VSCODE_HOSTS {
-        for (ext, label) in VSCODE_AI_EXTENSIONS {
+        for (ext, zh, en) in VSCODE_AI_EXTENSIONS {
             t.push(target(
                 roaming
                     .join(host)
                     .join(r"User\globalStorage")
                     .join(ext)
                     .join("tasks"),
-                &format!("{host} · {label}"),
+                Text::new(format!("{host} · {zh}"), format!("{host} · {en}")),
                 AGENT,
             ));
         }
@@ -517,17 +538,22 @@ fn push_ai_agent_targets(
         for name in ["worktrees", ".worktrees"] {
             t.push(target(
                 home.join(dir).join(name),
-                &format!("{label} · {name}"),
+                format!("{label} · {name}"),
                 CategoryId::DevWorktrees,
             ));
         }
     }
 }
 
-fn target(path: PathBuf, label: &str, category: CategoryId) -> ScanTarget {
+/// 构造一个扫描目标。
+///
+/// `label` 收 `impl Into<Text>`：`&str` / `String` 会走 [`Text::same`]
+/// （路径、`%TEMP%`、品牌名这类中英一致的标签占大多数），需要区分语言的
+/// 用 `Text::new(zh, en)` 显式传。
+fn target(path: PathBuf, label: impl Into<Text>, category: CategoryId) -> ScanTarget {
     ScanTarget {
         path,
-        label: label.to_string(),
+        label: label.into(),
         category,
     }
 }
@@ -557,7 +583,7 @@ mod tests {
                 );
             }
         }
-        for (dir, subs, label) in LOCAL_AGENT_DIRS {
+        for (dir, subs, label, _) in LOCAL_AGENT_DIRS {
             for sub in *subs {
                 assert!(
                     !NEVER_CLEAN.contains(sub),
@@ -582,7 +608,10 @@ mod tests {
     fn all_targets_are_absolute_and_categorised() {
         for t in all_targets() {
             assert!(t.path.is_absolute(), "{:?} 不是绝对路径", t.path);
-            assert!(!t.label.is_empty());
+            // 两种语言都得有文案，别只填一半
+            for lang in Language::ALL {
+                assert!(!t.label.get(lang).is_empty(), "{:?} 缺 {lang:?} 标签", t.path);
+            }
         }
     }
 
@@ -619,7 +648,12 @@ mod tests {
             .collect();
         println!("\n本机命中 {} 个开发类固定路径目标：", agent.len());
         for t in &agent {
-            println!("  [{:?}] {} -> {}", t.category, t.label, t.path.display());
+            println!(
+                "  [{:?}] {} -> {}",
+                t.category,
+                t.label.get(Language::Zh),
+                t.path.display()
+            );
         }
     }
 }

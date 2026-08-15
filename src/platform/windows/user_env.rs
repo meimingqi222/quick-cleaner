@@ -80,3 +80,36 @@ pub fn real_user_temp() -> PathBuf {
 pub fn real_user_sid() -> Option<String> {
     get_user_context().sid.clone()
 }
+
+/// 系统 UI 语言：中文返回 `Zh`，其余一律 `En`。
+///
+/// 用 `GetUserDefaultUILanguage`（Windows 的「显示语言」，不是区域格式——
+/// 很多人区域是中国但界面装的是英文版，按区域猜会猜反）。
+///
+/// LANGID 的低 10 位是主语言 ID，`LANG_CHINESE` = 0x04，因此简体、繁体、
+/// 港澳台各变体都会落到 `Zh`。
+///
+/// 跨账户提权（OTS）时这里拿到的是**管理员**的显示语言而不是前台用户的——
+/// 拿另一个用户的 UI 语言得去加载他的注册表 hive，代价过大。影响有限：
+/// 这只是**首次启动**的默认值，用户切一次语言就会被 `core::settings` 记住。
+pub fn detect_system_language() -> crate::core::i18n::Language {
+    use crate::core::i18n::Language;
+    use winapi::um::winnls::{GetSystemDefaultUILanguage, GetUserDefaultUILanguage};
+
+    const LANG_CHINESE: u16 = 0x04;
+
+    let langid = unsafe {
+        let user = GetUserDefaultUILanguage();
+        if user == 0 {
+            GetSystemDefaultUILanguage()
+        } else {
+            user
+        }
+    };
+
+    if langid & 0x3ff == LANG_CHINESE {
+        Language::Zh
+    } else {
+        Language::En
+    }
+}

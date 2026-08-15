@@ -281,3 +281,485 @@ pub fn tr_drive_suffix(lang: Language) -> &'static str {
         Language::En => "Drive",
     }
 }
+
+// ============================================================================
+// 状态栏文案
+//
+// 这些串以前直接写死在 `ui/mod.rs` 里——界面其余部分都双语了，只有状态栏
+// 在英文模式下仍然一路中文。带参数的返回 String，不带参数的返回
+// &'static str，与本文件其余词条保持一致。
+// ============================================================================
+
+pub fn tr_status_ready(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "就绪",
+        Language::En => "Ready",
+    }
+}
+
+pub fn tr_status_scanning(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在扫描可清理内容…",
+        Language::En => "Scanning for cleanable content…",
+    }
+}
+
+pub fn tr_status_scan_done(lang: Language, total: &str) -> String {
+    match lang {
+        Language::Zh => format!("扫描完成，共发现 {total} 可清理"),
+        Language::En => format!("Scan complete — {total} cleanable"),
+    }
+}
+
+pub fn tr_status_disk_scanning(lang: Language, vol: char) -> String {
+    match lang {
+        Language::Zh => format!("正在深度分析磁盘 {vol}: 空间占用…"),
+        Language::En => format!("Analyzing space usage on {vol}:…"),
+    }
+}
+
+pub fn tr_status_disk_done(lang: Language, files: u64, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("磁盘分析完成：已索引 {files} 个文件，占用 {size}"),
+        Language::En => format!("Disk analysis complete — {files} files indexed, {size} used"),
+    }
+}
+
+pub fn tr_status_disk_failed(lang: Language, err: &str) -> String {
+    match lang {
+        Language::Zh => format!("磁盘分析失败：{err}"),
+        Language::En => format!("Disk analysis failed: {err}"),
+    }
+}
+
+pub fn tr_status_apps_scanning(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在智能检索已安装软件与空间占用…",
+        Language::En => "Discovering installed apps and their disk usage…",
+    }
+}
+
+pub fn tr_status_apps_done(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("已加载 {count} 款软件，估算总占用 {size}"),
+        Language::En => format!("Loaded {count} apps, about {size} in total"),
+    }
+}
+
+pub fn tr_status_uninstall_waiting(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("已记录「{name}」的关联痕迹，正在等待官方卸载程序结束…"),
+        Language::En => {
+            format!("Traces of \"{name}\" recorded — waiting for its uninstaller to finish…")
+        }
+    }
+}
+
+pub fn tr_status_uninstall_done(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("「{name}」官方卸载已完成"),
+        Language::En => format!("\"{name}\" uninstaller finished"),
+    }
+}
+
+pub fn tr_status_uninstall_failed(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("「{name}」官方卸载未正常完成"),
+        Language::En => format!("\"{name}\" uninstaller did not complete normally"),
+    }
+}
+
+pub fn tr_status_uninstall_residual(lang: Language, head: &str, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("{head}，复核后仍有 {count} 项残留（{size}）"),
+        Language::En => format!("{head} — {count} leftovers remain after verification ({size})"),
+    }
+}
+
+pub fn tr_status_residual_scanning(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("正在深度扫描「{name}」的文件与注册表残留…"),
+        Language::En => format!("Deep-scanning file and registry leftovers of \"{name}\"…"),
+    }
+}
+
+pub fn tr_status_residual_done(lang: Language, name: &str, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("残留扫描完成：发现「{name}」的 {count} 项残留，共 {size}"),
+        Language::En => format!("Scan complete — {count} leftovers of \"{name}\", {size} total"),
+    }
+}
+
+pub fn tr_status_residual_none_selected(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "未选择任何要清除的残留项",
+        Language::En => "No leftover items selected",
+    }
+}
+
+pub fn tr_status_residual_cleaning(lang: Language, name: &str, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在彻底清除「{name}」的 {count} 项残留…"),
+        Language::En => format!("Removing {count} leftovers of \"{name}\"…"),
+    }
+}
+
+pub fn tr_status_residual_cleaned(lang: Language, name: &str, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("已彻底清除「{name}」的 {count} 项残留，释放 {size}"),
+        Language::En => format!("Removed {count} leftovers of \"{name}\", freed {size}"),
+    }
+}
+
+pub fn tr_status_residual_cleaned_partial(
+    lang: Language,
+    name: &str,
+    size: &str,
+    skipped: usize,
+) -> String {
+    match lang {
+        Language::Zh => {
+            format!("「{name}」清除完成，释放 {size}（{skipped} 项被占用或权限不足已跳过）")
+        }
+        Language::En => format!(
+            "\"{name}\" cleaned, freed {size} ({skipped} skipped — in use or access denied)"
+        ),
+    }
+}
+
+pub fn tr_status_stopping(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在停止清理…",
+        Language::En => "Stopping the cleanup…",
+    }
+}
+
+pub fn tr_status_nothing_selected(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "没有勾选任何要清理的内容",
+        Language::En => "Nothing is selected for cleaning",
+    }
+}
+
+pub fn tr_status_deleting_n(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在永久删除 {count} 项…"),
+        Language::En => format!("Permanently deleting {count} items…"),
+    }
+}
+
+pub fn tr_status_clean_done(lang: Language, files: u64, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("清理完成：已删除 {files} 个文件，释放 {size}"),
+        Language::En => format!("Cleanup complete — {files} files deleted, {size} freed"),
+    }
+}
+
+pub fn tr_status_clean_done_partial(
+    lang: Language,
+    files: u64,
+    size: &str,
+    skipped: usize,
+) -> String {
+    match lang {
+        Language::Zh => {
+            format!("清理完成：已删除 {files} 个文件，释放 {size}（{skipped} 项被占用已跳过）")
+        }
+        Language::En => format!(
+            "Cleanup complete — {files} files deleted, {size} freed ({skipped} skipped, in use)"
+        ),
+    }
+}
+
+pub fn tr_status_deleting_path(lang: Language, path: &str) -> String {
+    match lang {
+        Language::Zh => format!("正在删除 {path}…"),
+        Language::En => format!("Deleting {path}…"),
+    }
+}
+
+pub fn tr_status_deleted_path(lang: Language, path: &str, files: u64, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("已删除 {path}（{files} 个文件，{size}）"),
+        Language::En => format!("Deleted {path} ({files} files, {size})"),
+    }
+}
+
+pub fn tr_status_delete_failed(lang: Language, path: &str) -> String {
+    match lang {
+        Language::Zh => format!("删除失败：{path}（被占用或权限不足）"),
+        Language::En => format!("Failed to delete {path} (in use or access denied)"),
+    }
+}
+
+pub fn tr_status_batch_deleting(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在批量删除 {count} 项…"),
+        Language::En => format!("Deleting {count} selected items…"),
+    }
+}
+
+pub fn tr_status_batch_done(lang: Language, files: u64, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("批量删除完成：已删除 {files} 个文件，释放 {size}"),
+        Language::En => format!("Batch delete complete — {files} files deleted, {size} freed"),
+    }
+}
+
+pub fn tr_status_batch_done_partial(lang: Language, size: &str, skipped: usize) -> String {
+    match lang {
+        Language::Zh => format!("批量删除完成，释放 {size}（{skipped} 项受保护或被占用已跳过）"),
+        Language::En => {
+            format!("Batch delete complete, freed {size} ({skipped} skipped — protected or in use)")
+        }
+    }
+}
+
+// ============================================================================
+// 确认对话框文案
+//
+// 本工具只做永久删除（不经回收站），所以这里的警告语是「删了就没了」。
+// 这条产品决定写在 README 的「删除语义」一节。
+// ============================================================================
+
+pub fn tr_confirm_delete_selected_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认永久删除选中项",
+        Language::En => "Confirm permanent deletion",
+    }
+}
+
+pub fn tr_confirm_delete_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认永久删除",
+        Language::En => "Confirm permanent deletion",
+    }
+}
+
+pub fn tr_confirm_delete_selected_msg(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("将永久删除 {count} 项，释放约 {size} 磁盘空间。"),
+        Language::En => format!("{count} items will be permanently deleted, freeing about {size}."),
+    }
+}
+
+pub fn tr_confirm_delete_msg(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("将删除 {count} 项，共 {size}。"),
+        Language::En => format!("{count} items will be deleted, {size} in total."),
+    }
+}
+
+pub fn tr_confirm_delete_path_msg(lang: Language, path: &str, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("将删除 {path}（{size}）。"),
+        Language::En => format!("{path} ({size}) will be deleted."),
+    }
+}
+
+/// 「不进回收站」的基础警告。
+pub fn tr_confirm_no_recycle(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "文件不会进入回收站，删除后无法恢复。",
+        Language::En => "Files do not go to the Recycle Bin and cannot be recovered.",
+    }
+}
+
+/// 批量删除时的警告：多提醒一句「别把重要数据勾进去了」。
+pub fn tr_confirm_no_recycle_check_data(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "文件与目录不会进入回收站，删除后无法恢复。请确认没有重要数据。",
+        Language::En => "Files and folders do not go to the Recycle Bin and cannot be recovered. Make sure nothing important is selected.",
+    }
+}
+
+/// 删单个路径时的警告：多提醒一句「别删正在跑的程序的数据」。
+pub fn tr_confirm_no_recycle_check_running(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "文件不会进入回收站，删除后无法恢复。请确认它不是正在使用的程序或数据。",
+        Language::En => "Files do not go to the Recycle Bin and cannot be recovered. Make sure this is not data of a program that is currently running.",
+    }
+}
+
+pub fn tr_protected_path(lang: Language, path: &str) -> String {
+    match lang {
+        Language::Zh => format!("「{path}」是受保护的系统路径，不能删除"),
+        Language::En => format!("\"{path}\" is a protected system path and cannot be deleted"),
+    }
+}
+
+// ============================================================================
+// 顶栏 / 进度条 / 列表里剩下的零散文案
+// ============================================================================
+
+pub fn tr_btn_rescan(lang: Language, busy: bool) -> &'static str {
+    match (lang, busy) {
+        (Language::Zh, true) => "扫描中…",
+        (Language::Zh, false) => "重新扫描",
+        (Language::En, true) => "Scanning…",
+        (Language::En, false) => "Rescan",
+    }
+}
+
+pub fn tr_btn_refresh_apps(lang: Language, busy: bool) -> &'static str {
+    match (lang, busy) {
+        (Language::Zh, true) => "读取中…",
+        (Language::Zh, false) => "刷新软件列表",
+        (Language::En, true) => "Loading…",
+        (Language::En, false) => "Refresh apps",
+    }
+}
+
+pub fn tr_btn_reanalyze_disk(lang: Language, busy: bool) -> &'static str {
+    match (lang, busy) {
+        (Language::Zh, true) => "扫描中…",
+        (Language::Zh, false) => "重新分析磁盘",
+        (Language::En, true) => "Scanning…",
+        (Language::En, false) => "Re-analyze disk",
+    }
+}
+
+pub fn tr_elevation_mode(lang: Language, elevated: bool) -> &'static str {
+    match (lang, elevated) {
+        (Language::Zh, true) => "管理员模式",
+        (Language::Zh, false) => "普通模式",
+        (Language::En, true) => "Administrator",
+        (Language::En, false) => "Standard user",
+    }
+}
+
+pub fn tr_freed_pill(lang: Language, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("本次已释放 {size}"),
+        Language::En => format!("{size} freed"),
+    }
+}
+
+pub fn tr_file_count(lang: Language, count: &str) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个文件"),
+        Language::En => format!("{count} files"),
+    }
+}
+
+pub fn tr_file_progress(lang: Language, done: &str, total: &str) -> String {
+    match lang {
+        Language::Zh => format!("{done} / {total} 个文件"),
+        Language::En => format!("{done} / {total} files"),
+    }
+}
+
+pub fn tr_clean_phase(lang: Language, cancelling: bool) -> &'static str {
+    match (lang, cancelling) {
+        (Language::Zh, true) => "正在停止…",
+        (Language::Zh, false) => "正在永久删除",
+        (Language::En, true) => "Stopping…",
+        (Language::En, false) => "Deleting permanently",
+    }
+}
+
+pub fn tr_failed_count(lang: Language, count: &str) -> String {
+    match lang {
+        Language::Zh => format!("失败 {count}"),
+        Language::En => format!("{count} failed"),
+    }
+}
+
+pub fn tr_btn_stop(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "停止",
+        Language::En => "Stop",
+    }
+}
+
+pub fn tr_category_empty(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "此类别未发现可清理内容",
+        Language::En => "Nothing cleanable found in this category",
+    }
+}
+
+pub fn tr_last_clean_skipped(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("上次清理有 {count} 处项目被占用或受系统保护而跳过"),
+        Language::En => format!("{count} items were skipped last time — in use or system-protected"),
+    }
+}
+
+pub fn tr_toggle_details(lang: Language, expanded: bool) -> &'static str {
+    match (lang, expanded) {
+        (Language::Zh, true) => "收起详情 ▴",
+        (Language::Zh, false) => "查看详情 ▾",
+        (Language::En, true) => "Hide details ▴",
+        (Language::En, false) => "Show details ▾",
+    }
+}
+
+pub fn tr_volume_root(lang: Language, vol: char) -> String {
+    match lang {
+        Language::Zh => format!("{vol}: 根目录"),
+        Language::En => format!("{vol}: root"),
+    }
+}
+
+pub fn tr_space_breakdown(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "空间占比分布",
+        Language::En => "Space breakdown",
+    }
+}
+
+pub fn tr_top_n_categories(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("Top {count} 分类"),
+        Language::En => format!("Top {count} categories"),
+    }
+}
+
+pub fn tr_status_install_path(lang: Language, path: &str) -> String {
+    match lang {
+        Language::Zh => format!("已获取安装路径：{path}"),
+        Language::En => format!("Install path: {path}"),
+    }
+}
+
+pub fn tr_status_no_install_path(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("软件「{name}」无独立安装路径"),
+        Language::En => format!("\"{name}\" has no dedicated install directory"),
+    }
+}
+
+/// MFT 扫描失败原因。
+///
+/// `MftError` 自己的 `Display` 是给 `mftscan` 命令行和日志用的（固定中文），
+/// 界面上要跟随语言，所以在这里单独翻一份。
+pub fn tr_mft_error(lang: Language, err: &crate::core::disk::MftError) -> String {
+    use crate::core::disk::MftError;
+    match (lang, err) {
+        (Language::Zh, MftError::AccessDenied) => "需要管理员权限才能读取 $MFT".into(),
+        (Language::Zh, MftError::NotNtfs) => "该卷不是 NTFS 或无法获取卷信息".into(),
+        (Language::Zh, MftError::Io(e)) => format!("读取失败：{e}"),
+        (Language::En, MftError::AccessDenied) => "Administrator rights are required to read $MFT".into(),
+        (Language::En, MftError::NotNtfs) => "Not an NTFS volume, or volume info is unavailable".into(),
+        (Language::En, MftError::Io(e)) => format!("Read failed: {e}"),
+    }
+}
+
+/// 第一阶段扫完的状态：结果已经能用了，第二阶段还在后台跑。
+pub fn tr_status_scan_fixed_done(lang: Language, total: &str) -> String {
+    match lang {
+        Language::Zh => format!("系统垃圾扫描完成，共 {total}；正在后台检索项目构建产物…"),
+        Language::En => {
+            format!("System junk scanned — {total}; still looking for build artifacts…")
+        }
+    }
+}
+
+/// 开发者类目在第二阶段跑完之前显示的占位。
+pub fn tr_discovering(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "检索中…",
+        Language::En => "Scanning…",
+    }
+}

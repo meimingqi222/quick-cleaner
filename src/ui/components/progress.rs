@@ -2,6 +2,7 @@
 
 use crate::core::model::{commas, fmt_size, truncate};
 use crate::ui::components::buttons::ghost_button;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, Animation, AnimationExt as _, Context, Div, IntoElement, SharedString};
@@ -22,7 +23,7 @@ pub fn render_scan_line() -> Div {
                     SharedString::from("scan-progress"),
                     Animation::new(Duration::from_millis(1400)).repeat(),
                     |bar, delta| {
-                        let w = ((delta * 2.0).fract()) as f32 * 100.0;
+                        let w = (delta * 2.0).fract() * 100.0;
                         bar.w(px(w))
                     },
                 ),
@@ -33,14 +34,15 @@ pub fn render_scan_line() -> Div {
 pub fn render_progress_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
     const TRACK: f32 = 720.;
 
+    let lang = root.language;
     let snap = root.clean_snapshot().unwrap_or_default();
     let ratio = snap.ratio();
     let cancelling = snap.cancelled;
 
     let counts = if snap.total_files > 0 {
-        format!("{} / {} 个文件", commas(snap.files), commas(snap.total_files))
+        tr_file_progress(lang, &commas(snap.files), &commas(snap.total_files))
     } else {
-        format!("{} 个文件", commas(snap.files))
+        tr_file_count(lang, &commas(snap.files))
     };
     let bytes = if snap.total_bytes > 0 {
         format!("{} / {}", fmt_size(snap.bytes), fmt_size(snap.total_bytes))
@@ -74,11 +76,7 @@ pub fn render_progress_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElem
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(rgb(if cancelling { OUTLINE } else { ERROR }))
-                                .child(if cancelling {
-                                    String::from("正在停止…")
-                                } else {
-                                    String::from("正在永久删除")
-                                }),
+                                .child(tr_clean_phase(lang, cancelling)),
                         )
                         .child(div().flex_1())
                         .child(div().text_xs().text_color(rgb(MUTED)).child(counts))
@@ -87,7 +85,7 @@ pub fn render_progress_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElem
                                 div()
                                     .text_xs()
                                     .text_color(rgb(ERROR))
-                                    .child(format!("失败 {}", commas(snap.failed))),
+                                    .child(tr_failed_count(lang, &commas(snap.failed))),
                             )
                         }),
                 )
@@ -130,7 +128,7 @@ pub fn render_progress_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElem
                         .child(
                             div()
                                 .id("cancel-clean")
-                                .child(ghost_button(String::from("停止"), !cancelling))
+                                .child(ghost_button(String::from(tr_btn_stop(lang)), !cancelling))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.cancel_clean(cx);
                                 })),

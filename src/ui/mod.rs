@@ -16,14 +16,18 @@ use crate::core::cleaner::{
 use crate::core::safety::is_protected;
 use crate::core::apps::filter_and_sort_apps;
 use crate::core::disk::{DiskSelectionState, MftScan, Node};
-use crate::core::i18n::Language;
+use crate::core::i18n::{bilingual, Language, Text};
+use crate::core::settings::Settings;
 use crate::core::model::{fmt_size, Check};
-use crate::core::scanner::{apply_clean_result, scan_all, CategorySummary, ScanItem};
+use crate::core::scanner::{
+    apply_clean_result, merge_discovered, scan_discovered, scan_fixed, CategorySummary, ScanItem,
+};
 use crate::platform::{
     get_volume_space, is_elevated, list_installed_apps, list_ntfs_volumes, run_uninstaller_and_wait,
     scan_residuals, clean_residuals, scan_volume, verify_residuals,
 };
 use crate::ui::components::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::views::*;
 
@@ -38,14 +42,27 @@ use std::time::Duration;
 
 pub struct Root {
     pub language: Language,
+    /// 落盘的用户设置。语言以它为准：首次启动没有配置文件时，
+    /// `Settings::default()` 会按系统显示语言给出默认值。
+    pub settings: Settings,
     pub categories: Vec<CategorySummary>,
     pub scanned: bool,
     pub scanning: bool,
     pub view: View,
     pub cleaning: bool,
     pub scan_task: Option<Task<()>>,
+    /// 第二阶段（构建产物检索）的任务槽。它比第一阶段慢一个数量级，
+    /// 必须独立持有，否则会和第一阶段互相顶掉句柄。
+    pub discover_task: Option<Task<()>>,
+    /// 第二阶段是否还在跑。界面靠它给开发者类目显示「检索中」。
+    pub discovering: bool,
+    /// 每发起一轮扫描就自增。第二阶段回来时用它判断「我属于的那轮扫描
+    /// 是不是已经被新的一轮顶掉了」，避免把过期结果并进新数据。
+    pub scan_gen: u64,
     pub live: Arc<AtomicBool>,
-    pub status: String,
+    /// 状态栏文案。存双语而不是渲染好的字符串——状态栏是常驻的，
+    /// 用户切语言时最后那句话也得跟着变，不能停在写入时的语言上。
+    pub status: Text,
     pub freed_total: u64,
     pub last_failed: Vec<PathBuf>,
     pub last_failed_files: u64,
@@ -97,7 +114,9 @@ pub struct Root {
     // ---- 磁盘分析（Disk Lens 空间透镜）----
     pub mft: Option<MftScan>,
     pub mft_scanning: bool,
-    pub mft_error: Option<String>,
+    /// 保留错误值本身而不是渲染好的字符串：错误卡片会一直挂在界面上，
+    /// 用户中途切语言时它也得跟着变。
+    pub mft_error: Option<crate::core::disk::MftError>,
     pub mft_task: Option<Task<()>>,
     pub volumes: Vec<char>,
     pub disk_volume: char,
@@ -154,16 +173,22 @@ impl Root {
         };
         let disk_space = get_volume_space(disk_volume);
         let apps_focus_handle = cx.focus_handle();
+        // 有配置文件就照配置文件，没有就按系统显示语言（中文系统用中文，其余英文）
+        let settings = Settings::load();
         Self {
-            language: Language::Zh,
+            language: settings.language,
+            settings,
             categories: Vec::new(),
             scanned: false,
             scanning: false,
             view: View::Dashboard,
             cleaning: false,
             scan_task: None,
+            discover_task: None,
+            discovering: false,
+            scan_gen: 0,
             live: Arc::new(AtomicBool::new(true)),
-            status: "就绪".into(),
+            status: bilingual(|l| tr_status_ready(l).to_string()),
             freed_total: 0,
             last_failed: Vec::new(),
             last_failed_files: 0,
@@ -206,7 +231,7 @@ impl Root {
             volumes,
             disk_volume,
             disk_tab: DiskTab::Tree,
-            disk_path: vec![5],
+            disk_path: vec![crate::core::disk::ROOT_NODE],
             disk_sel: DiskSelectionState::new(),
             disk_space,
             disk_rows: Vec::new(),
@@ -219,19 +244,25 @@ impl Root {
     }
 
     pub fn toggle_language(&mut self, cx: &mut Context<Self>) {
-        self.language = self.language.toggle();
-        self.apps_gen += 1; // 触发派生缓存刷新
-        self.mft_gen += 1;
-        cx.notify();
+        self.set_language(self.language.toggle(), cx);
     }
 
+    /// 切换界面语言并**立刻落盘**。
+    ///
+    /// 写盘放在这里而不是退出时：GPUI 应用被任务管理器结束、或者清理过程中崩溃，
+    /// 都不会走到退出路径，那样用户就会觉得「设置没保存」。一次几十字节的写入，
+    /// 频率是「用户点了语言按钮」，不值得为它做延迟落盘。
     pub fn set_language(&mut self, lang: Language, cx: &mut Context<Self>) {
-        if self.language != lang {
-            self.language = lang;
-            self.apps_gen += 1;
-            self.mft_gen += 1;
-            cx.notify();
+        if self.language == lang {
+            return;
         }
+        self.language = lang;
+        // 双语标签是随渲染缓存一起取的，改语言必须让两个派生缓存失效
+        self.apps_gen += 1;
+        self.mft_gen += 1;
+        self.settings.language = lang;
+        self.settings.save();
+        cx.notify();
     }
 
     pub fn open_app_context_menu(&mut self, app: InstalledApp, x: f32, y: f32) {
@@ -242,16 +273,30 @@ impl Root {
         self.apps_context_menu = None;
     }
 
+    /// 发起一轮扫描。**分两个阶段**，界面不必等最慢的那条通道。
+    ///
+    /// 第一阶段扫固定路径表（`%TEMP%`、各种缓存目录），本机约 1 秒就能出结果，
+    /// 界面立刻可用；第二阶段才去全盘检索构建产物，那是整轮里最贵的一步
+    /// （本机 25 秒量级），跑完再把结果并进列表。
+    ///
+    /// 之所以值得拆：耗时几乎全在第二阶段，而它对应的「项目构建产物」类目
+    /// **默认根本不勾选**——让用户为一个默认不清的类目干等半分钟，代价和收益
+    /// 完全不成比例。
     pub fn start_scan(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
             return;
         }
+        // 通知上一轮（可能还在跑的第二阶段）停下
         self.live.store(false, Ordering::Relaxed);
         self.scan_task.take();
+        self.discover_task.take();
 
+        self.scan_gen += 1;
+        let gen = self.scan_gen;
         self.scanning = true;
         self.scanned = false;
-        self.status = "正在扫描可清理内容…".into();
+        self.discovering = false;
+        self.status = bilingual(|l| tr_status_scanning(l).to_string());
         let live = Arc::new(AtomicBool::new(true));
         self.live = live.clone();
         self.start_tick(cx);
@@ -260,7 +305,7 @@ impl Root {
         let targets = all_targets();
         let scan = cx
             .background_executor()
-            .spawn(async move { scan_all(&targets, &live) });
+            .spawn(async move { scan_fixed(&targets, &live) });
         self.scan_task = Some(cx.spawn(async move |this, cx| {
             let result = scan.await;
             this.update(cx, |this, cx| {
@@ -268,8 +313,37 @@ impl Root {
                 this.scanned = true;
                 this.scanning = false;
                 this.select_recommended();
-                let total: u64 = this.categories.iter().map(|c| c.total_size).sum();
-                this.status = format!("扫描完成，共发现 {} 可清理", fmt_size(total));
+                let total_str = fmt_size(this.total_cleanable());
+                this.status = bilingual(|l| tr_status_scan_fixed_done(l, &total_str));
+                this.start_discovery(gen, cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// 第二阶段：全盘检索构建产物，跑完并进已有分类。
+    ///
+    /// `gen` 是发起这轮扫描时的 `scan_gen`。回来时如果对不上，说明用户已经
+    /// 点了「重新扫描」，这份结果属于上一轮，直接丢掉——否则会把过期数据
+    /// （甚至是被取消后只跑了一半的数据）并进新列表。
+    fn start_discovery(&mut self, gen: u64, cx: &mut Context<Self>) {
+        self.discovering = true;
+        let live = self.live.clone();
+        let discover = cx
+            .background_executor()
+            .spawn(async move { scan_discovered(&live) });
+
+        self.discover_task = Some(cx.spawn(async move |this, cx| {
+            let items = discover.await;
+            this.update(cx, |this, cx| {
+                if this.scan_gen != gen {
+                    return;
+                }
+                this.discovering = false;
+                merge_discovered(&mut this.categories, items);
+                let total_str = fmt_size(this.total_cleanable());
+                this.status = bilingual(|l| tr_status_scan_done(l, &total_str));
                 cx.notify();
             })
             .ok();
@@ -458,7 +532,7 @@ impl Root {
         self.mft = None;
         self.disk_rows.clear();
         self.disk_rows_key = None;
-        self.disk_path = vec![5];
+        self.disk_path = vec![crate::core::disk::ROOT_NODE];
         self.disk_sel.clear();
         self.start_mft_scan(cx);
     }
@@ -473,7 +547,7 @@ impl Root {
         self.disk_space = get_volume_space(vol);
         self.disk_sel.clear();
         let saved_path = self.current_disk_full_path();
-        self.status = format!("正在深度分析磁盘 {vol}: 空间占用…");
+        self.status = bilingual(|l| tr_status_disk_scanning(l, vol));
         self.start_tick(cx);
         cx.notify();
 
@@ -487,13 +561,10 @@ impl Root {
                 this.mft_scanning = false;
                 match result {
                     Ok(s) => {
-                        this.status = format!(
-                            "磁盘分析完成：已索引 {} 个文件，占用 {}",
-                            s.file_count,
-                            fmt_size(s.total_size)
-                        );
+                        let (files, used) = (s.file_count, fmt_size(s.total_size));
+                        this.status = bilingual(|l| tr_status_disk_done(l, files, &used));
                         // 仅当 saved_path 确实属于当前卷时才尝试恢复层级；跨盘切换时直接回到新盘根目录
-                        let is_same_vol = saved_path.as_ref().map_or(false, |p| {
+                        let is_same_vol = saved_path.as_ref().is_some_and(|p| {
                             p.to_string_lossy().starts_with(&format!("{vol}:"))
                         });
                         if is_same_vol {
@@ -514,8 +585,8 @@ impl Root {
                         this.mft_gen += 1;
                     }
                     Err(e) => {
-                        this.status = format!("磁盘分析失败：{e}");
-                        this.mft_error = Some(e.to_string());
+                        this.status = bilingual(|l| tr_status_disk_failed(l, &tr_mft_error(l, &e)));
+                        this.mft_error = Some(e);
                         this.mft = None;
                         this.mft_gen += 1;
                     }
@@ -564,23 +635,10 @@ impl Root {
         let count = self.disk_sel.len();
         let lang = self.language;
 
-        let (title, body, detail) = match lang {
-            crate::core::i18n::Language::Zh => (
-                "确认永久删除选中项".to_string(),
-                format!("将永久删除 {} 项，释放约 {} 磁盘空间。", count, fmt_size(total_size)),
-                "文件与目录不会进入回收站，删除后无法恢复。请确认没有重要数据。".to_string(),
-            ),
-            crate::core::i18n::Language::En => (
-                "Confirm Permanent Deletion".to_string(),
-                format!("Permanently delete {} items, freeing approx {}.", count, fmt_size(total_size)),
-                "Items will be deleted permanently without moving to Recycle Bin. Please ensure no vital data is selected.".to_string(),
-            ),
-        };
-
         self.confirm = Some(ConfirmRequest {
-            title,
-            body,
-            detail,
+            title: tr_confirm_delete_selected_title(lang).to_string(),
+            body: tr_confirm_delete_selected_msg(lang, count, &fmt_size(total_size)),
+            detail: tr_confirm_no_recycle_check_data(lang).to_string(),
             kind: ConfirmKind::CleanDiskSelected,
         });
         cx.notify();
@@ -592,7 +650,7 @@ impl Root {
         }
         self.apps_scanning = true;
         self.apps_scanned = false;
-        self.status = "正在智能检索已安装软件与空间占用…".into();
+        self.status = bilingual(|l| tr_status_apps_scanning(l).to_string());
         self.start_tick(cx);
         cx.notify();
 
@@ -609,11 +667,8 @@ impl Root {
                 this.apps_scanned = true;
                 this.apps_scanning = false;
                 let total_size: u64 = this.apps.iter().map(|a| a.estimated_size).sum();
-                this.status = format!(
-                    "已加载 {} 款软件，估算总占用 {}",
-                    this.apps.len(),
-                    fmt_size(total_size)
-                );
+                let (count, size) = (this.apps.len(), fmt_size(total_size));
+                this.status = bilingual(|l| tr_status_apps_done(l, count, &size));
                 cx.notify();
             })
             .ok();
@@ -634,8 +689,7 @@ impl Root {
 
         self.residual_scanning = true;
         self.residual_result = None;
-        self.status =
-            format!("已记录「{name}」的关联痕迹，正在等待官方卸载程序结束…");
+        self.status = bilingual(|l| tr_status_uninstall_waiting(l, &name));
         self.start_tick(cx);
         cx.notify();
 
@@ -659,17 +713,16 @@ impl Root {
                     items: remaining,
                     total_file_size: total,
                 };
-                let uninstalled = result.is_ok();
-                this.status = format!(
-                    "{}，复核后仍有 {} 项残留（{}）",
-                    if uninstalled {
-                        format!("「{name}」官方卸载已完成")
+                let ok = result.is_ok();
+                let (count, size) = (res.items.len(), fmt_size(res.total_file_size));
+                this.status = bilingual(|l| {
+                    let head = if ok {
+                        tr_status_uninstall_done(l, &name)
                     } else {
-                        format!("「{name}」官方卸载未正常完成")
-                    },
-                    res.items.len(),
-                    fmt_size(res.total_file_size)
-                );
+                        tr_status_uninstall_failed(l, &name)
+                    };
+                    tr_status_uninstall_residual(l, &head, count, &size)
+                });
                 this.residual_selected = res.default_selection();
                 this.residual_result = Some(res);
                 cx.notify();
@@ -684,7 +737,8 @@ impl Root {
         }
         self.residual_scanning = true;
         self.residual_result = None;
-        self.status = format!("正在深度扫描「{}」的文件与注册表残留…", app.name);
+        let scanning_name = app.name.clone();
+        self.status = bilingual(|l| tr_status_residual_scanning(l, &scanning_name));
         cx.notify();
 
         let target = app.clone();
@@ -699,12 +753,8 @@ impl Root {
                 let count = res.items.len();
                 // 只预勾「确定」的；模糊匹配出来的交给用户自己判断
                 this.residual_selected = res.default_selection();
-                this.status = format!(
-                    "残留扫描完成：发现「{}」的 {} 项残留，共 {}",
-                    res.app_name,
-                    count,
-                    fmt_size(res.total_file_size)
-                );
+                let (name, size) = (res.app_name.clone(), fmt_size(res.total_file_size));
+                this.status = bilingual(|l| tr_status_residual_done(l, &name, count, &size));
                 this.residual_result = Some(res);
                 cx.notify();
             })
@@ -723,7 +773,7 @@ impl Root {
             .collect();
 
         if items_to_clean.is_empty() {
-            self.status = "未选择任何要清除的残留项".into();
+            self.status = bilingual(|l| tr_status_residual_none_selected(l).to_string());
             cx.notify();
             return;
         }
@@ -735,7 +785,10 @@ impl Root {
         // 残留项被全部选中时，这个软件才算真的清干净了，行才能从列表移除
         let cleaned_everything = items_to_clean.len() == res.items.len();
         let app_name = res.app_name.clone();
-        self.status = format!("正在彻底清除「{}」的 {} 项残留…", res.app_name, items_to_clean.len());
+        let cleaning_name = res.app_name.clone();
+        let cleaning_count = items_to_clean.len();
+        self.status =
+            bilingual(|l| tr_status_residual_cleaning(l, &cleaning_name, cleaning_count));
         cx.notify();
 
         let clean = cx
@@ -757,21 +810,14 @@ impl Root {
                     this.apps_gen += 1;
                 }
 
-                this.status = if report.failed.is_empty() {
-                    format!(
-                        "已彻底清除「{}」的 {} 项残留，释放 {}",
-                        app_name,
-                        report.ok,
-                        fmt_size(snap.bytes)
-                    )
-                } else {
-                    format!(
-                        "「{}」清除完成，释放 {}（{} 项被占用或权限不足已跳过）",
-                        app_name,
-                        fmt_size(snap.bytes),
-                        report.failed.len()
-                    )
-                };
+                let (ok, fails, size) = (report.ok, report.failed.len(), fmt_size(snap.bytes));
+                this.status = bilingual(|l| {
+                    if fails == 0 {
+                        tr_status_residual_cleaned(l, &app_name, ok, &size)
+                    } else {
+                        tr_status_residual_cleaned_partial(l, &app_name, &size, fails)
+                    }
+                });
                 cx.notify();
             })
             .ok();
@@ -784,23 +830,10 @@ impl Root {
             return;
         }
         let lang = self.language;
-        let (title, body, detail) = match lang {
-            crate::core::i18n::Language::Zh => (
-                "确认永久删除".to_string(),
-                format!("将删除 {} 项，共 {}。", count, fmt_size(self.selected_size())),
-                "文件不会进入回收站，删除后无法恢复。".to_string(),
-            ),
-            crate::core::i18n::Language::En => (
-                "Confirm Permanent Deletion".to_string(),
-                format!("Deleting {} items, totaling {}.", count, fmt_size(self.selected_size())),
-                "Files will not enter the Recycle Bin and cannot be recovered.".to_string(),
-            ),
-        };
-
         self.confirm = Some(ConfirmRequest {
-            title,
-            body,
-            detail,
+            title: tr_confirm_delete_title(lang).to_string(),
+            body: tr_confirm_delete_msg(lang, count, &fmt_size(self.selected_size())),
+            detail: tr_confirm_no_recycle(lang).to_string(),
             kind: ConfirmKind::CleanSelected,
         });
         cx.notify();
@@ -812,31 +845,16 @@ impl Root {
         }
         let lang = self.language;
         if is_protected(&path) {
-            self.status = match lang {
-                crate::core::i18n::Language::Zh => format!("「{}」是受保护的系统路径，不能删除", path.display()),
-                crate::core::i18n::Language::En => format!("\"{}\" is a system-protected path and cannot be deleted", path.display()),
-            };
+            let shown = path.display().to_string();
+            self.status = bilingual(|l| tr_protected_path(l, &shown));
             cx.notify();
             return;
         }
 
-        let (title, body, detail) = match lang {
-            crate::core::i18n::Language::Zh => (
-                "确认永久删除".to_string(),
-                format!("将删除 {}（{}）。", path.display(), fmt_size(size)),
-                "文件不会进入回收站，删除后无法恢复。请确认它不是正在使用的程序或数据。".to_string(),
-            ),
-            crate::core::i18n::Language::En => (
-                "Confirm Permanent Deletion".to_string(),
-                format!("Deleting \"{}\" ({}).", path.display(), fmt_size(size)),
-                "Files will not enter the Recycle Bin and cannot be recovered. Please ensure it is not active program data.".to_string(),
-            ),
-        };
-
         self.confirm = Some(ConfirmRequest {
-            title,
-            body,
-            detail,
+            title: tr_confirm_delete_title(lang).to_string(),
+            body: tr_confirm_delete_path_msg(lang, &path.display().to_string(), &fmt_size(size)),
+            detail: tr_confirm_no_recycle_check_running(lang).to_string(),
             kind: ConfirmKind::CleanPath(path, size),
         });
         cx.notify();
@@ -856,6 +874,7 @@ impl Root {
     pub fn is_busy(&self) -> bool {
         self.cleaning
             || self.scanning
+            || self.discovering
             || self.apps_scanning
             || self.mft_scanning
             || self.residual_scanning
@@ -895,7 +914,7 @@ impl Root {
     pub fn cancel_clean(&mut self, cx: &mut Context<Self>) {
         if let Some(p) = &self.clean_progress {
             p.request_cancel();
-            self.status = "正在停止清理…".into();
+            self.status = bilingual(|l| tr_status_stopping(l).to_string());
             cx.notify();
         }
     }
@@ -906,7 +925,7 @@ impl Root {
         }
         let paths = self.selected_paths();
         if paths.is_empty() {
-            self.status = "没有勾选任何要清理的内容".into();
+            self.status = bilingual(|l| tr_status_nothing_selected(l).to_string());
             cx.notify();
             return;
         }
@@ -922,7 +941,8 @@ impl Root {
         self.last_failed.clear();
         let progress = Arc::new(CleanProgress::new(total_files, total_bytes));
         self.clean_progress = Some(progress.clone());
-        self.status = format!("正在永久删除 {} 项…", paths.len());
+        let n = paths.len();
+        self.status = bilingual(|l| tr_status_deleting_n(l, n));
         self.start_tick(cx);
         cx.notify();
 
@@ -946,20 +966,14 @@ impl Root {
                 this.apply_clean_result(&attempted, &failed);
 
                 let fails = this.last_failed.len();
-                this.status = if fails > 0 {
-                    format!(
-                        "清理完成：已删除 {} 个文件，释放 {}（{} 项被占用已跳过）",
-                        snap.files,
-                        fmt_size(snap.bytes),
-                        fails
-                    )
-                } else {
-                    format!(
-                        "清理完成：已删除 {} 个文件，释放 {}",
-                        snap.files,
-                        fmt_size(snap.bytes)
-                    )
-                };
+                let (files, size) = (snap.files, fmt_size(snap.bytes));
+                this.status = bilingual(|l| {
+                    if fails > 0 {
+                        tr_status_clean_done_partial(l, files, &size, fails)
+                    } else {
+                        tr_status_clean_done(l, files, &size)
+                    }
+                });
                 cx.notify();
             })
             .ok();
@@ -973,7 +987,8 @@ impl Root {
         self.cleaning = true;
         let progress = Arc::new(CleanProgress::new(0, size));
         self.clean_progress = Some(progress.clone());
-        self.status = format!("正在删除 {}…", path.display());
+        let shown = path.display().to_string();
+        self.status = bilingual(|l| tr_status_deleting_path(l, &shown));
         self.start_tick(cx);
         cx.notify();
 
@@ -989,12 +1004,9 @@ impl Root {
                 let snap = this.clean_snapshot().unwrap_or_default();
                 this.freed_total += snap.bytes;
                 if report.failed.is_empty() {
-                    this.status = format!(
-                        "已删除 {}（{} 个文件，{}）",
-                        path.display(),
-                        snap.files,
-                        fmt_size(snap.bytes)
-                    );
+                    let (shown, files, size) =
+                        (path.display().to_string(), snap.files, fmt_size(snap.bytes));
+                    this.status = bilingual(|l| tr_status_deleted_path(l, &shown, files, &size));
                     // 局部即时从内存树中剔除，祖先目录体积自动联动扣减，无需全局重扫
                     if let Some(mft) = &mut this.mft {
                         mft.remove_path(&path);
@@ -1012,8 +1024,8 @@ impl Root {
                         *free += snap.bytes;
                     }
                 } else {
-                    this.status =
-                        format!("删除失败：{}（被占用或权限不足）", path.display());
+                    let shown = path.display().to_string();
+                    this.status = bilingual(|l| tr_status_delete_failed(l, &shown));
                 }
                 cx.notify();
             })
@@ -1035,7 +1047,8 @@ impl Root {
         self.cleaning = true;
         let progress = Arc::new(CleanProgress::new(0, total_size));
         self.clean_progress = Some(progress.clone());
-        self.status = format!("正在批量删除 {} 项…", targets.len());
+        let n = targets.len();
+        self.status = bilingual(|l| tr_status_batch_deleting(l, n));
         self.start_tick(cx);
         cx.notify();
 
@@ -1051,19 +1064,14 @@ impl Root {
                 let snap = this.clean_snapshot().unwrap_or_default();
                 this.freed_total += snap.bytes;
                 this.clear_disk_selection();
-                if report.failed.is_empty() {
-                    this.status = format!(
-                        "批量删除完成：已删除 {} 个文件，释放 {}",
-                        snap.files,
-                        fmt_size(snap.bytes)
-                    );
-                } else {
-                    this.status = format!(
-                        "批量删除完成，释放 {}（{} 项受保护或被占用已跳过）",
-                        fmt_size(snap.bytes),
-                        report.failed.len()
-                    );
-                }
+                let (files, fails, size) = (snap.files, report.failed.len(), fmt_size(snap.bytes));
+                this.status = bilingual(|l| {
+                    if fails == 0 {
+                        tr_status_batch_done(l, files, &size)
+                    } else {
+                        tr_status_batch_done_partial(l, &size, fails)
+                    }
+                });
                 // 局部即时从内存树中扣减删除项，保留当前所在目录层级
                 if let Some(mft) = &mut this.mft {
                     for t in &targets {
@@ -1237,7 +1245,7 @@ impl Render for Root {
                     .bg(rgb(BG))
                     .border_t_1()
                     .border_color(rgba(OUTLINE_VAR, 0.6))
-                    .child(self.status.clone()),
+                    .child(self.status.get(self.language).to_string()),
             );
 
         if let Some(req) = self.confirm.clone() {

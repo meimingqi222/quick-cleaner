@@ -33,3 +33,12 @@ pub fn relaunch_as_admin_if_needed() -> bool {
     true
 }
 
+
+/// macOS 的界面语言：按 POSIX 环境变量判断。
+///
+/// 更准的做法是读 `AppleLanguages` 用户默认值，但那要拉 Objective-C 运行时；
+/// 环境变量在终端启动和 Finder 启动下都够用，何况这只是首次启动的默认值，
+/// 用户切一次就会被 `core::settings` 记住。
+pub fn detect_system_language() -> crate::core::i18n::Language {
+    crate::core::i18n::Language::from_locale_tag(&crate::platform::posix_locale_tag())
+}

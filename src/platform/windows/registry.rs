@@ -40,7 +40,7 @@ pub fn read_reg_string(h_key: HKEY, value_name: &str) -> Option<String> {
             Some(from_wide(&buf[..(buf_size as usize / 2)]))
         } else if res as u32 == ERROR_MORE_DATA {
             // 超长字符串（如超长 UninstallString 或复杂命令行）：按系统返回的实际字节数动态扩容
-            let words = (buf_size as usize + 1) / 2;
+            let words = (buf_size as usize).div_ceil(2);
             let mut dyn_buf = vec![0u16; words];
             let res2 = RegQueryValueExW(
                 h_key,
@@ -189,7 +189,7 @@ pub fn enum_string_values(root: HKEY, subpath: &str, sam: DWORD) -> Vec<(String,
             } else if res as u32 == ERROR_MORE_DATA {
                 // 超长注册表值（如 Windows 防火墙长规则）：动态扩容当前条目缓冲区重试，
                 // 即使单项失败也绝不中断 loop，确保后续条目继续被枚举。
-                let dyn_words = ((data_len as usize + 1) / 2).max(8192);
+                let dyn_words = (data_len as usize).div_ceil(2).max(8192);
                 let mut dyn_data_buf = vec![0u16; dyn_words];
                 let mut dyn_data_len = (dyn_data_buf.len() * 2) as DWORD;
                 name_len = name_buf.len() as DWORD;

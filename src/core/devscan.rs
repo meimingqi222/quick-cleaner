@@ -28,6 +28,7 @@
 //!    （worktree）丢掉未提交的改动，所以交给用户主动选。
 
 use crate::core::categories::CategoryId;
+use crate::core::i18n::Text;
 use crate::core::scanner::{measure_dir, ScanItem};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -67,8 +68,10 @@ const SKIP_DIRS: &[&str] = &[
 struct Marker {
     /// 目录名（小写比较）
     dir: &'static str,
-    /// 给用户看的说明
-    label: &'static str,
+    /// 给用户看的说明（中文）
+    label_zh: &'static str,
+    /// 给用户看的说明（英文）
+    label_en: &'static str,
     category: CategoryId,
     /// 需要在**同级**看到其中任意一个才算数；空数组表示名字本身足够特征化。
     /// 以 `.` 开头的条目按扩展名匹配（如 `.csproj`）。
@@ -77,35 +80,35 @@ struct Marker {
 
 const MARKERS: &[Marker] = &[
     // ---- Node / 前端 ----
-    Marker { dir: "node_modules", label: "Node 依赖", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".next", label: "Next.js 构建缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".nuxt", label: "Nuxt 构建缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".svelte-kit", label: "SvelteKit 构建缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".turbo", label: "Turborepo 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".parcel-cache", label: "Parcel 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".angular", label: "Angular 构建缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: "dist", label: "前端构建产物", category: CategoryId::DevBuild, sibling_any: &["package.json"] },
+    Marker { dir: "node_modules", label_zh: "Node 依赖", label_en: "Node dependencies", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".next", label_zh: "Next.js 构建缓存", label_en: "Next.js build cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".nuxt", label_zh: "Nuxt 构建缓存", label_en: "Nuxt build cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".svelte-kit", label_zh: "SvelteKit 构建缓存", label_en: "SvelteKit build cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".turbo", label_zh: "Turborepo 缓存", label_en: "Turborepo cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".parcel-cache", label_zh: "Parcel 缓存", label_en: "Parcel cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".angular", label_zh: "Angular 构建缓存", label_en: "Angular build cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "dist", label_zh: "前端构建产物", label_en: "Frontend build output", category: CategoryId::DevBuild, sibling_any: &["package.json"] },
     // ---- Rust ----
-    Marker { dir: "target", label: "Rust 构建产物", category: CategoryId::DevBuild, sibling_any: &["Cargo.toml"] },
+    Marker { dir: "target", label_zh: "Rust 构建产物", label_en: "Rust build output", category: CategoryId::DevBuild, sibling_any: &["Cargo.toml"] },
     // ---- Python ----
-    Marker { dir: ".venv", label: "Python 虚拟环境", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: "venv", label: "Python 虚拟环境", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: "__pycache__", label: "Python 字节码缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".pytest_cache", label: "pytest 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".mypy_cache", label: "mypy 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".ruff_cache", label: "ruff 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".tox", label: "tox 环境", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".venv", label_zh: "Python 虚拟环境", label_en: "Python virtualenv", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "venv", label_zh: "Python 虚拟环境", label_en: "Python virtualenv", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "__pycache__", label_zh: "Python 字节码缓存", label_en: "Python bytecode cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".pytest_cache", label_zh: "pytest 缓存", label_en: "pytest cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".mypy_cache", label_zh: "mypy 缓存", label_en: "mypy cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".ruff_cache", label_zh: "ruff 缓存", label_en: "ruff cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".tox", label_zh: "tox 环境", label_en: "tox environments", category: CategoryId::DevBuild, sibling_any: &[] },
     // ---- C# / .NET ----
-    Marker { dir: "bin", label: ".NET 构建产物", category: CategoryId::DevBuild, sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"] },
-    Marker { dir: "obj", label: ".NET 中间产物", category: CategoryId::DevBuild, sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"] },
+    Marker { dir: "bin", label_zh: ".NET 构建产物", label_en: ".NET build output", category: CategoryId::DevBuild, sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"] },
+    Marker { dir: "obj", label_zh: ".NET 中间产物", label_en: ".NET intermediate output", category: CategoryId::DevBuild, sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"] },
     // ---- C / C++ ----
-    Marker { dir: "build", label: "C/C++ 构建产物", category: CategoryId::DevBuild, sibling_any: &["CMakeLists.txt", "Makefile", "meson.build"] },
-    Marker { dir: "cmake-build-debug", label: "CLion 构建产物", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: "cmake-build-release", label: "CLion 构建产物", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "build", label_zh: "C/C++ 构建产物", label_en: "C/C++ build output", category: CategoryId::DevBuild, sibling_any: &["CMakeLists.txt", "Makefile", "meson.build"] },
+    Marker { dir: "cmake-build-debug", label_zh: "CLion 构建产物", label_en: "CLion build output", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "cmake-build-release", label_zh: "CLion 构建产物", label_en: "CLion build output", category: CategoryId::DevBuild, sibling_any: &[] },
     // ---- JVM / 其它 ----
-    Marker { dir: ".gradle", label: "Gradle 项目缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: ".dart_tool", label: "Dart/Flutter 缓存", category: CategoryId::DevBuild, sibling_any: &[] },
-    Marker { dir: "vendor", label: "Go/PHP 依赖副本", category: CategoryId::DevBuild, sibling_any: &["go.mod", "composer.json"] },
+    Marker { dir: ".gradle", label_zh: "Gradle 项目缓存", label_en: "Gradle project cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: ".dart_tool", label_zh: "Dart/Flutter 缓存", label_en: "Dart/Flutter cache", category: CategoryId::DevBuild, sibling_any: &[] },
+    Marker { dir: "vendor", label_zh: "Go/PHP 依赖副本", label_en: "Go/PHP vendored deps", category: CategoryId::DevBuild, sibling_any: &["go.mod", "composer.json"] },
 ];
 
 /// 常见的代码根目录名，会在用户主目录和各固定磁盘根下探测。
@@ -143,8 +146,8 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
 
 struct Hit {
     path: PathBuf,
-    label: &'static str,
-    category: CategoryId,
+    /// 命中的规则本身。标签是双语的，直到建 `ScanItem` 时才展开。
+    marker: &'static Marker,
 }
 
 /// 发现所有开发垃圾目录并测算体积。
@@ -192,11 +195,11 @@ fn discover_via_mft(live: &AtomicBool) -> Vec<ScanItem> {
             }
             let path = PathBuf::from(tree.path_of_with(idx.0, &mut cache));
             out.push(ScanItem {
-                label: format!("{} · {}", idx.1, short_path(&path)),
+                label: item_label(idx.1, &path),
                 path,
                 size,
                 file_count: tree.file_count_of(idx.0),
-                category: idx.2,
+                category: idx.1.category,
                 // MFT 记录里没有直接可用的修改时间，这一列对开发垃圾也没有
                 // 展示价值（构建产物的时间戳随时在变）。
                 last_modified: 0,
@@ -213,7 +216,7 @@ fn collect_mft(
     dir: u32,
     depth: usize,
     live: &AtomicBool,
-    out: &mut Vec<(u32, &'static str, CategoryId)>,
+    out: &mut Vec<(u32, &'static Marker)>,
 ) {
     // 树在内存里，可以比遍历通道走得更深
     const MFT_MAX_DEPTH: usize = 12;
@@ -248,7 +251,7 @@ fn collect_mft(
             .iter()
             .find(|m| m.dir == lower && has_sibling(&files, m.sibling_any))
         {
-            Some(marker) => out.push((child, marker.label, marker.category)),
+            Some(marker) => out.push((child, marker)),
             None => collect_mft(tree, child, depth + 1, live, out),
         }
     }
@@ -274,16 +277,25 @@ fn discover_via_walk(live: &AtomicBool) -> Vec<ScanItem> {
         .map(|hit| {
             let acc = measure_dir(&hit.path, live);
             ScanItem {
-                label: format!("{} · {}", hit.label, short_path(&hit.path)),
+                label: item_label(hit.marker, &hit.path),
                 path: hit.path.clone(),
                 size: acc.0,
                 file_count: acc.1,
-                category: hit.category,
+                category: hit.marker.category,
                 last_modified: acc.2,
             }
         })
         .filter(|item| item.size > 0)
         .collect()
+}
+
+/// 列表里显示的标签：规则名 + 缩短过的路径，两种语言各拼一条。
+fn item_label(marker: &Marker, path: &Path) -> Text {
+    let sp = short_path(path);
+    Text::new(
+        format!("{} · {sp}", marker.label_zh),
+        format!("{} · {sp}", marker.label_en),
+    )
 }
 
 /// 递归查找命中项。命中后不再深入该目录。
@@ -321,11 +333,7 @@ fn collect(dir: &Path, depth: usize, max_depth: usize, live: &AtomicBool, out: &
             .iter()
             .find(|m| m.dir == lower && has_sibling(&file_names, m.sibling_any))
         {
-            Some(marker) => out.push(Hit {
-                path,
-                label: marker.label,
-                category: marker.category,
-            }),
+            Some(marker) => out.push(Hit { path, marker }),
             // 命中的目录不再下钻；没命中的继续往下找
             None => collect(&path, depth + 1, max_depth, live, out),
         }
@@ -370,6 +378,27 @@ fn short_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::i18n::Language;
+
+    /// 列表标签两种语言都要拼全：规则名跟着语言走，路径两边一样。
+    #[test]
+    fn item_label_carries_both_languages() {
+        let marker = MARKERS
+            .iter()
+            .find(|m| m.dir == "node_modules")
+            .expect("node_modules 规则应该在表里");
+        let label = item_label(marker, Path::new(r"D:\code\demo\node_modules"));
+
+        let zh = label.get(Language::Zh);
+        let en = label.get(Language::En);
+        assert!(zh.starts_with(marker.label_zh), "中文标签没拼上规则名：{zh}");
+        assert!(en.starts_with(marker.label_en), "英文标签没拼上规则名：{en}");
+        assert_ne!(zh, en, "两种语言不该是同一串");
+        // 路径那一段与语言无关，两边必须一致
+        let tail = |s: &str| s.split_once(" · ").map(|(_, t)| t.to_string());
+        assert_eq!(tail(zh), tail(en));
+        assert!(tail(zh).is_some_and(|t| t.contains("demo")), "路径没拼进去");
+    }
 
     #[test]
     fn sibling_rule_matches_exact_names() {

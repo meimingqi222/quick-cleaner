@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod model;
 pub mod safety;
 pub mod scanner;
+pub mod settings;
 
 pub use apps::{
     AppFilterPreset, AppRegRoot, AppSortColumn, AppSortState, InstalledApp, ResidualKind,
@@ -26,3 +27,4 @@ pub use i18n::Language;
 pub use model::{commas, fmt_size, truncate, Check};
 pub use safety::{is_protected, is_system_root_dir};
 pub use scanner::{scan_all, CategorySummary, ScanItem};
+pub use settings::Settings;

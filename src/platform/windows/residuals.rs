@@ -19,7 +19,7 @@
 
 use crate::core::apps::{
     is_safe_app_token, AppRegRoot, Confidence, InstalledApp, ResidualItem, ResidualKind,
-    ResidualScanResult,
+    ResidualScanResult, ResidualSource,
 };
 use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
@@ -179,12 +179,10 @@ fn collect_exe_names(app: &InstalledApp, install_dir: &str) -> Vec<String> {
         }
     };
 
-    for src in [&app.display_icon, &app.uninstall_string] {
-        if let Some(v) = src {
-            let clean = v.split(',').next().unwrap_or("").trim_matches('"').trim();
-            if let Some(f) = Path::new(clean).file_name().and_then(|f| f.to_str()) {
-                push(f, &mut out);
-            }
+    for v in [&app.display_icon, &app.uninstall_string].into_iter().flatten() {
+        let clean = v.split(',').next().unwrap_or("").trim_matches('"').trim();
+        if let Some(f) = Path::new(clean).file_name().and_then(|f| f.to_str()) {
+            push(f, &mut out);
         }
     }
 
@@ -300,7 +298,7 @@ fn scan_uninstall_entry(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
     ) {
         out.push(ResidualItem::certain(
             ResidualKind::RegistryKey(app.registry_root, app.registry_subpath.clone()),
-            "卸载登记项",
+            ResidualSource::UninstallEntry,
         ));
     }
 }
@@ -318,7 +316,7 @@ fn scan_install_dir(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
     } else {
         ResidualKind::File(loc.clone(), size)
     };
-    out.push(ResidualItem::certain(kind, "安装目录"));
+    out.push(ResidualItem::certain(kind, ResidualSource::InstallDir));
 }
 
 /// 安装目录被删掉后，上层那些只为它建的目录会空着留下来。
@@ -341,7 +339,7 @@ fn scan_orphan_ancestors(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
             }
             out.push(ResidualItem::certain(
                 ResidualKind::Directory(p.to_path_buf(), 0),
-                "空的安装父目录",
+                ResidualSource::EmptyInstallParent,
             ));
         }
         cur = p.parent();
@@ -384,7 +382,7 @@ fn scan_vendor_keys_by_path(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if values_mention(h, &p1, sam, ctx) {
                 out.push(ResidualItem::certain(
                     ResidualKind::RegistryKey(reg_root, p1),
-                    "厂商配置项",
+                    ResidualSource::VendorRegKey,
                 ));
                 continue; // 命中就不再往下钻，整棵删掉即可
             }
@@ -393,7 +391,7 @@ fn scan_vendor_keys_by_path(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 if values_mention(h, &p2, sam, ctx) {
                     out.push(ResidualItem::certain(
                         ResidualKind::RegistryKey(reg_root, p2),
-                        "厂商配置项",
+                        ResidualSource::VendorRegKey,
                     ));
                 }
             }
@@ -416,11 +414,7 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 
     let mut roots: Vec<PathBuf> = Vec::new();
-    for d in [dirs::data_dir(), dirs::data_local_dir()] {
-        if let Some(p) = d {
-            roots.push(p);
-        }
-    }
+    roots.extend([dirs::data_dir(), dirs::data_local_dir()].into_iter().flatten());
     if let Some(local) = dirs::data_local_dir() {
         roots.push(local.join("Programs"));
         roots.push(local.join(r"VirtualStore\Program Files"));
@@ -440,7 +434,7 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         }
         for p in exact {
             if p.exists() && !is_protected_residual_path(&p) {
-                push_dir(out, p, Confidence::Certain, "应用数据目录");
+                push_dir(out, p, Confidence::Certain, ResidualSource::AppDataDir);
             }
         }
 
@@ -461,7 +455,7 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if ctx.name_matches(name) {
                 let p = entry.path();
                 if !is_protected_residual_path(&p) {
-                    push_dir(out, p, Confidence::Possible, "疑似应用数据目录");
+                    push_dir(out, p, Confidence::Possible, ResidualSource::LikelyAppDataDir);
                 }
             }
         }
@@ -505,13 +499,13 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 Confidence::Possible
             };
             if p.is_dir() {
-                push_dir(out, p, conf, "开始菜单目录");
+                push_dir(out, p, conf, ResidualSource::StartMenuDir);
             } else {
                 let size = dir_or_file_size(&p);
                 out.push(ResidualItem {
                     kind: ResidualKind::File(p, size),
                     confidence: conf,
-                    source: "快捷方式",
+                    source: ResidualSource::Shortcut,
                 });
             }
         }
@@ -541,7 +535,7 @@ fn scan_software_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if reg_key_exists(h, &sub, sam) {
                 out.push(ResidualItem::certain(
                     ResidualKind::RegistryKey(reg_root, sub),
-                    "配置注册表项",
+                    ResidualSource::ConfigRegKey,
                 ));
             }
         }
@@ -556,7 +550,7 @@ fn scan_software_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if ctx.name_matches(&sub) {
                 out.push(ResidualItem::possible(
                     ResidualKind::RegistryKey(reg_root, format!("{base}\\{sub}")),
-                    "疑似配置注册表项",
+                    ResidualSource::LikelyConfigRegKey,
                 ));
             }
         }
@@ -577,7 +571,7 @@ fn scan_app_paths(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if hit_dir || hit_exe {
                 out.push(ResidualItem::certain(
                     ResidualKind::RegistryKey(reg_root, full),
-                    "App Paths 登记",
+                    ResidualSource::AppPathsEntry,
                 ));
             }
         }
@@ -613,7 +607,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                     } else {
                         Confidence::Possible
                     },
-                    source: "开机启动项",
+                    source: ResidualSource::StartupEntry,
                 });
             }
         }
@@ -632,12 +626,12 @@ fn scan_services(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.mentions_install_dir(&image) {
             out.push(ResidualItem::certain(
                 ResidualKind::RegistryKey(AppRegRoot::Hklm, full),
-                "服务",
+                ResidualSource::Service,
             ));
         } else if !image.is_empty() && ctx.name_matches(&svc) {
             out.push(ResidualItem::possible(
                 ResidualKind::RegistryKey(AppRegRoot::Hklm, full),
-                "疑似服务",
+                ResidualSource::LikelyService,
             ));
         }
     }
@@ -653,7 +647,7 @@ fn scan_firewall_rules(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.mentions_install_dir(&data) {
             out.push(ResidualItem::certain(
                 ResidualKind::RegistryValue(AppRegRoot::Hklm, FIREWALL_RULES.to_string(), name),
-                "防火墙规则",
+                ResidualSource::FirewallRule,
             ));
         }
     }
@@ -674,7 +668,7 @@ fn scan_tracing(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.name_matches(stem) {
             out.push(ResidualItem::possible(
                 ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{TRACING}\\{sub}")),
-                "RAS 跟踪记录",
+                ResidualSource::RasTrace,
             ));
         }
     }
@@ -690,7 +684,7 @@ fn scan_heap_leak(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.exe_names.iter().any(|e| sub.eq_ignore_ascii_case(e)) {
             out.push(ResidualItem::certain(
                 ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{HEAP_LEAK}\\{sub}")),
-                "内存泄漏诊断记录",
+                ResidualSource::LeakDiagnostics,
             ));
         }
     }
@@ -714,7 +708,7 @@ fn scan_app_compat(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 if ctx.mentions_install_dir(&name) {
                     out.push(ResidualItem::certain(
                         ResidualKind::RegistryValue(reg_root, key.to_string(), name),
-                        "兼容性设置",
+                        ResidualSource::CompatSetting,
                     ));
                 }
             }
@@ -732,7 +726,7 @@ fn scan_installer_folders(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.mentions_install_dir(&name) {
             out.push(ResidualItem::certain(
                 ResidualKind::RegistryValue(AppRegRoot::Hklm, INSTALLER_FOLDERS.to_string(), name),
-                "安装器目录登记",
+                ResidualSource::InstallerFolderEntry,
             ));
         }
     }
@@ -747,7 +741,7 @@ fn scan_mui_cache(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.mentions_install_dir(&name) {
             out.push(ResidualItem::certain(
                 ResidualKind::RegistryValue(AppRegRoot::Hkcu, MUI_CACHE.to_string(), name),
-                "程序名缓存",
+                ResidualSource::ProgramNameCache,
             ));
         }
     }
@@ -763,7 +757,7 @@ fn scan_registered_apps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if ctx.name_matches(&name) || ctx.name_matches(&data) {
             out.push(ResidualItem::possible(
                 ResidualKind::RegistryValue(AppRegRoot::Hklm, REGISTERED_APPS.to_string(), name),
-                "默认程序登记",
+                ResidualSource::DefaultProgramsEntry,
             ));
         }
     }
@@ -773,7 +767,7 @@ fn scan_registered_apps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 // 小工具
 // ---------------------------------------------------------------------------
 
-fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source: &'static str) {
+fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source: ResidualSource) {
     let size = dir_or_file_size(&path);
     out.push(ResidualItem {
         kind: ResidualKind::Directory(path, size),
@@ -965,13 +959,13 @@ mod tests {
     fn dedup_keeps_the_higher_confidence_record() {
         let k = ResidualKind::RegistryKey(AppRegRoot::Hklm, r"SOFTWARE\Foo".into());
         let mut items = vec![
-            ResidualItem::possible(k.clone(), "疑似配置注册表项"),
-            ResidualItem::certain(k.clone(), "配置注册表项"),
+            ResidualItem::possible(k.clone(), ResidualSource::LikelyConfigRegKey),
+            ResidualItem::certain(k.clone(), ResidualSource::ConfigRegKey),
         ];
         dedup_items(&mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].confidence, Confidence::Certain);
-        assert_eq!(items[0].source, "配置注册表项");
+        assert_eq!(items[0].source, ResidualSource::ConfigRegKey);
     }
 
     #[test]
@@ -997,7 +991,7 @@ mod tests {
         assert!(
             res.items
                 .iter()
-                .any(|i| i.source == "卸载登记项" && i.confidence == Confidence::Certain),
+                .any(|i| i.source == ResidualSource::UninstallEntry && i.confidence == Confidence::Certain),
             "「{}」的卸载登记项没被识别出来",
             target.name
         );
@@ -1025,7 +1019,12 @@ mod probe {
         let res = scan_residuals(app);
         println!("共 {} 项（确定 {} 项）:", res.items.len(), res.certain_count());
         for it in &res.items {
-            println!("  [{}][{}] {}", it.confidence.label(), it.source, it.kind.display_label());
+            println!(
+                "  [{}][{}] {}",
+                it.confidence.label(),
+                it.source.label(),
+                it.kind.display_label()
+            );
         }
     }
 }

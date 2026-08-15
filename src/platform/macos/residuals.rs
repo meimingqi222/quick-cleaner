@@ -1,6 +1,8 @@
 //! macOS 软件残留深度扫描骨架
 
-use crate::core::apps::{InstalledApp, ResidualItem, ResidualKind, ResidualScanResult};
+use crate::core::apps::{
+    InstalledApp, ResidualItem, ResidualKind, ResidualScanResult, ResidualSource,
+};
 use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
 use std::path::PathBuf;
 
@@ -20,7 +22,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
             total_file_size += size;
             items.push(ResidualItem::certain(
                 ResidualKind::Directory(app_support, size),
-                "应用支持目录",
+                ResidualSource::AppSupportDir,
             ));
         }
     }

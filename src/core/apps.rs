@@ -14,8 +14,19 @@ pub enum AppRegRoot {
 }
 
 impl AppRegRoot {
+    /// 注册表根的**语言无关**写法，用来拼注册表路径（`HKLM\Software\…`）。
+    ///
+    /// 以前这里返回的是 `label_lang(Zh)`，于是英文界面下的残留路径会显示成
+    /// `HKLM (64位)\Software\…`。给人看的带修饰说明请用 [`label_lang`]。
+    ///
+    /// [`label_lang`]: AppRegRoot::label_lang
     pub fn label(&self) -> &'static str {
-        self.label_lang(Language::Zh)
+        match self {
+            AppRegRoot::Hklm => "HKLM",
+            AppRegRoot::Hklm32 => "HKLM32",
+            AppRegRoot::Hkcu => "HKCU",
+            AppRegRoot::SystemApp => "SystemApp",
+        }
     }
 
     pub fn label_lang(&self, lang: Language) -> &'static str {
@@ -76,13 +87,17 @@ pub enum AppSortColumn {
 }
 
 impl AppSortColumn {
-    pub fn label(&self) -> &'static str {
+    /// 列的稳定标识，用作表头元素 ID。
+    ///
+    /// 表头**显示**的文字走 `ui::i18n` 的 `tr_th_*`，不从这里取——ID 必须
+    /// 与语言无关，否则切一次语言，GPUI 眼里的元素就换了一个。
+    pub fn id(&self) -> &'static str {
         match self {
-            AppSortColumn::Name => "应用名称与版本",
-            AppSortColumn::Publisher => "开发者",
-            AppSortColumn::LastUsed => "最后使用",
-            AppSortColumn::InstallDate => "安装日期",
-            AppSortColumn::Size => "占用大小",
+            AppSortColumn::Name => "name",
+            AppSortColumn::Publisher => "publisher",
+            AppSortColumn::LastUsed => "last-used",
+            AppSortColumn::InstallDate => "install-date",
+            AppSortColumn::Size => "size",
         }
     }
 }
@@ -163,6 +178,8 @@ impl AppFilterPreset {
         AppFilterPreset::Orphan,
     ];
 
+    /// 中文文案。**仅供日志与命令行**——界面上一律用 `label_lang(lang)`，
+    /// 否则英文模式下会漏出中文。
     pub fn label(&self) -> &'static str {
         self.label_lang(Language::Zh)
     }
@@ -259,6 +276,7 @@ impl ResidualKind {
         }
     }
 
+    /// 中文文案。**仅供日志与命令行**，界面上用 `kind_label_lang(lang)`。
     pub fn kind_label(&self) -> &'static str {
         self.kind_label_lang(Language::Zh)
     }
@@ -295,17 +313,107 @@ impl ResidualKind {
     }
 }
 
+/// 这条残留是被哪个扫描器发现的。
+///
+/// 以前直接存中文字符串，界面上的来源徽章因此在英文模式下也是中文；
+/// 而且测试要拿字符串字面量去比对，改一个字就断。改成枚举后文案统一在
+/// [`ResidualSource::label_lang`] 里翻译。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResidualSource {
+    UninstallEntry,
+    InstallDir,
+    EmptyInstallParent,
+    VendorRegKey,
+    AppDataDir,
+    LikelyAppDataDir,
+    AppSupportDir,
+    StartMenuDir,
+    Shortcut,
+    ConfigRegKey,
+    LikelyConfigRegKey,
+    AppPathsEntry,
+    StartupEntry,
+    Service,
+    LikelyService,
+    FirewallRule,
+    RasTrace,
+    LeakDiagnostics,
+    CompatSetting,
+    InstallerFolderEntry,
+    ProgramNameCache,
+    DefaultProgramsEntry,
+}
+
+impl ResidualSource {
+    pub fn label(&self) -> &'static str {
+        self.label_lang(Language::Zh)
+    }
+
+    pub fn label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                ResidualSource::UninstallEntry => "卸载登记项",
+                ResidualSource::InstallDir => "安装目录",
+                ResidualSource::EmptyInstallParent => "空的安装父目录",
+                ResidualSource::VendorRegKey => "厂商配置项",
+                ResidualSource::AppDataDir => "应用数据目录",
+                ResidualSource::LikelyAppDataDir => "疑似应用数据目录",
+                ResidualSource::AppSupportDir => "应用支持目录",
+                ResidualSource::StartMenuDir => "开始菜单目录",
+                ResidualSource::Shortcut => "快捷方式",
+                ResidualSource::ConfigRegKey => "配置注册表项",
+                ResidualSource::LikelyConfigRegKey => "疑似配置注册表项",
+                ResidualSource::AppPathsEntry => "App Paths 登记",
+                ResidualSource::StartupEntry => "开机启动项",
+                ResidualSource::Service => "服务",
+                ResidualSource::LikelyService => "疑似服务",
+                ResidualSource::FirewallRule => "防火墙规则",
+                ResidualSource::RasTrace => "RAS 跟踪记录",
+                ResidualSource::LeakDiagnostics => "内存泄漏诊断记录",
+                ResidualSource::CompatSetting => "兼容性设置",
+                ResidualSource::InstallerFolderEntry => "安装器目录登记",
+                ResidualSource::ProgramNameCache => "程序名缓存",
+                ResidualSource::DefaultProgramsEntry => "默认程序登记",
+            },
+            Language::En => match self {
+                ResidualSource::UninstallEntry => "Uninstall entry",
+                ResidualSource::InstallDir => "Install directory",
+                ResidualSource::EmptyInstallParent => "Empty install parent",
+                ResidualSource::VendorRegKey => "Vendor registry key",
+                ResidualSource::AppDataDir => "App data directory",
+                ResidualSource::LikelyAppDataDir => "Likely app data directory",
+                ResidualSource::AppSupportDir => "Application Support directory",
+                ResidualSource::StartMenuDir => "Start menu folder",
+                ResidualSource::Shortcut => "Shortcut",
+                ResidualSource::ConfigRegKey => "Config registry key",
+                ResidualSource::LikelyConfigRegKey => "Likely config registry key",
+                ResidualSource::AppPathsEntry => "App Paths entry",
+                ResidualSource::StartupEntry => "Startup entry",
+                ResidualSource::Service => "Service",
+                ResidualSource::LikelyService => "Likely service",
+                ResidualSource::FirewallRule => "Firewall rule",
+                ResidualSource::RasTrace => "RAS tracing entry",
+                ResidualSource::LeakDiagnostics => "Leak diagnostics entry",
+                ResidualSource::CompatSetting => "Compatibility setting",
+                ResidualSource::InstallerFolderEntry => "Installer folder entry",
+                ResidualSource::ProgramNameCache => "Program name cache",
+                ResidualSource::DefaultProgramsEntry => "Default programs entry",
+            },
+        }
+    }
+}
+
 /// 一条残留记录：内容 + 把握程度 + 给用户看的来源说明。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResidualItem {
     pub kind: ResidualKind,
     pub confidence: Confidence,
-    /// 这条是被哪个扫描器发现的，例如「开机启动项」「防火墙规则」
-    pub source: &'static str,
+    /// 这条是被哪个扫描器发现的
+    pub source: ResidualSource,
 }
 
 impl ResidualItem {
-    pub fn certain(kind: ResidualKind, source: &'static str) -> Self {
+    pub fn certain(kind: ResidualKind, source: ResidualSource) -> Self {
         Self {
             kind,
             confidence: Confidence::Certain,
@@ -313,7 +421,7 @@ impl ResidualItem {
         }
     }
 
-    pub fn possible(kind: ResidualKind, source: &'static str) -> Self {
+    pub fn possible(kind: ResidualKind, source: ResidualSource) -> Self {
         Self {
             kind,
             confidence: Confidence::Possible,
@@ -325,8 +433,17 @@ impl ResidualItem {
         self.kind.size()
     }
 
+    /// 中文文案。**仅供日志与命令行**，界面上用 `display_label_lang(lang)`。
     pub fn display_label(&self) -> String {
-        format!("[{}] {}", self.source, self.kind.display_label())
+        self.display_label_lang(Language::Zh)
+    }
+
+    pub fn display_label_lang(&self, lang: Language) -> String {
+        format!(
+            "[{}] {}",
+            self.source.label_lang(lang),
+            self.kind.display_label()
+        )
     }
 }
 

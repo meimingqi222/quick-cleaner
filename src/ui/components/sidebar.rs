@@ -21,6 +21,8 @@ pub enum View {
 impl View {
     pub const ALL: [View; 4] = [View::Dashboard, View::Junk, View::Apps, View::Disk];
 
+    /// 中文文案。**仅供日志与命令行**，界面上用 `title_lang(lang)`——
+    /// 顶栏标题就曾经因为调了这个而在英文模式下一直显示中文。
     pub fn title(&self) -> &'static str {
         self.title_lang(Language::Zh)
     }

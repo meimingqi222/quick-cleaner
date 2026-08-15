@@ -4,7 +4,7 @@ use super::apps_components::{render_apps_list_card, ListBody};
 use crate::core::apps::{
     AppFilterPreset, AppSortColumn, InstalledApp,
 };
-use crate::core::i18n::Language;
+use crate::core::i18n::{bilingual, Language};
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{loading_state_view, page_heading};
@@ -383,7 +383,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         let indicator = root.apps_sort.indicator(col);
 
         let mut item = div()
-            .id(SharedString::from(format!("th-col-{}", col.label())))
+            .id(SharedString::from(format!("th-col-{}", col.id())))
             .py(px(5.))
             .px(px(4.))
             .rounded_md()
@@ -588,8 +588,8 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
     let app_loc = app.install_location.clone();
 
     // 限制菜单弹出位置不超出视口边界
-    let x = (menu.x - 10.).max(10.).min(1040.);
-    let y = (menu.y - 10.).max(10.).min(620.);
+    let x = (menu.x - 10.).clamp(10., 1040.);
+    let y = (menu.y - 10.).clamp(10., 620.);
 
     let app_for_uninst = app.clone();
     let app_for_resid = app.clone();
@@ -682,7 +682,9 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                             if let Some(ref loc) = app_for_loc {
                                 crate::platform::reveal_in_explorer(loc);
                             } else {
-                                this.status = format!("软件「{app_name_for_loc}」无独立安装路径");
+                                this.status = bilingual(|l| {
+                                    tr_status_no_install_path(l, &app_name_for_loc)
+                                });
                             }
                             this.close_context_menu();
                             cx.notify();
@@ -753,9 +755,12 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .child(ctx_copy_path)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_copy.install_location {
-                                this.status = format!("已获取安装路径：{}", loc.display());
+                                let shown = loc.display().to_string();
+                                this.status = bilingual(|l| tr_status_install_path(l, &shown));
                             } else {
-                                this.status = format!("软件「{}」无独立安装路径", app_for_copy.name);
+                                let name = app_for_copy.name.clone();
+                                this.status =
+                                    bilingual(|l| tr_status_no_install_path(l, &name));
                             }
                             this.close_context_menu();
                             cx.notify();

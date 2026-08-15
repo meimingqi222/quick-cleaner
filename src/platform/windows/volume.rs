@@ -6,7 +6,6 @@
 use std::os::windows::ffi::OsStrExt;
 
 /// 枚举本机所有 NTFS 固定磁盘的盘符
-
 pub fn list_ntfs_volumes() -> Vec<char> {
     use winapi::um::fileapi::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
     use winapi::um::winbase::DRIVE_FIXED;
