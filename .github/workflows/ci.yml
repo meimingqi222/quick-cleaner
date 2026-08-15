@@ -1,4 +1,4 @@
-name: CI (Test & Check)
+name: CI
 
 on:
   push:
@@ -7,13 +7,19 @@ on:
       - "**.md"
       - ".gitignore"
       - "LICENSE"
+      - ".github/workflows/release.yml"
   pull_request:
     branches: [ "master", "main" ]
     paths-ignore:
       - "**.md"
       - ".gitignore"
       - "LICENSE"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,23 +27,14 @@ env:
 
 jobs:
   test:
-    name: Test & Typecheck (Windows)
+    name: Test (Windows)
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Set up Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Cargo check
-        run: cargo check --verbose
-
-      - name: Run automated test suite
-        run: cargo test --verbose
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test
