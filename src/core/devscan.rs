@@ -458,3 +458,44 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod bench_probe {
+    use std::sync::atomic::AtomicBool;
+    use std::time::Instant;
+
+    /// 手动跑：对比两条通道的耗时与命中数。
+    /// `cargo test --lib compare_channels -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn compare_channels() {
+        let live = AtomicBool::new(true);
+
+        #[cfg(windows)]
+        {
+            let elevated = crate::platform::windows::security::is_elevated();
+            println!("是否已提权: {elevated}");
+            if elevated {
+                let t = Instant::now();
+                let items = super::discover_via_mft(&live);
+                let total: u64 = items.iter().map(|i| i.size).sum();
+                println!(
+                    "MFT   通道: {:>7.2} 秒, {} 项, 合计 {}",
+                    t.elapsed().as_secs_f64(),
+                    items.len(),
+                    crate::core::model::fmt_size(total)
+                );
+            }
+        }
+
+        let t = Instant::now();
+        let items = super::discover_via_walk(&live);
+        let total: u64 = items.iter().map(|i| i.size).sum();
+        println!(
+            "遍历 通道: {:>7.2} 秒, {} 项, 合计 {}",
+            t.elapsed().as_secs_f64(),
+            items.len(),
+            crate::core::model::fmt_size(total)
+        );
+    }
+}

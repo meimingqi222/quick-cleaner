@@ -5,7 +5,7 @@ use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::danger_button;
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
-use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar};
+use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
 use crate::ui::components::icons::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -69,6 +69,11 @@ fn render_category_items(
     };
     let list_h = (count as f32 * ITEM_ROW_H).min(LIST_MAX_H);
 
+    // 先算滚动条：列表需要据此决定是否给它让出右侧宽度，
+    // 否则最右边的「大小」列会被滑块压住。
+    let base = handle.0.borrow().base_handle.clone();
+    let metrics = scroll_metrics(&base, list_h, count as f32 * ITEM_ROW_H);
+
     let list = gpui::uniform_list(
         SharedString::from(format!("junk-items-{id:?}")),
         count,
@@ -100,10 +105,10 @@ fn render_category_items(
         }),
     )
     .track_scroll(handle.clone())
-    .h(px(list_h));
+    .h(px(list_h))
+    .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)));
 
-    let base = handle.0.borrow().base_handle.clone();
-    let bar = scroll_metrics(&base, list_h, count as f32 * ITEM_ROW_H).map(|m| {
+    let bar = metrics.map(|m| {
         scrollbar(SharedString::from(format!("junk-thumb-{id:?}")), m, |thumb| {
             thumb.on_mouse_down(
                 gpui::MouseButton::Left,
@@ -146,6 +151,7 @@ fn item_row(
 
     div()
         .id(SharedString::from(format!("item-{idx}")))
+        .w_full()
         .h(px(ITEM_ROW_H))
         .flex()
         .items_center()
