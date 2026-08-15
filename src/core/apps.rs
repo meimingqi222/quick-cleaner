@@ -1,5 +1,6 @@
 //! 软件管理与残留清理数据模型与核心排序过滤
 
+use crate::core::i18n::Language;
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
@@ -14,11 +15,23 @@ pub enum AppRegRoot {
 
 impl AppRegRoot {
     pub fn label(&self) -> &'static str {
-        match self {
-            AppRegRoot::Hklm => "HKLM (64位)",
-            AppRegRoot::Hklm32 => "HKLM (32位)",
-            AppRegRoot::Hkcu => "HKCU (当前用户)",
-            AppRegRoot::SystemApp => "系统/UWP",
+        self.label_lang(Language::Zh)
+    }
+
+    pub fn label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                AppRegRoot::Hklm => "HKLM (64位)",
+                AppRegRoot::Hklm32 => "HKLM (32位)",
+                AppRegRoot::Hkcu => "HKCU (当前用户)",
+                AppRegRoot::SystemApp => "系统/UWP",
+            },
+            Language::En => match self {
+                AppRegRoot::Hklm => "HKLM (64-bit)",
+                AppRegRoot::Hklm32 => "HKLM (32-bit)",
+                AppRegRoot::Hkcu => "HKCU (Current User)",
+                AppRegRoot::SystemApp => "System / UWP",
+            },
         }
     }
 }
@@ -151,11 +164,23 @@ impl AppFilterPreset {
     ];
 
     pub fn label(&self) -> &'static str {
-        match self {
-            AppFilterPreset::All => "全部软件",
-            AppFilterPreset::Large => "大型软件 (>500MB)",
-            AppFilterPreset::Recent => "有安装日期",
-            AppFilterPreset::Orphan => "卸载器失效",
+        self.label_lang(Language::Zh)
+    }
+
+    pub fn label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                AppFilterPreset::All => "全部软件",
+                AppFilterPreset::Large => "大型软件 (>500MB)",
+                AppFilterPreset::Recent => "有安装日期",
+                AppFilterPreset::Orphan => "卸载器失效",
+            },
+            Language::En => match self {
+                AppFilterPreset::All => "All Apps",
+                AppFilterPreset::Large => "Large Apps (>500MB)",
+                AppFilterPreset::Recent => "With Install Date",
+                AppFilterPreset::Orphan => "Invalid Uninstaller",
+            },
         }
     }
 
@@ -191,9 +216,19 @@ pub enum Confidence {
 
 impl Confidence {
     pub fn label(&self) -> &'static str {
-        match self {
-            Confidence::Certain => "确定",
-            Confidence::Possible => "可能",
+        self.label_lang(Language::Zh)
+    }
+
+    pub fn label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                Confidence::Certain => "确定",
+                Confidence::Possible => "可能",
+            },
+            Language::En => match self {
+                Confidence::Certain => "Certain",
+                Confidence::Possible => "Possible",
+            },
         }
     }
 
@@ -225,11 +260,23 @@ impl ResidualKind {
     }
 
     pub fn kind_label(&self) -> &'static str {
-        match self {
-            ResidualKind::File(..) => "文件",
-            ResidualKind::Directory(..) => "目录",
-            ResidualKind::RegistryKey(..) => "注册表项",
-            ResidualKind::RegistryValue(..) => "注册表值",
+        self.kind_label_lang(Language::Zh)
+    }
+
+    pub fn kind_label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                ResidualKind::File(..) => "文件",
+                ResidualKind::Directory(..) => "目录",
+                ResidualKind::RegistryKey(..) => "注册表项",
+                ResidualKind::RegistryValue(..) => "注册表值",
+            },
+            Language::En => match self {
+                ResidualKind::File(..) => "File",
+                ResidualKind::Directory(..) => "Directory",
+                ResidualKind::RegistryKey(..) => "Registry Key",
+                ResidualKind::RegistryValue(..) => "Registry Value",
+            },
         }
     }
 

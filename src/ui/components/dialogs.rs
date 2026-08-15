@@ -1,10 +1,12 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
+use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
 use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, SharedString};
@@ -25,7 +27,14 @@ pub struct ConfirmRequest {
     pub detail: String,
 }
 
-pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Context<Root>) -> impl IntoElement {
+pub fn render_confirm_dialog(root: &Root, req: &ConfirmRequest, cx: &mut Context<Root>) -> impl IntoElement {
+    let lang = root.language;
+    let cancel_label = tr_btn_cancel(lang);
+    let confirm_label = match lang {
+        Language::Zh => "确认永久删除",
+        Language::En => "Delete Permanently",
+    };
+
     div()
         .absolute()
         .inset_0()
@@ -77,7 +86,7 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
                         .child(
                             div()
                                 .id("confirm-cancel")
-                                .child(ghost_button(String::from("取消"), true))
+                                .child(ghost_button(cancel_label.to_string(), true))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm = None;
                                     cx.notify();
@@ -86,7 +95,7 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
                         .child(
                             div()
                                 .id("confirm-accept")
-                                .child(danger_button(String::from("确认永久删除"), true))
+                                .child(danger_button(confirm_label.to_string(), true))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm_accept(cx);
                                 })),
@@ -96,6 +105,7 @@ pub fn render_confirm_dialog(_root: &Root, req: &ConfirmRequest, cx: &mut Contex
 }
 
 pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl IntoElement> {
+    let lang = root.language;
     let res = root.residual_result.as_ref()?;
     let total_items = res.items.len();
     let is_empty = total_items == 0;
@@ -112,6 +122,19 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
         .map(|it| it.size())
         .sum();
 
+    let (empty_title, empty_desc, done_label) = match lang {
+        Language::Zh => (
+            "该软件未发现关联的文件或注册表残留",
+            "官方卸载已彻底清理所有文件与配置注册表。",
+            "完成",
+        ),
+        Language::En => (
+            "No residual files or registry traces found",
+            "Uninstallation has cleanly removed all associated files and registry configurations.",
+            "Done",
+        ),
+    };
+
     let item_rows: Vec<gpui::AnyElement> = if is_empty {
         vec![div()
             .w_full()
@@ -121,19 +144,19 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .items_center()
             .justify_center()
             .gap_2()
-            .child(icon_badge(icon_sparkle(PRIMARY, 24.), PRIMARY_FIXED, PRIMARY, 52.))
+            .child(icon_badge(icon_shield(PRIMARY, 24.), PRIMARY_FIXED, PRIMARY, 52.))
             .child(
                 div()
                     .text_base()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(TEXT))
-                    .child("该软件未发现关联的文件或注册表残留"),
+                    .child(empty_title),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(OUTLINE))
-                    .child("官方卸载已彻底清理所有文件与配置注册表。"),
+                    .child(empty_desc),
             )
             .into_any_element()]
     } else {
@@ -178,7 +201,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             } else {
                                 CAUTION
                             }))
-                            .child(item.confidence.label()),
+                            .child(item.confidence.label_lang(lang)),
                     )
                     // 来源标签
                     .child(
@@ -201,7 +224,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .text_xs()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(OUTLINE))
-                            .child(item.kind.kind_label()),
+                            .child(item.kind.kind_label_lang(lang)),
                     )
                     .child(
                         div()
@@ -234,6 +257,19 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .collect()
     };
 
+    let clean_btn_text = match lang {
+        Language::Zh => format!(
+            "彻底清除所选 ({}) · 释放 {}",
+            selected_count,
+            fmt_size(selected_bytes)
+        ),
+        Language::En => format!(
+            "Clean Selected ({}) · Free {}",
+            selected_count,
+            fmt_size(selected_bytes)
+        ),
+    };
+
     let footer = if is_empty {
         div()
             .flex()
@@ -245,7 +281,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .child(
                 div()
                     .id("resid-done-btn")
-                    .child(primary_button(String::from("完成"), true))
+                    .child(primary_button(done_label.to_string(), true))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.residual_result = None;
                         this.residual_selected.clear();
@@ -270,7 +306,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         div()
                             .id("resid-select-rec")
                             .child(small_button(
-                                String::from("推荐选中"),
+                                tr_batch_rec(lang).to_string(),
                                 if is_recommended { PRIMARY_FIXED } else { SURF_HIGH },
                                 if is_recommended { PRIMARY } else { TEXT },
                                 true,
@@ -287,7 +323,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         div()
                             .id("resid-select-all")
                             .child(small_button(
-                                String::from("全选"),
+                                tr_batch_all(lang).to_string(),
                                 if all_selected { PRIMARY_FIXED } else { SURF_HIGH },
                                 if all_selected { PRIMARY } else { TEXT },
                                 true,
@@ -304,7 +340,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         div()
                             .id("resid-select-none")
                             .child(small_button(
-                                String::from("清空"),
+                                tr_btn_clear_sel(lang).to_string(),
                                 SURF_HIGH,
                                 MUTED,
                                 selected_count > 0,
@@ -324,7 +360,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         div()
                             .id("resid-cancel")
                             .child(ghost_button(
-                                String::from("取消"),
+                                tr_btn_cancel(lang).to_string(),
                                 true,
                             ))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -337,11 +373,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         div()
                             .id("resid-clean")
                             .child(danger_button(
-                                format!(
-                                    "彻底清除所选 ({}) · 释放 {}",
-                                    selected_count,
-                                    fmt_size(selected_bytes)
-                                ),
+                                clean_btn_text,
                                 selected_count > 0,
                             ))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -349,6 +381,21 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             })),
                     ),
             )
+    };
+
+    let modal_title = match lang {
+        Language::Zh => format!("发现「{}」的 {} 项关联残留", res.app_name, total_items),
+        Language::En => format!("Found {} residual items for \"{}\"", total_items, res.app_name),
+    };
+    let modal_sub = match lang {
+        Language::Zh => format!(
+            "包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {}",
+            fmt_size(res.total_file_size)
+        ),
+        Language::En => format!(
+            "Includes caches, app configuration and registry traces. Potential space: {}",
+            fmt_size(res.total_file_size)
+        ),
     };
 
     Some(
@@ -387,19 +434,13 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                             .text_lg()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(TEXT))
-                                            .child(format!(
-                                                "发现「{}」的 {} 项关联残留",
-                                                res.app_name, total_items
-                                            )),
+                                            .child(modal_title),
                                     )
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(rgb(MUTED))
-                                            .child(format!(
-                                                "包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {}",
-                                                fmt_size(res.total_file_size)
-                                            )),
+                                            .child(modal_sub),
                                     ),
                             ),
                     )

@@ -4,15 +4,18 @@ use super::apps_components::{render_apps_list_card, ListBody};
 use crate::core::apps::{
     AppFilterPreset, AppSortColumn, InstalledApp,
 };
+use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{loading_state_view, page_heading};
 use crate::ui::components::icons::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
 
 pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
     let total_apps = root.apps.len();
     let total_app_size: u64 = root.apps.iter().map(|a| a.estimated_size).sum();
 
@@ -43,10 +46,25 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex_1()
                 .min_w(px(0.))
                 .child(page_heading(
-                    "软件管理与深度卸载",
-                    "查看本机已安装软件、占用体积与最后使用时间",
+                    tr_apps_heading(lang),
+                    tr_apps_subheading(lang),
                 )),
         );
+
+    let (label_storage, label_total_count, label_stale_count) = match lang {
+        Language::Zh => ("估算总占用空间", "已安装应用总数", "长期未用软件 (>90天)"),
+        Language::En => ("Total Estimated Size", "Installed Applications", "Rarely Used (>90 days)"),
+    };
+
+    let total_apps_display = match lang {
+        Language::Zh => format!("{total_apps} 款"),
+        Language::En => format!("{total_apps} Apps"),
+    };
+
+    let stale_apps_display = match lang {
+        Language::Zh => format!("{stale_apps_count} 款"),
+        Language::En => format!("{stale_apps_count} Apps"),
+    };
 
     // 顶部 3 个指标卡片
     let stats_row = div()
@@ -73,7 +91,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(OUTLINE))
-                                .child("估算总占用空间"),
+                                .child(label_storage),
                         )
                         .child(
                             div()
@@ -104,14 +122,14 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(OUTLINE))
-                                .child("已安装应用总数"),
+                                .child(label_total_count),
                         )
                         .child(
                             div()
                                 .text_xl()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child(format!("{total_apps} 款")),
+                                .child(total_apps_display),
                         ),
                 ),
         )
@@ -135,14 +153,14 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(OUTLINE))
-                                .child("长期未用软件 (>90天)"),
+                                .child(label_stale_count),
                         )
                         .child(
                             div()
                                 .text_xl()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(CAUTION))
-                                .child(format!("{stale_apps_count} 款")),
+                                .child(stale_apps_display),
                         ),
                 ),
         );
@@ -150,8 +168,9 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     // 快速分类过滤预设标签
     let preset_buttons = AppFilterPreset::ALL.iter().map(|&p| {
         let active = root.apps_preset == p;
+        let p_label = p.label_lang(lang);
         div()
-            .id(SharedString::from(format!("preset-app-{}", p.label())))
+            .id(SharedString::from(format!("preset-app-{}", p.label_lang(Language::En))))
             .px_3()
             .py(px(4.))
             .rounded_full()
@@ -174,7 +193,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                     .text_color(rgb(MUTED))
                     .hover(|h| h.bg(rgb(SURF_LOW)))
             })
-            .child(p.label())
+            .child(p_label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.apps_preset = p;
                 cx.notify();
@@ -197,6 +216,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         None
     };
 
+    let search_placeholder = tr_search_placeholder(lang);
     let text_content = if search_text.is_empty() {
         div()
             .flex_1()
@@ -209,7 +229,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 div()
                     .text_xs()
                     .text_color(rgb(OUTLINE))
-                    .child("搜索已安装软件…"),
+                    .child(search_placeholder),
             )
     } else {
         div()
@@ -312,6 +332,18 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             .size_full(),
         );
 
+    let filter_stats_text = if root.apps_search.is_empty() {
+        match lang {
+            Language::Zh => format!("共 {} 款", display_apps.len()),
+            Language::En => format!("{} apps", display_apps.len()),
+        }
+    } else {
+        match lang {
+            Language::Zh => format!("匹配 {} / {} 款", display_apps.len(), total_apps),
+            Language::En => format!("Matched {} of {} apps", display_apps.len(), total_apps),
+        }
+    };
+
     let filter_stats_tag = div()
         .px_2()
         .py(px(3.))
@@ -320,11 +352,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .text_xs()
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(rgb(MUTED))
-        .child(if root.apps_search.is_empty() {
-            format!("共 {} 款", display_apps.len())
-        } else {
-            format!("匹配 {} / {} 款", display_apps.len(), total_apps)
-        });
+        .child(filter_stats_text);
 
     let controls_bar = card()
         .p_3()
@@ -342,7 +370,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(OUTLINE))
-                        .child("快速分类:"),
+                        .child(if lang == Language::Zh { "快速分类:" } else { "Presets:" }),
                 )
                 .child(div().flex().items_center().gap_2().children(preset_buttons))
                 .child(filter_stats_tag),
@@ -408,7 +436,10 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     };
 
     // 表格头（全部支持点击正逆序排序，并动态显示当前列项目数）
-    let app_name_header = format!("应用名称与版本 (共 {} 款)", display_apps.len());
+    let app_name_header = match lang {
+        Language::Zh => format!("应用名称与版本 (共 {} 款)", display_apps.len()),
+        Language::En => format!("Name & Version ({} apps)", display_apps.len()),
+    };
     let table_header = div()
         .px_5()
         .py_2()
@@ -419,10 +450,10 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .items_center()
         .gap_3()
         .child(make_header_col(AppSortColumn::Name, app_name_header, None, false))
-        .child(make_header_col(AppSortColumn::Publisher, "开发者".into(), Some(130.), false))
-        .child(make_header_col(AppSortColumn::LastUsed, "最后使用".into(), Some(110.), false))
-        .child(make_header_col(AppSortColumn::InstallDate, "安装日期".into(), Some(100.), false))
-        .child(make_header_col(AppSortColumn::Size, "占用大小".into(), Some(95.), true))
+        .child(make_header_col(AppSortColumn::Publisher, tr_th_publisher(lang).into(), Some(130.), false))
+        .child(make_header_col(AppSortColumn::LastUsed, tr_th_last_used(lang).into(), Some(110.), false))
+        .child(make_header_col(AppSortColumn::InstallDate, tr_th_installed_date(lang).into(), Some(100.), false))
+        .child(make_header_col(AppSortColumn::Size, tr_th_size(lang).into(), Some(95.), true))
         .child(
             div()
                 .w(px(190.))
@@ -431,15 +462,31 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(OUTLINE))
-                .child("操作"),
+                .child(tr_th_actions(lang)),
         );
 
     // 软件列表行
     // 行内容按需渲染，这里只决定「是占位提示还是 N 行列表」
-    let body = if root.apps_scanning {
-        ListBody::Placeholder(loading_state_view(
+    let (loading_title, loading_sub) = match lang {
+        Language::Zh => (
             "正在智能检索已安装软件与空间占用",
             "深度测算软件安装目录、真实体积与最后使用时间",
+        ),
+        Language::En => (
+            "Scanning installed applications…",
+            "Calculating installed size, directories and last usage date",
+        ),
+    };
+
+    let empty_title = match lang {
+        Language::Zh => "未找到匹配的已安装软件",
+        Language::En => "No matching applications found",
+    };
+
+    let body = if root.apps_scanning {
+        ListBody::Placeholder(loading_state_view(
+            loading_title,
+            loading_sub,
             root.anim_phase,
         ))
     } else if display_apps.is_empty() {
@@ -456,7 +503,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .text_base()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(MUTED))
-                        .child("未找到匹配的已安装软件"),
+                        .child(empty_title),
                 )
                 .into_any_element(),
         )
@@ -465,6 +512,23 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     };
 
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
+    let footer_text = if root.apps_search.is_empty() {
+        match lang {
+            Language::Zh => format!("当前列表展示 {} 款软件（总计 {} 款已装）", display_apps.len(), total_apps),
+            Language::En => format!("Displaying {} apps (Total {} installed)", display_apps.len(), total_apps),
+        }
+    } else {
+        match lang {
+            Language::Zh => format!("搜索匹配 {} 款软件（总计 {} 款）", display_apps.len(), total_apps),
+            Language::En => format!("Matched {} apps (Total {})", display_apps.len(), total_apps),
+        }
+    };
+
+    let total_size_label = match lang {
+        Language::Zh => format!("列表总占用: {}", fmt_size(filtered_size)),
+        Language::En => format!("Total Size: {}", fmt_size(filtered_size)),
+    };
+
     let list_footer = div()
         .px_5()
         .py_2()
@@ -488,17 +552,13 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .rounded_full()
                         .bg(rgb(PRIMARY)),
                 )
-                .child(if root.apps_search.is_empty() {
-                    format!("当前列表展示 {} 款软件（总计 {} 款已装）", display_apps.len(), total_apps)
-                } else {
-                    format!("搜索匹配 {} 款软件（总计 {} 款）", display_apps.len(), total_apps)
-                }),
+                .child(footer_text),
         )
         .child(
             div()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT))
-                .child(format!("列表总占用: {}", fmt_size(filtered_size))),
+                .child(total_size_label),
         );
 
     let list_card = render_apps_list_card(root, table_header, body, list_footer, cx);
@@ -520,6 +580,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
 /// 渲染软件条目悬浮右键上下文菜单（支持打开所在目录、常规卸载、强力深度清理、复制安装路径）
 pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
+    let lang = root.language;
     let menu = root.apps_context_menu.as_ref()?;
     let app = menu.app.clone();
     let has_uninstaller = app.uninstall_string.is_some() || app.quiet_uninstall_string.is_some();
@@ -535,6 +596,11 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
     let app_for_loc = app_loc.clone();
     let app_for_copy = app.clone();
     let app_name_for_loc = app.name.clone();
+
+    let (ctx_open_folder, ctx_uninstall, ctx_force_clean, ctx_copy_path) = match lang {
+        Language::Zh => ("打开安装目录", "官方常规卸载", "强力残留清理", "复制安装路径"),
+        Language::En => ("Open Install Location", "Standard Uninstall", "Force Residual Clean", "Copy Install Path"),
+    };
 
     let menu_view = div()
         .id("apps-context-menu-backdrop")
@@ -587,7 +653,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                                 div()
                                     .text_xs()
                                     .text_color(rgb(OUTLINE))
-                                    .child(format!("版本 {}", app.version)),
+                                    .child(format!("v{}", app.version)),
                             )
                         }),
                 )
@@ -611,7 +677,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .when(!has_location, |d| {
                             d.text_color(rgb(OUTLINE))
                         })
-                        .child("打开安装目录")
+                        .child(ctx_open_folder)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_loc {
                                 crate::platform::reveal_in_explorer(loc);
@@ -642,7 +708,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .when(!has_uninstaller, |d| {
                             d.text_color(rgb(OUTLINE))
                         })
-                        .child("官方常规卸载")
+                        .child(ctx_uninstall)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_context_menu();
                             this.request_uninstall_app(app_for_uninst.clone(), cx);
@@ -663,7 +729,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(PRIMARY))
                         .hover(|h| h.bg(rgba(PRIMARY, 0.08)))
-                        .child("强力残留清理")
+                        .child(ctx_force_clean)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_context_menu();
                             this.start_residual_scan(app_for_resid.clone(), cx);
@@ -684,7 +750,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(MUTED))
                         .hover(|h| h.bg(rgb(SURF_HIGH)))
-                        .child("复制安装路径")
+                        .child(ctx_copy_path)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_copy.install_location {
                                 this.status = format!("已获取安装路径：{}", loc.display());

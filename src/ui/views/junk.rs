@@ -1,12 +1,14 @@
 //! 智能清理视图与操作底栏 (CleanFlow 质感分层清理)
 
 use crate::core::categories::CategoryId;
+use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
 use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
 use crate::ui::components::icons::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Div, IntoElement, SharedString};
@@ -217,24 +219,25 @@ fn item_row(
 /// 扫描完默认只勾「推荐」那一套，但用户常常想一次性全清、或者把默认
 /// 勾选整体取消掉再自己挑。逐个类别点复选框太麻烦，这里给四个动作。
 fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
+    let lang = root.language;
     let total = root.total_item_count();
     let picked = root.selected_count();
     let enabled = root.scanned && !root.cleaning;
     let is_recommended = root.selection_is_recommended();
 
-    // (标签, 是否高亮为当前状态, 动作)
-    let actions: [(&'static str, bool, fn(&mut Root)); 4] = [
-        ("推荐选中", is_recommended, Root::select_recommended),
-        ("全选", picked == total && total > 0, Root::select_every),
-        ("反选", false, Root::invert_selection),
-        ("清空选中", picked == 0, Root::select_none),
+    // (标签, 英文ID, 是否高亮为当前状态, 动作)
+    let actions: [(&'static str, &'static str, bool, fn(&mut Root)); 4] = [
+        (tr_batch_rec(lang), "rec", is_recommended, Root::select_recommended),
+        (tr_batch_all(lang), "all", picked == total && total > 0, Root::select_every),
+        (tr_batch_invert(lang), "invert", false, Root::invert_selection),
+        (tr_batch_clear(lang), "clear", picked == 0, Root::select_none),
     ];
 
     let buttons: Vec<_> = actions
         .into_iter()
-        .map(|(label, active, action)| {
+        .map(|(label, id_key, active, action)| {
             div()
-                .id(SharedString::from(format!("sel-{label}")))
+                .id(SharedString::from(format!("sel-{id_key}")))
                 .child(small_button(
                     label.to_string(),
                     if active { PRIMARY_FIXED } else { SURF_LOW },
@@ -249,6 +252,11 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
                 })
         })
         .collect();
+
+    let count_text = match lang {
+        Language::Zh => format!("共 {total} 项"),
+        Language::En => format!("{total} items"),
+    };
 
     div()
         .flex()
@@ -269,11 +277,12 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
                 .text_xs()
                 .text_color(rgb(OUTLINE))
                 .ml_1()
-                .child(format!("共 {total} 项")),
+                .child(count_text),
         )
 }
 
 pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
     let total = root.total_cleanable();
 
     let found = card()
@@ -292,7 +301,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(OUTLINE))
-                        .child("共发现可清理"),
+                        .child(tr_found_cleanable(lang)),
                 )
                 .child(
                     div()
@@ -319,6 +328,17 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .child(icon_trash(if total > 0 { ERROR } else { PRIMARY }, 18.)),
         );
 
+    let (heading_title, heading_sub) = match lang {
+        Language::Zh => (
+            "智能清理",
+            "系统缓存、浏览器与包管理缓存默认已勾选；AI 助手缓存与项目构建产物需手动勾选",
+        ),
+        Language::En => (
+            "Smart Clean",
+            "System, browser & package caches selected by default; AI caches & dev builds require manual selection",
+        ),
+    };
+
     let header = div()
         .flex()
         .items_center()
@@ -328,10 +348,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .child(page_heading(
-                    "智能清理",
-                    "系统缓存、浏览器与包管理缓存默认已勾选；AI 助手缓存与项目构建产物需手动勾选",
-                )),
+                .child(page_heading(heading_title, heading_sub)),
         )
         .child(found);
 
@@ -352,7 +369,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             .py_4()
             .child(
                 div()
-                    .id(SharedString::from(format!("cb-{}", id.name())))
+                    .id(SharedString::from(format!("cb-{}", id.name_lang(Language::En))))
                     .flex_none()
                     .cursor_pointer()
                     .child(checkbox(state))
@@ -363,7 +380,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("row-{}", id.name())))
+                    .id(SharedString::from(format!("row-{}", id.name_lang(Language::En))))
                     .flex_1()
                     .min_w(px(0.))
                     .flex()
@@ -392,19 +409,19 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             .text_base()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(TEXT))
-                                            .child(id.name()),
+                                            .child(id.name_lang(lang)),
                                     )
                                     // 开发者类目默认不勾选，用徽标说明「要自己勾」，
                                     // 免得用户以为扫出来了却没被清掉是 bug
                                     .when(id.is_developer(), |d| {
                                         d.child(badge(
-                                            "需手动勾选".into(),
+                                            tr_need_manual_select(lang).into(),
                                             safety_container(safety),
                                             safety_color(safety),
                                         ))
                                     }),
                             )
-                            .child(div().text_xs().text_color(rgb(MUTED)).child(id.desc())),
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(id.desc_lang(lang))),
                     )
                     .child(
                         div()
@@ -514,10 +531,21 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         );
     }
 
-    let body: AnyElement = if root.scanning {
-        loading_state_view(
+    let (loading_title, loading_sub) = match lang {
+        Language::Zh => (
             "正在全面扫描系统冗余垃圾",
             "安全检索系统临时缓存、应用日志与回收站，准备释放空间",
+        ),
+        Language::En => (
+            "Scanning system junk files…",
+            "Safely checking system temp, caches, logs and Recycle Bin",
+        ),
+    };
+
+    let body: AnyElement = if root.scanning {
+        loading_state_view(
+            loading_title,
+            loading_sub,
             root.anim_phase,
         )
     } else {
@@ -569,9 +597,21 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
 }
 
 pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
+    let lang = root.language;
     let size = root.selected_size();
     let count = root.selected_count();
     let enabled = root.scanned && !root.cleaning && !root.scanning && count > 0;
+
+    let items_label = match lang {
+        Language::Zh => format!("({count} 项)"),
+        Language::En => format!("({count} items)"),
+    };
+
+    let clean_btn_text = if root.cleaning {
+        tr_cleaning(lang).to_string()
+    } else {
+        tr_clean_now(lang).to_string()
+    };
 
     div()
         .flex_none()
@@ -605,7 +645,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(OUTLINE))
-                                .child("已选择清理"),
+                                .child(if lang == Language::Zh { "已选择清理" } else { "Selected for Cleaning" }),
                         )
                         .child(
                             div()
@@ -624,7 +664,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(OUTLINE))
-                                        .child(format!("({count} 项)")),
+                                        .child(items_label),
                                 ),
                         ),
                 )
@@ -633,11 +673,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                     div()
                         .id("clean-now")
                         .child(danger_button(
-                            if root.cleaning {
-                                String::from("清理中…")
-                            } else {
-                                String::from("立即清理")
-                            },
+                            clean_btn_text,
                             enabled,
                         ))
                         .on_click(cx.listener(|this, _, _, cx| {

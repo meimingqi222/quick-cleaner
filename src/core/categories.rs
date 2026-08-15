@@ -1,5 +1,6 @@
 //! 垃圾清理类别与扫描目标规则定义
 
+use crate::core::i18n::Language;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -11,10 +12,21 @@ pub enum Safety {
 
 impl Safety {
     pub fn label(&self) -> &'static str {
-        match self {
-            Safety::Safe => "安全清理",
-            Safety::Caution => "注意",
-            Safety::Danger => "危险",
+        self.label_lang(Language::Zh)
+    }
+
+    pub fn label_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                Safety::Safe => "安全清理",
+                Safety::Caution => "注意",
+                Safety::Danger => "危险",
+            },
+            Language::En => match self {
+                Safety::Safe => "Safe",
+                Safety::Caution => "Caution",
+                Safety::Danger => "Danger",
+            },
         }
     }
 }
@@ -87,17 +99,35 @@ impl CategoryId {
     }
 
     pub fn name(&self) -> &'static str {
-        match self {
-            CategoryId::SystemTemp => "系统临时文件",
-            CategoryId::UserTemp => "用户临时文件",
-            CategoryId::BrowserCache => "浏览器缓存",
-            CategoryId::PackageCache => "包管理缓存",
-            CategoryId::Logs => "日志与崩溃转储",
-            CategoryId::RecycleBin => "回收站 / 废纸篓",
-            CategoryId::Thumbnails => "缩略图缓存",
-            CategoryId::AiAgents => "AI 编程助手缓存",
-            CategoryId::DevBuild => "项目构建产物与依赖",
-            CategoryId::DevWorktrees => "AI agent 临时 worktree",
+        self.name_lang(Language::Zh)
+    }
+
+    pub fn name_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                CategoryId::SystemTemp => "系统临时文件",
+                CategoryId::UserTemp => "用户临时文件",
+                CategoryId::BrowserCache => "浏览器缓存",
+                CategoryId::PackageCache => "包管理缓存",
+                CategoryId::Logs => "日志与崩溃转储",
+                CategoryId::RecycleBin => "回收站 / 废纸篓",
+                CategoryId::Thumbnails => "缩略图缓存",
+                CategoryId::AiAgents => "AI 编程助手缓存",
+                CategoryId::DevBuild => "项目构建产物与依赖",
+                CategoryId::DevWorktrees => "AI agent 临时 worktree",
+            },
+            Language::En => match self {
+                CategoryId::SystemTemp => "System Temp Files",
+                CategoryId::UserTemp => "User Temp Files",
+                CategoryId::BrowserCache => "Browser Cache",
+                CategoryId::PackageCache => "Package Manager Cache",
+                CategoryId::Logs => "Logs & Crash Dumps",
+                CategoryId::RecycleBin => "Recycle Bin / Trash",
+                CategoryId::Thumbnails => "Thumbnail Cache",
+                CategoryId::AiAgents => "AI Assistant Cache",
+                CategoryId::DevBuild => "Build Artifacts & Deps",
+                CategoryId::DevWorktrees => "AI Agent Git Worktrees",
+            },
         }
     }
 
@@ -117,17 +147,35 @@ impl CategoryId {
     }
 
     pub fn desc(&self) -> &'static str {
-        match self {
-            CategoryId::SystemTemp => "系统临时文件与系统更新残留",
-            CategoryId::UserTemp => "用户主目录下的应用临时文件",
-            CategoryId::BrowserCache => "Chrome / Edge / Safari 等浏览器的缓存数据",
-            CategoryId::PackageCache => "npm / pnpm / cargo / go 等包管理器缓存",
-            CategoryId::Logs => "系统与应用日志、崩溃转储",
-            CategoryId::RecycleBin => "回收站/废纸篓中已删除的文件",
-            CategoryId::Thumbnails => "系统缩略图缓存，可安全重建",
-            CategoryId::AiAgents => "Claude Code / Codex / Trae / Cursor 等 AI 编程工具的会话记录与缓存",
-            CategoryId::DevBuild => "代码目录下的 node_modules / target / .venv / bin·obj 等，可重新构建",
-            CategoryId::DevWorktrees => "AI agent 留下的临时 git worktree，可能含未提交改动",
+        self.desc_lang(Language::Zh)
+    }
+
+    pub fn desc_lang(&self, lang: Language) -> &'static str {
+        match lang {
+            Language::Zh => match self {
+                CategoryId::SystemTemp => "系统临时文件与系统更新残留",
+                CategoryId::UserTemp => "用户主目录下的应用临时文件",
+                CategoryId::BrowserCache => "Chrome / Edge / Safari 等浏览器的缓存数据",
+                CategoryId::PackageCache => "npm / pnpm / cargo / go 等包管理器缓存",
+                CategoryId::Logs => "系统与应用日志、崩溃转储",
+                CategoryId::RecycleBin => "回收站/废纸篓中已删除的文件",
+                CategoryId::Thumbnails => "系统缩略图缓存，可安全重建",
+                CategoryId::AiAgents => "Claude Code / Codex / Trae / Cursor 等 AI 编程工具的会话记录与缓存",
+                CategoryId::DevBuild => "代码目录下的 node_modules / target / .venv / bin·obj 等，可重新构建",
+                CategoryId::DevWorktrees => "AI agent 留下的临时 git worktree，可能含未提交改动",
+            },
+            Language::En => match self {
+                CategoryId::SystemTemp => "System temporary files and update leftovers",
+                CategoryId::UserTemp => "Application temporary files under user profile",
+                CategoryId::BrowserCache => "Cache files from Chrome, Edge, Firefox, Safari",
+                CategoryId::PackageCache => "Caches from npm, pnpm, Cargo, Go, pip, etc.",
+                CategoryId::Logs => "System and application event logs and crash dumps",
+                CategoryId::RecycleBin => "Deleted files in Recycle Bin or Trash",
+                CategoryId::Thumbnails => "System thumbnail cache, safe to rebuild",
+                CategoryId::AiAgents => "Session records and caches from Claude, Cursor, Trae, etc.",
+                CategoryId::DevBuild => "node_modules, target, .venv, bin/obj in projects, rebuildable",
+                CategoryId::DevWorktrees => "Temporary worktrees created by AI agents, may contain uncommitted edits",
+            },
         }
     }
 

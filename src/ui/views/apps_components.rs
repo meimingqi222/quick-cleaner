@@ -29,6 +29,7 @@ pub(super) fn render_app_row(
         .to_uppercase()
         .to_string();
 
+    let lang = root.language;
     let is_busy = root.residual_scanning || root.cleaning;
     let uninst_enabled = has_uninstaller && !is_busy;
     let resid_enabled = !is_busy;
@@ -166,7 +167,7 @@ pub(super) fn render_app_row(
                     div()
                         .id(SharedString::from(format!("uninst-{idx}")))
                         .child(small_button(
-                            String::from("卸载"),
+                            crate::ui::i18n::tr_btn_uninstall(lang).to_string(),
                             SURF_HIGH,
                             TEXT,
                             uninst_enabled,
@@ -179,7 +180,7 @@ pub(super) fn render_app_row(
                     div()
                         .id(SharedString::from(format!("clean-resid-{idx}")))
                         .child(small_button(
-                            String::from("强力清理"),
+                            crate::ui::i18n::tr_btn_force_clean(lang).to_string(),
                             PRIMARY_FIXED,
                             PRIMARY,
                             resid_enabled,

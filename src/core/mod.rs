@@ -7,6 +7,7 @@ pub mod categories;
 pub mod cleaner;
 pub mod devscan;
 pub mod disk;
+pub mod i18n;
 pub mod model;
 pub mod safety;
 pub mod scanner;
@@ -21,6 +22,7 @@ pub use cleaner::{
     CleanSnapshot,
 };
 pub use disk::{DirUsage, DiskSelectionState, MftScan, Node};
+pub use i18n::Language;
 pub use model::{commas, fmt_size, truncate, Check};
 pub use safety::{is_protected, is_system_root_dir};
 pub use scanner::{scan_all, CategorySummary, ScanItem};

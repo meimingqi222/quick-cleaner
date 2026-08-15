@@ -1,6 +1,7 @@
 //! GPUI 界面根视图与状态管理
 
 pub mod components;
+pub mod i18n;
 pub mod text_input;
 pub mod theme;
 pub mod views;
@@ -15,6 +16,7 @@ use crate::core::cleaner::{
 use crate::core::safety::is_protected;
 use crate::core::apps::filter_and_sort_apps;
 use crate::core::disk::{DiskSelectionState, MftScan, Node};
+use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
 use crate::core::scanner::{apply_clean_result, scan_all, CategorySummary, ScanItem};
 use crate::platform::{
@@ -35,6 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Root {
+    pub language: Language,
     pub categories: Vec<CategorySummary>,
     pub scanned: bool,
     pub scanning: bool,
@@ -152,6 +155,7 @@ impl Root {
         let disk_space = get_volume_space(disk_volume);
         let apps_focus_handle = cx.focus_handle();
         Self {
+            language: Language::Zh,
             categories: Vec::new(),
             scanned: false,
             scanning: false,
@@ -211,6 +215,22 @@ impl Root {
             anim_phase: 0,
             apps_focus_handle,
             apps_context_menu: None,
+        }
+    }
+
+    pub fn toggle_language(&mut self, cx: &mut Context<Self>) {
+        self.language = self.language.toggle();
+        self.apps_gen += 1; // 触发派生缓存刷新
+        self.mft_gen += 1;
+        cx.notify();
+    }
+
+    pub fn set_language(&mut self, lang: Language, cx: &mut Context<Self>) {
+        if self.language != lang {
+            self.language = lang;
+            self.apps_gen += 1;
+            self.mft_gen += 1;
+            cx.notify();
         }
     }
 
@@ -542,10 +562,25 @@ impl Root {
         }
         let total_size = self.disk_selected_size();
         let count = self.disk_sel.len();
+        let lang = self.language;
+
+        let (title, body, detail) = match lang {
+            crate::core::i18n::Language::Zh => (
+                "确认永久删除选中项".to_string(),
+                format!("将永久删除 {} 项，释放约 {} 磁盘空间。", count, fmt_size(total_size)),
+                "文件与目录不会进入回收站，删除后无法恢复。请确认没有重要数据。".to_string(),
+            ),
+            crate::core::i18n::Language::En => (
+                "Confirm Permanent Deletion".to_string(),
+                format!("Permanently delete {} items, freeing approx {}.", count, fmt_size(total_size)),
+                "Items will be deleted permanently without moving to Recycle Bin. Please ensure no vital data is selected.".to_string(),
+            ),
+        };
+
         self.confirm = Some(ConfirmRequest {
-            title: "确认永久删除选中项".into(),
-            body: format!("将永久删除 {} 项，释放约 {} 磁盘空间。", count, fmt_size(total_size)),
-            detail: "文件与目录不会进入回收站，删除后无法恢复。请确认没有重要数据。".into(),
+            title,
+            body,
+            detail,
             kind: ConfirmKind::CleanDiskSelected,
         });
         cx.notify();
@@ -748,10 +783,24 @@ impl Root {
         if count == 0 || self.cleaning || !self.scanned {
             return;
         }
+        let lang = self.language;
+        let (title, body, detail) = match lang {
+            crate::core::i18n::Language::Zh => (
+                "确认永久删除".to_string(),
+                format!("将删除 {} 项，共 {}。", count, fmt_size(self.selected_size())),
+                "文件不会进入回收站，删除后无法恢复。".to_string(),
+            ),
+            crate::core::i18n::Language::En => (
+                "Confirm Permanent Deletion".to_string(),
+                format!("Deleting {} items, totaling {}.", count, fmt_size(self.selected_size())),
+                "Files will not enter the Recycle Bin and cannot be recovered.".to_string(),
+            ),
+        };
+
         self.confirm = Some(ConfirmRequest {
-            title: "确认永久删除".into(),
-            body: format!("将删除 {} 项，共 {}。", count, fmt_size(self.selected_size())),
-            detail: "文件不会进入回收站，删除后无法恢复。".into(),
+            title,
+            body,
+            detail,
             kind: ConfirmKind::CleanSelected,
         });
         cx.notify();
@@ -761,16 +810,33 @@ impl Root {
         if self.cleaning {
             return;
         }
+        let lang = self.language;
         if is_protected(&path) {
-            self.status = format!("「{}」是受保护的系统路径，不能删除", path.display());
+            self.status = match lang {
+                crate::core::i18n::Language::Zh => format!("「{}」是受保护的系统路径，不能删除", path.display()),
+                crate::core::i18n::Language::En => format!("\"{}\" is a system-protected path and cannot be deleted", path.display()),
+            };
             cx.notify();
             return;
         }
+
+        let (title, body, detail) = match lang {
+            crate::core::i18n::Language::Zh => (
+                "确认永久删除".to_string(),
+                format!("将删除 {}（{}）。", path.display(), fmt_size(size)),
+                "文件不会进入回收站，删除后无法恢复。请确认它不是正在使用的程序或数据。".to_string(),
+            ),
+            crate::core::i18n::Language::En => (
+                "Confirm Permanent Deletion".to_string(),
+                format!("Deleting \"{}\" ({}).", path.display(), fmt_size(size)),
+                "Files will not enter the Recycle Bin and cannot be recovered. Please ensure it is not active program data.".to_string(),
+            ),
+        };
+
         self.confirm = Some(ConfirmRequest {
-            title: "确认永久删除".into(),
-            body: format!("将删除 {}（{}）。", path.display(), fmt_size(size)),
-            detail: "文件不会进入回收站，删除后无法恢复。请确认它不是正在使用的程序或数据。"
-                .into(),
+            title,
+            body,
+            detail,
             kind: ConfirmKind::CleanPath(path, size),
         });
         cx.notify();

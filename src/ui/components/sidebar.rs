@@ -1,6 +1,8 @@
 //! 侧边栏导航控件 (CleanFlow / Modern macOS & Windows 11 设计风格)
 
+use crate::core::i18n::Language;
 use crate::ui::components::icons::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{
@@ -20,11 +22,19 @@ impl View {
     pub const ALL: [View; 4] = [View::Dashboard, View::Junk, View::Apps, View::Disk];
 
     pub fn title(&self) -> &'static str {
-        match self {
-            View::Dashboard => "概览扫描",
-            View::Junk => "智能清理",
-            View::Apps => "软件管理",
-            View::Disk => "磁盘透镜",
+        self.title_lang(Language::Zh)
+    }
+
+    pub fn title_lang(&self, lang: Language) -> &'static str {
+        match (self, lang) {
+            (View::Dashboard, Language::Zh) => "概览扫描",
+            (View::Dashboard, Language::En) => "Overview",
+            (View::Junk, Language::Zh) => "智能清理",
+            (View::Junk, Language::En) => "Smart Clean",
+            (View::Apps, Language::Zh) => "软件管理",
+            (View::Apps, Language::En) => "Apps",
+            (View::Disk, Language::Zh) => "磁盘透镜",
+            (View::Disk, Language::En) => "Disk Lens",
         }
     }
 
@@ -40,13 +50,14 @@ impl View {
 
 pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
     let current = root.view;
+    let lang = root.language;
 
     let nav_item = |v: View, cx: &mut Context<Root>| {
         let active = current == v;
         let fg_color = if active { PRIMARY } else { MUTED };
 
         div()
-            .id(SharedString::from(format!("nav-{}", v.title())))
+            .id(SharedString::from(format!("nav-{}", v.title_lang(Language::En))))
             .h(px(44.))
             .flex()
             .items_center()
@@ -79,7 +90,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         gpui::FontWeight::MEDIUM
                     })
                     .text_color(rgb(fg_color))
-                    .child(v.title()),
+                    .child(v.title_lang(lang)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.view = v;
@@ -138,7 +149,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(icon_sparkle(ON_PRIMARY, 20.)),
+                                .child(icon_dashboard(ON_PRIMARY, 20.)),
                         )
                         .child(
                             div()
@@ -149,13 +160,13 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .text_base()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
-                                        .child("QuickCleaner"),
+                                        .child(tr_app_title(lang)),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(rgb(OUTLINE))
-                                        .child("极速磁盘与软件清理"),
+                                        .child(tr_app_subtitle(lang)),
                                 ),
                         ),
                 )
@@ -168,7 +179,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .children(items),
                 ),
         )
-        // 底栏统计与辅助信息
+        // 底栏统计与语言切换
         .child(
             div()
                 .p_4()
@@ -197,7 +208,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(icon_sparkle(PRIMARY, 16.)),
+                                .child(icon_trash(PRIMARY, 16.)),
                         )
                         .child(
                             div()
@@ -207,7 +218,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                     div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child("本次已释放空间"),
+                                        .child(tr_freed_total(lang)),
                                 )
                                 .child(
                                     div()
@@ -215,6 +226,80 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(PRIMARY))
                                         .child(crate::core::model::fmt_size(root.freed_total)),
+                                ),
+                        ),
+                )
+                // 语言切换 Pill
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if lang == Language::Zh { "界面语言" } else { "Language" }),
+                        )
+                        .child(
+                            div()
+                                .id("lang-switch-container")
+                                .flex()
+                                .items_center()
+                                .bg(rgb(CARD))
+                                .border_1()
+                                .border_color(rgba(OUTLINE_VAR, 0.5))
+                                .rounded_lg()
+                                .p(px(2.))
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .id("lang-zh-btn")
+                                        .px_2()
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .text_xs()
+                                        .font_weight(if lang == Language::Zh {
+                                            gpui::FontWeight::BOLD
+                                        } else {
+                                            gpui::FontWeight::NORMAL
+                                        })
+                                        .cursor_pointer()
+                                        .when(lang == Language::Zh, |d| {
+                                            d.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                        })
+                                        .when(lang != Language::Zh, |d| {
+                                            d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
+                                        })
+                                        .child("中文")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.set_language(Language::Zh, cx);
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("lang-en-btn")
+                                        .px_2()
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .text_xs()
+                                        .font_weight(if lang == Language::En {
+                                            gpui::FontWeight::BOLD
+                                        } else {
+                                            gpui::FontWeight::NORMAL
+                                        })
+                                        .cursor_pointer()
+                                        .when(lang == Language::En, |d| {
+                                            d.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                        })
+                                        .when(lang != Language::En, |d| {
+                                            d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
+                                        })
+                                        .child("English")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.set_language(Language::En, cx);
+                                        })),
                                 ),
                         ),
                 ),

@@ -1,10 +1,12 @@
 //! 概览视图（Smart Scan 环形扫描中心）
 
+use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::buttons::primary_button;
 use crate::ui::components::cards::card;
 use crate::ui::components::icons::*;
 use crate::ui::components::sidebar::View;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{
@@ -18,19 +20,32 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     const DOT: f32 = 14.;
     const TRACK: f32 = 8.;
 
+    let lang = root.language;
     let total = root.total_cleanable();
     let scanned = root.scanned;
 
     let (big, sub) = if root.scanning {
-        (String::from("扫描中…"), String::from("正在检查系统缓存与开发环境残留"))
+        (
+            tr_scanning(lang).to_string(),
+            match lang {
+                Language::Zh => String::from("正在检查系统缓存与开发环境残留"),
+                Language::En => String::from("Checking system caches and dev leftovers"),
+            },
+        )
     } else if root.cleaning {
-        (String::from("清理中…"), String::from("正在彻底移除选中垃圾"))
+        (
+            tr_cleaning(lang).to_string(),
+            match lang {
+                Language::Zh => String::from("正在彻底移除选中垃圾"),
+                Language::En => String::from("Permanently removing selected items"),
+            },
+        )
     } else if scanned && total > 0 {
-        (fmt_size(total), String::from("发现可清理内容"))
+        (fmt_size(total), tr_found_cleanable(lang).to_string())
     } else if scanned {
-        (String::from("系统很干净"), String::from("暂无可清理垃圾"))
+        (tr_system_clean(lang).to_string(), tr_no_junk(lang).to_string())
     } else {
-        (String::from("Smart Scan"), String::from("点击开始一键智能扫描"))
+        (String::from("Smart Scan"), tr_start_smart_scan(lang).to_string())
     };
 
     let mut ring = div()
@@ -88,7 +103,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         .justify_center()
         .gap(px(6.))
         .cursor_pointer()
-        .child(icon_sparkle(ON_PRIMARY, 28.))
+        .child(icon_dashboard(ON_PRIMARY, 28.))
         .child(
             div()
                 .text_2xl()
@@ -118,17 +133,33 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let ring = ring.child(inner);
 
     let blurb = if root.scanning {
-        String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…")
+        match lang {
+            Language::Zh => String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…"),
+            Language::En => String::from("Scanning system caches, application logs, build artifacts, and temp files…"),
+        }
     } else if scanned && total > 0 {
-        format!(
-            "已在 {} 个类别中发现 {} 可清理内容。",
-            root.categories.iter().filter(|c| c.total_size > 0).count(),
-            fmt_size(total)
-        )
+        match lang {
+            Language::Zh => format!(
+                "已在 {} 个类别中发现 {} 可清理内容。",
+                root.categories.iter().filter(|c| c.total_size > 0).count(),
+                fmt_size(total)
+            ),
+            Language::En => format!(
+                "Found {} cleanable items across {} categories.",
+                fmt_size(total),
+                root.categories.iter().filter(|c| c.total_size > 0).count()
+            ),
+        }
     } else if scanned {
-        String::from("未发现可清理的冗余缓存，系统状态良好。")
+        match lang {
+            Language::Zh => String::from("未发现可清理的冗余缓存，系统状态良好。"),
+            Language::En => String::from("No redundant caches found. System is running cleanly."),
+        }
     } else {
-        String::from("快速扫描系统缓存、开发依赖产物与磁盘占用。")
+        match lang {
+            Language::Zh => String::from("快速扫描系统缓存、开发依赖产物与磁盘占用。"),
+            Language::En => String::from("Quickly scan system caches, developer dependencies, and disk usage."),
+        }
     };
 
     // 底部 3 块快速入口卡片
@@ -157,7 +188,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child("智能清理"),
+                                .child(tr_view_junk(lang)),
                         )
                         .child(
                             div()
@@ -166,7 +197,10 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .child(if root.scanned {
                                     fmt_size(total)
                                 } else {
-                                    "一键清理".into()
+                                    match lang {
+                                        Language::Zh => "一键清理".into(),
+                                        Language::En => "Clean Junk".into(),
+                                    }
                                 }),
                         ),
                 )
@@ -195,18 +229,22 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child("软件管理"),
+                                .child(tr_view_apps(lang)),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child(if root.apps_scanning {
-                                    "检索软件中…".into()
-                                } else if root.apps_scanned {
-                                    format!("{} 款已装软件", root.apps.len())
+                                .child(if root.apps_scanned {
+                                    match lang {
+                                        Language::Zh => format!("已发现 {} 款", root.apps.len()),
+                                        Language::En => format!("{} Apps", root.apps.len()),
+                                    }
                                 } else {
-                                    "软件与残留清理".into()
+                                    match lang {
+                                        Language::Zh => "卸载分析".into(),
+                                        Language::En => "Uninstall".into(),
+                                    }
                                 }),
                         ),
                 )
@@ -238,20 +276,19 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child("磁盘透镜"),
+                                .child(tr_view_disk(lang)),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child(if root.mft_scanning {
-                                    "深度分析中…".into()
-                                } else if let Some(ref scan) = root.mft {
-                                    format!("{}: 盘已索引 ({} 文件)", root.disk_volume, scan.file_count)
-                                } else if let Some((used, _)) = root.disk_space {
-                                    format!("{}: 盘已用 {}", root.disk_volume, fmt_size(used))
+                                .child(if let Some(s) = &root.mft {
+                                    fmt_size(s.total_size)
                                 } else {
-                                    "空间分布与大文件".into()
+                                    match lang {
+                                        Language::Zh => "空间透镜".into(),
+                                        Language::En => "Storage".into(),
+                                    }
                                 }),
                         ),
                 )
@@ -286,10 +323,14 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         );
 
     if scanned && total > 0 && !root.cleaning {
+        let btn_text = match lang {
+            Language::Zh => String::from("查看详情并清理"),
+            Language::En => String::from("Review & Clean Junk"),
+        };
         body = body.child(
             div()
                 .id("goto-junk")
-                .child(primary_button(String::from("查看详情并清理"), true))
+                .child(primary_button(btn_text, true))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Junk;
                     cx.notify();
