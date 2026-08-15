@@ -921,9 +921,10 @@ impl Root {
                     protected,
                 }
             })
-            // 受系统保护的条目不进列表：既避免误操作，也避免它们挤占
-            // 环形图里的可视份额
-            .filter(|row| !row.protected)
+            // 受保护项照常入列。磁盘分析的价值就在于「看清谁占了空间」，
+            // 而用户目录、Windows、Program Files 恰恰是最大的几个——把它们
+            // 藏掉，环形图占比会变得毫无意义，也没法下钻进去找真正的元凶。
+            // 它们在行渲染里标注「系统保护项目」、禁用勾选与删除，但可以点进去。
             .take(DISK_MAX_ROWS)
             .collect();
         self.disk_rows_key = Some(key);
@@ -948,10 +949,14 @@ impl Root {
         self.apps_view_key = Some(key);
     }
 
-    /// 当前视图里可勾选的 (路径, 体积) 列表。
+    /// 当前视图里**可勾选**的 (路径, 体积) 列表。
+    ///
+    /// 受保护项虽然显示在列表里，但不参与勾选，也不能被「全选」带上，
+    /// 否则表头复选框永远到不了全选状态。
     pub fn disk_selectable(&self) -> Vec<(PathBuf, u64)> {
         self.disk_rows
             .iter()
+            .filter(|r| !r.protected)
             .map(|r| (r.path.clone(), r.node.size))
             .collect()
     }
