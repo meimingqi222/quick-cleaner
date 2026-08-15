@@ -5,6 +5,7 @@ use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
 use crate::ui::theme::*;
+use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Div, SharedString};
 
@@ -216,70 +217,26 @@ pub(super) fn render_apps_list_card(
     display_count: usize,
     cx: &mut Context<Root>,
 ) -> Div {
-    // 右侧自绘滚动条：GPUI 的 overflow_scroll 只处理滚动，不绘制滚动条。
-    // 通过 ScrollHandle 读取当前偏移、视口高度和最大偏移，实时显示列表滚动位置。
+    // 右侧自绘滚动条。几何计算与「智能清理」的分类列表共用同一套度量，
+    // 见 ui::components::scroll。
     let scroll_handle = root.apps_list_scroll.clone();
-    let viewport_h: f32 = scroll_handle.bounds().size.height.into();
-    let max_scroll_y: f32 = scroll_handle.max_offset().height.into();
-    let scroll_top: f32 = (-scroll_handle.offset().y).into();
-
-    // 首帧布局前 ScrollHandle 还没有 bounds/max_offset，用行高做一次保守估算，
-    // 保证内容明显溢出时滚动条立即可见；开始滚动后由真实布局值接管。
     let estimated_viewport_h = 340.0;
     let estimated_content_h = display_count as f32 * 73.0;
-    let estimated_max_y = (estimated_content_h - estimated_viewport_h).max(0.0);
-    let viewport_eff = if viewport_h > 0.0 {
-        viewport_h
-    } else {
-        estimated_viewport_h
-    };
-    let max_eff = if max_scroll_y > 0.0 {
-        max_scroll_y
-    } else {
-        estimated_max_y
-    };
-    let has_scroll = max_eff > 0.0;
 
-    let scrollbar = if has_scroll {
-        let track_h = viewport_eff;
-        let content_h = viewport_eff + max_eff;
-        let thumb_h = ((viewport_eff / content_h) * track_h).clamp(28.0, track_h);
-        let thumb_top = (scroll_top.max(0.0) / max_eff) * (track_h - thumb_h);
-
-        Some(
-            div()
-                .absolute()
-                .top(px(0.))
-                .right(px(0.))
-                .bottom(px(0.))
-                .w(px(12.))
-                .bg(rgba(OUTLINE_VAR, 0.14))
-                .child(
-                    div()
-                        .id("apps-scroll-thumb")
-                        .absolute()
-                        .right(px(2.))
-                        .top(px(thumb_top.clamp(0.0, track_h - thumb_h)))
-                        .w(px(8.))
-                        .h(px(thumb_h))
-                        .rounded_full()
-                        .bg(rgb(OUTLINE))
-                        .opacity(0.9)
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                                let mouse_y: f32 = event.position.y.into();
-                                let start_top: f32 = (-this.apps_list_scroll.offset().y).into();
-                                this.apps_scroll_drag = Some((mouse_y, start_top.max(0.0)));
-                                cx.notify();
-                            }),
-                        ),
-                ),
-        )
-    } else {
-        None
-    };
+    let scrollbar_el = scroll_metrics(&scroll_handle, estimated_viewport_h, estimated_content_h)
+        .map(|m| {
+            scrollbar("apps-scroll-thumb", m, |thumb| {
+                thumb.on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        let mouse_y: f32 = event.position.y.into();
+                        let start_top: f32 = (-this.apps_list_scroll.offset().y).into();
+                        this.apps_scroll_drag = Some((mouse_y, start_top.max(0.0)));
+                        cx.notify();
+                    }),
+                )
+            })
+        });
 
     card()
         .flex_1()
@@ -298,34 +255,25 @@ pub(super) fn render_apps_list_card(
                         .id("apps-list-rows")
                         .size_full()
                         .overflow_scroll()
-                        .scrollbar_width(px(12.))
+                        .scrollbar_width(px(SCROLLBAR_W))
                         .track_scroll(&root.apps_list_scroll)
                         .flex()
                         .flex_col()
                         .children(rows),
                 )
-                .children(scrollbar),
+                .children(scrollbar_el),
         )
         .child(list_footer)
         .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-            let Some((start_mouse_y, start_scroll_top)) = this.apps_scroll_drag else {
+            let Some(start) = this.apps_scroll_drag else {
                 return;
             };
-            let viewport_h: f32 = this.apps_list_scroll.bounds().size.height.into();
-            let max_scroll_y: f32 = this.apps_list_scroll.max_offset().height.into();
-            if viewport_h <= 0.0 || max_scroll_y <= 0.0 {
-                return;
-            }
-
-            let content_h = viewport_h + max_scroll_y;
-            let thumb_h = ((viewport_h / content_h) * viewport_h).clamp(28.0, viewport_h);
-            let travel = (viewport_h - thumb_h).max(1.0);
             let mouse_y: f32 = event.position.y.into();
-            let new_top = (start_scroll_top + (mouse_y - start_mouse_y) / travel * max_scroll_y)
-                .clamp(0.0, max_scroll_y);
-            this.apps_list_scroll
-                .set_offset(gpui::point(px(0.0), px(-new_top)));
-            cx.notify();
+            if let Some(new_top) = drag_to_offset(&this.apps_list_scroll, start, mouse_y) {
+                this.apps_list_scroll
+                    .set_offset(gpui::point(px(0.0), px(-new_top)));
+                cx.notify();
+            }
         }))
         .on_mouse_up(
             gpui::MouseButton::Left,

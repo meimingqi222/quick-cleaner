@@ -5,6 +5,7 @@ use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::danger_button;
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
+use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar};
 use crate::ui::components::icons::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -33,6 +34,168 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
         CategoryId::DevBuild => icon_gear(fg, size),
         CategoryId::DevWorktrees => icon_shield(fg, size),
     }
+}
+
+/// 单行条目的高度。uniform_list 要求行高一致，这里写死以便它精确布局。
+const ITEM_ROW_H: f32 = 52.0;
+/// 展开区最多占多高，超出部分自己滚。
+const LIST_MAX_H: f32 = 420.0;
+
+/// 渲染某个分类展开后的条目列表。
+///
+/// 用 `uniform_list` 而不是把所有行塞进容器：条目数可达上千，全量渲染
+/// 会让整页滚动掉到个位数帧率。`uniform_list` 只构造视口内的那十几行。
+fn render_category_items(
+    root: &Root,
+    summary: &crate::core::scanner::CategorySummary,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let id = summary.category;
+    let count = summary.items.len();
+    if count == 0 {
+        return div()
+            .px_5()
+            .py_4()
+            .border_t_1()
+            .border_color(rgba(OUTLINE_VAR, 0.3))
+            .text_xs()
+            .text_color(rgb(OUTLINE))
+            .child("此类别未发现可清理内容")
+            .into_any_element();
+    }
+
+    let Some(handle) = root.junk_scroll.get(&id).cloned() else {
+        return div().into_any_element();
+    };
+    let list_h = (count as f32 * ITEM_ROW_H).min(LIST_MAX_H);
+
+    let list = gpui::uniform_list(
+        SharedString::from(format!("junk-items-{id:?}")),
+        count,
+        cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+            let Some(summary) = this.categories.iter().find(|c| c.category == id) else {
+                return Vec::new();
+            };
+            // 先把这一段要用的数据拷出来，避免在 cx.listener 闭包里继续借用 this
+            let rows: Vec<(usize, std::path::PathBuf, String, String, u64, u64)> = range
+                .filter_map(|i| {
+                    let item = summary.items.get(i)?;
+                    Some((
+                        i,
+                        item.path.clone(),
+                        item.label.clone(),
+                        truncate(&item.path.to_string_lossy(), 70),
+                        item.file_count,
+                        item.size,
+                    ))
+                })
+                .collect();
+
+            rows.into_iter()
+                .map(|(i, path, label, path_text, file_count, size)| {
+                    let checked = this.selected.contains(&path);
+                    item_row(i, path, label, path_text, file_count, size, checked, cx)
+                })
+                .collect()
+        }),
+    )
+    .track_scroll(handle.clone())
+    .h(px(list_h));
+
+    let base = handle.0.borrow().base_handle.clone();
+    let bar = scroll_metrics(&base, list_h, count as f32 * ITEM_ROW_H).map(|m| {
+        scrollbar(SharedString::from(format!("junk-thumb-{id:?}")), m, |thumb| {
+            thumb.on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    let Some(h) = this.junk_scroll.get(&id) else { return };
+                    let top: f32 = (-h.0.borrow().base_handle.offset().y).into();
+                    let mouse_y: f32 = event.position.y.into();
+                    this.junk_scroll_drag = Some((id, mouse_y, top.max(0.0)));
+                    cx.notify();
+                }),
+            )
+        })
+    });
+
+    div()
+        .relative()
+        .h(px(list_h))
+        .border_t_1()
+        .border_color(rgba(OUTLINE_VAR, 0.3))
+        .child(list)
+        .children(bar)
+        .into_any_element()
+}
+
+/// 展开区里的单行条目。
+#[allow(clippy::too_many_arguments)]
+fn item_row(
+    idx: usize,
+    path: std::path::PathBuf,
+    label: String,
+    path_text: String,
+    file_count: u64,
+    size: u64,
+    checked: bool,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let dim = size == 0;
+    let is_even = idx % 2 == 0;
+    let toggle_path = path.clone();
+
+    div()
+        .id(SharedString::from(format!("item-{idx}")))
+        .h(px(ITEM_ROW_H))
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_5()
+        .bg(if is_even { rgb(CARD) } else { rgb(SURF_LOW) })
+        .hover(|h| h.bg(rgb(SURF)))
+        .child(
+            div()
+                .id(SharedString::from(format!("cb-item-{idx}")))
+                .flex_none()
+                .cursor_pointer()
+                .child(checkbox(if checked { Check::On } else { Check::Off }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_item(&toggle_path);
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(rgb(TEXT))
+                        .child(label),
+                )
+                .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text)),
+        )
+        .child(right_cell(
+            70.,
+            if file_count > 0 {
+                format!("{} 个文件", commas(file_count))
+            } else {
+                String::from("0")
+            },
+            OUTLINE,
+            false,
+        ))
+        .child(right_cell(
+            85.,
+            if size > 0 { fmt_size(size) } else { String::from("0 B") },
+            if dim { OUTLINE } else { TEXT },
+            !dim,
+        ))
+        .into_any_element()
 }
 
 pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
@@ -194,94 +357,19 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     })),
             );
 
-        let mut sub_rows: Vec<AnyElement> = Vec::new();
-        if expanded {
-            for (idx, item) in summary.items.iter().enumerate() {
-                let path_buf = item.path.clone();
-                let checked = root.selected.contains(&path_buf);
-                let item_dim = item.size == 0;
-                let is_even = idx % 2 == 0;
-
-                sub_rows.push(
-                    div()
-                        .id(SharedString::from(format!("item-{}", item.path.display())))
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .px_5()
-                        .py_2()
-                        .bg(if is_even { rgb(CARD) } else { rgb(SURF_LOW) })
-                        .border_t_1()
-                        .border_color(rgba(OUTLINE_VAR, 0.3))
-                        .hover(|h| h.bg(rgb(SURF)))
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("cb-item-{}", item.path.display())))
-                                .flex_none()
-                                .cursor_pointer()
-                                .child(checkbox(if checked {
-                                    Check::On
-                                } else {
-                                    Check::Off
-                                }))
-                                .on_click(cx.listener({
-                                    let pb = path_buf.clone();
-                                    move |this, _, _, cx| {
-                                        this.toggle_item(&pb);
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(TEXT))
-                                        .child(item.label.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(OUTLINE))
-                                        .child(truncate(&item.path.to_string_lossy(), 60)),
-                                ),
-                        )
-                        .child(right_cell(
-                            70.,
-                            if item.file_count > 0 {
-                                format!("{} 个文件", commas(item.file_count))
-                            } else {
-                                String::from("0")
-                            },
-                            OUTLINE,
-                            false,
-                        ))
-                        .child(right_cell(
-                            85.,
-                            if item.size > 0 {
-                                fmt_size(item.size)
-                            } else {
-                                String::from("0 B")
-                            },
-                            if item_dim { OUTLINE } else { TEXT },
-                            !item_dim,
-                        ))
-                        .into_any_element(),
-                );
-            }
-        }
+        // 展开区用虚拟化列表：「项目构建产物」这一类在开发机上能有近千条，
+        // 全量铺开会让整页滚动直接卡死。uniform_list 只渲染可见的那几行。
+        let sub_list = if expanded {
+            Some(render_category_items(root, summary, cx))
+        } else {
+            None
+        };
 
         cards.push(
             card()
                 .overflow_hidden()
                 .child(head)
-                .when(expanded, |d| d.children(sub_rows))
+                .children(sub_list)
                 .into_any_element(),
         );
     }
@@ -378,6 +466,30 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .child(header)
         .children(skipped_banner)
         .child(body)
+        // 滚动条拖拽的 move/up 挂在整页上：鼠标一旦拖出滑块范围，
+        // 事件就不会再落到滑块自己身上了。
+        .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+            let Some((id, start_y, start_top)) = this.junk_scroll_drag else {
+                return;
+            };
+            let Some(handle) = this.junk_scroll.get(&id) else {
+                return;
+            };
+            let base = handle.0.borrow().base_handle.clone();
+            let mouse_y: f32 = event.position.y.into();
+            if let Some(new_top) = drag_to_offset(&base, (start_y, start_top), mouse_y) {
+                base.set_offset(gpui::point(px(0.0), px(-new_top)));
+                cx.notify();
+            }
+        }))
+        .on_mouse_up(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.junk_scroll_drag.take().is_some() {
+                    cx.notify();
+                }
+            }),
+        )
         .into_any_element()
 }
 

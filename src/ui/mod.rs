@@ -50,6 +50,11 @@ pub struct Root {
 
     pub selected: HashSet<PathBuf>,
     pub expanded: HashSet<CategoryId>,
+    /// 每个分类展开后各自的滚动位置。「项目构建产物」这类可能有近千条，
+    /// 必须走虚拟化列表，而 uniform_list 需要一个长期持有的滚动句柄。
+    pub junk_scroll: std::collections::HashMap<CategoryId, gpui::UniformListScrollHandle>,
+    /// 正在拖拽哪个分类的滚动条滑块：(分类, 按下时鼠标 y, 按下时滚动偏移)
+    pub junk_scroll_drag: Option<(CategoryId, f32, f32)>,
 
     pub confirm: Option<ConfirmRequest>,
     pub clean_progress: Option<Arc<CleanProgress>>,
@@ -155,6 +160,11 @@ impl Root {
             show_failed_details: false,
             selected: HashSet::new(),
             expanded: HashSet::new(),
+            junk_scroll: CategoryId::ALL
+                .iter()
+                .map(|&c| (c, gpui::UniformListScrollHandle::new()))
+                .collect(),
+            junk_scroll_drag: None,
             confirm: None,
             clean_progress: None,
             clean_task: None,
