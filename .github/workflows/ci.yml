@@ -50,7 +50,7 @@ jobs:
           
           # 复制双语文档与开源协议
           if (Test-Path "README.md") { Copy-Item "README.md" "$distDir/" }
-          if (Test-Path "README_en.md") { Copy-Item "README_en.md" "$distDir/" }
+          if (Test-Path "README_zh.md") { Copy-Item "README_zh.md" "$distDir/" }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$distDir/" }
           
           # 压缩为 zip

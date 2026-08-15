@@ -1,134 +1,136 @@
 # QuickCleaner
 
-[English Version](README_en.md) | [中文说明](README.md)
+[English](README.md) | [中文说明](README_zh.md)
 
-> **极速、原生、安全的 Windows 磁盘空间分析与系统深度清理工具**  
-> 基于 **Rust + GPUI** 构建，无 WebView / Electron 开销，毫秒级响应与 GPU 加速渲染。
-
----
-
-## 核心特性
-
-### 1. NTFS $MFT 极速磁盘分析 (Disk Lens)
-- **毫秒级全盘索引**：直接解析 NTFS 文件系统主文件表（`$MFT`），无需耗时的传统递归 I/O 遍历，3~5 秒内完成全盘数百万文件索引（速度媲美 WizTree / Everything）。
-- **层级空间占比透镜**：直观的环形图与目录树下钻，迅速定位占用磁盘的大文件与冗余深层目录。
-- **多卷/多分区支持**：支持快速切换分析 C 盘、D 盘、E 盘等多个 NTFS 固定分区，自动识别可用容量与占用分布。
-
-### 2. CleanFlow 智能垃圾清理
-- **全面覆盖十大类目**：
-  - 系统临时文件 / 用户临时文件 / 缩略图缓存
-  - 主流浏览器缓存（Chrome、Edge、Firefox 等）
-  - 开发者包管理缓存（Cargo、npm、pnpm、Yarn、pip、Gradle、Go build 等）
-  - 日志与系统崩溃转储（Minidump、Windows Error Reporting）
-  - 回收站安全清空（调用系统 `SHEmptyRecycleBinW`，保留各卷元数据结构）
-  - **AI 助手与 Agent 缓存**（Claude、Cursor、Antigravity 等会话与模型缓存）
-  - **项目构建产物与依赖**（代码目录下的 `node_modules`、`target`、`.venv`、`bin/obj`，默认安全不预选）
-- **清空内容且保留目录**：清理时清除目录内冗余内容，保留关键系统目录节点，确保系统与应用平稳运行。
-
-### 3. 软件管理与卸载残留深度清理
-- **已安装软件全览**：从 64 位/32 位注册表多源枚举，快速查看软件大小、安装日期与使用频次。
-- **全生命周期残留追踪**：
-  - **卸载前采集**：捕获应用关联的 ProgramData、AppData、注册表项、服务与启动项痕迹；
-  - **执行官方卸载**：平滑调用官方卸载程序并监控其退出；
-  - **卸载后复核**：比对残留项，仅将官方卸载程序遗留的孤儿配置与缓存列出供用户一键彻底清除。
-
-### 4. 严格安全防护体系
-- **系统核心保护**：内置严谨的系统路径白名单与黑名单，核心 Windows 目录、驱动程序、系统库仅供分析下钻，严格禁止误删。
-- **智能 UAC 提权**：Windows 下启动时自动请求管理员权限，解锁直接读取 MFT 原始卷扇区与深度清理的能力；支持 `--no-elevate` 参数以普通权限启动。
-
-### 5. 现代化原生桌面体验与多语言支持
-- **GPUI 高性能原生 UI**：基于 Zed 的 GPUI 渲染引擎，纯 Rust 编写，毫秒级冷启动与 60/120fps 流畅动效。
-- **中英文无缝切换**：全界面与分析引擎原生支持中英文（`中文 / English`），点击侧边栏底部即可实时平滑切换。
-- **高质感浅色/深色排版**：无过度装饰与 AI 模板化视觉，规范的主题色彩系统（`Material 3 / Fluent` 融合风格），支持 PerMonitorV2 高 DPI 屏幕自适应。
+> **Blazing-fast, native, and safe Windows disk space analyzer & deep system cleaner**  
+> Built with **Rust + GPUI**, zero WebView / Electron overhead, millisecond-level responsiveness, and GPU-accelerated rendering.
 
 ---
 
-## 架构设计
+## Key Features
 
-项目采用严格的自上而下单向分层架构：
+### 1. NTFS $MFT Blazing-Fast Disk Analyzer (Disk Lens)
+- **Millisecond-Level Whole-Drive Indexing**: Directly parses the NTFS Master File Table (`$MFT`) without slow recursive filesystem walks. Indexes millions of files in 3-5 seconds (performance comparable to WizTree / Everything).
+- **Hierarchical Storage Lens**: Interactive donut charts and drillable directory trees to quickly pinpoint space-hogging large files and bloated folders.
+- **Multi-Volume Support**: Seamlessly switch between NTFS volumes (C:, D:, E:, etc.), automatically detecting total capacity and usage breakdowns.
+
+### 2. CleanFlow Smart Junk Cleaning
+- **Comprehensive Coverage Across 10 Categories**:
+  - System temporary files / User temp files / Thumbnail caches
+  - Major browser caches (Chrome, Edge, Firefox, etc.)
+  - Developer package manager caches (Cargo, npm, pnpm, Yarn, pip, Gradle, Go build, etc.)
+  - Logs and crash dumps (Minidumps, Windows Error Reporting)
+  - Safe Recycle Bin cleanup (invokes Windows native `SHEmptyRecycleBinW`, preserving volume metadata)
+  - **AI Assistant & Agent Caches** (Claude, Cursor, Antigravity session & model caches)
+  - **Project Build Artifacts & Dependencies** (`node_modules`, `target`, `.venv`, `bin/obj` in code directories; safely unselected by default)
+- **Clear Contents, Retain Directory Anchors**: Cleans internal junk files while keeping essential directory nodes intact, ensuring stable system and application behavior.
+
+### 3. Application Manager & Deep Residual Cleanup
+- **Complete Installed Software Inventory**: Enumerates 64-bit and 32-bit Windows registry uninstall keys, displaying installed size, installation date, and last usage.
+- **Full Lifecycle Residual Tracking**:
+  - **Pre-uninstall snapshot**: Collects associated ProgramData, AppData, registry paths, services, and autostart traces before uninstallation;
+  - **Official Uninstaller Execution**: Runs standard vendor uninstallers and monitors completion;
+  - **Post-uninstall verification**: Compares remaining files/registry keys, surfacing orphaned configuration and cache files for one-click deep cleanup.
+
+### 4. Robust Safety & Protection System
+- **Core System Protection**: Built-in strict path whitelists and protected directories. Critical Windows system files, drivers, and libraries can be browsed and analyzed but are strictly prevented from accidental deletion.
+- **Smart UAC Elevation**: Automatically prompts for administrator privileges on startup to unlock direct raw sector NTFS $MFT parsing and deep cleaning. Supports `--no-elevate` flag for standard user execution.
+
+### 5. Modern Native Desktop Experience & Internationalization
+- **GPUI High-Performance Native UI**: Powered by Zed's GPUI rendering engine in pure Rust. Delivers sub-millisecond cold starts and smooth 60/120fps micro-animations.
+- **Seamless Multilingual Support**: Fully internationalized UI and core analysis engine supporting English and Chinese (`中文 / English`) with instant live switching via the sidebar pill.
+- **Refined Material / Fluent Aesthetic**: Free of excessive decorations or generic AI tropes, featuring a clean color token system and PerMonitorV2 High-DPI screen scaling.
+
+---
+
+## Architecture
+
+QuickCleaner follows a strict unidirectional layered architecture:
 
 ```
 quick-cleaner/
 ├── src/
-│   ├── main.rs                 # 应用程序主入口与 UAC 提权自重启
-│   ├── lib.rs                  # 模块定义
+│   ├── main.rs                 # Entry point & UAC self-elevation handler
+│   ├── lib.rs                  # Module declarations
 │   ├── bin/
-│   │   └── mftscan.rs          # 独立命令行 MFT 验证工具
+│   │   └── mftscan.rs          # Standalone CLI tool for $MFT verification
 │   │
-│   ├── core/                   # 领域逻辑层（不依赖 GPUI，无系统强耦合）
-│   │   ├── categories.rs       # 10 大清理类别与扫描规则
-│   │   ├── scanner.rs          # walkdir + rayon 并行目录扫描
-│   │   ├── cleaner.rs          # 清理执行器与原子进度计数
-│   │   ├── safety.rs           # 路径安全防护规则（唯一事实来源）
-│   │   ├── apps.rs             # 软件模型与残留分析器
-│   │   ├── disk.rs             # 磁盘树与选择状态模型
-│   │   └── model.rs            # 数据格式化与通用三态模型
+│   ├── core/                   # Pure domain logic (independent of GPUI & OS specifics)
+│   │   ├── i18n.rs             # Core multilingual definitions (Language enum)
+│   │   ├── categories.rs       # 10 junk categories & scan definitions
+│   │   ├── scanner.rs          # Parallel directory scanner with walkdir + rayon
+│   │   ├── cleaner.rs          # Cleanup executor with atomic progress tracking
+│   │   ├── safety.rs           # Single source of truth for path safety rules
+│   │   ├── apps.rs             # App models and residual analyzers
+│   │   ├── disk.rs             # Disk tree models & selection state machine
+│   │   └── model.rs            # Data formatting & shared tri-state models
 │   │
-│   ├── platform/               # 操作系统适配层（由 platform_contract! 编译期约束）
-│   │   ├── mod.rs              # 统一平台门面契约
-│   │   ├── windows/            # Windows 原生实现（$MFT、注册表、进程、UAC 等）
-│   │   └── macos/              # macOS 基础跨平台适配
+│   ├── platform/               # OS abstraction layer (enforced by platform_contract!)
+│   │   ├── mod.rs              # Unified platform facade
+│   │   ├── windows/            # Windows native implementation ($MFT, Registry, Process, UAC)
+│   │   └── macos/              # macOS baseline cross-platform compatibility
 │   │
-│   └── ui/                     # GPUI 视图与交互层
-│       ├── mod.rs              # Root 状态机与派生缓存管理
-│       ├── theme.rs            # 设计系统色彩与尺寸 Token
-│       ├── components/         # 通用组件（按钮、卡片、滚动条、弹窗等）
-│       └── views/              # 页面视图（dashboard / junk / apps / disk）
+│   └── ui/                     # GPUI views and interaction layer
+│       ├── mod.rs              # Root state machine & derived cache management
+│       ├── i18n.rs             # UI-level internationalization dictionaries
+│       ├── theme.rs            # Color tokens and design system metrics
+│       ├── components/         # Reusable widgets (buttons, cards, scrollbars, dialogs)
+│       └── views/              # Main views (dashboard, junk, apps, disk)
 ```
 
 ---
 
-## 🚀 构建与运行
+## 🚀 Building & Running
 
-### 前置要求
-- **Rust** 1.75 或更高版本（推荐使用 `stable-x86_64-pc-windows-msvc` 工具链）
-- **Windows 10 / 11**（推荐以管理员权限运行以获得完整的 `$MFT` 读取支持）
+### Prerequisites
+- **Rust** 1.75 or newer (the `stable-x86_64-pc-windows-msvc` toolchain is recommended)
+- **Windows 10 / 11** (Run with administrator privileges for full direct `$MFT` reading support)
 
-### 本地编译与调试
+### Local Compilation & Development
 
 ```bash
-# 1. 克隆仓库
+# 1. Clone the repository
 git clone https://github.com/your-username/quick-cleaner.git
 cd quick-cleaner
 
-# 2. 运行单元测试（覆盖算法、MFT 解析、安全防护等）
+# 2. Run automated test suite (NTFS parser, safety boundaries, residual matching, etc.)
 cargo test
 
-# 3. 启动开发版
+# 3. Launch debug build
 cargo run
 
-# 4. 构建发布优化版
+# 4. Build optimized release binary
 cargo build --release
 ```
 
-编译生成的可执行文件位于 `target/release/quick-cleaner.exe`。
+The compiled binary will be located at `target/release/quick-cleaner.exe`.
 
-### 独立命令行工具
+### Standalone CLI Tool
 
-项目附带了一个独立的命令行 $MFT 扫描验证工具，用于快速排查磁盘解析性能与准确性：
+A standalone CLI `$MFT` scanner is included for profiling disk parsing performance and accuracy:
 
 ```bash
-# 扫描 C 盘并输出前 20 个最大文件
+# Scan Drive C: and output the top 20 largest files
 cargo run --bin mftscan -- C 20
 ```
 
 ---
 
-## 质量与测试
+## Quality & Testing
 
-项目拥有完善的自动化测试套件（近 100 项单元测试），覆盖：
-- NTFS `$MFT` 记录解析、fixup 扇区尾校验、数据片段重组与树构建；
-- 路径与注册表安全规则、系统保护边界校验；
-- 卸载残留模糊匹配与置信度打分算法；
-- 目录多线程并行扫描与清理进度原子计算。
+QuickCleaner maintains a comprehensive automated testing suite (100 unit tests) covering:
+- NTFS `$MFT` record decoding, fixup tail validation, non-resident data fragment reconstruction, and tree assembly;
+- Path and registry security rules, preventing destructive operations on critical system directories;
+- App uninstaller residual fuzzy-matching and confidence scoring algorithms;
+- Parallel multi-threaded scanning and atomic cleanup progress reporting.
 
-运行全量测试：
+Run all tests with:
 ```bash
 cargo test
 ```
 
 ---
 
-## 开源协议
+## License
 
-本项目采用 [MIT License](LICENSE) 开源。
+This project is licensed under the [MIT License](LICENSE).
