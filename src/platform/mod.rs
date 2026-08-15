@@ -16,7 +16,7 @@
 //! | `get_volume_space` | 卷的总容量 / 可用容量 |
 //! | `list_installed_apps` | 已安装软件枚举 |
 //! | `run_uninstaller_and_wait` | 调用官方卸载程序并等待退出 |
-//! | `scan_residuals` / `clean_residuals` | 卸载残留的扫描与清理 |
+//! | `scan_residuals` / `verify_residuals` / `clean_residuals` | 卸载残留的采集、复核与清理 |
 //! | `reveal_in_explorer` | 在系统文件管理器中定位路径 |
 
 /// 编译期校验：当前平台分支确实提供了门面要求的全部函数，且签名一致。
@@ -25,7 +25,7 @@
 macro_rules! platform_contract {
     () => {
         const _: () = {
-            use crate::core::apps::{InstalledApp, ResidualKind, ResidualScanResult};
+            use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
             use crate::core::cleaner::{CleanProgress, CleanReport};
             use crate::core::disk::{MftError, MftScan};
             use std::path::Path;
@@ -38,7 +38,8 @@ macro_rules! platform_contract {
             let _: fn(&AtomicBool) -> Vec<InstalledApp> = list_installed_apps;
             let _: fn(&InstalledApp) -> Result<(), String> = run_uninstaller_and_wait;
             let _: fn(&InstalledApp) -> ResidualScanResult = scan_residuals;
-            let _: fn(&[ResidualKind], &CleanProgress) -> CleanReport = clean_residuals;
+            let _: fn(&[ResidualItem], &CleanProgress) -> CleanReport = clean_residuals;
+            let _: fn(Vec<ResidualItem>) -> Vec<ResidualItem> = verify_residuals;
             let _: fn(&Path) = reveal_in_explorer;
         };
     };
@@ -61,7 +62,7 @@ platform_contract!();
 /// 既不是 Windows 也不是 macOS 时的兜底实现：编译得过，但什么都不做。
 #[cfg(all(not(windows), not(target_os = "macos")))]
 pub mod fallback {
-    use crate::core::apps::{InstalledApp, ResidualKind, ResidualScanResult};
+    use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
     use crate::core::cleaner::{CleanProgress, CleanReport};
     use crate::core::disk::{MftError, MftScan};
     use std::path::Path;
@@ -100,8 +101,12 @@ pub mod fallback {
         }
     }
 
-    pub fn clean_residuals(_items: &[ResidualKind], _prog: &CleanProgress) -> CleanReport {
+    pub fn clean_residuals(_items: &[ResidualItem], _prog: &CleanProgress) -> CleanReport {
         CleanReport::default()
+    }
+
+    pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
+        items
     }
 
     pub fn reveal_in_explorer(_path: &Path) {}

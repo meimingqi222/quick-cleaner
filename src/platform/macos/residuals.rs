@@ -1,6 +1,6 @@
 //! macOS 软件残留深度扫描骨架
 
-use crate::core::apps::{InstalledApp, ResidualKind, ResidualScanResult};
+use crate::core::apps::{InstalledApp, ResidualItem, ResidualKind, ResidualScanResult};
 use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
 use std::path::PathBuf;
 
@@ -18,7 +18,10 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
                 .map(|m| m.len())
                 .sum();
             total_file_size += size;
-            items.push(ResidualKind::Directory(app_support, size));
+            items.push(ResidualItem::certain(
+                ResidualKind::Directory(app_support, size),
+                "应用支持目录",
+            ));
         }
     }
 
@@ -29,14 +32,25 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     }
 }
 
-pub fn clean_residuals(items: &[ResidualKind], prog: &CleanProgress) -> CleanReport {
+pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
     for item in items {
-        if let ResidualKind::Directory(path, _) | ResidualKind::File(path, _) = item {
+        if let ResidualKind::Directory(path, _) | ResidualKind::File(path, _) = &item.kind {
             prog.note(path);
             let res = clean_path(path, prog);
             report.record(path, res);
         }
     }
     report
+}
+
+/// 复核候选残留是否仍然存在（对应 Windows 侧的「先扫描后卸载」流程）。
+pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
+    items
+        .into_iter()
+        .filter(|it| match &it.kind {
+            ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => p.exists(),
+            _ => true,
+        })
+        .collect()
 }

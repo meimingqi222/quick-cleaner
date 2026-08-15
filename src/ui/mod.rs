@@ -5,7 +5,7 @@ pub mod theme;
 pub mod views;
 
 use crate::core::apps::{
-    AppFilterPreset, AppSortState, InstalledApp, ResidualKind, ResidualScanResult,
+    AppFilterPreset, AppSortState, InstalledApp, ResidualItem, ResidualScanResult,
 };
 use crate::core::categories::{all_targets, CategoryId};
 use crate::core::cleaner::{
@@ -18,7 +18,7 @@ use crate::core::model::{fmt_size, Check};
 use crate::core::scanner::{apply_clean_result, scan_all, CategorySummary, ScanItem};
 use crate::platform::{
     get_volume_space, is_elevated, list_installed_apps, list_ntfs_volumes, run_uninstaller_and_wait,
-    scan_residuals, clean_residuals, scan_volume,
+    scan_residuals, clean_residuals, scan_volume, verify_residuals,
 };
 use crate::ui::components::*;
 use crate::ui::theme::*;
@@ -554,29 +554,58 @@ impl Root {
         }));
     }
 
+    /// 卸载软件：**先采集残留候选，再运行官方卸载程序**。
+    ///
+    /// 顺序很关键。安装目录、指向它的注册表值、服务的 ImagePath——这些
+    /// 证据只在卸载之前存在。原先是卸载跑完才扫，那时安装目录已经没了，
+    /// 所有基于路径的匹配全部落空，于是几乎每个软件都被报成「非常干净」。
+    /// 现在提前扫一遍留下候选集，卸载结束后再复核哪些还在，剩下的才是
+    /// 官方卸载程序没清干净的部分。
     pub fn request_uninstall_app(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
         let name = app.name.clone();
-        let target_app = app.clone();
+        let pre_target = app.clone();
+        let uninst_target = app.clone();
 
-        self.status = format!("正在运行「{name}」官方卸载程序，完成后将自动深度扫描残留…");
+        self.residual_scanning = true;
+        self.residual_result = None;
+        self.status = format!("正在记录「{name}」的关联痕迹，随后运行官方卸载程序…");
+        self.start_tick(cx);
         cx.notify();
 
-        let uninst_task = cx
-            .background_executor()
-            .spawn(async move { run_uninstaller_and_wait(&target_app) });
+        let work = cx.background_executor().spawn(async move {
+            // 1. 卸载前采集候选（此时安装目录还在，证据最全）
+            let pre = scan_residuals(&pre_target);
+            // 2. 运行官方卸载程序并等它退出
+            let result = run_uninstaller_and_wait(&uninst_target);
+            // 3. 复核：只留下卸载程序没清掉的
+            let remaining = verify_residuals(pre.items);
+            (result, remaining)
+        });
 
-        self.apps_task = Some(cx.spawn(async move |this, cx| {
-            let res = uninst_task.await;
+        self.residual_task = Some(cx.spawn(async move |this, cx| {
+            let (result, remaining) = work.await;
             this.update(cx, |this, cx| {
-                match res {
-                    Ok(_) => {
-                        this.status = format!("「{name}」官方卸载已完成，正在扫描残留文件与注册表…");
-                    }
-                    Err(e) => {
-                        this.status = format!("「{name}」官方卸载未正常完成（{e}），转入强力残留清理…");
-                    }
-                }
-                this.start_residual_scan(app, cx);
+                this.residual_scanning = false;
+                let total: u64 = remaining.iter().map(|i| i.size()).sum();
+                let res = ResidualScanResult {
+                    app_name: name.clone(),
+                    items: remaining,
+                    total_file_size: total,
+                };
+                let uninstalled = result.is_ok();
+                this.status = format!(
+                    "{}，复核后仍有 {} 项残留（{}）",
+                    if uninstalled {
+                        format!("「{name}」官方卸载已完成")
+                    } else {
+                        format!("「{name}」官方卸载未正常完成")
+                    },
+                    res.items.len(),
+                    fmt_size(res.total_file_size)
+                );
+                this.residual_selected = res.default_selection();
+                this.residual_result = Some(res);
+                cx.notify();
             })
             .ok();
         }));
@@ -601,7 +630,8 @@ impl Root {
             this.update(cx, |this, cx| {
                 this.residual_scanning = false;
                 let count = res.items.len();
-                this.residual_selected = (0..count).collect();
+                // 只预勾「确定」的；模糊匹配出来的交给用户自己判断
+                this.residual_selected = res.default_selection();
                 this.status = format!(
                     "残留扫描完成：发现「{}」的 {} 项残留，共 {}",
                     res.app_name,
@@ -619,7 +649,7 @@ impl Root {
         let Some(res) = self.residual_result.take() else {
             return;
         };
-        let items_to_clean: Vec<ResidualKind> = self
+        let items_to_clean: Vec<ResidualItem> = self
             .residual_selected
             .iter()
             .filter_map(|&idx| res.items.get(idx).cloned())

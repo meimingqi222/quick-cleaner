@@ -166,19 +166,52 @@ impl AppFilterPreset {
     }
 }
 
+/// 某一项残留与该软件关联的把握程度。
+///
+/// 决定它是否默认勾选。照搬 Bulk Crap Uninstaller 的思路：靠名字模糊匹配
+/// 出来的东西不能和「明确指向安装目录」的东西一视同仁，否则一次误删就
+/// 可能带走别的软件的数据。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Confidence {
+    /// 名字相近，但没有指向该软件的硬证据。默认不勾选。
+    Possible,
+    /// 有明确证据：路径就是安装目录、注册表值直接指向安装目录、
+    /// 或者本来就是该软件自己的卸载登记项。默认勾选。
+    Certain,
+}
+
+impl Confidence {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Confidence::Certain => "确定",
+            Confidence::Possible => "可能",
+        }
+    }
+
+    pub fn is_certain(&self) -> bool {
+        *self == Confidence::Certain
+    }
+}
+
 /// 关联残留项目分类
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResidualKind {
     File(PathBuf, u64),
     Directory(PathBuf, u64),
+    /// 整个注册表键
     RegistryKey(AppRegRoot, String),
+    /// 某个键下的单个值：(根, 键路径, 值名)
+    ///
+    /// 启动项、防火墙规则、App Paths 这些是以「值」的形式存在的，
+    /// 删掉整个键会波及其它软件。
+    RegistryValue(AppRegRoot, String, String),
 }
 
 impl ResidualKind {
     pub fn size(&self) -> u64 {
         match self {
             ResidualKind::File(_, s) | ResidualKind::Directory(_, s) => *s,
-            ResidualKind::RegistryKey(..) => 0,
+            ResidualKind::RegistryKey(..) | ResidualKind::RegistryValue(..) => 0,
         }
     }
 
@@ -186,8 +219,48 @@ impl ResidualKind {
         match self {
             ResidualKind::File(p, _) => format!("📄 残留文件: {}", p.display()),
             ResidualKind::Directory(p, _) => format!("📁 残留目录: {}", p.display()),
-            ResidualKind::RegistryKey(root, sub) => format!("🗝️ 注册表项: {}\\{}", root.label(), sub),
+            ResidualKind::RegistryKey(root, sub) => {
+                format!("🗝️ 注册表项: {}\\{}", root.label(), sub)
+            }
+            ResidualKind::RegistryValue(root, sub, name) => {
+                format!("🔑 注册表值: {}\\{} → {}", root.label(), sub, name)
+            }
         }
+    }
+}
+
+/// 一条残留记录：内容 + 把握程度 + 给用户看的来源说明。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResidualItem {
+    pub kind: ResidualKind,
+    pub confidence: Confidence,
+    /// 这条是被哪个扫描器发现的，例如「开机启动项」「防火墙规则」
+    pub source: &'static str,
+}
+
+impl ResidualItem {
+    pub fn certain(kind: ResidualKind, source: &'static str) -> Self {
+        Self {
+            kind,
+            confidence: Confidence::Certain,
+            source,
+        }
+    }
+
+    pub fn possible(kind: ResidualKind, source: &'static str) -> Self {
+        Self {
+            kind,
+            confidence: Confidence::Possible,
+            source,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        self.kind.size()
+    }
+
+    pub fn display_label(&self) -> String {
+        format!("[{}] {}", self.source, self.kind.display_label())
     }
 }
 
@@ -195,8 +268,24 @@ impl ResidualKind {
 #[derive(Clone, Debug, Default)]
 pub struct ResidualScanResult {
     pub app_name: String,
-    pub items: Vec<ResidualKind>,
+    pub items: Vec<ResidualItem>,
     pub total_file_size: u64,
+}
+
+impl ResidualScanResult {
+    /// 默认应当勾选的条目下标——只勾「确定」的。
+    pub fn default_selection(&self) -> std::collections::HashSet<usize> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.confidence.is_certain())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn certain_count(&self) -> usize {
+        self.items.iter().filter(|i| i.confidence.is_certain()).count()
+    }
 }
 
 /// ASCII/Unicode 大小写不敏感的字典序比较，不分配。

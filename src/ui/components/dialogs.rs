@@ -158,6 +158,28 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .cursor_pointer()
                     .hover(|h| h.bg(rgb(SURF_LOW)))
                     .child(checkbox(check_state))
+                    // 把握程度直接标在行首：模糊匹配出来的默认不勾选，
+                    // 用户需要一眼看出哪些是「确定」哪些只是「可能」
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_2()
+                            .py(px(1.))
+                            .rounded_md()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .bg(rgb(if item.confidence.is_certain() {
+                                PRIMARY_FIXED
+                            } else {
+                                CAUTION_CONTAINER
+                            }))
+                            .text_color(rgb(if item.confidence.is_certain() {
+                                PRIMARY
+                            } else {
+                                CAUTION
+                            }))
+                            .child(item.confidence.label()),
+                    )
                     .child(
                         div()
                             .flex_1()
