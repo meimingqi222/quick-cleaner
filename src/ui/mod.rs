@@ -15,7 +15,7 @@ use crate::core::safety::is_protected;
 use crate::core::apps::filter_and_sort_apps;
 use crate::core::disk::{DiskSelectionState, MftScan, Node};
 use crate::core::model::{fmt_size, Check};
-use crate::core::scanner::{scan_all, CategorySummary, ScanItem};
+use crate::core::scanner::{apply_clean_result, scan_all, CategorySummary, ScanItem};
 use crate::platform::{
     get_volume_space, is_elevated, list_installed_apps, list_ntfs_volumes, run_uninstaller_and_wait,
     scan_residuals, clean_residuals, scan_volume,
@@ -42,7 +42,6 @@ pub struct Root {
     pub scan_task: Option<Task<()>>,
     pub live: Arc<AtomicBool>,
     pub status: String,
-    pub freed_baseline: Option<u64>,
     pub freed_total: u64,
     pub last_failed: Vec<PathBuf>,
     pub last_failed_files: u64,
@@ -153,7 +152,6 @@ impl Root {
             scan_task: None,
             live: Arc::new(AtomicBool::new(true)),
             status: "就绪".into(),
-            freed_baseline: None,
             freed_total: 0,
             last_failed: Vec::new(),
             last_failed_files: 0,
@@ -238,22 +236,9 @@ impl Root {
                 this.categories = result;
                 this.scanned = true;
                 this.scanning = false;
-                this.select_all();
+                this.select_recommended();
                 let total: u64 = this.categories.iter().map(|c| c.total_size).sum();
-                this.status = match this.freed_baseline.take() {
-                    Some(before) => {
-                        let freed = before.saturating_sub(total);
-                        this.freed_total += freed;
-                        let fails = this.last_failed.len();
-                        let mut s = format!("清理完成，释放 {}", fmt_size(freed));
-                        if fails > 0 {
-                            s.push_str(&format!("（{fails} 项活动程序占用已安全跳过）"));
-                        }
-                        s.push_str(&format!("　·　剩余可清理 {}", fmt_size(total)));
-                        s
-                    }
-                    None => format!("扫描完成，共发现 {} 可清理", fmt_size(total)),
-                };
+                this.status = format!("扫描完成，共发现 {} 可清理", fmt_size(total));
                 cx.notify();
             })
             .ok();
@@ -268,11 +253,11 @@ impl Root {
         self.categories.iter().flat_map(|c| c.items.iter())
     }
 
-    /// 按各类目的默认策略预勾选。
+    /// 按各类目的默认策略预勾选（扫描完成后的初始状态）。
     ///
     /// 开发者类目（AI 助手缓存、构建产物、worktree）一律不默认勾选：
     /// 它们删掉不会坏系统，但会让下次构建重来，甚至丢掉未提交的改动。
-    pub fn select_all(&mut self) {
+    pub fn select_recommended(&mut self) {
         self.selected = self
             .items()
             .filter(|i| i.category.default_selected())
@@ -280,7 +265,44 @@ impl Root {
             .collect();
     }
 
-    /// 把某一批类目整体勾上或取消（供「全选开发项」这类快捷操作用）。
+    /// 勾选全部条目，包括开发者类目。
+    pub fn select_every(&mut self) {
+        self.selected = self.items().map(|i| i.path.clone()).collect();
+    }
+
+    /// 清空所有勾选。
+    pub fn select_none(&mut self) {
+        self.selected.clear();
+    }
+
+    /// 反选：已勾的取消，没勾的选上。
+    pub fn invert_selection(&mut self) {
+        self.selected = self
+            .items()
+            .filter(|i| !self.selected.contains(&i.path))
+            .map(|i| i.path.clone())
+            .collect();
+    }
+
+    /// 当前勾选是否恰好等于「推荐」的那一套。
+    ///
+    /// 用来给工具栏上的「推荐」按钮做选中态高亮，让用户一眼看出
+    /// 自己是不是还停在默认状态。
+    pub fn selection_is_recommended(&self) -> bool {
+        let mut n = 0usize;
+        for item in self.items() {
+            let want = item.category.default_selected();
+            if want != self.selected.contains(&item.path) {
+                return false;
+            }
+            if want {
+                n += 1;
+            }
+        }
+        n == self.selected.len()
+    }
+
+    /// 把某一批类目整体勾上或取消（供分类标题上的复选框用）。
     pub fn set_category_selected(&mut self, id: CategoryId, on: bool) {
         let paths: Vec<PathBuf> = self
             .categories
@@ -295,6 +317,20 @@ impl Root {
                 self.selected.remove(&p);
             }
         }
+    }
+
+    /// 清理完成后就地更新扫描结果，替代整轮重扫。实现见 `core::scanner`。
+    pub fn apply_clean_result(&mut self, attempted: &[PathBuf], failed: &[PathBuf]) {
+        let cleared = apply_clean_result(&mut self.categories, attempted, failed);
+        // 已经清空的条目不该继续占着勾选状态
+        for p in cleared {
+            self.selected.remove(&p);
+        }
+    }
+
+    /// 全部条目数（用于工具栏显示「已选 N / 共 M」）。
+    pub fn total_item_count(&self) -> usize {
+        self.items().count()
     }
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {
@@ -721,13 +757,13 @@ impl Root {
 
         self.cleaning = true;
         self.last_failed.clear();
-        self.freed_baseline = None;
         let progress = Arc::new(CleanProgress::new(total_files, total_bytes));
         self.clean_progress = Some(progress.clone());
         self.status = format!("正在永久删除 {} 项…", paths.len());
         self.start_tick(cx);
         cx.notify();
 
+        let attempted = paths.clone();
         let clean = cx
             .background_executor()
             .spawn(async move { clean_targets(&paths, &progress) });
@@ -740,15 +776,26 @@ impl Root {
                 let snap = this.clean_snapshot().unwrap_or_default();
                 this.last_failed_files = snap.failed;
                 this.freed_total += snap.bytes;
-                this.status = format!(
-                    "清理完成：已删除 {} 个文件，释放 {}（{} 项占用已跳过），正在复扫…",
-                    snap.files,
-                    fmt_size(snap.bytes),
-                    this.last_failed.len()
-                );
-                this.categories.clear();
-                this.scanned = false;
-                this.start_scan(cx);
+
+                // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
+                let failed = this.last_failed.clone();
+                this.apply_clean_result(&attempted, &failed);
+
+                let fails = this.last_failed.len();
+                this.status = if fails > 0 {
+                    format!(
+                        "清理完成：已删除 {} 个文件，释放 {}（{} 项被占用已跳过）",
+                        snap.files,
+                        fmt_size(snap.bytes),
+                        fails
+                    )
+                } else {
+                    format!(
+                        "清理完成：已删除 {} 个文件，释放 {}",
+                        snap.files,
+                        fmt_size(snap.bytes)
+                    )
+                };
                 cx.notify();
             })
             .ok();

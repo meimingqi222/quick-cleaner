@@ -2,7 +2,7 @@
 
 use crate::core::categories::CategoryId;
 use crate::core::model::{commas, fmt_size, truncate, Check};
-use crate::ui::components::buttons::danger_button;
+use crate::ui::components::buttons::{danger_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
 use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
@@ -202,6 +202,67 @@ fn item_row(
             !dim,
         ))
         .into_any_element()
+}
+
+/// 批量选择工具栏。
+///
+/// 扫描完默认只勾「推荐」那一套，但用户常常想一次性全清、或者把默认
+/// 勾选整体取消掉再自己挑。逐个类别点复选框太麻烦，这里给四个动作。
+fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
+    let total = root.total_item_count();
+    let picked = root.selected_count();
+    let enabled = root.scanned && !root.cleaning;
+    let is_recommended = root.selection_is_recommended();
+
+    // (标签, 是否高亮为当前状态, 动作)
+    let actions: [(&'static str, bool, fn(&mut Root)); 4] = [
+        ("推荐选中", is_recommended, Root::select_recommended),
+        ("全选", picked == total && total > 0, Root::select_every),
+        ("反选", false, Root::invert_selection),
+        ("清空选中", picked == 0, Root::select_none),
+    ];
+
+    let buttons: Vec<_> = actions
+        .into_iter()
+        .map(|(label, active, action)| {
+            div()
+                .id(SharedString::from(format!("sel-{label}")))
+                .child(small_button(
+                    label.to_string(),
+                    if active { PRIMARY_FIXED } else { SURF_LOW },
+                    if active { PRIMARY } else { MUTED },
+                    enabled,
+                ))
+                .when(enabled, |d| {
+                    d.on_click(cx.listener(move |this, _, _, cx| {
+                        action(this);
+                        cx.notify();
+                    }))
+                })
+        })
+        .collect();
+
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        // 与左侧「已选择清理 N 项」之间的分隔
+        .child(
+            div()
+                .w(px(1.))
+                .h(px(24.))
+                .flex_none()
+                .bg(rgba(OUTLINE_VAR, 0.7))
+                .mr_1(),
+        )
+        .children(buttons)
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(OUTLINE))
+                .ml_1()
+                .child(format!("共 {total} 项")),
+        )
 }
 
 pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
@@ -559,6 +620,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                                 ),
                         ),
                 )
+                .child(render_selection_toolbar(root, cx))
                 .child(
                     div()
                         .id("clean-now")
