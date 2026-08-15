@@ -2,6 +2,7 @@
 
 use crate::core::cleaner::{delete_tree, CleanProgress, CleanReport};
 use crate::platform::windows::security::current_user_sid;
+use crate::platform::windows::user_env::real_user_sid;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -16,10 +17,10 @@ pub fn is_recycle_junk_entry(name: &str) -> bool {
     !name.eq_ignore_ascii_case("desktop.ini")
 }
 
-/// 扫尾清掉当前用户 SID 目录下 Shell 没能删干净的残骸。
-pub fn sweep_orphaned_recycle(p: &CleanProgress) -> CleanReport {
+/// 清理真实前台用户 SID 目录下的所有回收站条目（保留 desktop.ini）。
+pub fn clean_real_user_recycle_entries(p: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
-    let Some(sid) = current_user_sid() else {
+    let Some(sid) = real_user_sid() else {
         return report;
     };
 
@@ -45,24 +46,46 @@ pub fn sweep_orphaned_recycle(p: &CleanProgress) -> CleanReport {
     report
 }
 
+/// 扫尾清掉真实用户 SID 目录下 Shell 没能删干净的残骸。
+pub fn sweep_orphaned_recycle(p: &CleanProgress) -> CleanReport {
+    clean_real_user_recycle_entries(p)
+}
+
 /// 清空回收站。
 ///
-/// 分两步：先让 Shell 清掉它索引里可见的条目，再扫尾删掉孤儿数据。
+/// 当当前进程 SID 与真实前台用户 SID 一致时，先调用 Windows Shell API `SHEmptyRecycleBinW`，
+/// 再扫尾清理孤儿文件。
+/// 当跨账户提权（OTS）导致真实用户 SID 与进程管理员 SID 不一致时，跳过 `SHEmptyRecycleBinW`
+/// （避免误清管理员自身的回收站），直接对真实用户的 `$Recycle.Bin\<SID>` 目录执行
+/// 深度清理并保留 desktop.ini。
 pub fn empty_recycle_bin(p: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
-    // SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND
-    let flags = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
-    let hr = unsafe { SHEmptyRecycleBinW(ptr::null_mut(), ptr::null(), flags) };
-    // S_OK = 0；回收站本来就是空的时候返回 E_UNEXPECTED(0x8000FFFF)，同样视为成功
-    if hr == 0 {
-        report.ok += 1;
-    } else if hr as u32 == 0x8000_FFFF {
-        report.skipped += 1;
-    } else {
-        report.failed.push(PathBuf::from("回收站"));
+    let real_sid = real_user_sid();
+    let proc_sid = current_user_sid();
+
+    let is_same_user = match (&real_sid, &proc_sid) {
+        (Some(r), Some(p)) => r == p,
+        (None, None) => true,
+        _ => false,
+    };
+
+    if is_same_user {
+        // 同一用户环境：先通知 Windows Shell 清空回收站
+        // SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND
+        let flags = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+        let hr = unsafe { SHEmptyRecycleBinW(ptr::null_mut(), ptr::null(), flags) };
+        // S_OK = 0；回收站本来就是空的时候返回 E_UNEXPECTED(0x8000FFFF)，同样视为成功
+        if hr == 0 {
+            report.ok += 1;
+        } else if hr as u32 == 0x8000_FFFF {
+            report.skipped += 1;
+        } else {
+            report.failed.push(PathBuf::from("回收站"));
+        }
     }
 
-    report.merge(sweep_orphaned_recycle(p));
+    // 无论是否同用户，都针对真实前台用户的 SID 目录执行彻底清理与扫尾
+    report.merge(clean_real_user_recycle_entries(p));
     report
 }
 
