@@ -1,6 +1,6 @@
 //! 软件管理与深度卸载视图 (Geek Uninstaller / CleanFlow 质感升级版)
 
-use super::apps_components::{render_app_row, render_apps_list_card};
+use super::apps_components::{render_apps_list_card, ListBody};
 use crate::core::apps::{
     AppFilterPreset, AppSortColumn, InstalledApp,
 };
@@ -421,34 +421,33 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         );
 
     // 软件列表行
-    let rows: Vec<AnyElement> = if root.apps_scanning {
-        vec![loading_state_view(
+    // 行内容按需渲染，这里只决定「是占位提示还是 N 行列表」
+    let body = if root.apps_scanning {
+        ListBody::Placeholder(loading_state_view(
             "正在智能检索已安装软件与空间占用",
             "深度测算软件安装目录、真实体积与最后使用时间",
             root.anim_phase,
-        )]
+        ))
     } else if display_apps.is_empty() {
-        vec![div()
-            .p_12()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(MUTED))
-                    .child("📦 未找到匹配的已安装软件"),
-            )
-            .into_any_element()]
+        ListBody::Placeholder(
+            div()
+                .p_12()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(MUTED))
+                        .child("📦 未找到匹配的已安装软件"),
+                )
+                .into_any_element(),
+        )
     } else {
-        display_apps
-            .iter()
-            .enumerate()
-            .map(|(idx, app)| render_app_row(root, app, idx, cx))
-            .collect()
+        ListBody::Rows(display_apps.len())
     };
 
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
@@ -488,14 +487,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .child(format!("列表总占用: {}", fmt_size(filtered_size))),
         );
 
-    let list_card = render_apps_list_card(
-        root,
-        table_header,
-        rows,
-        list_footer,
-        display_apps.len(),
-        cx,
-    );
+    let list_card = render_apps_list_card(root, table_header, body, list_footer, cx);
 
     div()
         .id("apps-view")

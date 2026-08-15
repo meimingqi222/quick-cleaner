@@ -268,15 +268,47 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
     report
 }
 
-/// 清理多个扫描目标（每个目标清空其内容，保留目录本身）。
-pub fn clean_targets(dirs: &[PathBuf], p: &CleanProgress) -> CleanReport {
+/// 一个清理目标及其处置方式。
+#[derive(Clone, Debug)]
+pub struct CleanTarget {
+    pub path: PathBuf,
+    /// 连目录本身一起删，还是只清空内容。
+    ///
+    /// 见 `CategoryId::removes_directory`：系统缓存目录要保留（大量程序
+    /// 假定它们存在），开发产物目录要删干净（空的 `.venv` / `node_modules`
+    /// 比不存在更糟）。
+    pub remove_dir: bool,
+}
+
+impl CleanTarget {
+    /// 只清空内容，保留目录本身。
+    pub fn empty(path: PathBuf) -> Self {
+        Self {
+            path,
+            remove_dir: false,
+        }
+    }
+
+    /// 连目录一起删。
+    pub fn remove(path: PathBuf) -> Self {
+        Self {
+            path,
+            remove_dir: true,
+        }
+    }
+}
+
+/// 清理多个扫描目标。
+pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
     let mut bin_done = false;
-    for d in dirs {
+    for t in targets {
         if p.cancelled() {
             break;
         }
+        let d = &t.path;
         p.note(d);
+
         #[cfg(windows)]
         if crate::platform::windows::recycle::is_recycle_bin(d) {
             if !bin_done {
@@ -293,7 +325,12 @@ pub fn clean_targets(dirs: &[PathBuf], p: &CleanProgress) -> CleanReport {
             }
             continue;
         }
-        report.merge(clean_dir_contents(d, p));
+
+        if t.remove_dir {
+            report.record(d, clean_path(d, p));
+        } else {
+            report.merge(clean_dir_contents(d, p));
+        }
     }
     report
 }

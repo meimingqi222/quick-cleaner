@@ -65,6 +65,19 @@ impl CategoryId {
         )
     }
 
+    /// 清理时是否连目录本身一起删掉。
+    ///
+    /// 默认策略是「清空内容、保留目录」——`%TEMP%`、`Windows\Temp`、
+    /// `.cargo\registry` 这些被大量程序假定存在，删掉目录本身会导致
+    /// 后续写入失败。
+    ///
+    /// 但开发产物正相反：留一个空的 `.venv` 会让 Python 工具认成损坏的
+    /// 虚拟环境，空的 `node_modules` 会让包管理器以为依赖已装好，空的
+    /// worktree 目录纯粹是垃圾。这些必须整个删掉。
+    pub fn removes_directory(&self) -> bool {
+        matches!(self, CategoryId::DevBuild | CategoryId::DevWorktrees)
+    }
+
     /// 该类目是否靠发现式扫描产生（而非固定路径表）。
     ///
     /// 只有构建产物需要检索——它们散落在用户的代码目录里。AI agent

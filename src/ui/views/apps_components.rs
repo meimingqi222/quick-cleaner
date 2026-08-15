@@ -31,11 +31,12 @@ pub(super) fn render_app_row(
 
     div()
         .id(SharedString::from(format!("app-row-{idx}")))
+        .w_full()
+        .h(px(APP_ROW_H))
         .flex()
         .items_center()
         .gap_3()
         .px_5()
-        .py_3()
         .border_b_1()
         .border_color(rgba(OUTLINE_VAR, 0.3))
         .hover(|h| h.bg(rgb(SURF_LOW)))
@@ -83,6 +84,8 @@ pub(super) fn render_app_row(
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(rgb(TEXT))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
                                 .child(truncate(&app.name, 38)),
                         )
                         .when(!app.version.is_empty(), |d| {
@@ -209,34 +212,72 @@ pub(super) fn render_app_row(
         .into_any_element()
 }
 
+/// 软件表的行高。uniform_list 要求等高，因此行内名称强制单行。
+pub(super) const APP_ROW_H: f32 = 73.0;
+
+/// 列表主体：要么是占位提示，要么是虚拟化的行。
+pub(super) enum ListBody {
+    /// 加载中 / 空结果之类的整块占位
+    Placeholder(AnyElement),
+    /// 有多少行（内容按需渲染）
+    Rows(usize),
+}
+
 pub(super) fn render_apps_list_card(
     root: &Root,
     table_header: Div,
-    rows: Vec<AnyElement>,
+    body: ListBody,
     list_footer: Div,
-    display_count: usize,
     cx: &mut Context<Root>,
 ) -> Div {
     // 右侧自绘滚动条。几何计算与「智能清理」的分类列表共用同一套度量，
     // 见 ui::components::scroll。
-    let scroll_handle = root.apps_list_scroll.clone();
-    let estimated_viewport_h = 340.0;
-    let estimated_content_h = display_count as f32 * 73.0;
+    let row_count = match &body {
+        ListBody::Rows(n) => *n,
+        ListBody::Placeholder(_) => 0,
+    };
+    let base = root.apps_list_scroll.0.borrow().base_handle.clone();
+    let metrics = scroll_metrics(&base, 340.0, row_count as f32 * APP_ROW_H);
 
-    let scrollbar_el = scroll_metrics(&scroll_handle, estimated_viewport_h, estimated_content_h)
-        .map(|m| {
-            scrollbar("apps-scroll-thumb", m, |thumb| {
-                thumb.on_mouse_down(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                        let mouse_y: f32 = event.position.y.into();
-                        let start_top: f32 = (-this.apps_list_scroll.offset().y).into();
-                        this.apps_scroll_drag = Some((mouse_y, start_top.max(0.0)));
-                        cx.notify();
-                    }),
-                )
-            })
-        });
+    let scrollbar_el = metrics.map(|m| {
+        scrollbar("apps-scroll-thumb", m, |thumb| {
+            thumb.on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    let mouse_y: f32 = event.position.y.into();
+                    let start_top: f32 =
+                        (-this.apps_list_scroll.0.borrow().base_handle.offset().y).into();
+                    this.apps_scroll_drag = Some((mouse_y, start_top.max(0.0)));
+                    cx.notify();
+                }),
+            )
+        })
+    });
+
+    let body_el: AnyElement = match body {
+        ListBody::Placeholder(el) => el,
+        // 148 款软件按旧写法是每帧构造上千个元素；uniform_list 只渲染视口内的行
+        ListBody::Rows(n) => gpui::uniform_list(
+            "apps-list-rows",
+            n,
+            cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
+                let picked: Vec<crate::core::apps::InstalledApp> = range
+                    .clone()
+                    .filter_map(|i| this.apps_view.get(i).and_then(|&j| this.apps.get(j)))
+                    .cloned()
+                    .collect();
+                picked
+                    .into_iter()
+                    .zip(range)
+                    .map(|(app, idx)| render_app_row(this, &app, idx, cx))
+                    .collect()
+            }),
+        )
+        .track_scroll(root.apps_list_scroll.clone())
+        .size_full()
+        .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)))
+        .into_any_element(),
+    };
 
     card()
         .flex_1()
@@ -250,17 +291,7 @@ pub(super) fn render_apps_list_card(
                 .flex_1()
                 .min_h(px(0.))
                 .relative()
-                .child(
-                    div()
-                        .id("apps-list-rows")
-                        .size_full()
-                        .overflow_scroll()
-                        .scrollbar_width(px(SCROLLBAR_W))
-                        .track_scroll(&root.apps_list_scroll)
-                        .flex()
-                        .flex_col()
-                        .children(rows),
-                )
+                .child(body_el)
                 .children(scrollbar_el),
         )
         .child(list_footer)
@@ -269,9 +300,9 @@ pub(super) fn render_apps_list_card(
                 return;
             };
             let mouse_y: f32 = event.position.y.into();
-            if let Some(new_top) = drag_to_offset(&this.apps_list_scroll, start, mouse_y) {
-                this.apps_list_scroll
-                    .set_offset(gpui::point(px(0.0), px(-new_top)));
+            let base = this.apps_list_scroll.0.borrow().base_handle.clone();
+            if let Some(new_top) = drag_to_offset(&base, start, mouse_y) {
+                base.set_offset(gpui::point(px(0.0), px(-new_top)));
                 cx.notify();
             }
         }))

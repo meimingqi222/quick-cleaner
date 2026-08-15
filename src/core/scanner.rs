@@ -69,8 +69,9 @@ pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummar
 /// 扫描要几十秒，让用户点完清理干等一分钟毫无必要。释放量也不依赖重扫
 /// ——`CleanProgress` 边删边记的字节数比前后差值更准。
 ///
-/// 清理语义是「清空目录内容、保留目录本身」，所以成功的目标是**体积
-/// 归零**而不是从列表消失；失败的保持原样，用户可以再试。
+/// 成功清理的条目**直接从列表移除**：它要么已经不存在（开发产物整个删掉），
+/// 要么已经空了（系统缓存目录清空内容保留自身），两种情况都没有任何可清理
+/// 的东西了，继续挂在列表上只是噪音。失败的条目保持原样，用户可以再试。
 pub fn apply_clean_result(
     cats: &mut [CategorySummary],
     attempted: &[PathBuf],
@@ -81,14 +82,14 @@ pub fn apply_clean_result(
 
     let mut cleared = Vec::new();
     for cat in cats.iter_mut() {
-        for item in &mut cat.items {
+        cat.items.retain(|item| {
             let p = item.path.as_path();
-            if attempted.contains(p) && !failed.contains(p) {
-                item.size = 0;
-                item.file_count = 0;
+            let done = attempted.contains(p) && !failed.contains(p);
+            if done {
                 cleared.push(item.path.clone());
             }
-        }
+            !done
+        });
         cat.total_size = cat.items.iter().map(|i| i.size).sum();
     }
     cleared
@@ -223,7 +224,8 @@ mod tests {
 
         assert_eq!(cleared.len(), 2);
         assert_eq!(cats[0].total_size, 0);
-        assert!(cats[0].items.iter().all(|i| i.size == 0 && i.file_count == 0));
+        // 清完就没有可清的了，条目应从列表消失而不是留一堆 0 B 的空壳
+        assert!(cats[0].items.is_empty());
     }
 
     /// 被占用而删除失败的条目必须保留体积，否则界面会谎报已经清干净了。
@@ -245,7 +247,9 @@ mod tests {
 
         assert_eq!(cleared, vec![PathBuf::from(r"C:\ok")]);
         assert_eq!(cats[0].total_size, 700);
-        assert_eq!(cats[0].items[1].size, 700);
+        assert_eq!(cats[0].items.len(), 1, "失败的条目必须留在列表里供重试");
+        assert_eq!(cats[0].items[0].path, PathBuf::from(r"C:\locked"));
+        assert_eq!(cats[0].items[0].size, 700);
     }
 
     /// 没被本次清理选中的条目不能受影响。
@@ -261,7 +265,8 @@ mod tests {
 
         apply_clean_result(&mut cats, &[PathBuf::from(r"C:\picked")], &[]);
 
-        assert_eq!(cats[0].items[1].size, 900);
+        assert_eq!(cats[0].items.len(), 1);
+        assert_eq!(cats[0].items[0].path, PathBuf::from(r"C:\other"));
         assert_eq!(cats[0].total_size, 900);
     }
 

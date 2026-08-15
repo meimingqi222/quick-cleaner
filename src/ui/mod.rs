@@ -9,7 +9,7 @@ use crate::core::apps::{
 };
 use crate::core::categories::{all_targets, CategoryId};
 use crate::core::cleaner::{
-    clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot,
+    clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot, CleanTarget,
 };
 use crate::core::safety::is_protected;
 use crate::core::apps::filter_and_sort_apps;
@@ -76,7 +76,8 @@ pub struct Root {
     /// 过滤 + 排序后的 `apps` 下标，渲染直接读这里
     pub apps_view: Vec<usize>,
     apps_view_key: Option<AppsViewKey>,
-    pub apps_list_scroll: gpui::ScrollHandle,
+    /// 软件表也走虚拟化列表，句柄需长期持有
+    pub apps_list_scroll: gpui::UniformListScrollHandle,
     pub apps_scroll_drag: Option<(f32, f32)>,
     pub residual_result: Option<ResidualScanResult>,
     pub residual_scanning: bool,
@@ -178,7 +179,7 @@ impl Root {
             apps_gen: 0,
             apps_view: Vec::new(),
             apps_view_key: None,
-            apps_list_scroll: gpui::ScrollHandle::new(),
+            apps_list_scroll: gpui::UniformListScrollHandle::new(),
             apps_scroll_drag: None,
             residual_result: None,
             residual_scanning: false,
@@ -337,6 +338,17 @@ impl Root {
         self.items()
             .filter(|i| self.selected.contains(&i.path))
             .map(|i| i.path.clone())
+            .collect()
+    }
+
+    /// 勾选项连同各自的处置方式（整个删掉还是只清空内容）。
+    pub fn selected_targets(&self) -> Vec<CleanTarget> {
+        self.items()
+            .filter(|i| self.selected.contains(&i.path))
+            .map(|i| CleanTarget {
+                path: i.path.clone(),
+                remove_dir: i.category.removes_directory(),
+            })
             .collect()
     }
 
@@ -764,9 +776,10 @@ impl Root {
         cx.notify();
 
         let attempted = paths.clone();
+        let targets = self.selected_targets();
         let clean = cx
             .background_executor()
-            .spawn(async move { clean_targets(&paths, &progress) });
+            .spawn(async move { clean_targets(&targets, &progress) });
 
         self.clean_task = Some(cx.spawn(async move |this, cx| {
             let report: CleanReport = clean.await;
