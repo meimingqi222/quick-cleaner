@@ -90,7 +90,7 @@ quick-cleaner/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-username/quick-cleaner.git
+git clone https://github.com/meimingqi222/quick-cleaner.git
 cd quick-cleaner
 
 # 2. 运行单元测试（覆盖算法、MFT 解析、安全防护等）

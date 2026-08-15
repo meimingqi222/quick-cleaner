@@ -90,7 +90,7 @@ quick-cleaner/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/quick-cleaner.git
+git clone https://github.com/meimingqi222/quick-cleaner.git
 cd quick-cleaner
 
 # 2. Run automated test suite (NTFS parser, safety boundaries, residual matching, etc.)
