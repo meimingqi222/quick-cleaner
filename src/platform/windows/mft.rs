@@ -223,7 +223,7 @@ impl MftTree {
         }
 
         let mut files: Vec<(u64, u32)> = heap.into_iter().map(|Reverse(v)| v).collect();
-        files.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        files.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
         files
             .into_iter()
             .map(|(size, i)| Node {

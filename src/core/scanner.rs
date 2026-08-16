@@ -107,7 +107,7 @@ fn scan_fixed_inner(
         .iter()
         .map(|(it, d, t)| (*d, it.path.as_path(), it.size, *t))
         .collect();
-    slowest.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    slowest.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
     let top: Vec<String> = slowest
         .iter()
         .take(5)
@@ -217,7 +217,7 @@ pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>) {
 
         cat.items.append(&mut found);
         if cat.category.is_discovered() {
-            cat.items.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+            cat.items.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         }
         cat.total_size = cat.items.iter().map(|it| it.size).sum();
     }
@@ -233,7 +233,7 @@ fn aggregate(results: Vec<ScanItem>) -> Vec<CategorySummary> {
             .cloned()
             .collect();
         if cat.is_discovered() {
-            items.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+            items.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         }
         let total: u64 = items.iter().map(|it| it.size).sum();
         out.push(CategorySummary {
@@ -544,7 +544,7 @@ mod tests {
             .collect();
         println!("  固定路径表并行扫描合计: {:?}", t1.elapsed());
 
-        per.sort_by(|a, b| b.0.cmp(&a.0));
+        per.sort_by_key(|b| std::cmp::Reverse(b.0));
         println!("  最慢的 15 个：");
         for (d, path, size) in per.iter().take(15) {
             println!("    {:>9.2?}  {:>10}  {}", d, crate::core::model::fmt_size(*size), path);

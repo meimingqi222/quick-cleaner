@@ -282,8 +282,7 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
     let (focus_title, focus_size_str, focus_count_str, breakdown) = match root.disk_tab {
         DiskTab::Tree => {
             let is_root = cur == tree.root();
-            if is_root && root.disk_space.is_some() {
-                let (tot, fre) = root.disk_space.unwrap();
+            if let Some((tot, fre)) = if is_root { root.disk_space } else { None } {
                 let used = tot.saturating_sub(fre);
                 let used_pct = ((used as f64 / tot.max(1) as f64) * 100.0).round() as u64;
 

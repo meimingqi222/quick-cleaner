@@ -273,7 +273,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
 
     dedup_items(&mut items);
     // 「确定」的排在前面，用户先看到的就是可以放心删的
-    items.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+    items.sort_by_key(|b| std::cmp::Reverse(b.confidence));
 
     let total_file_size = items.iter().map(|i| i.size()).sum();
     ResidualScanResult {
