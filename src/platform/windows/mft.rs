@@ -400,6 +400,8 @@ struct Volume {
 
 impl Drop for Volume {
     fn drop(&mut self) {
+        // SAFETY: handle 只可能来自 Volume::open 里成功的 CreateFileW，
+        // Volume 不实现 Clone，因此这里是唯一一次关闭。
         unsafe { winapi::um::handleapi::CloseHandle(self.handle) };
     }
 }
@@ -418,6 +420,8 @@ impl Volume {
             .chain(std::iter::once(0))
             .collect();
 
+        // SAFETY: wide 是本地 Vec 且以 NUL 结尾，活到调用结束。其余参数
+        // 都是常量标志位。返回值在使用前会与 INVALID_HANDLE_VALUE 比对。
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -431,6 +435,7 @@ impl Volume {
         };
 
         if handle == INVALID_HANDLE_VALUE {
+            // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
             return Err(if err == 5 {
                 MftError::AccessDenied
@@ -446,6 +451,8 @@ impl Volume {
 
         let mut data = NtfsVolumeData::default();
         let mut returned: u32 = 0;
+        // SAFETY: self.handle 是构造时校验过的有效卷句柄。输出缓冲是本地的
+        // NtfsVolumeData，按它的真实大小上报；驱动写入量由 bytes 出参回报。
         let ok = unsafe {
             DeviceIoControl(
                 self.handle,
@@ -467,9 +474,13 @@ impl Volume {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, MftError> {
         use winapi::um::fileapi::{ReadFile, SetFilePointerEx};
 
+        // SAFETY: LARGE_INTEGER 是个纯 POD union，全零是合法位模式；
+        // QuadPart_mut 拿到的是这块本地内存里 i64 那一路的可变引用。
         let mut distance: winapi::um::winnt::LARGE_INTEGER = unsafe { std::mem::zeroed() };
         unsafe { *distance.QuadPart_mut() = offset as i64 };
 
+        // SAFETY: 句柄有效，distance 按值传入，第三个参数传 null 表示
+        // 不需要回报新位置——这是文档允许的。
         let ok = unsafe {
             SetFilePointerEx(
                 self.handle,
@@ -479,11 +490,15 @@ impl Volume {
             )
         };
         if ok == 0 {
+            // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
             return Err(MftError::Io(format!("SetFilePointerEx @{offset} (Win32 {err})")));
         }
 
         let mut read: u32 = 0;
+        // SAFETY: buf 是调用方提供的可变切片，指针与长度取自它本身，
+        // ReadFile 写入量不会超过上报的长度。第五个参数传 null 表示同步读，
+        // 与 CreateFileW 时没有指定 FILE_FLAG_OVERLAPPED 一致。
         let ok = unsafe {
             ReadFile(
                 self.handle,
@@ -494,6 +509,7 @@ impl Volume {
             )
         };
         if ok == 0 {
+            // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
             return Err(MftError::Io(format!("ReadFile @{offset} (Win32 {err})")));
         }

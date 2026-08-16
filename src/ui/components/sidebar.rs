@@ -6,7 +6,7 @@ use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{
-    div, linear_gradient, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString,
+    div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString,
 };
 
 /// 主区域当前显示哪个视图
@@ -96,10 +96,10 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.view = v;
-                if v == View::Disk && this.mft.is_none() && this.mft_error.is_none() {
+                if v == View::Disk && this.disk.mft.is_none() && this.disk.error.is_none() {
                     this.start_mft_scan(cx);
                 }
-                if v == View::Apps && !this.apps_scanned && !this.apps_scanning {
+                if v == View::Apps && !this.apps.scanned && !this.apps.scanning {
                     this.start_apps_scan(cx);
                 }
                 cx.notify();
@@ -141,17 +141,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 .w(px(38.))
                                 .h(px(38.))
                                 .flex_none()
-                                .rounded_xl()
-                                .bg(linear_gradient(
-                                    135.,
-                                    gpui::linear_color_stop(rgb(PRIMARY_BRIGHT), 0.),
-                                    gpui::linear_color_stop(rgb(PRIMARY), 1.),
-                                ))
-                                .shadow_sm()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(icon_dashboard(ON_PRIMARY, 20.)),
+                                .child(icon_app_logo(38.)),
                         )
                         .child(
                             div()
@@ -227,7 +217,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .text_sm()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(PRIMARY))
-                                        .child(crate::core::model::fmt_size(root.freed_total)),
+                                        .child(crate::core::model::fmt_size(root.clean.freed_total)),
                                 ),
                         ),
                 )

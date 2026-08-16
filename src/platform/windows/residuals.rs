@@ -221,6 +221,8 @@ fn sam_of(root: AppRegRoot) -> DWORD {
 fn reg_key_exists(root: HKEY, subpath: &str, sam: DWORD) -> bool {
     let wide = to_wide(subpath);
     let mut h_key: HKEY = std::ptr::null_mut();
+    // SAFETY: wide 以 NUL 结尾且活到调用结束。只是探测键存不存在，
+    // 打开成功后立刻关闭。
     unsafe {
         if RegOpenKeyExW(root, wide.as_ptr(), 0, sam, &mut h_key) as u32 == ERROR_SUCCESS {
             RegCloseKey(h_key);
@@ -234,6 +236,8 @@ fn reg_key_exists(root: HKEY, subpath: &str, sam: DWORD) -> bool {
 fn open_and_read(root: HKEY, subpath: &str, value: &str, sam: DWORD) -> Option<String> {
     let wide = to_wide(subpath);
     let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: 同 reg_key_exists；读值本身走的是已经封装好的
+    // `registry::read_reg_string`，句柄在返回前关闭。
     unsafe {
         if RegOpenKeyExW(root, wide.as_ptr(), 0, sam, &mut h) as u32 != ERROR_SUCCESS {
             return None;

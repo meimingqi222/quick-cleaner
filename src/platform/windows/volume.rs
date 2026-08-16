@@ -10,6 +10,7 @@ pub fn list_ntfs_volumes() -> Vec<char> {
     use winapi::um::fileapi::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
     use winapi::um::winbase::DRIVE_FIXED;
 
+    // SAFETY: 不接收参数，返回一个位掩码。
     let mask = unsafe { GetLogicalDrives() };
     let mut out = Vec::new();
     for i in 0..26u32 {
@@ -22,11 +23,14 @@ pub fn list_ntfs_volumes() -> Vec<char> {
             .chain(std::iter::once(0))
             .collect();
 
+        // SAFETY: root 是本地的宽字符串且以 NUL 结尾，只被读取。
         if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
             continue;
         }
 
         let mut fs = [0u16; 32];
+        // SAFETY: root 以 NUL 结尾；两个输出缓冲都是本地数组，长度如实
+        // 上报，API 不会越界写。
         let ok = unsafe {
             GetVolumeInformationW(
                 root.as_ptr(),
@@ -58,9 +62,11 @@ pub fn get_volume_space(vol: char) -> Option<(u64, u64)> {
 
     let path = format!("{}:\\\0", vol);
     let wide: Vec<u16> = OsStr::new(&path).encode_wide().collect();
+    // SAFETY: ULARGE_INTEGER 是 POD union，全零是合法位模式。
     let mut free_avail: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
     let mut total: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
     let mut total_free: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
+    // SAFETY: wide 以 NUL 结尾；三个出参都是上面刚初始化的本地变量的地址。
     let ret = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),
@@ -70,6 +76,8 @@ pub fn get_volume_space(vol: char) -> Option<(u64, u64)> {
         )
     };
     if ret != 0 {
+        // SAFETY: 调用成功才走到这里，说明这两个 union 已被 API 按
+        // QuadPart 那一路填好。
         Some((unsafe { *total.QuadPart() }, unsafe { *total_free.QuadPart() }))
     } else {
         None

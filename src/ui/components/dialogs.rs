@@ -106,17 +106,18 @@ pub fn render_confirm_dialog(root: &Root, req: &ConfirmRequest, cx: &mut Context
 
 pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl IntoElement> {
     let lang = root.language;
-    let res = root.residual_result.as_ref()?;
+    let res = root.residual.result.as_ref()?;
     let total_items = res.items.len();
     let is_empty = total_items == 0;
 
-    let selected_count = root.residual_selected.len();
+    let selected_count = root.residual.selected.len();
     let all_selected = selected_count == total_items && total_items > 0;
     let rec_selection = res.default_selection();
-    let is_recommended = root.residual_selected == rec_selection;
+    let is_recommended = root.residual.selected == rec_selection;
 
     let selected_bytes: u64 = root
-        .residual_selected
+        .residual
+        .selected
         .iter()
         .filter_map(|&idx| res.items.get(idx))
         .map(|it| it.size())
@@ -164,7 +165,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .iter()
             .enumerate()
             .map(|(idx, item)| {
-                let is_checked = root.residual_selected.contains(&idx);
+                let is_checked = root.residual.selected.contains(&idx);
                 let check_state = if is_checked {
                     Check::On
                 } else {
@@ -246,10 +247,10 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                         )
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.residual_selected.contains(&idx) {
-                            this.residual_selected.remove(&idx);
+                        if this.residual.selected.contains(&idx) {
+                            this.residual.selected.remove(&idx);
                         } else {
-                            this.residual_selected.insert(idx);
+                            this.residual.selected.insert(idx);
                         }
                         cx.notify();
                     }))
@@ -284,8 +285,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .id("resid-done-btn")
                     .child(primary_button(done_label.to_string(), true))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.residual_result = None;
-                        this.residual_selected.clear();
+                        this.residual.result = None;
+                        this.residual.selected.clear();
                         cx.notify();
                     })),
             )
@@ -313,8 +314,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 true,
                             ))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(r) = &this.residual_result {
-                                    this.residual_selected = r.default_selection();
+                                if let Some(r) = &this.residual.result {
+                                    this.residual.selected = r.default_selection();
                                 }
                                 cx.notify();
                             })),
@@ -330,8 +331,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 true,
                             ))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(r) = &this.residual_result {
-                                    this.residual_selected = (0..r.items.len()).collect();
+                                if let Some(r) = &this.residual.result {
+                                    this.residual.selected = (0..r.items.len()).collect();
                                 }
                                 cx.notify();
                             })),
@@ -347,7 +348,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 selected_count > 0,
                             ))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.residual_selected.clear();
+                                this.residual.selected.clear();
                                 cx.notify();
                             })),
                     ),
@@ -365,8 +366,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 true,
                             ))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.residual_result = None;
-                                this.residual_selected.clear();
+                                this.residual.result = None;
+                                this.residual.selected.clear();
                                 cx.notify();
                             })),
                     )

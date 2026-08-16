@@ -18,6 +18,9 @@ extern "system" {
 
 /// 检查当前进程是否拥有管理员提权身份
 pub fn is_elevated() -> bool {
+    // SAFETY: OpenProcessToken 写入本地的 token 变量；后续 GetTokenInformation
+    // 只在打开成功后调用，写入目标是本地的 TOKEN_ELEVATION，大小如实上报。
+    // token 在所有出口都会 CloseHandle。
     unsafe {
         let mut token: HANDLE = ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
@@ -39,6 +42,9 @@ pub fn is_elevated() -> bool {
 
 /// 解析当前登录用户的 Windows SID 字符串（例如 S-1-5-21-...）
 pub fn current_user_sid() -> Option<String> {
+    // SAFETY: GetTokenInformation 先用空缓冲问长度，再按返回的长度分配，
+    // 第二次调用写入的就是这块自己分配的内存。ConvertSidToStringSidW 分配的
+    // 字符串由 LocalFree 释放，不会泄漏也不会重复释放。
     unsafe {
         let mut token: HANDLE = ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
@@ -166,6 +172,8 @@ pub fn relaunch_as_admin_if_needed() -> bool {
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: 所有传入的宽字符串都是本地 Vec 且以 NUL 结尾，活到调用结束。
+    // ShellExecuteW 只读它们，不持有。
     let res = unsafe {
         ShellExecuteW(
             ptr::null_mut(),

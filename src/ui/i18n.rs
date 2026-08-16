@@ -1,4 +1,31 @@
 //! UI 视图层国际化（i18n）文案映射
+//!
+//! # 和 `core::i18n` 的分工
+//!
+//! 项目里有两套 i18n 机制，边界是「文案在什么时候确定语言」：
+//!
+//! - **本模块的 `tr_*` 函数**：渲染时按当前语言取。适用于**每帧重新渲染**
+//!   的文案——按钮标题、列头、空状态提示。用户切语言时下一帧就跟着变，
+//!   不需要任何额外处理。
+//! - **`core::i18n::Text`（配 `bilingual()`）**：把两种语言都存下来，
+//!   读的时候再挑。适用于**在某个时刻生成、之后长期挂着**的文案——
+//!   状态栏那句话、扫描项的标签。它们生成于后台线程，那时还不知道用户
+//!   之后会切到哪种语言；而切语言不该触发重扫，也不该让状态栏停在旧语言上。
+//!
+//! 判断方法：这段文字是「每次渲染重新算」还是「算一次存着」？前者用
+//! `tr_*`，后者用 `Text`。
+//!
+//! # 为什么是一堆函数而不是一张表
+//!
+//! 每个 `tr_*` 都是一个 `match lang`，加语言时编译器会强制补全每一处。
+//! 换成 `HashMap<&str, ...>` 就只能在运行时发现漏翻，对一个只有两种语言、
+//! 靠穷尽匹配吃红利的项目来说是净亏。
+//!
+//! # 一条约束
+//!
+//! 从 `core` / `platform` 冒上来的错误 payload 必须是**语言中立**的
+//! （API 名、错误码、路径），因为它们会被原样嵌进这里的本地化外壳。
+//! 见 `tr_mft_error`。
 
 use crate::core::i18n::Language;
 
@@ -761,5 +788,32 @@ pub fn tr_discovering(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "检索中…",
         Language::En => "Scanning…",
+    }
+}
+
+/// 磁盘清理条上的「删除到回收站」开关。
+pub fn tr_recycle_toggle(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "删除到回收站",
+        Language::En => "Delete to Recycle Bin",
+    }
+}
+
+/// 开关关闭时，右侧体积那行的说明：这些空间真的会被释放。
+pub fn tr_to_be_freed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "待彻底释放",
+        Language::En => "To be freed",
+    }
+}
+
+/// 开关打开时的说明。
+///
+/// 必须说清楚「不释放空间」——回收站里的文件还占着原来的簇，用户删完
+/// 发现可用容量纹丝不动会以为程序没生效。
+pub fn tr_to_be_recycled(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移入回收站（暂不释放空间）",
+        Language::En => "Moved to Recycle Bin (space not freed yet)",
     }
 }

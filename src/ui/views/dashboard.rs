@@ -22,9 +22,9 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
 
     let lang = root.language;
     let total = root.total_cleanable();
-    let scanned = root.scanned;
+    let scanned = root.junk.scanned;
 
-    let (big, sub) = if root.scanning {
+    let (big, sub) = if root.junk.scanning {
         (
             tr_scanning(lang).to_string(),
             match lang {
@@ -32,7 +32,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 Language::En => String::from("Checking system caches and dev leftovers"),
             },
         )
-    } else if root.cleaning {
+    } else if root.clean.running {
         (
             tr_cleaning(lang).to_string(),
             match lang {
@@ -65,7 +65,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         );
 
     // 扫描时沿着轨道绕圈的小点
-    if root.scanning || root.cleaning {
+    if root.junk.scanning || root.clean.running {
         ring = ring.child(
             div()
                 .absolute()
@@ -129,10 +129,10 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .child(sub),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            if this.scanning || this.cleaning {
+            if this.junk.scanning || this.clean.running {
                 return;
             }
-            if this.scanned {
+            if this.junk.scanned {
                 this.view = View::Junk;
             } else {
                 this.start_scan(cx);
@@ -142,7 +142,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
 
     let ring = ring.child(inner);
 
-    let blurb = if root.scanning {
+    let blurb = if root.junk.scanning {
         match lang {
             Language::Zh => String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…"),
             Language::En => String::from("Scanning system caches, application logs, build artifacts, and temp files…"),
@@ -151,13 +151,13 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         match lang {
             Language::Zh => format!(
                 "已在 {} 个类别中发现 {} 可清理内容。",
-                root.categories.iter().filter(|c| c.total_size > 0).count(),
+                root.junk.categories.iter().filter(|c| c.total_size > 0).count(),
                 fmt_size(total)
             ),
             Language::En => format!(
                 "Found {} cleanable items across {} categories.",
                 fmt_size(total),
-                root.categories.iter().filter(|c| c.total_size > 0).count()
+                root.junk.categories.iter().filter(|c| c.total_size > 0).count()
             ),
         }
     } else if scanned {
@@ -204,7 +204,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                             div()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child(if root.scanned {
+                                .child(if root.junk.scanned {
                                     fmt_size(total)
                                 } else {
                                     match lang {
@@ -245,10 +245,10 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                             div()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child(if root.apps_scanned {
+                                .child(if root.apps.scanned {
                                     match lang {
-                                        Language::Zh => format!("已发现 {} 款", root.apps.len()),
-                                        Language::En => format!("{} Apps", root.apps.len()),
+                                        Language::Zh => format!("已发现 {} 款", root.apps.list.len()),
+                                        Language::En => format!("{} Apps", root.apps.list.len()),
                                     }
                                 } else {
                                     match lang {
@@ -260,7 +260,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Apps;
-                    if !this.apps_scanned && !this.apps_scanning {
+                    if !this.apps.scanned && !this.apps.scanning {
                         this.start_apps_scan(cx);
                     }
                     cx.notify();
@@ -292,7 +292,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                             div()
                                 .text_xs()
                                 .text_color(rgb(OUTLINE))
-                                .child(if let Some(s) = &root.mft {
+                                .child(if let Some(s) = &root.disk.mft {
                                     fmt_size(s.total_size)
                                 } else {
                                     match lang {
@@ -304,7 +304,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Disk;
-                    if this.mft.is_none() && this.mft_error.is_none() && !this.mft_scanning {
+                    if this.disk.mft.is_none() && this.disk.error.is_none() && !this.disk.scanning {
                         this.start_mft_scan(cx);
                     }
                     cx.notify();
@@ -332,7 +332,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .child(blurb),
         );
 
-    if scanned && total > 0 && !root.cleaning {
+    if scanned && total > 0 && !root.clean.running {
         let btn_text = match lang {
             Language::Zh => String::from("查看详情并清理"),
             Language::En => String::from("Review & Clean Junk"),

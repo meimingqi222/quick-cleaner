@@ -165,6 +165,7 @@ pub fn detect_system_language() -> crate::core::i18n::Language {
 
     const LANG_CHINESE: u16 = 0x04;
 
+    // SAFETY: 这两个 API 不接收任何指针，只返回一个 LANGID。
     let langid = unsafe {
         let user = GetUserDefaultUILanguage();
         if user == 0 {

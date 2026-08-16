@@ -166,15 +166,32 @@ impl AppSortState {
 pub enum AppFilterPreset {
     All,
     Large,
-    Recent,
+    Unused,
     Orphan,
+}
+
+/// 「长期未用」的判定门槛：从来没被记录过使用，或者最后一次使用距今超过 90 天。
+pub const RARELY_USED_SECS: u64 = 90 * 86400;
+
+/// 当前 Unix 时间戳（秒）。系统时间异常时退化成 0，此时所有软件都算「长期未用」，
+/// 与「没有使用记录」的处理保持一致。
+pub fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 该软件是否属于「长期未用」。统计卡片与快速分类共用这一套判定，避免两处口径不一致。
+pub fn is_rarely_used(app: &InstalledApp, now_secs: u64) -> bool {
+    app.last_used_raw == 0 || now_secs.saturating_sub(app.last_used_raw) > RARELY_USED_SECS
 }
 
 impl AppFilterPreset {
     pub const ALL: [AppFilterPreset; 4] = [
         AppFilterPreset::All,
         AppFilterPreset::Large,
-        AppFilterPreset::Recent,
+        AppFilterPreset::Unused,
         AppFilterPreset::Orphan,
     ];
 
@@ -189,24 +206,24 @@ impl AppFilterPreset {
             Language::Zh => match self {
                 AppFilterPreset::All => "全部软件",
                 AppFilterPreset::Large => "大型软件 (>500MB)",
-                AppFilterPreset::Recent => "有安装日期",
+                AppFilterPreset::Unused => "长期未用 (>90天)",
                 AppFilterPreset::Orphan => "卸载器失效",
             },
             Language::En => match self {
                 AppFilterPreset::All => "All Apps",
                 AppFilterPreset::Large => "Large Apps (>500MB)",
-                AppFilterPreset::Recent => "With Install Date",
+                AppFilterPreset::Unused => "Rarely Used (>90d)",
                 AppFilterPreset::Orphan => "Invalid Uninstaller",
             },
         }
     }
 
     /// 某个软件是否落在该预设分类里。
-    pub fn matches(&self, app: &InstalledApp) -> bool {
+    pub fn matches(&self, app: &InstalledApp, now_secs: u64) -> bool {
         match self {
             AppFilterPreset::All => true,
             AppFilterPreset::Large => app.estimated_size >= 500 * 1024 * 1024,
-            AppFilterPreset::Recent => app.install_date.is_some(),
+            AppFilterPreset::Unused => is_rarely_used(app, now_secs),
             // 光看「有没有卸载命令」没有意义——注册表里几乎每一项都有。
             // 真正需要关注的是命令跑不起来的：可执行文件已经没了。
             AppFilterPreset::Orphan => {
@@ -518,11 +535,12 @@ pub fn filter_and_sort_apps(
     sort_state: AppSortState,
 ) -> Vec<usize> {
     let kw = search_keyword.trim().to_lowercase();
+    let now_secs = now_unix_secs();
     let mut idx: Vec<usize> = apps
         .iter()
         .enumerate()
         .filter(|(_, app)| {
-            preset.matches(app)
+            preset.matches(app, now_secs)
                 && (kw.is_empty()
                     || contains_ci(&app.name, &kw)
                     || contains_ci(&app.publisher, &kw)
@@ -827,6 +845,25 @@ mod tests {
         assert_eq!(
             filter_and_sort_apps(&apps, AppFilterPreset::All, "", state).len(),
             2
+        );
+    }
+
+    #[test]
+    fn test_unused_preset_matches_stale_and_unrecorded() {
+        let now = now_unix_secs();
+        let apps = vec![
+            // 从来没有使用记录 —— 算长期未用
+            create_test_app("NeverUsed", "Pub", 1024, 0, 0),
+            // 最后一次使用是 100 天前 —— 算长期未用
+            create_test_app("Stale", "Pub", 1024, 0, now - 100 * 86400),
+            // 昨天还在用 —— 不算
+            create_test_app("Fresh", "Pub", 1024, 0, now - 86400),
+        ];
+        let state = AppSortState::new(AppSortColumn::Name, SortDirection::Ascending);
+
+        assert_eq!(
+            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::Unused, "", state)),
+            ["NeverUsed", "Stale"]
         );
     }
 

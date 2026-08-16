@@ -37,6 +37,9 @@ pub struct RunningProcess {
 /// 仍可按 `exe_name` 匹配。
 pub fn list_processes() -> Vec<RunningProcess> {
     let mut out = Vec::new();
+    // SAFETY: 快照句柄只在 != INVALID_HANDLE_VALUE 时使用，并在返回前
+    // CloseHandle。PROCESSENTRY32W 的 dwSize 按文档要求先填成结构体大小，
+    // Process32FirstW/NextW 才会正确填充。
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
@@ -70,6 +73,8 @@ pub fn list_processes() -> Vec<RunningProcess> {
 }
 
 fn image_path_of(pid: DWORD) -> String {
+    // SAFETY: 进程句柄打不开时（权限不足的系统进程）返回空句柄，此时直接
+    // 返回空串，不会拿它去调 API。缓冲区是本地数组，长度如实上报。
     unsafe {
         // 用 LIMITED_INFORMATION 而不是 QUERY_INFORMATION：前者对非同权限
         // 进程也常能成功，够我们读路径了

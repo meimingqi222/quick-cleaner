@@ -5,10 +5,14 @@
 //! 几何」这段容易写错的算术集中到一处，各列表复用同一套度量。
 //!
 //! 拖拽状态仍由各调用方存在 `Root` 上（每个列表要独立记录），本模块只
-//! 提供度量与滑块外观。
+//! 提供度量、滑块外观，以及拖拽期间的窗口级事件捕获。
 
 use crate::ui::theme::*;
-use gpui::{div, prelude::*, px, rgb, Div, ScrollHandle, SharedString, Stateful};
+use gpui::{
+    canvas, div, prelude::*, px, rgb, Context, DispatchPhase, Div, Entity, IntoElement,
+    MouseButton, MouseMoveEvent, MouseUpEvent, ScrollHandle, SharedString, Stateful,
+};
+use std::rc::Rc;
 
 /// 滑块最小高度：再短就抓不住了。
 const MIN_THUMB_H: f32 = 28.0;
@@ -120,6 +124,53 @@ pub fn scrollbar(
                 .opacity(0.9)
                 .cursor_pointer(),
         ))
+}
+
+/// 把滑块拖拽的 move / up 注册成**窗口级**监听，返回一个零尺寸元素。
+///
+/// GPUI 的 `div().on_mouse_move` 只在鼠标命中该元素时才会触发。拖滚动条
+/// 的时候鼠标很容易滑出列表——往右一点就出了卡片边界——事件随即断流，
+/// 表现就是「拖一段卡住，鼠标绕回来又猛地跳一截」。挂到哪个祖先容器上
+/// 都躲不掉这个问题，只是边界远近的差别。
+///
+/// 这里借 `canvas` 拿到 paint 阶段，把监听直接挂在窗口上，不再经过命中
+/// 测试。鼠标松开的事件万一丢了（比如在窗口外抬起），下一次不带左键的
+/// 移动也会把拖拽收尾，不会卡在「一直跟着鼠标」的状态。
+///
+/// 返回值绝对定位且尺寸为 0，塞进任意容器都不影响布局。
+pub fn drag_capture<T: 'static>(
+    entity: Entity<T>,
+    on_move: impl Fn(&mut T, f32, &mut Context<T>) + 'static,
+    on_up: impl Fn(&mut T, &mut Context<T>) + 'static,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |_, _, window, _| {
+            let on_up = Rc::new(on_up);
+            let (move_entity, move_on_up) = (entity.clone(), on_up.clone());
+
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if event.pressed_button == Some(MouseButton::Left) {
+                    let mouse_y: f32 = event.position.y.into();
+                    move_entity.update(cx, |this, cx| on_move(this, mouse_y, cx));
+                } else {
+                    // 左键已经不在按下状态，说明抬起事件没送到，就地收尾。
+                    move_entity.update(cx, |this, cx| move_on_up(this, cx));
+                }
+            });
+
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+                    entity.update(cx, |this, cx| on_up(this, cx));
+                }
+            });
+        },
+    )
+    .absolute()
+    .size(px(0.))
 }
 
 #[cfg(test)]

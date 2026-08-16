@@ -5,7 +5,9 @@ use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
 use crate::ui::theme::*;
-use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
+use crate::ui::components::scroll::{
+    drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
+};
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Div, SharedString};
 
@@ -30,7 +32,7 @@ pub(super) fn render_app_row(
         .to_string();
 
     let lang = root.language;
-    let is_busy = root.residual_scanning || root.cleaning;
+    let is_busy = root.residual.scanning || root.clean.running;
     let uninst_enabled = has_uninstaller && !is_busy;
     let resid_enabled = !is_busy;
 
@@ -241,7 +243,7 @@ pub(super) fn render_apps_list_card(
         ListBody::Rows(n) => *n,
         ListBody::Placeholder(_) => 0,
     };
-    let base = root.apps_list_scroll.0.borrow().base_handle.clone();
+    let base = root.apps.scroll.0.borrow().base_handle.clone();
     let metrics = scroll_metrics(&base, 340.0, row_count as f32 * APP_ROW_H);
 
     let scrollbar_el = metrics.map(|m| {
@@ -251,8 +253,8 @@ pub(super) fn render_apps_list_card(
                 cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                     let mouse_y: f32 = event.position.y.into();
                     let start_top: f32 =
-                        (-this.apps_list_scroll.0.borrow().base_handle.offset().y).into();
-                    this.apps_scroll_drag = Some((mouse_y, start_top.max(0.0)));
+                        (-this.apps.scroll.0.borrow().base_handle.offset().y).into();
+                    this.apps.scroll_drag = Some((mouse_y, start_top.max(0.0)));
                     cx.notify();
                 }),
             )
@@ -268,7 +270,7 @@ pub(super) fn render_apps_list_card(
             cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
                 let picked: Vec<crate::core::apps::InstalledApp> = range
                     .clone()
-                    .filter_map(|i| this.apps_view.get(i).and_then(|&j| this.apps.get(j)))
+                    .filter_map(|i| this.apps.view.get(i).and_then(|&j| this.apps.list.get(j)))
                     .cloned()
                     .collect();
                 picked
@@ -278,7 +280,7 @@ pub(super) fn render_apps_list_card(
                     .collect()
             }),
         )
-        .track_scroll(root.apps_list_scroll.clone())
+        .track_scroll(root.apps.scroll.clone())
         .size_full()
         .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)))
         .into_any_element(),
@@ -297,26 +299,26 @@ pub(super) fn render_apps_list_card(
                 .min_h(px(0.))
                 .relative()
                 .child(body_el)
-                .children(scrollbar_el),
+                .children(scrollbar_el)
+                // 拖拽期间的 move/up 走窗口级监听，鼠标滑出卡片也不会断流
+                .child(drag_capture(
+                    cx.entity(),
+                    |this, mouse_y, cx| {
+                        let Some(start) = this.apps.scroll_drag else {
+                            return;
+                        };
+                        let base = this.apps.scroll.0.borrow().base_handle.clone();
+                        if let Some(new_top) = drag_to_offset(&base, start, mouse_y) {
+                            base.set_offset(gpui::point(px(0.0), px(-new_top)));
+                            cx.notify();
+                        }
+                    },
+                    |this, cx| {
+                        if this.apps.scroll_drag.take().is_some() {
+                            cx.notify();
+                        }
+                    },
+                )),
         )
         .child(list_footer)
-        .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-            let Some(start) = this.apps_scroll_drag else {
-                return;
-            };
-            let mouse_y: f32 = event.position.y.into();
-            let base = this.apps_list_scroll.0.borrow().base_handle.clone();
-            if let Some(new_top) = drag_to_offset(&base, start, mouse_y) {
-                base.set_offset(gpui::point(px(0.0), px(-new_top)));
-                cx.notify();
-            }
-        }))
-        .on_mouse_up(
-            gpui::MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
-                if this.apps_scroll_drag.take().is_some() {
-                    cx.notify();
-                }
-            }),
-        )
 }

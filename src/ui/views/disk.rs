@@ -42,22 +42,22 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
 
     let (loading_title, loading_sub) = match lang {
         Language::Zh => (
-            format!("正在深度分析磁盘 {} 空间占用", root.disk_volume),
+            format!("正在深度分析磁盘 {} 空间占用", root.disk.volume),
             "快速索引全盘文件结构与体积分布，请稍候".to_string(),
         ),
         Language::En => (
-            format!("Analyzing storage for drive {}…", root.disk_volume),
+            format!("Analyzing storage for drive {}…", root.disk.volume),
             "Indexing NTFS file hierarchy and sizes, please wait".to_string(),
         ),
     };
 
-    let body = if root.mft_scanning {
+    let body = if root.disk.scanning {
         loading_state_view(
             &loading_title,
             &loading_sub,
             root.anim_phase,
         )
-    } else if let Some(ref err) = root.mft_error {
+    } else if let Some(ref err) = root.disk.error {
         let err_hint = match lang {
             Language::Zh => "请确保以管理员权限运行，或切换至其他可用盘符重试",
             Language::En => "Please ensure running as administrator or switch to another drive",
@@ -89,11 +89,11 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .child(err_hint),
             )
             .into_any_element()
-    } else if let Some(ref scan) = root.mft {
+    } else if let Some(ref scan) = root.disk.mft {
         render_disk_lens_panes(root, scan, cx)
     } else {
-        let vol_buttons: Vec<_> = root.volumes.iter().map(|&v| {
-            let active = root.disk_volume == v;
+        let vol_buttons: Vec<_> = root.disk.volumes.iter().map(|&v| {
+            let active = root.disk.volume == v;
             let drive_label = match lang {
                 Language::Zh => format!("{v}: 盘 (NTFS)"),
                 Language::En => format!("Drive {v}: (NTFS)"),
@@ -129,12 +129,12 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         }).collect();
 
         let prompt_title = match lang {
-            Language::Zh => format!("选择磁盘并开始深度分析（当前选择 {}: 盘）", root.disk_volume),
-            Language::En => format!("Select a drive to analyze (Current: Drive {}:)", root.disk_volume),
+            Language::Zh => format!("选择磁盘并开始深度分析（当前选择 {}: 盘）", root.disk.volume),
+            Language::En => format!("Select a drive to analyze (Current: Drive {}:)", root.disk.volume),
         };
         let btn_scan_text = match lang {
-            Language::Zh => format!("开始分析 {}: 盘空间占用", root.disk_volume),
-            Language::En => format!("Analyze Drive {}: Storage", root.disk_volume),
+            Language::Zh => format!("开始分析 {}: 盘空间占用", root.disk.volume),
+            Language::En => format!("Analyze Drive {}: Storage", root.disk.volume),
         };
 
         div()
@@ -206,32 +206,13 @@ fn render_disk_lens_panes(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -
 }
 
 /// 左侧：Disk Lens 环形透镜与容量分类（与右侧当前目录完全联动）
-fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -> AnyElement {
-    let tree = &scan.tree;
-    let cur = *root.disk_path.last().unwrap_or(&tree.root());
-    let cur_size = tree.size_of(cur);
-    let cur_name = if cur == tree.root() {
-        tr_volume_root(root.language, tree.volume())
-    } else {
-        tree.name_of(cur)
-    };
-    // 目录列表、完整路径与保护状态都在 Root::refresh_render_caches 里算好，
-    // 这里直接借用；以前每帧都要为每一行重新解析路径并跑一遍保护规则。
-    let children: Vec<&Node> = root.disk_rows.iter().map(|r| &r.node).collect();
-
-    // 调色盘（预设优雅高质感色彩）
-    let colors = [
-        0x0078d4, // 0: Primary Blue
-        0x7547ab, // 1: Purple
-        0x059669, // 2: Emerald Green
-        0xd97706, // 3: Amber Orange
-        0x10b981, // 4: Emerald Green (Free / Available Space)
-        0x64748b, // 5: Slate Gray (Others)
-    ];
-
+/// 顶部的盘符切换药丸。
+fn render_volume_pills(root: &Root, cx: &mut Context<Root>) -> Vec<AnyElement> {
     let lang = root.language;
-    let volume_pills: Vec<_> = root.volumes.iter().map(|&v| {
-        let active = root.disk_volume == v;
+    root.disk.volumes
+        .iter()
+        .map(|&v| {
+        let active = root.disk.volume == v;
         let drive_label = match lang {
             Language::Zh => format!("{v}: 盘"),
             Language::En => format!("{v}:"),
@@ -264,244 +245,272 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.switch_disk_volume(v, cx);
             }))
-    }).collect();
-
-    let total_cap_str = if let Some((tot, _)) = root.disk_space {
-        match lang {
-            Language::Zh => format!("{} 总容量", fmt_size(tot)),
-            Language::En => format!("{} Total", fmt_size(tot)),
-        }
-    } else {
-        match lang {
-            Language::Zh => format!("{} 已扫描", fmt_size(scan.total_size)),
-            Language::En => format!("{} Scanned", fmt_size(scan.total_size)),
-        }
-    };
-
-    // 根据当前 Tab 计算占比清单与圆环扇区
-    let (focus_title, focus_size_str, focus_count_str, breakdown) = match root.disk_tab {
-        DiskTab::Tree => {
-            let is_root = cur == tree.root();
-            if let Some((tot, fre)) = if is_root { root.disk_space } else { None } {
-                let used = tot.saturating_sub(fre);
-                let used_pct = ((used as f64 / tot.max(1) as f64) * 100.0).round() as u64;
-
-                let mut items = Vec::new();
-                let mut top_sum = 0u64;
-
-                // 小于 1% 的根目录项直接并入“其他已用”，保证圆环、占比条和图例完全一致，
-                // 避免 0.2%/0.6% 这类肉眼难辨的顶部细条和白缝。
-                let min_visible_ratio = 0.01;
-                let visible_children: Vec<_> = children
-                    .iter()
-                    .filter(|c| (c.size as f64 / tot.max(1) as f64) >= min_visible_ratio)
-                    .take(4)
-                    .collect();
-
-                for (i, c) in visible_children.iter().enumerate() {
-                    let ratio = (c.size as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
-                    top_sum += c.size;
-                    items.push(BreakdownItem {
-                        name: c.name.clone(),
-                        size: c.size,
-                        ratio,
-                        color: colors[i % (colors.len() - 2)],
-                        is_dir: c.is_dir,
-                        idx: Some(c.idx),
-                    });
-                }
-
-                if used > top_sum && used - top_sum > 1024 * 1024 {
-                    let rem = used - top_sum;
-                    let ratio = (rem as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
-                    let rem_count = children.len().saturating_sub(visible_children.len());
-                    let others_label = match lang {
-                        Language::Zh => format!("其他已用 {} 项", rem_count),
-                        Language::En => format!("Other {} items", rem_count),
-                    };
-                    items.push(BreakdownItem {
-                        name: others_label,
-                        size: rem,
-                        ratio,
-                        color: colors[5], // Slate Gray
-                        is_dir: false,
-                        idx: None,
-                    });
-                }
-
-                // 空闲可用空间条目（以翡翠绿清晰展现）
-                if fre > 0 {
-                    let free_ratio = (fre as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
-                    let free_label = match lang {
-                        Language::Zh => "空闲可用空间".to_string(),
-                        Language::En => "Free Space".to_string(),
-                    };
-                    items.push(BreakdownItem {
-                        name: free_label,
-                        size: fre,
-                        ratio: free_ratio,
-                        color: colors[4], // 0x10b981 Emerald Green
-                        is_dir: false,
-                        idx: None,
-                    });
-                }
-
-                let used_count_str = match lang {
-                    Language::Zh => format!("已用 {used_pct}% · 空闲 {}", fmt_size(fre)),
-                    Language::En => format!("Used {used_pct}% · Free {}", fmt_size(fre)),
-                };
-
-                (
-                    cur_name,
-                    fmt_size(tot),
-                    used_count_str,
-                    items,
-                )
-            } else {
-                let total_children_size: u64 = children.iter().map(|c| c.size).sum();
-                let base_size = total_children_size.max(cur_size).max(1);
-
-                let mut items = Vec::new();
-                let mut top_sum = 0u64;
-
-                for (i, c) in children.iter().take(4).enumerate() {
-                    let ratio = (c.size as f64 / base_size as f64).clamp(0.0, 1.0);
-                    top_sum += c.size;
-                    items.push(BreakdownItem {
-                        name: if c.name.is_empty() {
-                            match lang {
-                                Language::Zh => format!("{}: 根目录", tree.volume()),
-                                Language::En => format!("{}: Root", tree.volume()),
-                            }
-                        } else {
-                            c.name.clone()
-                        },
-                        size: c.size,
-                        ratio,
-                        color: colors[i % (colors.len() - 2)],
-                        is_dir: c.is_dir,
-                        idx: Some(c.idx),
-                    });
-                }
-
-                if cur_size > top_sum && cur_size - top_sum > 1024 {
-                    let rem = cur_size - top_sum;
-                    let ratio = (rem as f64 / base_size as f64).clamp(0.0, 1.0);
-                    let others_label = match lang {
-                        Language::Zh => format!("其他 {} 项", children.len().saturating_sub(4)),
-                        Language::En => format!("Other {} items", children.len().saturating_sub(4)),
-                    };
-                    items.push(BreakdownItem {
-                        name: others_label,
-                        size: rem,
-                        ratio,
-                        color: colors[5],
-                        is_dir: false,
-                        idx: None,
-                    });
-                }
-
-                let sub_count_str = match lang {
-                    Language::Zh => format!("当前目录共 {} 个子项", children.len()),
-                    Language::En => format!("{} items in folder", children.len()),
-                };
-
-                (
-                    cur_name,
-                    fmt_size(cur_size),
-                    sub_count_str,
-                    items,
-                )
-            }
-        }
-        DiskTab::Files => {
-            let files = tree.largest_files(200);
-            let total_files_size: u64 = files.iter().map(|f| f.size).sum();
-            let base_size = total_files_size.max(1);
-
-            // 按后缀类型聚类
-            let mut media_sz = 0u64;
-            let mut bin_sz = 0u64;
-            let mut arch_sz = 0u64;
-            let mut doc_sz = 0u64;
-            let mut other_sz = 0u64;
-
-            for f in &files {
-                let ext = std::path::Path::new(&f.name)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-
-                match ext.as_str() {
-                    "mp4" | "mkv" | "avi" | "mov" | "flv" | "mp3" | "wav" => media_sz += f.size,
-                    "exe" | "dll" | "sys" | "node" | "pak" | "bin" | "msi" => bin_sz += f.size,
-                    "zip" | "rar" | "7z" | "tar" | "gz" | "iso" | "vmdk" | "vhdx" => {
-                        arch_sz += f.size
-                    }
-                    "dat" | "db" | "log" | "txt" | "pdf" | "docx" | "xlsx" | "sqlite" => {
-                        doc_sz += f.size
-                    }
-                    _ => other_sz += f.size,
-                }
-            }
-
-            let cat_data = match lang {
-                Language::Zh => [
-                    ("媒体视频 (Media)", media_sz, colors[0]),
-                    ("程序/动态库 (Bin)", bin_sz, colors[1]),
-                    ("压缩镜像 (Archive)", arch_sz, colors[2]),
-                    ("文档数据 (Data)", doc_sz, colors[3]),
-                    ("其他文件 (Others)", other_sz, colors[5]),
-                ],
-                Language::En => [
-                    ("Media & Video", media_sz, colors[0]),
-                    ("Binaries & DLLs", bin_sz, colors[1]),
-                    ("Archives & Images", arch_sz, colors[2]),
-                    ("Documents & Data", doc_sz, colors[3]),
-                    ("Other Files", other_sz, colors[5]),
-                ],
-            };
-
-            let items: Vec<BreakdownItem> = cat_data
-                .into_iter()
-                .filter(|(_, sz, _)| *sz > 0)
-                .map(|(name, sz, col)| BreakdownItem {
-                    name: name.to_string(),
-                    size: sz,
-                    ratio: (sz as f64 / base_size as f64).clamp(0.0, 1.0),
-                    color: col,
-                    is_dir: false,
-                    idx: None,
-                })
-                .collect();
-
-            let files_summary_title = match lang {
-                Language::Zh => "全盘大文件分布".to_string(),
-                Language::En => "Largest Files Breakdown".to_string(),
-            };
-            let files_count_str = match lang {
-                Language::Zh => format!("前 {} 个大文件汇总", files.len()),
-                Language::En => format!("Top {} large files", files.len()),
-            };
-
-            (
-                files_summary_title,
-                fmt_size(total_files_size),
-                files_count_str,
-                items,
-            )
-        }
-    };
-
-    let ring_segments: Vec<DonutSegment> = breakdown
-        .iter()
-        .map(|it| DonutSegment {
-            ratio: it.ratio as f32,
-            color: it.color,
         })
+        .map(|d| d.into_any_element())
+        .collect()
+}
+
+/// 按当前 Tab 算出占比清单，连带右上角那三行摘要文字。
+///
+/// 两种 Tab 的口径完全不同，各自成函数：目录树看「当前目录下各子项的
+/// 占比」，大文件榜看「按后缀聚类」。这里只负责挑一条路。
+fn compute_breakdown(
+    root: &Root,
+    scan: &MftScan,
+    cur: u32,
+    children: &[&Node],
+    colors: &[u32; 6],
+) -> (String, String, String, Vec<BreakdownItem>) {
+    let tree = &scan.tree;
+    match root.disk.tab {
+        DiskTab::Tree => breakdown_for_tree(root, tree, cur, children, colors),
+        DiskTab::Files => breakdown_for_files(root, tree, colors),
+    }
+}
+
+/// 目录树视图的占比清单：当前目录下各子项各占多少。
+///
+/// 站在盘符根上时口径不一样——要把「可用空间」也算成一块，让环形图
+/// 表示整块盘而不只是已用部分。
+fn breakdown_for_tree(
+    root: &Root,
+    tree: &MftTree,
+    cur: u32,
+    children: &[&Node],
+    colors: &[u32; 6],
+) -> (String, String, String, Vec<BreakdownItem>) {
+    let lang = root.language;
+    let cur_size = tree.size_of(cur);
+    let cur_name = if cur == tree.root() {
+        tr_volume_root(lang, tree.volume())
+    } else {
+        tree.name_of(cur)
+    };
+
+let is_root = cur == tree.root();
+if let Some((tot, fre)) = if is_root { root.disk.space } else { None } {
+    let used = tot.saturating_sub(fre);
+    let used_pct = ((used as f64 / tot.max(1) as f64) * 100.0).round() as u64;
+
+    let mut items = Vec::new();
+    let mut top_sum = 0u64;
+
+    // 小于 1% 的根目录项直接并入“其他已用”，保证圆环、占比条和图例完全一致，
+    // 避免 0.2%/0.6% 这类肉眼难辨的顶部细条和白缝。
+    let min_visible_ratio = 0.01;
+    let visible_children: Vec<_> = children
+        .iter()
+        .filter(|c| (c.size as f64 / tot.max(1) as f64) >= min_visible_ratio)
+        .take(4)
         .collect();
 
+    for (i, c) in visible_children.iter().enumerate() {
+        let ratio = (c.size as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
+        top_sum += c.size;
+        items.push(BreakdownItem {
+            name: c.name.clone(),
+            size: c.size,
+            ratio,
+            color: colors[i % (colors.len() - 2)],
+            is_dir: c.is_dir,
+            idx: Some(c.idx),
+        });
+    }
+
+    if used > top_sum && used - top_sum > 1024 * 1024 {
+        let rem = used - top_sum;
+        let ratio = (rem as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
+        let rem_count = children.len().saturating_sub(visible_children.len());
+        let others_label = match lang {
+            Language::Zh => format!("其他已用 {} 项", rem_count),
+            Language::En => format!("Other {} items", rem_count),
+        };
+        items.push(BreakdownItem {
+            name: others_label,
+            size: rem,
+            ratio,
+            color: colors[5], // Slate Gray
+            is_dir: false,
+            idx: None,
+        });
+    }
+
+    // 空闲可用空间条目（以翡翠绿清晰展现）
+    if fre > 0 {
+        let free_ratio = (fre as f64 / tot.max(1) as f64).clamp(0.0, 1.0);
+        let free_label = match lang {
+            Language::Zh => "空闲可用空间".to_string(),
+            Language::En => "Free Space".to_string(),
+        };
+        items.push(BreakdownItem {
+            name: free_label,
+            size: fre,
+            ratio: free_ratio,
+            color: colors[4], // 0x10b981 Emerald Green
+            is_dir: false,
+            idx: None,
+        });
+    }
+
+    let used_count_str = match lang {
+        Language::Zh => format!("已用 {used_pct}% · 空闲 {}", fmt_size(fre)),
+        Language::En => format!("Used {used_pct}% · Free {}", fmt_size(fre)),
+    };
+
+    (
+        cur_name,
+        fmt_size(tot),
+        used_count_str,
+        items,
+    )
+} else {
+    let total_children_size: u64 = children.iter().map(|c| c.size).sum();
+    let base_size = total_children_size.max(cur_size).max(1);
+
+    let mut items = Vec::new();
+    let mut top_sum = 0u64;
+
+    for (i, c) in children.iter().take(4).enumerate() {
+        let ratio = (c.size as f64 / base_size as f64).clamp(0.0, 1.0);
+        top_sum += c.size;
+        items.push(BreakdownItem {
+            name: if c.name.is_empty() {
+                match lang {
+                    Language::Zh => format!("{}: 根目录", tree.volume()),
+                    Language::En => format!("{}: Root", tree.volume()),
+                }
+            } else {
+                c.name.clone()
+            },
+            size: c.size,
+            ratio,
+            color: colors[i % (colors.len() - 2)],
+            is_dir: c.is_dir,
+            idx: Some(c.idx),
+        });
+    }
+
+    if cur_size > top_sum && cur_size - top_sum > 1024 {
+        let rem = cur_size - top_sum;
+        let ratio = (rem as f64 / base_size as f64).clamp(0.0, 1.0);
+        let others_label = match lang {
+            Language::Zh => format!("其他 {} 项", children.len().saturating_sub(4)),
+            Language::En => format!("Other {} items", children.len().saturating_sub(4)),
+        };
+        items.push(BreakdownItem {
+            name: others_label,
+            size: rem,
+            ratio,
+            color: colors[5],
+            is_dir: false,
+            idx: None,
+        });
+    }
+
+    let sub_count_str = match lang {
+        Language::Zh => format!("当前目录共 {} 个子项", children.len()),
+        Language::En => format!("{} items in folder", children.len()),
+    };
+
+    (
+        cur_name,
+        fmt_size(cur_size),
+        sub_count_str,
+        items,
+    )
+}
+        
+}
+
+/// 大文件榜的占比清单：全盘最大的那批文件按后缀聚类。
+fn breakdown_for_files(
+    root: &Root,
+    tree: &MftTree,
+    colors: &[u32; 6],
+) -> (String, String, String, Vec<BreakdownItem>) {
+    let lang = root.language;
+
+let files = tree.largest_files(200);
+let total_files_size: u64 = files.iter().map(|f| f.size).sum();
+let base_size = total_files_size.max(1);
+
+// 按后缀类型聚类
+let mut media_sz = 0u64;
+let mut bin_sz = 0u64;
+let mut arch_sz = 0u64;
+let mut doc_sz = 0u64;
+let mut other_sz = 0u64;
+
+for f in &files {
+    let ext = std::path::Path::new(&f.name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "mp4" | "mkv" | "avi" | "mov" | "flv" | "mp3" | "wav" => media_sz += f.size,
+        "exe" | "dll" | "sys" | "node" | "pak" | "bin" | "msi" => bin_sz += f.size,
+        "zip" | "rar" | "7z" | "tar" | "gz" | "iso" | "vmdk" | "vhdx" => {
+            arch_sz += f.size
+        }
+        "dat" | "db" | "log" | "txt" | "pdf" | "docx" | "xlsx" | "sqlite" => {
+            doc_sz += f.size
+        }
+        _ => other_sz += f.size,
+    }
+}
+
+let cat_data = match lang {
+    Language::Zh => [
+        ("媒体视频 (Media)", media_sz, colors[0]),
+        ("程序/动态库 (Bin)", bin_sz, colors[1]),
+        ("压缩镜像 (Archive)", arch_sz, colors[2]),
+        ("文档数据 (Data)", doc_sz, colors[3]),
+        ("其他文件 (Others)", other_sz, colors[5]),
+    ],
+    Language::En => [
+        ("Media & Video", media_sz, colors[0]),
+        ("Binaries & DLLs", bin_sz, colors[1]),
+        ("Archives & Images", arch_sz, colors[2]),
+        ("Documents & Data", doc_sz, colors[3]),
+        ("Other Files", other_sz, colors[5]),
+    ],
+};
+
+let items: Vec<BreakdownItem> = cat_data
+    .into_iter()
+    .filter(|(_, sz, _)| *sz > 0)
+    .map(|(name, sz, col)| BreakdownItem {
+        name: name.to_string(),
+        size: sz,
+        ratio: (sz as f64 / base_size as f64).clamp(0.0, 1.0),
+        color: col,
+        is_dir: false,
+        idx: None,
+    })
+    .collect();
+
+let files_summary_title = match lang {
+    Language::Zh => "全盘大文件分布".to_string(),
+    Language::En => "Largest Files Breakdown".to_string(),
+};
+let files_count_str = match lang {
+    Language::Zh => format!("前 {} 个大文件汇总", files.len()),
+    Language::En => format!("Top {} large files", files.len()),
+};
+
+(
+    files_summary_title,
+    fmt_size(total_files_size),
+    files_count_str,
+    items,
+)
+        
+}
+
+/// 顶部那条按占比分段着色的横条。
+fn render_proportion_bar(breakdown: &[BreakdownItem]) -> gpui::Div {
     // 动态多彩占比条
     let mut proportion_bar = div()
         .w_full()
@@ -511,7 +520,7 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
         .bg(rgb(SURF_HIGH))
         .flex();
 
-    for item in &breakdown {
+    for item in breakdown {
         let pct = (item.ratio * 100.0) as f32;
         if pct > 0.5 {
             proportion_bar = proportion_bar.child(
@@ -523,6 +532,54 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
             );
         }
     }
+    proportion_bar
+}
+
+fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -> AnyElement {
+    let tree = &scan.tree;
+    let cur = *root.disk.path.last().unwrap_or(&tree.root());
+    // 目录列表、完整路径与保护状态都在 Root::refresh_render_caches 里算好，
+    // 这里直接借用；以前每帧都要为每一行重新解析路径并跑一遍保护规则。
+    let children: Vec<&Node> = root.disk.rows.iter().map(|r| &r.node).collect();
+
+    // 调色盘（预设优雅高质感色彩）
+    let colors = [
+        0x0078d4, // 0: Primary Blue
+        0x7547ab, // 1: Purple
+        0x059669, // 2: Emerald Green
+        0xd97706, // 3: Amber Orange
+        0x10b981, // 4: Emerald Green (Free / Available Space)
+        0x64748b, // 5: Slate Gray (Others)
+    ];
+
+    let lang = root.language;
+    let volume_pills = render_volume_pills(root, cx);
+
+    let total_cap_str = if let Some((tot, _)) = root.disk.space {
+        match lang {
+            Language::Zh => format!("{} 总容量", fmt_size(tot)),
+            Language::En => format!("{} Total", fmt_size(tot)),
+        }
+    } else {
+        match lang {
+            Language::Zh => format!("{} 已扫描", fmt_size(scan.total_size)),
+            Language::En => format!("{} Scanned", fmt_size(scan.total_size)),
+        }
+    };
+
+    // 占比清单的计算按 Tab 分两种口径，单独拎出去了
+    let (focus_title, focus_size_str, focus_count_str, breakdown) =
+        compute_breakdown(root, scan, cur, &children, &colors);
+
+    let ring_segments: Vec<DonutSegment> = breakdown
+        .iter()
+        .map(|it| DonutSegment {
+            ratio: it.ratio as f32,
+            color: it.color,
+        })
+        .collect();
+
+    let proportion_bar = render_proportion_bar(&breakdown);
 
     // 列表项渲染（支持点击下钻联动）
     let breakdown_rows = breakdown
@@ -657,10 +714,14 @@ fn render_left_lens_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) ->
 }
 
 /// 右侧：智能层级与文件列表浏览器
-fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -> AnyElement {
+/// 面包屑导航。
+///
+/// 路径深了会中间省略——单行自适应，小窗口下也不折行，否则整条工具栏
+/// 会被挤变形。
+fn render_breadcrumbs(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -> gpui::Div {
     let lang = root.language;
     let tree = &scan.tree;
-    let depth = root.disk_path.len();
+    let depth = root.disk.path.len();
 
     // 面包屑导航（单行自适应，防止小窗口折行挤压）
     let mut crumbs = div()
@@ -672,13 +733,13 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
         .overflow_hidden();
 
     let max_display_crumbs = 3;
-    let path_len = root.disk_path.len();
+    let path_len = root.disk.path.len();
     let display_indices: Vec<(usize, u32)> = if path_len <= max_display_crumbs {
-        root.disk_path.iter().copied().enumerate().collect()
+        root.disk.path.iter().copied().enumerate().collect()
     } else {
-        let mut list = vec![(0, root.disk_path[0])];
+        let mut list = vec![(0, root.disk.path[0])];
         for i in (path_len - 2)..path_len {
-            list.push((i, root.disk_path[i]));
+            list.push((i, root.disk.path[i]));
         }
         list
     };
@@ -725,7 +786,7 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 })
                 .child(crumb_name)
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.disk_path.truncate(i + 1);
+                    this.disk.path.truncate(i + 1);
                     cx.notify();
                 })),
         );
@@ -738,6 +799,13 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
             );
         }
     }
+
+    crumbs
+}
+
+/// 「目录树 / 全盘大文件」两个视图之间的切换。
+fn render_tab_switch(root: &Root, cx: &mut Context<Root>) -> gpui::Div {
+    let lang = root.language;
 
     // 视图切换（目录树 / 全盘大文件）
     let tab_switch = div()
@@ -755,23 +823,23 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 .py(px(3.))
                 .rounded_md()
                 .text_xs()
-                .font_weight(if root.disk_tab == DiskTab::Tree {
+                .font_weight(if root.disk.tab == DiskTab::Tree {
                     gpui::FontWeight::BOLD
                 } else {
                     gpui::FontWeight::NORMAL
                 })
                 .cursor_pointer()
-                .when(root.disk_tab == DiskTab::Tree, |d| {
+                .when(root.disk.tab == DiskTab::Tree, |d| {
                     d.bg(rgb(CARD))
                         .text_color(rgb(PRIMARY))
                         .shadow_sm()
                 })
-                .when(root.disk_tab != DiskTab::Tree, |d| {
+                .when(root.disk.tab != DiskTab::Tree, |d| {
                     d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                 })
                 .child(tr_tab_tree(lang))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.disk_tab = DiskTab::Tree;
+                    this.disk.tab = DiskTab::Tree;
                     cx.notify();
                 })),
         )
@@ -782,26 +850,36 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 .py(px(3.))
                 .rounded_md()
                 .text_xs()
-                .font_weight(if root.disk_tab == DiskTab::Files {
+                .font_weight(if root.disk.tab == DiskTab::Files {
                     gpui::FontWeight::BOLD
                 } else {
                     gpui::FontWeight::NORMAL
                 })
                 .cursor_pointer()
-                .when(root.disk_tab == DiskTab::Files, |d| {
+                .when(root.disk.tab == DiskTab::Files, |d| {
                     d.bg(rgb(CARD))
                         .text_color(rgb(PRIMARY))
                         .shadow_sm()
                 })
-                .when(root.disk_tab != DiskTab::Files, |d| {
+                .when(root.disk.tab != DiskTab::Files, |d| {
                     d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                 })
                 .child(tr_tab_files(lang))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.disk_tab = DiskTab::Files;
+                    this.disk.tab = DiskTab::Files;
                     cx.notify();
                 })),
         );
+
+    tab_switch
+}
+
+/// 跨目录已选状态的胶囊提示，带一键清空。
+///
+/// 勾选是跨目录累计的，用户下钻几层之后很容易忘了别的目录里还留着选中项，
+/// 这个提示就是防止「确认删除」时删出预期之外的东西。
+fn render_cross_folder_badge(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
+    let lang = root.language;
 
     // 跨目录已选状态提示与一键清空标签（紧凑胶囊设计）
     let total_selected_count = root.disk_selected_count();
@@ -836,11 +914,26 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.clear_disk_selection();
                     cx.notify();
-                })),
+                }))
+                .into_any_element(),
         )
     } else {
         None
     };
+
+    cross_folder_badge
+}
+
+fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
+    let tree = &scan.tree;
+    let depth = root.disk.path.len();
+
+    let crumbs = render_breadcrumbs(root, scan, cx);
+
+    let tab_switch = render_tab_switch(root, cx);
+
+    let cross_folder_badge = render_cross_folder_badge(root, cx);
 
     let btn_parent_text = match lang {
         Language::Zh => "← 上级",
@@ -877,8 +970,8 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                             depth > 1,
                         ))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if this.disk_path.len() > 1 {
-                                this.disk_path.pop();
+                            if this.disk.path.len() > 1 {
+                                this.disk.path.pop();
                                 cx.notify();
                             }
                         })),
@@ -899,8 +992,8 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
     // Root::refresh_render_caches 按「盘符 + 目录 + 标签页 + 树版本」缓存，
     // 目录没变时整帧不做任何路径解析。
     let selectable_items: Vec<(std::path::PathBuf, u64)> = root.disk_selectable();
-    let drillable = root.disk_tab == DiskTab::Tree;
-    let rows: Vec<AnyElement> = if root.disk_rows.is_empty() {
+    let drillable = root.disk.tab == DiskTab::Tree;
+    let rows: Vec<AnyElement> = if root.disk.rows.is_empty() {
         let hint = match (drillable, lang) {
             (true, Language::Zh) => "此目录为空",
             (true, Language::En) => "Directory is empty",
@@ -917,7 +1010,7 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
             .child(hint)
             .into_any_element()]
     } else {
-        root.disk_rows
+        root.disk.rows
             .iter()
             .map(|row| render_lens_row(root, tree, row, drillable, cx))
             .collect()
@@ -955,7 +1048,7 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
                     let all_on = header_check_state == Check::On;
                     move |this, _, _, cx| {
                         for (p, sz) in &items {
-                            this.disk_sel.set(p, *sz, !all_on);
+                            this.disk.sel.set(p, *sz, !all_on);
                         }
                         cx.notify();
                     }
@@ -1012,7 +1105,8 @@ fn render_right_browser_pane(root: &Root, scan: &MftScan, cx: &mut Context<Root>
 }
 
 /// 渲染单行文件 / 文件夹（支持勾选、下钻与安全删除）
-fn render_lens_row(
+/// 行内的图标 + 名称列。目录可以直接点进去下钻。
+fn render_lens_row_name(
     root: &Root,
     tree: &MftTree,
     row: &DiskRow,
@@ -1023,11 +1117,12 @@ fn render_lens_row(
     let n = &row.node;
     let idx = n.idx;
     let is_dir = n.is_dir;
-    let path = row.path.clone();
-    let path_str = path.to_string_lossy().to_string();
+    let size = n.size;
+    let path_str = row.path.to_string_lossy().to_string();
     let protected = row.protected;
-    let is_selected = root.is_disk_item_selected(&path);
 
+    // 目录树视图显示节点名（根节点没有名字，用盘符代替）；
+    // 大文件榜跨目录，只有完整路径才说得清是哪个文件。
     let display_name = if drillable {
         if n.name.is_empty() {
             match lang {
@@ -1041,18 +1136,147 @@ fn render_lens_row(
         path_str.clone()
     };
 
-    let p_for_cb = path.clone();
-    let p_for_del = path.clone();
-    let size = n.size;
-
-    let delete_label = match lang {
-        Language::Zh => "删除",
-        Language::En => "Delete",
-    };
     let protected_label = match lang {
         Language::Zh => "系统保护项目",
         Language::En => "System Protected",
     };
+
+div()
+    .id(SharedString::from(format!("drill-{idx}")))
+    .flex_1()
+    .min_w(px(0.))
+    .flex()
+    .items_center()
+    .gap_3()
+    .when(drillable && is_dir, |d| d.cursor_pointer())
+    .child(
+        div()
+            .w(px(28.))
+            .h(px(28.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(if is_dir {
+                icon_badge(icon_dashboard(PRIMARY, 14.), PRIMARY_FIXED, PRIMARY, 28.)
+            } else if size >= 1024 * 1024 * 1024 {
+                icon_badge(icon_trash(ERROR, 14.), ERROR_CONTAINER, ERROR, 28.)
+            } else {
+                icon_badge(icon_disk(PRIMARY, 14.), PRIMARY_FIXED, PRIMARY, 28.)
+            }),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(if is_dir {
+                        gpui::FontWeight::SEMIBOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
+                    .text_color(rgb(TEXT))
+                    .child(truncate(&display_name, 56)),
+            )
+            .when(protected, |d| {
+                d.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(protected_label),
+                )
+            }),
+    )
+    .when(drillable && is_dir, |d| {
+        d.on_click(cx.listener(move |this, _, _, cx| {
+            this.disk.path.push(idx);
+            cx.notify();
+        }))
+    })
+    .into_any_element()
+}
+
+/// 行尾的操作列：目录给「进入」，文件给「删除」；受保护项两者都不给。
+fn render_lens_row_actions(
+    root: &Root,
+    row: &DiskRow,
+    drillable: bool,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let lang = root.language;
+    let n = &row.node;
+    let idx = n.idx;
+    let is_dir = n.is_dir;
+    let size = n.size;
+    let p_for_del = row.path.clone();
+    let protected = row.protected;
+    let delete_label = match lang {
+        Language::Zh => "删除",
+        Language::En => "Delete",
+    };
+
+div()
+    .w(px(40.))
+    .flex_none()
+    .flex()
+    .justify_center()
+    .when(drillable && is_dir, |d| {
+        d.child(
+            div()
+                .id(SharedString::from(format!("enter-dir-{idx}")))
+                .px_2()
+                .py(px(2.))
+                .rounded_md()
+                .text_xs()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(PRIMARY))
+                .cursor_pointer()
+                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                .child("›")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.disk.path.push(idx);
+                    cx.notify();
+                })),
+        )
+    })
+    .when(!is_dir && !protected, |d| {
+        d.child(
+            div()
+                .id(SharedString::from(format!("del-file-{idx}")))
+                .px_2()
+                .py(px(2.))
+                .rounded_md()
+                .text_xs()
+                .text_color(rgb(ERROR))
+                .cursor_pointer()
+                .hover(|h| h.bg(rgb(ERROR_CONTAINER)))
+                .child(delete_label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.request_clean_path(p_for_del.clone(), size, cx);
+                })),
+        )
+    })
+    .into_any_element()
+}
+
+fn render_lens_row(
+    root: &Root,
+    tree: &MftTree,
+    row: &DiskRow,
+    drillable: bool,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let n = &row.node;
+    let idx = n.idx;
+    let path = row.path.clone();
+    let protected = row.protected;
+    let is_selected = root.is_disk_item_selected(&path);
+    let p_for_cb = path.clone();
+    let size = n.size;
 
     div()
         .id(SharedString::from(format!("lens-row-{idx}")))
@@ -1085,64 +1309,7 @@ fn render_lens_row(
                 }),
         )
         // 图标与名称（点击目录可直接下钻）
-        .child(
-            div()
-                .id(SharedString::from(format!("drill-{idx}")))
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .items_center()
-                .gap_3()
-                .when(drillable && is_dir, |d| d.cursor_pointer())
-                .child(
-                    div()
-                        .w(px(28.))
-                        .h(px(28.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(if is_dir {
-                            icon_badge(icon_dashboard(PRIMARY, 14.), PRIMARY_FIXED, PRIMARY, 28.)
-                        } else if size >= 1024 * 1024 * 1024 {
-                            icon_badge(icon_trash(ERROR, 14.), ERROR_CONTAINER, ERROR, 28.)
-                        } else {
-                            icon_badge(icon_disk(PRIMARY, 14.), PRIMARY_FIXED, PRIMARY, 28.)
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(if is_dir {
-                                    gpui::FontWeight::SEMIBOLD
-                                } else {
-                                    gpui::FontWeight::NORMAL
-                                })
-                                .text_color(rgb(TEXT))
-                                .child(truncate(&display_name, 56)),
-                        )
-                        .when(protected, |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .child(protected_label),
-                            )
-                        }),
-                )
-                .when(drillable && is_dir, |d| {
-                    d.on_click(cx.listener(move |this, _, _, cx| {
-                        this.disk_path.push(idx);
-                        cx.notify();
-                    }))
-                }),
-        )
+        .child(render_lens_row_name(root, tree, row, drillable, cx))
         // 大小
         .child(
             div()
@@ -1159,49 +1326,7 @@ fn render_lens_row(
                 .child(fmt_size(size)),
         )
         // 进入或删除按钮
-        .child(
-            div()
-                .w(px(40.))
-                .flex_none()
-                .flex()
-                .justify_center()
-                .when(drillable && is_dir, |d| {
-                    d.child(
-                        div()
-                            .id(SharedString::from(format!("enter-dir-{idx}")))
-                            .px_2()
-                            .py(px(2.))
-                            .rounded_md()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(PRIMARY))
-                            .cursor_pointer()
-                            .hover(|h| h.bg(rgb(SURF_HIGH)))
-                            .child("›")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.disk_path.push(idx);
-                                cx.notify();
-                            })),
-                    )
-                })
-                .when(!is_dir && !protected, |d| {
-                    d.child(
-                        div()
-                            .id(SharedString::from(format!("del-file-{idx}")))
-                            .px_2()
-                            .py(px(2.))
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(rgb(ERROR))
-                            .cursor_pointer()
-                            .hover(|h| h.bg(rgb(ERROR_CONTAINER)))
-                            .child(delete_label)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.request_clean_path(p_for_del.clone(), size, cx);
-                            })),
-                    )
-                }),
-        )
+        .child(render_lens_row_actions(root, row, drillable, cx))
         .into_any_element()
 }
 
@@ -1219,6 +1344,27 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
         Language::Zh => format!("{count} 项已选中"),
         Language::En => format!("{count} items selected"),
     };
+
+    let to_recycle = root.settings.delete_to_recycle_bin;
+
+    // 处置方式开关。放在确认按钮旁边，按下去之前就能看清是永久删除还是
+    // 送回收站——这是这条工具栏上唯一不可撤销的决定。
+    let recycle_toggle = div()
+        .id("toggle-recycle-bin")
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor_pointer()
+        .child(checkbox(if to_recycle { Check::On } else { Check::Off }))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(if to_recycle { TEXT } else { OUTLINE }))
+                .child(tr_recycle_toggle(lang)),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.toggle_recycle_bin(cx);
+        }));
 
     Some(
         div()
@@ -1290,9 +1436,14 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
                                 div()
                                     .text_xs()
                                     .text_color(rgb(OUTLINE))
-                                    .child(if lang == Language::Zh { "待彻底释放" } else { "To be freed" }),
+                                    .child(if to_recycle {
+                                        tr_to_be_recycled(lang)
+                                    } else {
+                                        tr_to_be_freed(lang)
+                                    }),
                             ),
                     )
+                    .child(recycle_toggle)
                     .child(
                         div()
                             .id("clear-disk-selection-btn")
@@ -1312,7 +1463,7 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
                             .id("clean-disk-selected")
                             .child(crate::ui::components::buttons::danger_button(
                                 tr_btn_confirm_delete(lang).to_string(),
-                                !root.cleaning,
+                                !root.clean.running,
                             ))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.request_clean_disk_selected(cx);

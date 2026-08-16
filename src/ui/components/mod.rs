@@ -1,4 +1,14 @@
 //! 可复用 UI 控件库
+//!
+//! # 关于 `use ...::*`
+//!
+//! 视图文件里对 `theme` / `i18n` / `icons` 一律用 glob 导入，这是刻意的：
+//! 这三个模块导出的都是**带统一前缀的词汇表**——`PRIMARY`/`SURF_HIGH`、
+//! `tr_btn_*`、`icon_*`——名字本身就说明了出处，逐个列出来只会让每个视图
+//! 顶着几十行 import。
+//!
+//! 本模块和 `views` 不适用这条：`card` / `checkbox` / `small_button` 之间
+//! 没有共同前缀，glob 进来就分不清谁来自哪儿，所以调用方显式列出。
 
 pub mod buttons;
 pub mod cards;

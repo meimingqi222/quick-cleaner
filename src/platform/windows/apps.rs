@@ -70,6 +70,8 @@ fn scan_registry_uninstall(
     let wide_path = to_wide(uninstall_path);
     let mut h_uninstall: HKEY = std::ptr::null_mut();
 
+    // SAFETY: wide_path 以 NUL 结尾且活到调用结束；句柄只在打开成功后
+    // 使用，函数出口无条件关闭。
     unsafe {
         if RegOpenKeyExW(
             root,
@@ -301,6 +303,8 @@ fn scan_user_assist_map() -> UserAssistIndex {
     let ua_path = to_wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist");
     let mut h_ua: HKEY = std::ptr::null_mut();
 
+    // SAFETY: 同上。UserAssist 子键名是 ROT13 编码的，读出来之后只做纯
+    // 字符串处理，不涉及裸指针。
     unsafe {
         if RegOpenKeyExW(
             HKEY_CURRENT_USER,

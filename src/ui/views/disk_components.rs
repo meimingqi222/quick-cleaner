@@ -85,7 +85,7 @@ pub(super) fn render_breakdown_row(
         .when(is_dir && idx.is_some(), |d| {
             let target_idx = idx.unwrap();
             d.on_click(cx.listener(move |this, _, _, cx| {
-                this.disk_path.push(target_idx);
+                this.disk.path.push(target_idx);
                 cx.notify();
             }))
         })

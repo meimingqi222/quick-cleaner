@@ -26,6 +26,9 @@ pub fn read_reg_string(h_key: HKEY, value_name: &str) -> Option<String> {
     let mut buf_size = (buf.len() * 2) as DWORD;
     let mut val_type: DWORD = 0;
 
+    // SAFETY: h_key 由调用方保证是打开着的有效句柄。buf 是本地数组，
+    // buf_size 如实报告它的字节长度，RegQueryValueExW 不会越界写。
+    // 出参 val_type / buf_size 都是本地变量的地址。
     unsafe {
         let res = RegQueryValueExW(
             h_key,
@@ -67,6 +70,8 @@ pub fn read_reg_dword(h_key: HKEY, value_name: &str) -> Option<u32> {
     let mut val_size = std::mem::size_of::<DWORD>() as DWORD;
     let mut val_type: DWORD = 0;
 
+    // SAFETY: 同 read_reg_string——句柄由调用方保证有效，写入目标是
+    // 本地的单个 DWORD，val_size 如实报告它的大小。
     unsafe {
         let res = RegQueryValueExW(
             h_key,
@@ -88,6 +93,8 @@ pub fn read_reg_dword(h_key: HKEY, value_name: &str) -> Option<u32> {
 /// 递归删除指定的注册表子树
 pub fn delete_reg_tree(root: HKEY, subpath: &str) -> bool {
     let wide_path = to_wide(subpath);
+    // SAFETY: wide_path 是本地 Vec，to_wide 保证以 NUL 结尾，指针在整个
+    // 调用期间有效。RegDeleteTreeW 只读这个字符串。
     unsafe {
         let res = RegDeleteTreeW(root, wide_path.as_ptr());
         res as u32 == ERROR_SUCCESS
@@ -105,6 +112,9 @@ pub fn enum_subkeys(root: HKEY, subpath: &str, sam: DWORD) -> Vec<String> {
     let wide = to_wide(subpath);
     let mut h: HKEY = std::ptr::null_mut();
 
+    // SAFETY: wide 以 NUL 结尾且活到调用结束。h 是本地变量，只在
+    // RegOpenKeyExW 返回 ERROR_SUCCESS 时才被当作有效句柄使用，
+    // 并在函数出口无条件 RegCloseKey。
     unsafe {
         if RegOpenKeyExW(root, wide.as_ptr(), 0, sam | KEY_ENUMERATE_SUB_KEYS, &mut h) as u32
             != ERROR_SUCCESS
@@ -153,6 +163,8 @@ pub fn enum_string_values(root: HKEY, subpath: &str, sam: DWORD) -> Vec<(String,
     let wide = to_wide(subpath);
     let mut h: HKEY = std::ptr::null_mut();
 
+    // SAFETY: 同 enum_subkeys。name_buf / data_buf 是本地数组，每轮循环都
+    // 把长度重置成它们的真实容量后再传进去，RegEnumValueW 不会越界写。
     unsafe {
         if RegOpenKeyExW(root, wide.as_ptr(), 0, sam | KEY_QUERY_VALUE, &mut h) as u32
             != ERROR_SUCCESS
@@ -224,6 +236,8 @@ pub fn delete_reg_value(root: HKEY, subpath: &str, value_name: &str, sam: DWORD)
     let wide = to_wide(subpath);
     let wide_val = to_wide(value_name);
     let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: 两个 wide 串都以 NUL 结尾且活到调用结束；句柄只在打开成功
+    // 后使用，并在返回前关闭。
     unsafe {
         if RegOpenKeyExW(root, wide.as_ptr(), 0, sam | KEY_SET_VALUE, &mut h) as u32
             != ERROR_SUCCESS
@@ -233,5 +247,133 @@ pub fn delete_reg_value(root: HKEY, subpath: &str, value_name: &str, sam: DWORD)
         let ok = RegDeleteValueW(h, wide_val.as_ptr()) as u32 == ERROR_SUCCESS;
         RegCloseKey(h);
         ok
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winapi::um::winnt::KEY_READ;
+    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW, HKEY_LOCAL_MACHINE};
+
+    /// 每台 Windows 上都有的键，拿来做真实读取的靶子。
+    const CURVER: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+    /// 打开一个只读句柄，测完自己关。
+    struct Key(HKEY);
+
+    impl Key {
+        fn open(subpath: &str) -> Option<Self> {
+            let wide = to_wide(subpath);
+            let mut h: HKEY = std::ptr::null_mut();
+            // SAFETY: wide 以 NUL 结尾且活到调用结束；h 只在返回 ERROR_SUCCESS
+            // 时被当作有效句柄，并由 Drop 关闭。
+            let ok = unsafe {
+                RegOpenKeyExW(HKEY_LOCAL_MACHINE, wide.as_ptr(), 0, KEY_READ, &mut h) as u32
+                    == ERROR_SUCCESS
+            };
+            ok.then_some(Key(h))
+        }
+    }
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            // SAFETY: 句柄来自成功的 RegOpenKeyExW，Key 不可 Clone，只关一次。
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+
+    #[test]
+    fn wide_round_trips_including_cjk() {
+        for s in ["", "Software", r"C:\Program Files (x86)", "中文路径", "emoji 🚀"] {
+            let w = to_wide(s);
+            assert_eq!(*w.last().unwrap(), 0, "必须以 NUL 结尾");
+            assert_eq!(from_wide(&w), s);
+        }
+    }
+
+    /// `from_wide` 要在第一个 NUL 处截断，而不是把整个缓冲都吃进去。
+    /// 注册表 API 回填的缓冲区尾部全是零，不截断的话字符串会拖一串 \0。
+    #[test]
+    fn from_wide_stops_at_the_first_nul() {
+        let mut buf = to_wide("abc");
+        buf.extend_from_slice(&[0u16; 8]);
+        assert_eq!(from_wide(&buf), "abc");
+        // 完全没有 NUL 时按整段解释
+        assert_eq!(from_wide(&[0x41, 0x42]), "AB");
+        assert_eq!(from_wide(&[]), "");
+    }
+
+    #[test]
+    fn reads_a_real_string_value() {
+        let Some(k) = Key::open(CURVER) else {
+            return; // 非 Windows 或权限受限的环境直接跳过
+        };
+        let name = read_reg_string(k.0, "ProductName").expect("ProductName 应该读得到");
+        assert!(!name.is_empty());
+        assert!(!name.contains('\0'), "尾部 NUL 没有被截掉：{name:?}");
+    }
+
+    #[test]
+    fn reads_a_real_dword_value() {
+        let Some(k) = Key::open(CURVER) else { return };
+        // CurrentMajorVersionNumber 从 Win10 起存在
+        if let Some(v) = read_reg_dword(k.0, "CurrentMajorVersionNumber") {
+            assert!(v >= 6, "主版本号看起来不对：{v}");
+        }
+    }
+
+    /// 值不存在时必须返回 None，不能 panic、也不能返回垃圾。
+    #[test]
+    fn missing_values_return_none() {
+        let Some(k) = Key::open(CURVER) else { return };
+        assert!(read_reg_string(k.0, "绝不存在的值名 9f3a").is_none());
+        assert!(read_reg_dword(k.0, "绝不存在的值名 9f3a").is_none());
+    }
+
+    /// 键不存在时枚举返回空表，同样不能 panic。
+    #[test]
+    fn enumerating_a_missing_key_is_empty() {
+        assert!(enum_subkeys(HKEY_LOCAL_MACHINE, r"SOFTWARE\绝不存在 9f3a", 0).is_empty());
+        assert!(enum_string_values(HKEY_LOCAL_MACHINE, r"SOFTWARE\绝不存在 9f3a", 0).is_empty());
+    }
+
+    #[test]
+    fn enumerates_real_subkeys_and_values() {
+        let subkeys = enum_subkeys(HKEY_LOCAL_MACHINE, "SOFTWARE", 0);
+        if subkeys.is_empty() {
+            return; // 非 Windows 环境
+        }
+        assert!(
+            subkeys.iter().any(|k| k.eq_ignore_ascii_case("Microsoft")),
+            "SOFTWARE 下应当有 Microsoft"
+        );
+        assert!(subkeys.iter().all(|k| !k.contains('\0')));
+
+        let values = enum_string_values(HKEY_LOCAL_MACHINE, CURVER, 0);
+        assert!(
+            values.iter().any(|(n, _)| n == "ProductName"),
+            "CurrentVersion 下应当有 ProductName"
+        );
+        assert!(values.iter().all(|(n, v)| !n.contains('\0') && !v.contains('\0')));
+    }
+
+    /// 空子路径表示「就是这个根键本身」，不能因此炸掉。
+    #[test]
+    fn empty_subpath_targets_the_root_itself() {
+        let _ = enum_subkeys(HKEY_LOCAL_MACHINE, "", 0);
+        let _ = enum_string_values(HKEY_LOCAL_MACHINE, "", 0);
+    }
+
+    /// 删除不存在的键要老实返回 false，而不是报告成功。
+    ///
+    /// 只删一个必定不存在的路径——绝不能让测试真的动到注册表。
+    #[test]
+    fn deleting_a_missing_tree_reports_failure() {
+        assert!(!delete_reg_tree(
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\QuickCleanerTestKeyThatMustNotExist9f3a"
+        ));
     }
 }

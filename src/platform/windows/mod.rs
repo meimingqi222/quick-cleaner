@@ -13,7 +13,10 @@ pub mod volume;
 pub use apps::{dir_or_file_size, list_installed_apps, reveal_in_explorer, run_uninstaller_and_wait};
 pub use mft::{scan_volume, MftError, MftTree};
 pub use volume::{get_volume_space, list_ntfs_volumes};
-pub use recycle::{empty_recycle_bin, is_recycle_bin, is_recycle_junk_entry, sweep_orphaned_recycle};
+pub use recycle::{
+    empty_recycle_bin, is_recycle_bin, is_recycle_junk_entry, move_to_recycle_bin,
+    sweep_orphaned_recycle,
+};
 pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
 pub use security::{current_user_sid, is_elevated, relaunch_as_admin_if_needed};
 pub use user_env::{detect_system_language, get_user_context, init_user_context, real_user_home, real_user_known_folders, real_user_local_appdata, real_user_roaming_appdata, real_user_sid, real_user_temp};

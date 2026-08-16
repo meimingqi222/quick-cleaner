@@ -6,7 +6,9 @@ use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
-use crate::ui::components::scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
+use crate::ui::components::scroll::{
+    drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
+};
 use crate::ui::components::icons::*;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -66,7 +68,7 @@ fn render_category_items(
             .into_any_element();
     }
 
-    let Some(handle) = root.junk_scroll.get(&id).cloned() else {
+    let Some(handle) = root.junk.scroll.get(&id).cloned() else {
         return div().into_any_element();
     };
     let list_h = (count as f32 * ITEM_ROW_H).min(LIST_MAX_H);
@@ -81,7 +83,7 @@ fn render_category_items(
         count,
         cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
             let lang = this.language;
-            let Some(summary) = this.categories.iter().find(|c| c.category == id) else {
+            let Some(summary) = this.junk.categories.iter().find(|c| c.category == id) else {
                 return Vec::new();
             };
             // 先把这一段要用的数据拷出来，避免在 cx.listener 闭包里继续借用 this。
@@ -102,7 +104,7 @@ fn render_category_items(
 
             rows.into_iter()
                 .map(|(i, path, label, path_text, file_count, size)| {
-                    let checked = this.selected.contains(&path);
+                    let checked = this.junk.selected.contains(&path);
                     item_row(i, path, label, path_text, file_count, size, checked, lang, cx)
                 })
                 .collect()
@@ -117,10 +119,10 @@ fn render_category_items(
             thumb.on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    let Some(h) = this.junk_scroll.get(&id) else { return };
+                    let Some(h) = this.junk.scroll.get(&id) else { return };
                     let top: f32 = (-h.0.borrow().base_handle.offset().y).into();
                     let mouse_y: f32 = event.position.y.into();
-                    this.junk_scroll_drag = Some((id, mouse_y, top.max(0.0)));
+                    this.junk.scroll_drag = Some((id, mouse_y, top.max(0.0)));
                     cx.notify();
                 }),
             )
@@ -228,7 +230,7 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
     let lang = root.language;
     let total = root.total_item_count();
     let picked = root.selected_count();
-    let enabled = root.scanned && !root.cleaning;
+    let enabled = root.junk.scanned && !root.clean.running;
     let is_recommended = root.selection_is_recommended();
 
     let actions: [BatchAction; 4] = [
@@ -313,7 +315,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .text_xl()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(if total > 0 { ERROR } else { PRIMARY }))
-                        .child(if root.scanned {
+                        .child(if root.junk.scanned {
                             fmt_size(total)
                         } else {
                             String::from("—")
@@ -358,11 +360,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .child(found);
 
     let mut cards: Vec<AnyElement> = Vec::new();
-    for summary in &root.categories {
+    for summary in &root.junk.categories {
         let id = summary.category;
         let size = summary.total_size;
         let safety = id.safety();
-        let expanded = root.expanded.contains(&id);
+        let expanded = root.junk.expanded.contains(&id);
         let state = root.cat_check(summary);
         let dim = size == 0;
 
@@ -435,7 +437,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .text_color(rgb(if dim { OUTLINE } else { safety_color(safety) }))
                             // 构建产物走第二阶段异步检索，没跑完之前显示「检索中」
                             // 而不是 0 B——后者看起来像「扫过了，没东西」。
-                            .child(if root.discovering && id.is_discovered() {
+                            .child(if root.junk.discovering && id.is_discovered() {
                                 String::from(tr_discovering(lang))
                             } else if size > 0 {
                                 fmt_size(size)
@@ -476,7 +478,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     }
 
     let mut skipped_banner: Option<AnyElement> = None;
-    if !root.last_failed.is_empty() {
+    if !root.clean.last_failed.is_empty() {
         skipped_banner = Some(
             card()
                 .p_4()
@@ -495,7 +497,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(ERROR))
-                                .child(tr_last_clean_skipped(lang, root.last_failed.len())),
+                                .child(tr_last_clean_skipped(lang, root.clean.last_failed.len())),
                         )
                         .child(
                             div()
@@ -504,14 +506,14 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(ERROR))
                                 .cursor_pointer()
-                                .child(tr_toggle_details(lang, root.show_failed_details))
+                                .child(tr_toggle_details(lang, root.clean.show_failed_details))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.show_failed_details = !this.show_failed_details;
+                                    this.clean.show_failed_details = !this.clean.show_failed_details;
                                     cx.notify();
                                 })),
                         ),
                 )
-                .when(root.show_failed_details, |d| {
+                .when(root.clean.show_failed_details, |d| {
                     d.child(
                         div()
                             .flex()
@@ -520,7 +522,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .p_2()
                             .rounded_md()
                             .bg(rgba(CARD, 0.6))
-                            .children(root.last_failed.iter().take(20).map(|p| {
+                            .children(root.clean.last_failed.iter().take(20).map(|p| {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(ERROR))
@@ -544,7 +546,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         ),
     };
 
-    let body: AnyElement = if root.scanning {
+    let body: AnyElement = if root.junk.scanning {
         loading_state_view(
             loading_title,
             loading_sub,
@@ -571,30 +573,29 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .child(header)
         .children(skipped_banner)
         .child(body)
-        // 滚动条拖拽的 move/up 挂在整页上：鼠标一旦拖出滑块范围，
-        // 事件就不会再落到滑块自己身上了。
-        .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-            let Some((id, start_y, start_top)) = this.junk_scroll_drag else {
-                return;
-            };
-            let Some(handle) = this.junk_scroll.get(&id) else {
-                return;
-            };
-            let base = handle.0.borrow().base_handle.clone();
-            let mouse_y: f32 = event.position.y.into();
-            if let Some(new_top) = drag_to_offset(&base, (start_y, start_top), mouse_y) {
-                base.set_offset(gpui::point(px(0.0), px(-new_top)));
-                cx.notify();
-            }
-        }))
-        .on_mouse_up(
-            gpui::MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
-                if this.junk_scroll_drag.take().is_some() {
+        // 滚动条拖拽的 move/up 走窗口级监听：鼠标拖出滑块、拖出整页
+        // 甚至拖出窗口，事件都还接得住。
+        .child(drag_capture(
+            cx.entity(),
+            |this, mouse_y, cx| {
+                let Some((id, start_y, start_top)) = this.junk.scroll_drag else {
+                    return;
+                };
+                let Some(handle) = this.junk.scroll.get(&id) else {
+                    return;
+                };
+                let base = handle.0.borrow().base_handle.clone();
+                if let Some(new_top) = drag_to_offset(&base, (start_y, start_top), mouse_y) {
+                    base.set_offset(gpui::point(px(0.0), px(-new_top)));
                     cx.notify();
                 }
-            }),
-        )
+            },
+            |this, cx| {
+                if this.junk.scroll_drag.take().is_some() {
+                    cx.notify();
+                }
+            },
+        ))
         .into_any_element()
 }
 
@@ -602,14 +603,14 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
     let lang = root.language;
     let size = root.selected_size();
     let count = root.selected_count();
-    let enabled = root.scanned && !root.cleaning && !root.scanning && count > 0;
+    let enabled = root.junk.scanned && !root.clean.running && !root.junk.scanning && count > 0;
 
     let items_label = match lang {
         Language::Zh => format!("({count} 项)"),
         Language::En => format!("({count} items)"),
     };
 
-    let clean_btn_text = if root.cleaning {
+    let clean_btn_text = if root.clean.running {
         tr_cleaning(lang).to_string()
     } else {
         tr_clean_now(lang).to_string()

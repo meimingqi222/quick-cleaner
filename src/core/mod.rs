@@ -21,7 +21,7 @@ pub use apps::{
 pub use categories::{all_targets, CategoryId, Safety, ScanTarget};
 pub use cleaner::{
     clean_arbitrary, clean_path, clean_targets, CleanProgress, CleanReport, CleanResult,
-    CleanSnapshot,
+    CleanSnapshot, Disposal,
 };
 pub use disk::{DirUsage, DiskSelectionState, MftScan, Node};
 pub use i18n::Language;

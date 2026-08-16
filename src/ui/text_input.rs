@@ -76,15 +76,15 @@ fn clamp_to_boundary(s: &str, r: Range<usize>) -> Range<usize> {
 impl Root {
     /// 当前搜索框里光标（或选区）的字节范围，已钳到合法边界。
     fn search_selection(&self) -> Range<usize> {
-        clamp_to_boundary(&self.apps_search, self.apps_search_sel.clone())
+        clamp_to_boundary(&self.apps.search, self.apps.search_sel.clone())
     }
 
     /// 把光标收到末尾。内容被外部改动（清空按钮、切换筛选）后要调一次，
     /// 否则残留的旧偏移会指到字符串外面。
     pub fn reset_search_caret(&mut self) {
-        let end = self.apps_search.len();
-        self.apps_search_sel = end..end;
-        self.apps_search_marked = None;
+        let end = self.apps.search.len();
+        self.apps.search_sel = end..end;
+        self.apps.search_marked = None;
     }
 
     /// 退格：删掉光标前的一个**字符**（不是一个字节）。
@@ -93,22 +93,22 @@ impl Root {
     pub fn search_backspace(&mut self) {
         let sel = self.search_selection();
         if sel.start != sel.end {
-            self.apps_search.replace_range(sel.clone(), "");
-            self.apps_search_sel = sel.start..sel.start;
+            self.apps.search.replace_range(sel.clone(), "");
+            self.apps.search_sel = sel.start..sel.start;
         } else if sel.start > 0 {
-            let prev = self.apps_search[..sel.start]
+            let prev = self.apps.search[..sel.start]
                 .char_indices()
                 .next_back()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            self.apps_search.replace_range(prev..sel.start, "");
-            self.apps_search_sel = prev..prev;
+            self.apps.search.replace_range(prev..sel.start, "");
+            self.apps.search_sel = prev..prev;
         }
-        self.apps_search_marked = None;
+        self.apps.search_marked = None;
     }
 
     pub fn search_clear(&mut self) {
-        self.apps_search.clear();
+        self.apps.search.clear();
         self.reset_search_caret();
     }
 }
@@ -122,11 +122,11 @@ impl EntityInputHandler for Root {
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         let range = clamp_to_boundary(
-            &self.apps_search,
-            range_from_utf16(&self.apps_search, &range_utf16),
+            &self.apps.search,
+            range_from_utf16(&self.apps.search, &range_utf16),
         );
-        actual_range.replace(range_to_utf16(&self.apps_search, &range));
-        Some(self.apps_search[range].to_string())
+        actual_range.replace(range_to_utf16(&self.apps.search, &range));
+        Some(self.apps.search[range].to_string())
     }
 
     fn selected_text_range(
@@ -136,7 +136,7 @@ impl EntityInputHandler for Root {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: range_to_utf16(&self.apps_search, &self.search_selection()),
+            range: range_to_utf16(&self.apps.search, &self.search_selection()),
             reversed: false,
         })
     }
@@ -146,13 +146,13 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.apps_search_marked
+        self.apps.search_marked
             .as_ref()
-            .map(|r| range_to_utf16(&self.apps_search, r))
+            .map(|r| range_to_utf16(&self.apps.search, r))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.apps_search_marked = None;
+        self.apps.search_marked = None;
     }
 
     /// 提交文本：普通打字与输入法确认后的汉字都走这里。
@@ -165,15 +165,15 @@ impl EntityInputHandler for Root {
     ) {
         let range = range_utf16
             .as_ref()
-            .map(|r| range_from_utf16(&self.apps_search, r))
-            .or_else(|| self.apps_search_marked.clone())
+            .map(|r| range_from_utf16(&self.apps.search, r))
+            .or_else(|| self.apps.search_marked.clone())
             .unwrap_or_else(|| self.search_selection());
-        let range = clamp_to_boundary(&self.apps_search, range);
+        let range = clamp_to_boundary(&self.apps.search, range);
 
-        self.apps_search.replace_range(range.clone(), new_text);
+        self.apps.search.replace_range(range.clone(), new_text);
         let caret = range.start + new_text.len();
-        self.apps_search_sel = caret..caret;
-        self.apps_search_marked = None;
+        self.apps.search_sel = caret..caret;
+        self.apps.search_marked = None;
         cx.notify();
     }
 
@@ -188,21 +188,21 @@ impl EntityInputHandler for Root {
     ) {
         let range = range_utf16
             .as_ref()
-            .map(|r| range_from_utf16(&self.apps_search, r))
-            .or_else(|| self.apps_search_marked.clone())
+            .map(|r| range_from_utf16(&self.apps.search, r))
+            .or_else(|| self.apps.search_marked.clone())
             .unwrap_or_else(|| self.search_selection());
-        let range = clamp_to_boundary(&self.apps_search, range);
+        let range = clamp_to_boundary(&self.apps.search, range);
 
-        self.apps_search.replace_range(range.clone(), new_text);
-        self.apps_search_marked = if new_text.is_empty() {
+        self.apps.search.replace_range(range.clone(), new_text);
+        self.apps.search_marked = if new_text.is_empty() {
             None
         } else {
             Some(range.start..range.start + new_text.len())
         };
 
         // 输入法给的选区是相对于这段组合文本的
-        let composed = &self.apps_search[range.start..range.start + new_text.len()];
-        self.apps_search_sel = match new_selected_range_utf16.as_ref() {
+        let composed = &self.apps.search[range.start..range.start + new_text.len()];
+        self.apps.search_sel = match new_selected_range_utf16.as_ref() {
             Some(r) => {
                 let inner = range_from_utf16(composed, r);
                 range.start + inner.start..range.start + inner.end
@@ -226,7 +226,7 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        Some(self.apps_search_bounds.unwrap_or(element_bounds))
+        Some(self.apps.search_bounds.unwrap_or(element_bounds))
     }
 
     fn character_index_for_point(

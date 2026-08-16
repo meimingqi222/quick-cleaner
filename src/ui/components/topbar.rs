@@ -11,9 +11,9 @@ use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
 
 pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
     let lang = root.language;
-    let is_apps_busy = root.apps_scanning || root.residual_scanning;
-    let is_mft_busy = root.mft_scanning;
-    let is_junk_busy = root.scanning || root.cleaning;
+    let is_apps_busy = root.apps.scanning || root.residual.scanning;
+    let is_mft_busy = root.disk.scanning;
+    let is_junk_busy = root.junk.scanning || root.clean.running;
 
     let (busy, label) = match root.view {
         View::Dashboard | View::Junk => (is_junk_busy, tr_btn_rescan(lang, is_junk_busy)),
@@ -77,7 +77,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .gap_3()
-                .when(root.freed_total > 0, |d| {
+                .when(root.clean.freed_total > 0, |d| {
                     d.child(
                         div()
                             .px_3()
@@ -87,7 +87,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                             .text_xs()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(PRIMARY))
-                            .child(tr_freed_pill(lang, &fmt_size(root.freed_total))),
+                            .child(tr_freed_pill(lang, &fmt_size(root.clean.freed_total))),
                     )
                 })
                 .child(
@@ -96,17 +96,17 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .child(ghost_button(label.to_string(), !busy))
                         .on_click(cx.listener(|this, _, _, cx| match this.view {
                             View::Dashboard | View::Junk => {
-                                if !this.scanning && !this.cleaning {
+                                if !this.junk.scanning && !this.clean.running {
                                     this.start_scan(cx);
                                 }
                             }
                             View::Apps => {
-                                if !this.apps_scanning && !this.residual_scanning {
+                                if !this.apps.scanning && !this.residual.scanning {
                                     this.start_apps_scan(cx);
                                 }
                             }
                             View::Disk => {
-                                if !this.mft_scanning {
+                                if !this.disk.scanning {
                                     this.start_mft_scan(cx);
                                 }
                             }

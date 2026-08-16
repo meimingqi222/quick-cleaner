@@ -12,6 +12,7 @@ use crate::core::apps::{
 use crate::core::categories::{all_targets, CategoryId};
 use crate::core::cleaner::{
     clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot, CleanTarget,
+    Disposal,
 };
 use crate::core::safety::is_protected;
 use crate::core::apps::filter_and_sort_apps;
@@ -27,30 +28,35 @@ use crate::platform::{
     get_volume_space, is_elevated, list_installed_apps, list_ntfs_volumes, run_uninstaller_and_wait,
     scan_residuals, clean_residuals, scan_volume, verify_residuals,
 };
-use crate::ui::components::*;
+// `components` 与 `views` 导出的名字没有共同前缀（`card` / `checkbox` /
+// `render_donut`），glob 进来就看不出谁是谁，所以显式列出。
+// `i18n::*`（清一色 `tr_` 前缀）和 `theme::*`（清一色大写色值常量）保持
+// glob——那两个是「命名空间即词汇表」，逐个列反而更难读。
+use crate::ui::components::{
+    render_confirm_dialog, render_progress_bar, render_residual_modal, render_scan_line,
+    render_sidebar, render_top_bar, ConfirmKind, ConfirmRequest, View,
+};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
-use crate::ui::views::*;
+use crate::ui::views::{
+    render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
+    render_disk_clean_bar, render_disk_view, render_junk_view, DiskTab,
+};
 
 use gpui::{
     div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window,
 };
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct Root {
-    pub language: Language,
-    /// 落盘的用户设置。语言以它为准：首次启动没有配置文件时，
-    /// `Settings::default()` 会按系统显示语言给出默认值。
-    pub settings: Settings,
+/// 智能清理页的状态。
+pub struct JunkState {
     pub categories: Vec<CategorySummary>,
     pub scanned: bool,
     pub scanning: bool,
-    pub view: View,
-    pub cleaning: bool,
     pub scan_task: Option<Task<()>>,
     /// 第二阶段（构建产物检索）的任务槽。它比第一阶段慢一个数量级，
     /// 必须独立持有，否则会和第一阶段互相顶掉句柄。
@@ -59,81 +65,278 @@ pub struct Root {
     pub discovering: bool,
     /// 每发起一轮扫描就自增。第二阶段回来时用它判断「我属于的那轮扫描
     /// 是不是已经被新的一轮顶掉了」，避免把过期结果并进新数据。
-    pub scan_gen: u64,
-    pub live: Arc<AtomicBool>,
-    /// 状态栏文案。存双语而不是渲染好的字符串——状态栏是常驻的，
-    /// 用户切语言时最后那句话也得跟着变，不能停在写入时的语言上。
-    pub status: Text,
-    pub freed_total: u64,
-    pub last_failed: Vec<PathBuf>,
-    pub last_failed_files: u64,
-    pub show_failed_details: bool,
-
+    pub gen: u64,
     pub selected: HashSet<PathBuf>,
     pub expanded: HashSet<CategoryId>,
     /// 每个分类展开后各自的滚动位置。「项目构建产物」这类可能有近千条，
     /// 必须走虚拟化列表，而 uniform_list 需要一个长期持有的滚动句柄。
-    pub junk_scroll: std::collections::HashMap<CategoryId, gpui::UniformListScrollHandle>,
+    pub scroll: std::collections::HashMap<CategoryId, gpui::UniformListScrollHandle>,
     /// 正在拖拽哪个分类的滚动条滑块：(分类, 按下时鼠标 y, 按下时滚动偏移)
-    pub junk_scroll_drag: Option<(CategoryId, f32, f32)>,
+    pub scroll_drag: Option<(CategoryId, f32, f32)>,
+}
 
-    pub confirm: Option<ConfirmRequest>,
-    pub clean_progress: Option<Arc<CleanProgress>>,
-    /// 清理任务独占的槽位。以前清理任务会借用 scan_task / mft_task，
-    /// 一旦清理和扫描重叠就会互相顶掉对方的句柄。
-    pub clean_task: Option<Task<()>>,
-    pub tick_task: Option<Task<()>>,
-    pub elevated: bool,
+impl JunkState {
+    /// 全部条目（跨类目铺平）。
+    pub fn items(&self) -> impl Iterator<Item = &ScanItem> {
+        self.categories.iter().flat_map(|c| c.items.iter())
+    }
 
-    // ---- 软件管理 (Geek Uninstaller 风格) ----
-    pub apps: Vec<InstalledApp>,
-    pub apps_scanned: bool,
-    pub apps_scanning: bool,
-    pub apps_task: Option<Task<()>>,
-    pub apps_sort: AppSortState,
-    pub apps_preset: AppFilterPreset,
-    pub apps_search: String,
+    pub fn total_cleanable(&self) -> u64 {
+        self.categories.iter().map(|c| c.total_size).sum()
+    }
+
+    pub fn total_item_count(&self) -> usize {
+        self.items().count()
+    }
+
+    /// 按各类目的默认策略预勾选（扫描完成后的初始状态）。
+    ///
+    /// 开发者类目（AI 助手缓存、构建产物、worktree）一律不默认勾选：
+    /// 它们删掉不会坏系统，但会让下次构建重来，甚至丢掉未提交的改动。
+    pub fn select_recommended(&mut self) {
+        self.selected = self
+            .items()
+            .filter(|i| i.category.default_selected())
+            .map(|i| i.path.clone())
+            .collect();
+    }
+
+    /// 勾选全部条目，包括开发者类目。
+    pub fn select_every(&mut self) {
+        self.selected = self.items().map(|i| i.path.clone()).collect();
+    }
+
+    /// 清空所有勾选。
+    pub fn select_none(&mut self) {
+        self.selected.clear();
+    }
+
+    /// 反选：已勾的取消，没勾的选上。
+    pub fn invert_selection(&mut self) {
+        self.selected = self
+            .items()
+            .filter(|i| !self.selected.contains(&i.path))
+            .map(|i| i.path.clone())
+            .collect();
+    }
+
+    /// 当前勾选是否恰好等于「推荐」的那一套。
+    ///
+    /// 用来给工具栏上的「推荐」按钮做选中态高亮，让用户一眼看出自己
+    /// 是不是还停在默认状态。
+    ///
+    /// 最后那句 `n == self.selected.len()` 不是多余的：勾选集合里可能
+    /// 残留着已经不在扫描结果里的路径（清理完成后就地更新过），
+    /// 光比对每个条目发现不了这种多出来的。
+    pub fn selection_is_recommended(&self) -> bool {
+        let mut n = 0usize;
+        for item in self.items() {
+            let want = item.category.default_selected();
+            if want != self.selected.contains(&item.path) {
+                return false;
+            }
+            if want {
+                n += 1;
+            }
+        }
+        n == self.selected.len()
+    }
+
+    /// 把某一批类目整体勾上或取消（供分类标题上的复选框用）。
+    pub fn set_category_selected(&mut self, id: CategoryId, on: bool) {
+        let paths: Vec<PathBuf> = self
+            .categories
+            .iter()
+            .filter(|c| c.category == id)
+            .flat_map(|c| c.items.iter().map(|i| i.path.clone()))
+            .collect();
+        for p in paths {
+            if on {
+                self.selected.insert(p);
+            } else {
+                self.selected.remove(&p);
+            }
+        }
+    }
+
+    /// 清理完成后就地更新扫描结果，替代整轮重扫。实现见 `core::scanner`。
+    pub fn apply_clean_result(&mut self, attempted: &[PathBuf], failed: &[PathBuf]) {
+        let cleared = apply_clean_result(&mut self.categories, attempted, failed);
+        // 已经清空的条目不该继续占着勾选状态
+        for p in cleared {
+            self.selected.remove(&p);
+        }
+    }
+
+    pub fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selected_items().map(|i| i.path.clone()).collect()
+    }
+
+    /// 勾选项连同各自的处置方式（整个删掉还是只清空内容）。
+    pub fn selected_targets(&self) -> Vec<CleanTarget> {
+        self.selected_items()
+            .map(|i| CleanTarget {
+                path: i.path.clone(),
+                remove_dir: i.category.removes_directory(),
+            })
+            .collect()
+    }
+
+    pub fn selected_size(&self) -> u64 {
+        self.selected_items().map(|i| i.size).sum()
+    }
+
+    pub fn selected_file_count(&self) -> u64 {
+        self.selected_items().map(|i| i.file_count).sum()
+    }
+
+    pub fn selected_count(&self) -> usize {
+        self.selected_items().count()
+    }
+
+    fn selected_items(&self) -> impl Iterator<Item = &ScanItem> {
+        self.items().filter(|i| self.selected.contains(&i.path))
+    }
+
+    /// 某个类目的勾选态：全选 / 部分 / 未选。
+    pub fn category_check(&self, c: &CategorySummary) -> Check {
+        let n = c
+            .items
+            .iter()
+            .filter(|i| self.selected.contains(&i.path))
+            .count();
+        Check::from_counts(n, c.items.len())
+    }
+
+    /// 点类目标题上的复选框：全选状态下取消整组，否则补齐整组。
+    pub fn toggle_category(&mut self, id: CategoryId) {
+        let Some(c) = self.categories.iter().find(|c| c.category == id) else {
+            return;
+        };
+        let paths: Vec<PathBuf> = c.items.iter().map(|i| i.path.clone()).collect();
+        if self.category_check(c) == Check::On {
+            for p in &paths {
+                self.selected.remove(p);
+            }
+        } else {
+            for p in paths {
+                self.selected.insert(p);
+            }
+        }
+    }
+
+    /// 展开 / 收起某个类目。
+    pub fn toggle_expand(&mut self, id: CategoryId) {
+        if !self.expanded.remove(&id) {
+            self.expanded.insert(id);
+        }
+    }
+
+    /// 勾选 / 取消单个条目。
+    pub fn toggle_item(&mut self, path: &Path) {
+        let pb = path.to_path_buf();
+        if !self.selected.remove(&pb) {
+            self.selected.insert(pb);
+        }
+    }
+}
+
+/// 软件管理页的状态（Geek Uninstaller 风格）。
+pub struct AppsState {
+    pub list: Vec<InstalledApp>,
+    pub scanned: bool,
+    pub scanning: bool,
+    pub task: Option<Task<()>>,
+    pub sort: AppSortState,
+    pub preset: AppFilterPreset,
+    pub search: String,
     /// 搜索框光标/选区的**字节**范围
-    pub apps_search_sel: std::ops::Range<usize>,
+    pub search_sel: std::ops::Range<usize>,
     /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
-    pub apps_search_marked: Option<std::ops::Range<usize>>,
+    pub search_marked: Option<std::ops::Range<usize>>,
     /// 搜索框最近一次绘制的位置，用来定位输入法候选窗口
-    pub apps_search_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    pub search_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 软件表每次被整体替换就自增，用来判定渲染缓存是否失效
-    pub apps_gen: u64,
-    /// 过滤 + 排序后的 `apps` 下标，渲染直接读这里
-    pub apps_view: Vec<usize>,
-    apps_view_key: Option<AppsViewKey>,
+    pub gen: u64,
+    /// 过滤 + 排序后的 `list` 下标，渲染直接读这里
+    pub view: Vec<usize>,
+    pub(super) view_key: Option<AppsViewKey>,
     /// 软件表也走虚拟化列表，句柄需长期持有
-    pub apps_list_scroll: gpui::UniformListScrollHandle,
-    pub apps_scroll_drag: Option<(f32, f32)>,
-    pub residual_result: Option<ResidualScanResult>,
-    pub residual_scanning: bool,
-    pub residual_task: Option<Task<()>>,
-    pub residual_selected: HashSet<usize>,
+    pub scroll: gpui::UniformListScrollHandle,
+    pub scroll_drag: Option<(f32, f32)>,
+    pub focus_handle: gpui::FocusHandle,
+    pub context_menu: Option<AppsContextMenu>,
+}
 
-    // ---- 磁盘分析（Disk Lens 空间透镜）----
+/// 深度卸载的残留扫描状态。
+pub struct ResidualState {
+    pub result: Option<ResidualScanResult>,
+    pub scanning: bool,
+    pub task: Option<Task<()>>,
+    pub selected: HashSet<usize>,
+}
+
+/// 磁盘透镜（Disk Lens 空间分析）的状态。
+pub struct DiskState {
     pub mft: Option<MftScan>,
-    pub mft_scanning: bool,
+    pub scanning: bool,
     /// 保留错误值本身而不是渲染好的字符串：错误卡片会一直挂在界面上，
     /// 用户中途切语言时它也得跟着变。
-    pub mft_error: Option<crate::core::disk::MftError>,
-    pub mft_task: Option<Task<()>>,
+    pub error: Option<crate::core::disk::MftError>,
+    pub task: Option<Task<()>>,
     pub volumes: Vec<char>,
-    pub disk_volume: char,
-    pub disk_tab: DiskTab,
-    pub disk_path: Vec<u32>,
+    pub volume: char,
+    pub tab: DiskTab,
+    pub path: Vec<u32>,
     /// 磁盘透镜的勾选状态（含继承与局部排除），实现见 `core::disk`
-    pub disk_sel: DiskSelectionState,
-    pub disk_space: Option<(u64, u64)>,
+    pub sel: DiskSelectionState,
+    pub space: Option<(u64, u64)>,
     /// 当前目录（或最大文件列表）的渲染行缓存
-    pub disk_rows: Vec<DiskRow>,
-    disk_rows_key: Option<DiskRowsKey>,
+    pub rows: Vec<DiskRow>,
+    pub(super) rows_key: Option<DiskRowsKey>,
     /// MFT 树每次被替换或就地修改就自增
-    pub mft_gen: u64,
+    pub gen: u64,
+}
+
+/// 正在执行的清理任务及其结果。
+pub struct CleanState {
+    pub running: bool,
+    pub progress: Option<Arc<CleanProgress>>,
+    /// 清理任务独占的槽位。以前清理任务会借用 scan_task / mft_task，
+    /// 一旦清理和扫描重叠就会互相顶掉对方的句柄。
+    pub task: Option<Task<()>>,
+    pub freed_total: u64,
+    pub last_failed: Vec<PathBuf>,
+    pub last_failed_files: u64,
+    pub show_failed_details: bool,
+}
+
+/// 应用根视图。
+///
+/// 四个功能域（智能清理 / 软件管理 / 磁盘透镜 / 深度卸载）各自的状态收在
+/// 独立的结构体里，`Root` 自己只保留真正全局的东西。以前这里是五十来个
+/// 平铺字段，`xxx_scanning` / `xxx_task` / `xxx_gen` 三件套每加一个功能就
+/// 复制一遍，谁属于谁全靠前缀约定。
+pub struct Root {
+    pub language: Language,
+    /// 落盘的用户设置。语言以它为准：首次启动没有配置文件时，
+    /// `Settings::default()` 会按系统显示语言给出默认值。
+    pub settings: Settings,
+    pub view: View,
+    /// 状态栏文案。存双语而不是渲染好的字符串——状态栏是常驻的，
+    /// 用户切语言时最后那句话也得跟着变，不能停在写入时的语言上。
+    pub status: Text,
+    pub live: Arc<AtomicBool>,
+    pub elevated: bool,
+    pub confirm: Option<ConfirmRequest>,
+    pub tick_task: Option<Task<()>>,
     pub anim_phase: usize,
-    pub apps_focus_handle: gpui::FocusHandle,
-    pub apps_context_menu: Option<AppsContextMenu>,
+
+    pub junk: JunkState,
+    pub apps: AppsState,
+    pub residual: ResidualState,
+    pub disk: DiskState,
+    pub clean: CleanState,
 }
 
 /// 磁盘透镜列表里的一行，连同渲染需要的派生数据一起算好。
@@ -179,68 +382,83 @@ impl Root {
         Self {
             language: settings.language,
             settings,
-            categories: Vec::new(),
-            scanned: false,
-            scanning: false,
             view: View::Dashboard,
-            cleaning: false,
-            scan_task: None,
-            discover_task: None,
-            discovering: false,
-            scan_gen: 0,
-            live: Arc::new(AtomicBool::new(true)),
             status: bilingual(|l| tr_status_ready(l).to_string()),
-            freed_total: 0,
-            last_failed: Vec::new(),
-            last_failed_files: 0,
-            show_failed_details: false,
-            selected: HashSet::new(),
-            expanded: HashSet::new(),
-            junk_scroll: CategoryId::ALL
-                .iter()
-                .map(|&c| (c, gpui::UniformListScrollHandle::new()))
-                .collect(),
-            junk_scroll_drag: None,
-            confirm: None,
-            clean_progress: None,
-            clean_task: None,
-            tick_task: None,
+            live: Arc::new(AtomicBool::new(true)),
             elevated: is_elevated(),
-            apps: Vec::new(),
-            apps_scanned: false,
-            apps_scanning: false,
-            apps_task: None,
-            apps_sort: AppSortState::default(),
-            apps_preset: AppFilterPreset::All,
-            apps_search: String::new(),
-            apps_search_sel: 0..0,
-            apps_search_marked: None,
-            apps_search_bounds: None,
-            apps_gen: 0,
-            apps_view: Vec::new(),
-            apps_view_key: None,
-            apps_list_scroll: gpui::UniformListScrollHandle::new(),
-            apps_scroll_drag: None,
-            residual_result: None,
-            residual_scanning: false,
-            residual_task: None,
-            residual_selected: HashSet::new(),
-            mft: None,
-            mft_scanning: false,
-            mft_error: None,
-            mft_task: None,
-            volumes,
-            disk_volume,
-            disk_tab: DiskTab::Tree,
-            disk_path: vec![crate::core::disk::ROOT_NODE],
-            disk_sel: DiskSelectionState::new(),
-            disk_space,
-            disk_rows: Vec::new(),
-            disk_rows_key: None,
-            mft_gen: 0,
+            confirm: None,
+            tick_task: None,
             anim_phase: 0,
-            apps_focus_handle,
-            apps_context_menu: None,
+
+            junk: JunkState {
+                categories: Vec::new(),
+                scanned: false,
+                scanning: false,
+                scan_task: None,
+                discover_task: None,
+                discovering: false,
+                gen: 0,
+                selected: HashSet::new(),
+                expanded: HashSet::new(),
+                scroll: CategoryId::ALL
+                    .iter()
+                    .map(|&c| (c, gpui::UniformListScrollHandle::new()))
+                    .collect(),
+                scroll_drag: None,
+            },
+
+            apps: AppsState {
+                list: Vec::new(),
+                scanned: false,
+                scanning: false,
+                task: None,
+                sort: AppSortState::default(),
+                preset: AppFilterPreset::All,
+                search: String::new(),
+                search_sel: 0..0,
+                search_marked: None,
+                search_bounds: None,
+                gen: 0,
+                view: Vec::new(),
+                view_key: None,
+                scroll: gpui::UniformListScrollHandle::new(),
+                scroll_drag: None,
+                focus_handle: apps_focus_handle,
+                context_menu: None,
+            },
+
+            residual: ResidualState {
+                result: None,
+                scanning: false,
+                task: None,
+                selected: HashSet::new(),
+            },
+
+            disk: DiskState {
+                mft: None,
+                scanning: false,
+                error: None,
+                task: None,
+                volumes,
+                volume: disk_volume,
+                tab: DiskTab::Tree,
+                path: vec![crate::core::disk::ROOT_NODE],
+                sel: DiskSelectionState::new(),
+                space: disk_space,
+                rows: Vec::new(),
+                rows_key: None,
+                gen: 0,
+            },
+
+            clean: CleanState {
+                running: false,
+                progress: None,
+                task: None,
+                freed_total: 0,
+                last_failed: Vec::new(),
+                last_failed_files: 0,
+                show_failed_details: false,
+            },
         }
     }
 
@@ -259,19 +477,37 @@ impl Root {
         }
         self.language = lang;
         // 双语标签是随渲染缓存一起取的，改语言必须让两个派生缓存失效
-        self.apps_gen += 1;
-        self.mft_gen += 1;
+        self.apps.gen += 1;
+        self.disk.gen += 1;
         self.settings.language = lang;
         self.settings.save();
         cx.notify();
     }
 
+    /// 手选路径当前的处置方式。
+    ///
+    /// 只影响磁盘透镜里用户点名的路径；分类清理永远是永久删除。
+    pub fn disposal(&self) -> Disposal {
+        if self.settings.delete_to_recycle_bin {
+            Disposal::RecycleBin
+        } else {
+            Disposal::Permanent
+        }
+    }
+
+    /// 切换「删除到回收站」，并立刻落盘。
+    pub fn toggle_recycle_bin(&mut self, cx: &mut Context<Self>) {
+        self.settings.delete_to_recycle_bin = !self.settings.delete_to_recycle_bin;
+        self.settings.save();
+        cx.notify();
+    }
+
     pub fn open_app_context_menu(&mut self, app: InstalledApp, x: f32, y: f32) {
-        self.apps_context_menu = Some(AppsContextMenu { app, x, y });
+        self.apps.context_menu = Some(AppsContextMenu { app, x, y });
     }
 
     pub fn close_context_menu(&mut self) {
-        self.apps_context_menu = None;
+        self.apps.context_menu = None;
     }
 
     /// 发起一轮扫描。**分两个阶段**，界面不必等最慢的那条通道。
@@ -284,19 +520,19 @@ impl Root {
     /// **默认根本不勾选**——让用户为一个默认不清的类目干等半分钟，代价和收益
     /// 完全不成比例。
     pub fn start_scan(&mut self, cx: &mut Context<Self>) {
-        if self.scanning {
+        if self.junk.scanning {
             return;
         }
         // 通知上一轮（可能还在跑的第二阶段）停下
         self.live.store(false, Ordering::Relaxed);
-        self.scan_task.take();
-        self.discover_task.take();
+        self.junk.scan_task.take();
+        self.junk.discover_task.take();
 
-        self.scan_gen += 1;
-        let gen = self.scan_gen;
-        self.scanning = true;
-        self.scanned = false;
-        self.discovering = false;
+        self.junk.gen += 1;
+        let gen = self.junk.gen;
+        self.junk.scanning = true;
+        self.junk.scanned = false;
+        self.junk.discovering = false;
         self.status = bilingual(|l| tr_status_scanning(l).to_string());
         let live = Arc::new(AtomicBool::new(true));
         self.live = live.clone();
@@ -325,12 +561,12 @@ impl Root {
             };
             (cats, pre)
         });
-        self.scan_task = Some(cx.spawn(async move |this, cx| {
+        self.junk.scan_task = Some(cx.spawn(async move |this, cx| {
             let (result, prescanned) = scan.await;
             this.update(cx, |this, cx| {
-                this.categories = result;
-                this.scanned = true;
-                this.scanning = false;
+                this.junk.categories = result;
+                this.junk.scanned = true;
+                this.junk.scanning = false;
                 this.select_recommended();
                 let total_str = fmt_size(this.total_cleanable());
                 this.status = bilingual(|l| tr_status_scan_fixed_done(l, &total_str));
@@ -352,20 +588,20 @@ impl Root {
         prescanned: Option<crate::core::disk::MftScan>,
         cx: &mut Context<Self>,
     ) {
-        self.discovering = true;
+        self.junk.discovering = true;
         let live = self.live.clone();
         let discover = cx
             .background_executor()
             .spawn(async move { scan_discovered(&live, prescanned) });
 
-        self.discover_task = Some(cx.spawn(async move |this, cx| {
+        self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
             let items = discover.await;
             this.update(cx, |this, cx| {
-                if this.scan_gen != gen {
+                if this.junk.gen != gen {
                     return;
                 }
-                this.discovering = false;
-                merge_discovered(&mut this.categories, items);
+                this.junk.discovering = false;
+                merge_discovered(&mut this.junk.categories, items);
                 let total_str = fmt_size(this.total_cleanable());
                 this.status = bilingual(|l| tr_status_scan_done(l, &total_str));
                 cx.notify();
@@ -374,202 +610,115 @@ impl Root {
         }));
     }
 
+    // ---- 智能清理：转发给 JunkState，逻辑与测试都在那边 ----
+
     pub fn total_cleanable(&self) -> u64 {
-        self.categories.iter().map(|c| c.total_size).sum()
+        self.junk.total_cleanable()
     }
 
     pub fn items(&self) -> impl Iterator<Item = &ScanItem> {
-        self.categories.iter().flat_map(|c| c.items.iter())
+        self.junk.items()
     }
 
-    /// 按各类目的默认策略预勾选（扫描完成后的初始状态）。
-    ///
-    /// 开发者类目（AI 助手缓存、构建产物、worktree）一律不默认勾选：
-    /// 它们删掉不会坏系统，但会让下次构建重来，甚至丢掉未提交的改动。
     pub fn select_recommended(&mut self) {
-        self.selected = self
-            .items()
-            .filter(|i| i.category.default_selected())
-            .map(|i| i.path.clone())
-            .collect();
+        self.junk.select_recommended();
     }
 
-    /// 勾选全部条目，包括开发者类目。
     pub fn select_every(&mut self) {
-        self.selected = self.items().map(|i| i.path.clone()).collect();
+        self.junk.select_every();
     }
 
-    /// 清空所有勾选。
     pub fn select_none(&mut self) {
-        self.selected.clear();
+        self.junk.select_none();
     }
 
-    /// 反选：已勾的取消，没勾的选上。
     pub fn invert_selection(&mut self) {
-        self.selected = self
-            .items()
-            .filter(|i| !self.selected.contains(&i.path))
-            .map(|i| i.path.clone())
-            .collect();
+        self.junk.invert_selection();
     }
 
-    /// 当前勾选是否恰好等于「推荐」的那一套。
-    ///
-    /// 用来给工具栏上的「推荐」按钮做选中态高亮，让用户一眼看出
-    /// 自己是不是还停在默认状态。
     pub fn selection_is_recommended(&self) -> bool {
-        let mut n = 0usize;
-        for item in self.items() {
-            let want = item.category.default_selected();
-            if want != self.selected.contains(&item.path) {
-                return false;
-            }
-            if want {
-                n += 1;
-            }
-        }
-        n == self.selected.len()
+        self.junk.selection_is_recommended()
     }
 
-    /// 把某一批类目整体勾上或取消（供分类标题上的复选框用）。
     pub fn set_category_selected(&mut self, id: CategoryId, on: bool) {
-        let paths: Vec<PathBuf> = self
-            .categories
-            .iter()
-            .filter(|c| c.category == id)
-            .flat_map(|c| c.items.iter().map(|i| i.path.clone()))
-            .collect();
-        for p in paths {
-            if on {
-                self.selected.insert(p);
-            } else {
-                self.selected.remove(&p);
-            }
-        }
+        self.junk.set_category_selected(id, on);
     }
 
-    /// 清理完成后就地更新扫描结果，替代整轮重扫。实现见 `core::scanner`。
     pub fn apply_clean_result(&mut self, attempted: &[PathBuf], failed: &[PathBuf]) {
-        let cleared = apply_clean_result(&mut self.categories, attempted, failed);
-        // 已经清空的条目不该继续占着勾选状态
-        for p in cleared {
-            self.selected.remove(&p);
-        }
+        self.junk.apply_clean_result(attempted, failed);
     }
 
-    /// 全部条目数（用于工具栏显示「已选 N / 共 M」）。
     pub fn total_item_count(&self) -> usize {
-        self.items().count()
+        self.junk.total_item_count()
     }
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {
-        self.items()
-            .filter(|i| self.selected.contains(&i.path))
-            .map(|i| i.path.clone())
-            .collect()
+        self.junk.selected_paths()
     }
 
-    /// 勾选项连同各自的处置方式（整个删掉还是只清空内容）。
     pub fn selected_targets(&self) -> Vec<CleanTarget> {
-        self.items()
-            .filter(|i| self.selected.contains(&i.path))
-            .map(|i| CleanTarget {
-                path: i.path.clone(),
-                remove_dir: i.category.removes_directory(),
-            })
-            .collect()
+        self.junk.selected_targets()
     }
 
     pub fn selected_size(&self) -> u64 {
-        self.items()
-            .filter(|i| self.selected.contains(&i.path))
-            .map(|i| i.size)
-            .sum()
+        self.junk.selected_size()
     }
 
     pub fn selected_count(&self) -> usize {
-        self.items()
-            .filter(|i| self.selected.contains(&i.path))
-            .count()
+        self.junk.selected_count()
     }
 
     pub fn failures_need_admin(&self) -> bool {
-        if self.elevated || self.last_failed.is_empty() {
+        if self.elevated || self.clean.last_failed.is_empty() {
             return false;
         }
         let win = std::env::var("SystemRoot")
             .unwrap_or_else(|_| r"C:\Windows".into())
             .to_ascii_lowercase();
-        self.last_failed.iter().any(|p| {
+        self.clean.last_failed.iter().any(|p| {
             let s = p.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
             s.starts_with(&win) || s.contains(r"\program files") || s.contains(r"\programdata")
         })
     }
 
     pub fn cat_check(&self, c: &CategorySummary) -> Check {
-        let n = c
-            .items
-            .iter()
-            .filter(|i| self.selected.contains(&i.path))
-            .count();
-        Check::from_counts(n, c.items.len())
+        self.junk.category_check(c)
     }
 
     pub fn toggle_category(&mut self, id: CategoryId) {
-        let Some(c) = self.categories.iter().find(|c| c.category == id) else {
-            return;
-        };
-        let paths: Vec<PathBuf> = c.items.iter().map(|i| i.path.clone()).collect();
-        if self.cat_check(c) == Check::On {
-            for p in &paths {
-                self.selected.remove(p);
-            }
-        } else {
-            for p in paths {
-                self.selected.insert(p);
-            }
-        }
+        self.junk.toggle_category(id);
     }
 
     pub fn toggle_expand(&mut self, id: CategoryId) {
-        if self.expanded.contains(&id) {
-            self.expanded.remove(&id);
-        } else {
-            self.expanded.insert(id);
-        }
+        self.junk.toggle_expand(id);
     }
 
     pub fn toggle_item(&mut self, path: &std::path::Path) {
-        let pb = path.to_path_buf();
-        if self.selected.contains(&pb) {
-            self.selected.remove(&pb);
-        } else {
-            self.selected.insert(pb);
-        }
+        self.junk.toggle_item(path);
     }
 
     pub fn switch_disk_volume(&mut self, vol: char, cx: &mut Context<Self>) {
-        if self.disk_volume == vol && (self.mft.is_some() || self.mft_scanning) {
+        if self.disk.volume == vol && (self.disk.mft.is_some() || self.disk.scanning) {
             return;
         }
-        self.disk_volume = vol;
-        self.mft = None;
-        self.disk_rows.clear();
-        self.disk_rows_key = None;
-        self.disk_path = vec![crate::core::disk::ROOT_NODE];
-        self.disk_sel.clear();
+        self.disk.volume = vol;
+        self.disk.mft = None;
+        self.disk.rows.clear();
+        self.disk.rows_key = None;
+        self.disk.path = vec![crate::core::disk::ROOT_NODE];
+        self.disk.sel.clear();
         self.start_mft_scan(cx);
     }
 
     pub fn start_mft_scan(&mut self, cx: &mut Context<Self>) {
-        if self.mft_scanning {
+        if self.disk.scanning {
             return;
         }
-        self.mft_scanning = true;
-        self.mft_error = None;
-        let vol = self.disk_volume;
-        self.disk_space = get_volume_space(vol);
-        self.disk_sel.clear();
+        self.disk.scanning = true;
+        self.disk.error = None;
+        let vol = self.disk.volume;
+        self.disk.space = get_volume_space(vol);
+        self.disk.sel.clear();
         let saved_path = self.current_disk_full_path();
         self.status = bilingual(|l| tr_status_disk_scanning(l, vol));
         self.start_tick(cx);
@@ -579,10 +728,10 @@ impl Root {
             .background_executor()
             .spawn(async move { scan_volume(vol, 0) });
 
-        self.mft_task = Some(cx.spawn(async move |this, cx| {
+        self.disk.task = Some(cx.spawn(async move |this, cx| {
             let result = scan.await;
             this.update(cx, |this, cx| {
-                this.mft_scanning = false;
+                this.disk.scanning = false;
                 match result {
                     Ok(s) => {
                         let (files, used) = (s.file_count, fmt_size(s.total_size));
@@ -594,25 +743,25 @@ impl Root {
                         if is_same_vol {
                             if let Some(target_path) = saved_path {
                                 let resolved = s.tree.find_path(&target_path);
-                                this.disk_path = if resolved.is_empty() {
+                                this.disk.path = if resolved.is_empty() {
                                     vec![s.tree.root()]
                                 } else {
                                     resolved
                                 };
                             } else {
-                                this.disk_path = vec![s.tree.root()];
+                                this.disk.path = vec![s.tree.root()];
                             }
                         } else {
-                            this.disk_path = vec![s.tree.root()];
+                            this.disk.path = vec![s.tree.root()];
                         }
-                        this.mft = Some(s);
-                        this.mft_gen += 1;
+                        this.disk.mft = Some(s);
+                        this.disk.gen += 1;
                     }
                     Err(e) => {
                         this.status = bilingual(|l| tr_status_disk_failed(l, &tr_mft_error(l, &e)));
-                        this.mft_error = Some(e);
-                        this.mft = None;
-                        this.mft_gen += 1;
+                        this.disk.error = Some(e);
+                        this.disk.mft = None;
+                        this.disk.gen += 1;
                     }
                 }
                 cx.notify();
@@ -622,8 +771,8 @@ impl Root {
     }
 
     pub fn current_disk_full_path(&self) -> Option<PathBuf> {
-        let mft = self.mft.as_ref()?;
-        let cur = *self.disk_path.last().unwrap_or(&mft.tree.root());
+        let mft = self.disk.mft.as_ref()?;
+        let cur = *self.disk.path.last().unwrap_or(&mft.tree.root());
         Some(PathBuf::from(mft.tree.path_of(cur)))
     }
 
@@ -632,31 +781,31 @@ impl Root {
     // 两边已经开始出现行为差异，现在只保留 core 那份。
 
     pub fn is_disk_item_selected(&self, path: &std::path::Path) -> bool {
-        self.disk_sel.is_selected(path)
+        self.disk.sel.is_selected(path)
     }
 
     pub fn toggle_disk_item(&mut self, path: &std::path::Path, size: u64) {
-        self.disk_sel.toggle(path, size);
+        self.disk.sel.toggle(path, size);
     }
 
     pub fn clear_disk_selection(&mut self) {
-        self.disk_sel.clear();
+        self.disk.sel.clear();
     }
 
     pub fn disk_selected_size(&self) -> u64 {
-        self.disk_sel.total_size()
+        self.disk.sel.total_size()
     }
 
     pub fn disk_selected_count(&self) -> usize {
-        self.disk_sel.len()
+        self.disk.sel.len()
     }
 
     pub fn request_clean_disk_selected(&mut self, cx: &mut Context<Self>) {
-        if self.disk_sel.is_empty() || self.cleaning {
+        if self.disk.sel.is_empty() || self.clean.running {
             return;
         }
         let total_size = self.disk_selected_size();
-        let count = self.disk_sel.len();
+        let count = self.disk.sel.len();
         let lang = self.language;
 
         self.confirm = Some(ConfirmRequest {
@@ -669,11 +818,11 @@ impl Root {
     }
 
     pub fn start_apps_scan(&mut self, cx: &mut Context<Self>) {
-        if self.apps_scanning {
+        if self.apps.scanning {
             return;
         }
-        self.apps_scanning = true;
-        self.apps_scanned = false;
+        self.apps.scanning = true;
+        self.apps.scanned = false;
         self.status = bilingual(|l| tr_status_apps_scanning(l).to_string());
         self.start_tick(cx);
         cx.notify();
@@ -683,15 +832,15 @@ impl Root {
             .background_executor()
             .spawn(async move { list_installed_apps(&live) });
 
-        self.apps_task = Some(cx.spawn(async move |this, cx| {
+        self.apps.task = Some(cx.spawn(async move |this, cx| {
             let result = scan.await;
             this.update(cx, |this, cx| {
-                this.apps = result;
-                this.apps_gen += 1;
-                this.apps_scanned = true;
-                this.apps_scanning = false;
-                let total_size: u64 = this.apps.iter().map(|a| a.estimated_size).sum();
-                let (count, size) = (this.apps.len(), fmt_size(total_size));
+                this.apps.list = result;
+                this.apps.gen += 1;
+                this.apps.scanned = true;
+                this.apps.scanning = false;
+                let total_size: u64 = this.apps.list.iter().map(|a| a.estimated_size).sum();
+                let (count, size) = (this.apps.list.len(), fmt_size(total_size));
                 this.status = bilingual(|l| tr_status_apps_done(l, count, &size));
                 cx.notify();
             })
@@ -711,8 +860,8 @@ impl Root {
         let pre_target = app.clone();
         let uninst_target = app.clone();
 
-        self.residual_scanning = true;
-        self.residual_result = None;
+        self.residual.scanning = true;
+        self.residual.result = None;
         self.status = bilingual(|l| tr_status_uninstall_waiting(l, &name));
         self.start_tick(cx);
         cx.notify();
@@ -727,10 +876,10 @@ impl Root {
             (result, remaining)
         });
 
-        self.residual_task = Some(cx.spawn(async move |this, cx| {
+        self.residual.task = Some(cx.spawn(async move |this, cx| {
             let (result, remaining) = work.await;
             this.update(cx, |this, cx| {
-                this.residual_scanning = false;
+                this.residual.scanning = false;
                 let total: u64 = remaining.iter().map(|i| i.size()).sum();
                 let res = ResidualScanResult {
                     app_name: name.clone(),
@@ -752,8 +901,8 @@ impl Root {
                     };
                     tr_status_uninstall_residual(l, &head, count, &size)
                 });
-                this.residual_selected = res.default_selection();
-                this.residual_result = Some(res);
+                this.residual.selected = res.default_selection();
+                this.residual.result = Some(res);
                 cx.notify();
             })
             .ok();
@@ -761,11 +910,11 @@ impl Root {
     }
 
     pub fn start_residual_scan(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
-        if self.residual_scanning {
+        if self.residual.scanning {
             return;
         }
-        self.residual_scanning = true;
-        self.residual_result = None;
+        self.residual.scanning = true;
+        self.residual.result = None;
         let scanning_name = app.name.clone();
         self.status = bilingual(|l| tr_status_residual_scanning(l, &scanning_name));
         cx.notify();
@@ -775,16 +924,16 @@ impl Root {
             .background_executor()
             .spawn(async move { scan_residuals(&target) });
 
-        self.residual_task = Some(cx.spawn(async move |this, cx| {
+        self.residual.task = Some(cx.spawn(async move |this, cx| {
             let res = scan.await;
             this.update(cx, |this, cx| {
-                this.residual_scanning = false;
+                this.residual.scanning = false;
                 let count = res.items.len();
                 // 只预勾「确定」的；模糊匹配出来的交给用户自己判断
-                this.residual_selected = res.default_selection();
+                this.residual.selected = res.default_selection();
                 let (name, size) = (res.app_name.clone(), fmt_size(res.total_file_size));
                 this.status = bilingual(|l| tr_status_residual_done(l, &name, count, &size));
-                this.residual_result = Some(res);
+                this.residual.result = Some(res);
                 cx.notify();
             })
             .ok();
@@ -792,11 +941,12 @@ impl Root {
     }
 
     pub fn clean_selected_residuals(&mut self, cx: &mut Context<Self>) {
-        let Some(res) = self.residual_result.take() else {
+        let Some(res) = self.residual.result.take() else {
             return;
         };
         let items_to_clean: Vec<ResidualItem> = self
-            .residual_selected
+            .residual
+            .selected
             .iter()
             .filter_map(|&idx| res.items.get(idx).cloned())
             .collect();
@@ -824,19 +974,19 @@ impl Root {
             .background_executor()
             .spawn(async move { clean_residuals(&items_to_clean, &prog) });
 
-        self.residual_task = Some(cx.spawn(async move |this, cx| {
+        self.residual.task = Some(cx.spawn(async move |this, cx| {
             let report = clean.await;
             this.update(cx, |this, cx| {
                 let snap = progress.snapshot();
-                this.freed_total += snap.bytes;
-                this.residual_selected.clear();
+                this.clean.freed_total += snap.bytes;
+                this.residual.selected.clear();
 
                 // 局部更新：软件确实被清干净时，直接把它从内存里的软件表
                 // 摘掉，不再触发一轮完整的注册表枚举 + 全盘安装目录遍历。
                 let removed = cleaned_everything && report.failed.is_empty();
                 if removed {
-                    this.apps.retain(|a| a.name != app_name);
-                    this.apps_gen += 1;
+                    this.apps.list.retain(|a| a.name != app_name);
+                    this.apps.gen += 1;
                 }
 
                 let (ok, fails, size) = (report.ok, report.failed.len(), fmt_size(snap.bytes));
@@ -855,7 +1005,7 @@ impl Root {
 
     pub fn request_clean_selected(&mut self, cx: &mut Context<Self>) {
         let count = self.selected_count();
-        if count == 0 || self.cleaning || !self.scanned {
+        if count == 0 || self.clean.running || !self.junk.scanned {
             return;
         }
         let lang = self.language;
@@ -869,7 +1019,7 @@ impl Root {
     }
 
     pub fn request_clean_path(&mut self, path: PathBuf, size: u64, cx: &mut Context<Self>) {
-        if self.cleaning {
+        if self.clean.running {
             return;
         }
         let lang = self.language;
@@ -901,12 +1051,12 @@ impl Root {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.cleaning
-            || self.scanning
-            || self.discovering
-            || self.apps_scanning
-            || self.mft_scanning
-            || self.residual_scanning
+        self.clean.running
+            || self.junk.scanning
+            || self.junk.discovering
+            || self.apps.scanning
+            || self.disk.scanning
+            || self.residual.scanning
     }
 
     pub fn start_tick(&mut self, cx: &mut Context<Self>) {
@@ -937,11 +1087,11 @@ impl Root {
     }
 
     pub fn clean_snapshot(&self) -> Option<CleanSnapshot> {
-        self.clean_progress.as_ref().map(|p| p.snapshot())
+        self.clean.progress.as_ref().map(|p| p.snapshot())
     }
 
     pub fn cancel_clean(&mut self, cx: &mut Context<Self>) {
-        if let Some(p) = &self.clean_progress {
+        if let Some(p) = &self.clean.progress {
             p.request_cancel();
             self.status = bilingual(|l| tr_status_stopping(l).to_string());
             cx.notify();
@@ -966,9 +1116,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) {
         let (total_files, total_bytes) = totals;
-        self.cleaning = true;
+        self.clean.running = true;
         let progress = Arc::new(CleanProgress::new(total_files, total_bytes));
-        self.clean_progress = Some(progress.clone());
+        self.clean.progress = Some(progress.clone());
         self.status = status;
         self.start_tick(cx);
         cx.notify();
@@ -977,12 +1127,12 @@ impl Root {
             .background_executor()
             .spawn(async move { work(&progress) });
 
-        self.clean_task = Some(cx.spawn(async move |this, cx| {
+        self.clean.task = Some(cx.spawn(async move |this, cx| {
             let report: CleanReport = clean.await;
             this.update(cx, |this, cx| {
-                this.cleaning = false;
+                this.clean.running = false;
                 let snap = this.clean_snapshot().unwrap_or_default();
-                this.freed_total += snap.bytes;
+                this.clean.freed_total += snap.bytes;
                 finish(this, report, snap, cx);
                 cx.notify();
             })
@@ -998,27 +1148,27 @@ impl Root {
     /// 摘完之后当前所在的目录可能已经不存在了（用户就站在被删的那一层里），
     /// 所以要沿 `disk_path` 往回退到第一个仍然有效的节点。
     fn prune_deleted_from_mft(&mut self, deleted: &[PathBuf], freed_bytes: u64) {
-        if let Some(mft) = &mut self.mft {
+        if let Some(mft) = &mut self.disk.mft {
             for path in deleted {
                 mft.remove_path(path);
             }
-            self.mft_gen += 1;
-            while self.disk_path.len() > 1 {
-                let cur = *self.disk_path.last().unwrap();
+            self.disk.gen += 1;
+            while self.disk.path.len() > 1 {
+                let cur = *self.disk.path.last().unwrap();
                 if mft.tree.valid(cur) {
                     break;
                 }
-                self.disk_path.pop();
+                self.disk.path.pop();
             }
         }
-        if let Some((_, free)) = &mut self.disk_space {
+        if let Some((_, free)) = &mut self.disk.space {
             *free += freed_bytes;
         }
     }
 
     /// 智能清理页：删掉当前勾选的所有分类项。
     pub fn start_clean(&mut self, cx: &mut Context<Self>) {
-        if self.cleaning || !self.scanned {
+        if self.clean.running || !self.junk.scanned {
             return;
         }
         let attempted = self.selected_paths();
@@ -1030,12 +1180,12 @@ impl Root {
 
         let total_files: u64 = self
             .items()
-            .filter(|i| self.selected.contains(&i.path))
+            .filter(|i| self.junk.selected.contains(&i.path))
             .map(|i| i.file_count)
             .sum();
         let totals = (total_files, self.selected_size());
 
-        self.last_failed.clear();
+        self.clean.last_failed.clear();
         let n = attempted.len();
         let targets = self.selected_targets();
 
@@ -1044,14 +1194,14 @@ impl Root {
             bilingual(|l| tr_status_deleting_n(l, n)),
             move |p| clean_targets(&targets, p),
             move |this, report, snap, _cx| {
-                this.last_failed = report.failed;
-                this.last_failed_files = snap.failed;
+                this.clean.last_failed = report.failed;
+                this.clean.last_failed_files = snap.failed;
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
-                let failed = this.last_failed.clone();
+                let failed = this.clean.last_failed.clone();
                 this.apply_clean_result(&attempted, &failed);
 
-                let fails = this.last_failed.len();
+                let fails = this.clean.last_failed.len();
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
                     if fails > 0 {
@@ -1067,16 +1217,17 @@ impl Root {
 
     /// 磁盘透镜：删掉单个用户点名的路径。
     pub fn start_clean_path(&mut self, path: PathBuf, size: u64, cx: &mut Context<Self>) {
-        if self.cleaning {
+        if self.clean.running {
             return;
         }
         let target = path.clone();
         let shown = path.display().to_string();
+        let disposal = self.disposal();
 
         self.spawn_clean(
             (0, size),
             bilingual(|l| tr_status_deleting_path(l, &shown)),
-            move |p| clean_arbitrary(std::slice::from_ref(&target), p),
+            move |p| clean_arbitrary(std::slice::from_ref(&target), disposal, p),
             move |this, report, snap, _cx| {
                 let shown = path.display().to_string();
                 if !report.failed.is_empty() {
@@ -1093,22 +1244,23 @@ impl Root {
 
     /// 磁盘透镜：删掉当前勾选的一批路径。
     pub fn start_clean_disk_selected(&mut self, cx: &mut Context<Self>) {
-        if self.cleaning || self.disk_sel.is_empty() {
+        if self.clean.running || self.disk.sel.is_empty() {
             return;
         }
         // 展开成实际删除目标：勾选目录里若埋着被排除的子孙，会自动下钻绕开。
-        let targets = self.disk_sel.resolve_targets();
+        let targets = self.disk.sel.resolve_targets();
         if targets.is_empty() {
             return;
         }
         let total_size = self.disk_selected_size();
         let n = targets.len();
         let to_clean = targets.clone();
+        let disposal = self.disposal();
 
         self.spawn_clean(
             (0, total_size),
             bilingual(|l| tr_status_batch_deleting(l, n)),
-            move |p| clean_arbitrary(&to_clean, p),
+            move |p| clean_arbitrary(&to_clean, disposal, p),
             move |this, report, snap, _cx| {
                 this.clear_disk_selection();
 
@@ -1145,26 +1297,26 @@ impl Root {
     }
 
     fn refresh_disk_rows(&mut self) {
-        let Some(scan) = &self.mft else {
-            self.disk_rows.clear();
-            self.disk_rows_key = None;
+        let Some(scan) = &self.disk.mft else {
+            self.disk.rows.clear();
+            self.disk.rows_key = None;
             return;
         };
         let tree = &scan.tree;
-        let cur = *self.disk_path.last().unwrap_or(&tree.root());
-        let key: DiskRowsKey = (self.disk_volume, cur, self.disk_tab, self.mft_gen);
-        if self.disk_rows_key == Some(key) {
+        let cur = *self.disk.path.last().unwrap_or(&tree.root());
+        let key: DiskRowsKey = (self.disk.volume, cur, self.disk.tab, self.disk.gen);
+        if self.disk.rows_key == Some(key) {
             return;
         }
 
-        let nodes = match self.disk_tab {
+        let nodes = match self.disk.tab {
             DiskTab::Tree => tree.children(cur),
             DiskTab::Files => tree.largest_files(DISK_MAX_ROWS),
         };
 
         // 整批共用一个路径缓存，父链只回溯一次
         let mut path_cache = std::collections::HashMap::new();
-        self.disk_rows = nodes
+        self.disk.rows = nodes
             .into_iter()
             .map(|node| {
                 let path = PathBuf::from(tree.path_of_with(node.idx, &mut path_cache));
@@ -1181,26 +1333,35 @@ impl Root {
             // 它们在行渲染里标注「系统保护项目」、禁用勾选与删除，但可以点进去。
             .take(DISK_MAX_ROWS)
             .collect();
-        self.disk_rows_key = Some(key);
+        self.disk.rows_key = Some(key);
     }
 
     fn refresh_apps_view(&mut self) {
-        let key: AppsViewKey = (
-            self.apps_gen,
-            self.apps_preset,
-            self.apps_search.clone(),
-            self.apps_sort,
-        );
-        if self.apps_view_key.as_ref() == Some(&key) {
+        // 逐字段比对而不是「先造 key 再比」：造 key 要克隆搜索串，而这个
+        // 函数每帧都跑，扫描期间是 20fps。命中缓存时（绝大多数帧）现在
+        // 一次分配都没有，只在真的失效时才克隆一次。
+        let hit = self.apps.view_key.as_ref().is_some_and(|k| {
+            k.0 == self.apps.gen
+                && k.1 == self.apps.preset
+                && k.2 == self.apps.search
+                && k.3 == self.apps.sort
+        });
+        if hit {
             return;
         }
-        self.apps_view = filter_and_sort_apps(
-            &self.apps,
-            self.apps_preset,
-            &self.apps_search,
-            self.apps_sort,
+
+        self.apps.view = filter_and_sort_apps(
+            &self.apps.list,
+            self.apps.preset,
+            &self.apps.search,
+            self.apps.sort,
         );
-        self.apps_view_key = Some(key);
+        self.apps.view_key = Some((
+            self.apps.gen,
+            self.apps.preset,
+            self.apps.search.clone(),
+            self.apps.sort,
+        ));
     }
 
     /// 当前视图里**可勾选**的 (路径, 体积) 列表。
@@ -1208,7 +1369,7 @@ impl Root {
     /// 受保护项虽然显示在列表里，但不参与勾选，也不能被「全选」带上，
     /// 否则表头复选框永远到不了全选状态。
     pub fn disk_selectable(&self) -> Vec<(PathBuf, u64)> {
-        self.disk_rows
+        self.disk.rows
             .iter()
             .filter(|r| !r.protected)
             .map(|r| (r.path.clone(), r.node.size))
@@ -1236,13 +1397,13 @@ impl Render for Root {
             .flex_col()
             .child(render_top_bar(self, cx));
 
-        if self.scanning {
+        if self.junk.scanning {
             main = main.child(render_scan_line());
         }
 
         main = main.child(div().flex_1().min_h(px(0.)).flex().child(content));
 
-        if self.cleaning {
+        if self.clean.running {
             main = main.child(render_progress_bar(self, cx));
         } else if self.view == View::Junk {
             main = main.child(render_clean_bar(self, cx));
@@ -1296,5 +1457,238 @@ impl Render for Root {
         }
 
         root.into_any_element()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::i18n::bilingual;
+
+    fn item(path: &str, cat: CategoryId, size: u64, files: u64) -> ScanItem {
+        ScanItem {
+            path: PathBuf::from(path),
+            label: bilingual(|_| path.to_string()),
+            size,
+            file_count: files,
+            category: cat,
+            last_modified: 0,
+        }
+    }
+
+    /// 一个类目「推荐勾选」、一个类目「默认不勾」，覆盖两种策略。
+    fn junk_fixture() -> JunkState {
+        let recommended = CategoryId::ALL
+            .iter()
+            .copied()
+            .find(|c| c.default_selected())
+            .expect("至少要有一个默认勾选的类目");
+        let opt_in = CategoryId::ALL
+            .iter()
+            .copied()
+            .find(|c| !c.default_selected())
+            .expect("至少要有一个默认不勾的类目");
+
+        JunkState {
+            categories: vec![
+                CategorySummary {
+                    category: recommended,
+                    total_size: 300,
+                    items: vec![
+                        item(r"C:\rec\a", recommended, 100, 3),
+                        item(r"C:\rec\b", recommended, 200, 5),
+                    ],
+                },
+                CategorySummary {
+                    category: opt_in,
+                    total_size: 50,
+                    items: vec![item(r"C:\opt\c", opt_in, 50, 1)],
+                },
+            ],
+            scanned: true,
+            scanning: false,
+            scan_task: None,
+            discover_task: None,
+            discovering: false,
+            gen: 0,
+            selected: HashSet::new(),
+            expanded: HashSet::new(),
+            scroll: std::collections::HashMap::new(),
+            scroll_drag: None,
+        }
+    }
+
+    fn recommended_cat(j: &JunkState) -> CategoryId {
+        j.categories[0].category
+    }
+
+    fn opt_in_cat(j: &JunkState) -> CategoryId {
+        j.categories[1].category
+    }
+
+    #[test]
+    fn totals_span_every_category() {
+        let j = junk_fixture();
+        assert_eq!(j.total_cleanable(), 350);
+        assert_eq!(j.total_item_count(), 3);
+    }
+
+    /// 推荐勾选必须跳过「默认不勾」的开发者类目——它们删掉不坏系统，
+    /// 但会让下次构建重来，甚至丢掉未提交的改动。
+    #[test]
+    fn recommended_selection_skips_opt_in_categories() {
+        let mut j = junk_fixture();
+        j.select_recommended();
+
+        assert_eq!(j.selected_count(), 2);
+        assert_eq!(j.selected_size(), 300);
+        assert_eq!(j.selected_file_count(), 8);
+        assert!(!j.selected.contains(&PathBuf::from(r"C:\opt\c")));
+        assert!(j.selection_is_recommended());
+    }
+
+    #[test]
+    fn select_every_and_none_are_inverses() {
+        let mut j = junk_fixture();
+        j.select_every();
+        assert_eq!(j.selected_count(), 3);
+        assert_eq!(j.selected_size(), 350);
+        assert!(!j.selection_is_recommended(), "全选不等于推荐");
+
+        j.select_none();
+        assert_eq!(j.selected_count(), 0);
+        assert_eq!(j.selected_size(), 0);
+    }
+
+    #[test]
+    fn invert_flips_every_item() {
+        let mut j = junk_fixture();
+        j.select_recommended();
+        j.invert_selection();
+
+        assert_eq!(j.selected_count(), 1);
+        assert!(j.selected.contains(&PathBuf::from(r"C:\opt\c")));
+
+        j.invert_selection();
+        assert!(j.selection_is_recommended());
+    }
+
+    /// 勾选集合里残留了扫描结果之外的路径时，不能再算作「推荐状态」。
+    /// 这正是 `selection_is_recommended` 末尾那句长度比对在防的事。
+    #[test]
+    fn stale_selection_is_not_recommended() {
+        let mut j = junk_fixture();
+        j.select_recommended();
+        assert!(j.selection_is_recommended());
+
+        j.selected.insert(PathBuf::from(r"C:\already\deleted"));
+        assert!(!j.selection_is_recommended(), "多出来的残留项没被发现");
+    }
+
+    #[test]
+    fn category_check_reports_partial_state() {
+        let mut j = junk_fixture();
+        let cat = &j.categories[0].clone();
+
+        assert_eq!(j.category_check(cat), Check::Off);
+        j.toggle_item(Path::new(r"C:\rec\a"));
+        assert_eq!(j.category_check(cat), Check::Partial);
+        j.toggle_item(Path::new(r"C:\rec\b"));
+        assert_eq!(j.category_check(cat), Check::On);
+    }
+
+    /// 类目复选框：全选态点一下清空，否则补齐整组（含部分选中的情况）。
+    #[test]
+    fn toggling_a_category_fills_then_clears() {
+        let mut j = junk_fixture();
+        let id = recommended_cat(&j);
+
+        j.toggle_category(id);
+        assert_eq!(j.selected_count(), 2);
+
+        j.toggle_category(id);
+        assert_eq!(j.selected_count(), 0);
+
+        // 部分选中时应当补齐，而不是清空
+        j.toggle_item(Path::new(r"C:\rec\a"));
+        j.toggle_category(id);
+        assert_eq!(j.selected_count(), 2);
+    }
+
+    #[test]
+    fn set_category_selected_only_touches_that_category() {
+        let mut j = junk_fixture();
+        j.select_every();
+        j.set_category_selected(opt_in_cat(&j), false);
+
+        assert_eq!(j.selected_count(), 2);
+        assert!(!j.selected.contains(&PathBuf::from(r"C:\opt\c")));
+    }
+
+    #[test]
+    fn toggle_item_and_expand_round_trip() {
+        let mut j = junk_fixture();
+        let id = recommended_cat(&j);
+
+        j.toggle_item(Path::new(r"C:\rec\a"));
+        assert!(j.selected.contains(&PathBuf::from(r"C:\rec\a")));
+        j.toggle_item(Path::new(r"C:\rec\a"));
+        assert!(j.selected.is_empty());
+
+        assert!(!j.expanded.contains(&id));
+        j.toggle_expand(id);
+        assert!(j.expanded.contains(&id));
+        j.toggle_expand(id);
+        assert!(!j.expanded.contains(&id));
+    }
+
+    /// 每个条目的处置方式来自它所属的类目：系统缓存目录要保留目录本身，
+    /// 开发产物要连目录一起删（空的 node_modules 比不存在更糟）。
+    #[test]
+    fn selected_targets_carry_per_category_disposal() {
+        let mut j = junk_fixture();
+        j.select_every();
+
+        let targets = j.selected_targets();
+        assert_eq!(targets.len(), 3);
+        for t in &targets {
+            let cat = j
+                .items()
+                .find(|i| i.path == t.path)
+                .expect("目标必须来自扫描结果")
+                .category;
+            assert_eq!(t.remove_dir, cat.removes_directory());
+        }
+    }
+
+    /// 清理成功的条目要从勾选里摘掉；失败的仍然留着，好让用户重试。
+    #[test]
+    fn clean_result_drops_cleared_items_from_selection() {
+        let mut j = junk_fixture();
+        j.select_every();
+
+        let attempted = vec![
+            PathBuf::from(r"C:\rec\a"),
+            PathBuf::from(r"C:\rec\b"),
+            PathBuf::from(r"C:\opt\c"),
+        ];
+        let failed = vec![PathBuf::from(r"C:\rec\b")];
+        j.apply_clean_result(&attempted, &failed);
+
+        assert!(!j.selected.contains(&PathBuf::from(r"C:\rec\a")), "删成功的还留在勾选里");
+        assert!(j.selected.contains(&PathBuf::from(r"C:\rec\b")), "删失败的不该被摘掉");
+    }
+
+    #[test]
+    fn empty_state_is_well_behaved() {
+        let mut j = junk_fixture();
+        j.categories.clear();
+
+        assert_eq!(j.total_cleanable(), 0);
+        assert_eq!(j.total_item_count(), 0);
+        assert!(j.selected_targets().is_empty());
+        j.select_recommended();
+        assert!(j.selection_is_recommended(), "空扫描结果 + 空勾选就是推荐状态");
     }
 }

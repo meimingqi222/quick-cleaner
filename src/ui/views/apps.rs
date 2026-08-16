@@ -2,7 +2,7 @@
 
 use super::apps_components::{render_apps_list_card, ListBody};
 use crate::core::apps::{
-    AppFilterPreset, AppSortColumn, InstalledApp,
+    is_rarely_used, now_unix_secs, AppFilterPreset, AppSortColumn, InstalledApp,
 };
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::{fmt_size, truncate};
@@ -16,24 +16,22 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
 
 pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
-    let total_apps = root.apps.len();
-    let total_app_size: u64 = root.apps.iter().map(|a| a.estimated_size).sum();
+    let total_apps = root.apps.list.len();
+    let total_app_size: u64 = root.apps.list.iter().map(|a| a.estimated_size).sum();
 
-    // 统计长期未用软件（未记录或最后使用距离现在 > 90 天）
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    // 统计长期未用软件——与快速分类里的「长期未用」共用同一套判定
+    let now_secs = now_unix_secs();
     let stale_apps_count = root
         .apps
+        .list
         .iter()
-        .filter(|a| a.last_used_raw == 0 || (now_secs.saturating_sub(a.last_used_raw) > 90 * 86400))
+        .filter(|a| is_rarely_used(a, now_secs))
         .count();
 
     // 预设过滤 + 搜索 + 排序的结果由 Root 在 render 入口统一维护，
     // 这里只借用下标，不做任何拷贝。
     let display_apps: Vec<&InstalledApp> =
-        root.apps_view.iter().filter_map(|&i| root.apps.get(i)).collect();
+        root.apps.view.iter().filter_map(|&i| root.apps.list.get(i)).collect();
 
     // 顶部大标题与概览
     let header = div()
@@ -167,7 +165,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     // 快速分类过滤预设标签
     let preset_buttons = AppFilterPreset::ALL.iter().map(|&p| {
-        let active = root.apps_preset == p;
+        let active = root.apps.preset == p;
         let p_label = p.label_lang(lang);
         div()
             .id(SharedString::from(format!("preset-app-{}", p.label_lang(Language::En))))
@@ -195,13 +193,13 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             })
             .child(p_label)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.apps_preset = p;
+                this.apps.preset = p;
                 cx.notify();
             }))
     });
 
-    let search_focused = root.apps_focus_handle.is_focused(window);
-    let search_text = &root.apps_search;
+    let search_focused = root.apps.focus_handle.is_focused(window);
+    let search_text = &root.apps.search;
 
     let cursor_bar = if search_focused {
         Some(
@@ -250,7 +248,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     let search_box = div()
         .id("apps-search-box")
-        .track_focus(&root.apps_focus_handle)
+        .track_focus(&root.apps.focus_handle)
         // 输入处理器所借的 canvas 是绝对定位的，需要这个定位上下文
         .relative()
         .w(px(240.))
@@ -290,7 +288,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             )
         })
         .on_click(cx.listener(|this, _, window, cx| {
-            this.apps_focus_handle.focus(window);
+            this.apps.focus_handle.focus(window);
             cx.notify();
         }))
         // 只处理编辑键。字符输入（含输入法组合）全部由 EntityInputHandler
@@ -314,11 +312,11 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             gpui::canvas(
                 move |bounds, _window, _cx| bounds,
                 {
-                    let handle = root.apps_focus_handle.clone();
+                    let handle = root.apps.focus_handle.clone();
                     let entity = cx.entity();
                     move |_, bounds: gpui::Bounds<gpui::Pixels>, window, cx| {
                         entity.update(cx, |this, _| {
-                            this.apps_search_bounds = Some(bounds);
+                            this.apps.search_bounds = Some(bounds);
                         });
                         window.handle_input(
                             &handle,
@@ -332,7 +330,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             .size_full(),
         );
 
-    let filter_stats_text = if root.apps_search.is_empty() {
+    let filter_stats_text = if root.apps.search.is_empty() {
         match lang {
             Language::Zh => format!("共 {} 款", display_apps.len()),
             Language::En => format!("{} apps", display_apps.len()),
@@ -379,8 +377,8 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     // 辅助生成可点击排序列头
     let make_header_col = |col: AppSortColumn, title: String, width: Option<f32>, align_right: bool| {
-        let active = root.apps_sort.column == col;
-        let indicator = root.apps_sort.indicator(col);
+        let active = root.apps.sort.column == col;
+        let indicator = root.apps.sort.indicator(col);
 
         let mut item = div()
             .id(SharedString::from(format!("th-col-{}", col.id())))
@@ -423,7 +421,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                     }),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.apps_sort.toggle(col);
+                this.apps.sort.toggle(col);
                 cx.notify();
             }));
 
@@ -483,7 +481,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         Language::En => "No matching applications found",
     };
 
-    let body = if root.apps_scanning {
+    let body = if root.apps.scanning {
         ListBody::Placeholder(loading_state_view(
             loading_title,
             loading_sub,
@@ -512,7 +510,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     };
 
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
-    let footer_text = if root.apps_search.is_empty() {
+    let footer_text = if root.apps.search.is_empty() {
         match lang {
             Language::Zh => format!("当前列表展示 {} 款软件（总计 {} 款已装）", display_apps.len(), total_apps),
             Language::En => format!("Displaying {} apps (Total {} installed)", display_apps.len(), total_apps),
@@ -581,7 +579,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 /// 渲染软件条目悬浮右键上下文菜单（支持打开所在目录、常规卸载、强力深度清理、复制安装路径）
 pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
     let lang = root.language;
-    let menu = root.apps_context_menu.as_ref()?;
+    let menu = root.apps.context_menu.as_ref()?;
     let app = menu.app.clone();
     let has_uninstaller = app.uninstall_string.is_some() || app.quiet_uninstall_string.is_some();
     let has_location = app.install_location.as_ref().map(|p| p.exists()).unwrap_or(false);

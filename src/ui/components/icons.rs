@@ -1,10 +1,19 @@
 //! 高质感矢量图标与图标徽标控件库
 //! 采用纯矢量组合绘制，告别粗糙 Emoji，呈现现代沉浸式界面
 
+use std::sync::Arc;
 use crate::ui::theme::*;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Div};
+use gpui::{div, img, prelude::*, px, rgb, AnyElement, Div, Image, ImageFormat, ImageSource};
 
-/// 颜色徽标容器：包裹图标的高级渐变/柔和背景底板
+pub fn icon_app_logo(size: f32) -> AnyElement {
+    static PNG_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+    let image = Arc::new(Image::from_bytes(ImageFormat::Png, PNG_BYTES.to_vec()));
+    let src = ImageSource::from(image);
+    img(src)
+        .w(px(size))
+        .h(px(size))
+        .into_any_element()
+}
 pub fn icon_badge(icon: AnyElement, bg_color: u32, border_color: u32, size: f32) -> Div {
     div()
         .w(px(size))

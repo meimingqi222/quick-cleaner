@@ -406,9 +406,28 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
     report
 }
 
+/// 手选路径的处置方式。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Disposal {
+    /// 直接抹掉，立刻释放空间。
+    #[default]
+    Permanent,
+    /// 送进回收站，可以还原——但**不释放磁盘空间**。
+    RecycleBin,
+}
+
 /// 对用户在磁盘分析里手动选中的任意路径执行清理。
-pub fn clean_arbitrary(paths: &[PathBuf], p: &CleanProgress) -> CleanReport {
-    audit("用户手选路径", paths.iter().cloned());
+///
+/// `disposal` 只影响手选路径。分类清理走的是固定白名单表（缓存、临时文件、
+/// 构建产物），把它们塞进回收站没有意义，只会让用户再清一次。
+pub fn clean_arbitrary(paths: &[PathBuf], disposal: Disposal, p: &CleanProgress) -> CleanReport {
+    audit(
+        match disposal {
+            Disposal::Permanent => "用户手选路径（永久删除）",
+            Disposal::RecycleBin => "用户手选路径（送回收站）",
+        },
+        paths.iter().cloned(),
+    );
     let mut report = CleanReport::default();
     for path in paths {
         if p.cancelled() {
@@ -419,10 +438,50 @@ pub fn clean_arbitrary(paths: &[PathBuf], p: &CleanProgress) -> CleanReport {
             report.failed.push(path.clone());
             continue;
         }
-        report.record(path, clean_path(path, p));
+        report.record(path, dispose(path, disposal, p));
     }
     audit_result(&report, p);
     report
+}
+
+/// 按处置方式删掉一个路径。
+///
+/// 回收站失败时**不**回退到永久删除：用户开这个开关就是要「删错了能捞
+/// 回来」，悄悄替他永久删掉是把安全网抽走。如实报失败，让他自己决定。
+fn dispose(path: &Path, disposal: Disposal, p: &CleanProgress) -> CleanResult {
+    match disposal {
+        Disposal::Permanent => clean_path(path, p),
+        Disposal::RecycleBin => recycle_path(path, p),
+    }
+}
+
+#[cfg(windows)]
+fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
+    if p.cancelled() {
+        return CleanResult::Skipped;
+    }
+    if std::fs::symlink_metadata(path).is_err() {
+        return CleanResult::Skipped;
+    }
+    if is_protected(path) {
+        return CleanResult::Failed;
+    }
+
+    if crate::platform::windows::move_to_recycle_bin(path) {
+        // 回收站不释放空间，所以这里只记条目数，不往 bytes 上加——
+        // 界面上「已释放 X」必须是真的释放了才算。
+        p.files.fetch_add(1, Ordering::Relaxed);
+        CleanResult::Ok
+    } else {
+        p.failed.fetch_add(1, Ordering::Relaxed);
+        CleanResult::Failed
+    }
+}
+
+/// 非 Windows 平台没有等价的回收站 API，一律按永久删除处理。
+#[cfg(not(windows))]
+fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
+    clean_path(path, p)
 }
 
 #[cfg(test)]
