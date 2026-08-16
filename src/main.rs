@@ -22,12 +22,17 @@ fn main() {
         // 又要在自提权之前，否则提权前那次启动出的问题一行都留不下来。
         quick_cleaner::platform::windows::init_user_context();
         quick_cleaner::core::log::init();
+        // 越早越好：这之后的任何 panic 才有现场可查
+        quick_cleaner::core::log::install_panic_hook();
         if !std::env::args().any(|a| a == "--no-elevate") {
             quick_cleaner::platform::relaunch_as_admin_if_needed();
         }
     }
     #[cfg(not(windows))]
-    quick_cleaner::core::log::init();
+    {
+        quick_cleaner::core::log::init();
+        quick_cleaner::core::log::install_panic_hook();
+    }
 
     Application::new().run(move |cx: &mut App| {
         #[cfg(not(target_os = "macos"))]

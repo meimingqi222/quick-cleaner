@@ -76,6 +76,73 @@ pub fn real_user_temp() -> PathBuf {
     }
 }
 
+/// 需要纳入删除保护的「已知文件夹」在 `User Shell Folders` 里的值名。
+///
+/// `Personal` 是文档，那串 GUID 是下载——键名和显示名对不上是 Shell 的历史包袱。
+const KNOWN_FOLDER_VALUES: &[&str] = &[
+    "Desktop",
+    "Personal",
+    "My Pictures",
+    "My Video",
+    "My Music",
+    "{374DE290-123F-4565-9164-39C4925E467B}",
+    "Favorites",
+];
+
+/// 真实前台用户「桌面 / 文档 / 下载 / 图片……」的**实际**落点。
+///
+/// 不能靠 `%USERPROFILE%\Desktop` 硬拼：
+///
+/// - OneDrive 的「备份重要文件夹」会把桌面、文档、图片整体重定向到
+///   `%USERPROFILE%\OneDrive\桌面`，硬拼出来的那个目录甚至不存在；
+/// - 中文系统上这些目录在磁盘上的名字本身就是本地化的；
+/// - 企业环境常把它们重定向到网络盘或另一个分区。
+///
+/// 三种情况下硬拼的路径都保护不到用户真正的桌面，而那正是最不该被误删的地方。
+///
+/// 读注册表而不是调 `SHGetKnownFolderPath`：后者返回**当前进程**用户的路径，
+/// 跨账户提权（OTS）时那是管理员的桌面——正好保护错了人。
+pub fn real_user_known_folders() -> &'static [PathBuf] {
+    static FOLDERS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    FOLDERS.get_or_init(|| {
+        use winapi::um::winreg::{HKEY_CURRENT_USER, HKEY_USERS};
+        const SUBPATH: &str =
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders";
+
+        // 优先读真实前台用户的 hive；OTS 提权时 HKCU 指向的是管理员。
+        // 拿不到 SID、或那个 hive 没加载时退回 HKCU。
+        let entries = real_user_sid()
+            .map(|sid| {
+                super::registry::enum_string_values(HKEY_USERS, &format!(r"{sid}\{SUBPATH}"), 0)
+            })
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| super::registry::enum_string_values(HKEY_CURRENT_USER, SUBPATH, 0));
+
+        entries
+            .into_iter()
+            .filter(|(name, _)| {
+                KNOWN_FOLDER_VALUES
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case(name))
+            })
+            .map(|(_, raw)| expand_user_profile(&raw))
+            .filter(|p| p.is_absolute())
+            .collect()
+    })
+}
+
+/// 展开 `User Shell Folders` 里的 `%USERPROFILE%` 前缀。
+///
+/// 这些值是 `REG_EXPAND_SZ`，绝大多数形如 `%USERPROFILE%\Desktop`。展开时
+/// 锚定**真实前台用户**的主目录，而不是进程环境里的那个。
+fn expand_user_profile(raw: &str) -> PathBuf {
+    const VAR: &str = "%USERPROFILE%";
+    if raw.len() >= VAR.len() && raw[..VAR.len()].eq_ignore_ascii_case(VAR) {
+        return real_user_home().join(raw[VAR.len()..].trim_start_matches(std::path::is_separator));
+    }
+    PathBuf::from(raw)
+}
+
 /// 真实前台用户的 Windows SID
 pub fn real_user_sid() -> Option<String> {
     get_user_context().sid.clone()

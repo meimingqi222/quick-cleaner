@@ -102,6 +102,53 @@ pub fn init() {
     ));
 }
 
+/// 把 panic 也写进日志。
+///
+/// 本程序链接的是 windows 子系统（见 `main.rs` 顶部），没有 stderr。默认的
+/// panic 处理器把消息写到 stderr，也就是写进了虚空——用户看到的只是「程序
+/// 突然没了」，日志里一个字都没有。而最容易 panic 的恰恰是 `$MFT` 解析：
+/// 它在系统正在写盘的时候读裸卷，撕裂读取拿到的字节任何值都可能。
+///
+/// 链在原有 hook 之后而不是覆盖它：GPUI 自己也可能装过 hook，抢掉它的
+/// 只会换一种形式的信息丢失。
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<未命名>").to_string();
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<位置未知>".into());
+
+        write(format_args!(
+            "!!!!! panic 于 {location}（线程 {name}）: {}",
+            panic_message(info)
+        ));
+        write(format_args!(
+            "调用栈:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        ));
+
+        previous(info);
+    }));
+}
+
+/// 从 `PanicHookInfo` 里取出可读的消息。
+///
+/// payload 常见的两种形态是 `&str`（`panic!("literal")`）和 `String`
+/// （`panic!("{}", x)` 与所有内置的越界/溢出信息），两种都要认。
+fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let payload = info.payload();
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<无法识别的 panic payload>".into()
+    }
+}
+
 /// 追加一行。带本地时间戳，自动补换行。
 ///
 /// 锁中毒（某个线程写日志时 panic 了）不该让后续写入全部失效，
@@ -141,6 +188,38 @@ mod tests {
     fn writing_never_panics() {
         write(format_args!("测试写入 {} {:?}", 1, "两"));
         crate::log!("宏形式 {}", 2);
+    }
+
+    /// hook 装上之后，panic 必须真的落进日志文件——这是它存在的全部意义。
+    ///
+    /// 只在能拿到日志路径的环境里断言；CI 容器里取不到主目录时退化成
+    /// 「装了不炸」。跑完还原 hook，免得后面的测试失败时看不到正常输出。
+    #[test]
+    fn panics_are_written_to_the_log() {
+        let Some(path) = path() else {
+            install_panic_hook();
+            let _ = std::panic::take_hook();
+            return;
+        };
+        let before = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+        install_panic_hook();
+        let caught = std::panic::catch_unwind(|| {
+            let v: Vec<u8> = vec![0; 4];
+            let _ = v[99];
+        });
+        let _ = std::panic::take_hook();
+
+        assert!(caught.is_err(), "这里本来就该 panic");
+        let after = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        assert!(after > before, "panic 没有写进日志：{} -> {}", before, after);
+
+        let tail = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(tail.contains("!!!!! panic"), "日志里没有 panic 标记行");
+        assert!(
+            tail.contains("index out of bounds"),
+            "日志里没有 panic 消息本身"
+        );
     }
 
     /// 路径必须落在 QuickCleaner 配置目录下，和 settings.json 同级。

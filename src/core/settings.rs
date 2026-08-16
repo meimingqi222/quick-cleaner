@@ -53,6 +53,10 @@ impl Settings {
 
     /// 把设置写回磁盘。尽力而为：写不进去（只读目录、磁盘满、权限不足）
     /// 只是下次启动回到默认值，不值得打断用户手头的操作，因此不返回错误。
+    ///
+    /// 先写同目录下的临时文件再改名。直接 `fs::write` 是「先截断、后写入」，
+    /// 中途断电或被杀进程会留下一个空的或半截的 settings.json；改名在同一个
+    /// 卷上是原子的，最坏情况也只是留个临时文件，原配置完好无损。
     pub fn save(&self) {
         let Some(path) = Self::path() else { return };
         if let Some(dir) = path.parent() {
@@ -60,8 +64,22 @@ impl Settings {
                 return;
             }
         }
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&path, text);
+        let Ok(text) = serde_json::to_string_pretty(self) else {
+            return;
+        };
+
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &text).is_err() {
+            return;
+        }
+        // Windows 上 rename 不能覆盖已存在的目标，得先挪开原文件。
+        // 这一步失败（文件被占用）就退回直接覆盖——总比不保存强。
+        if std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&path);
+            if std::fs::rename(&tmp, &path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+                let _ = std::fs::write(&path, &text);
+            }
         }
     }
 

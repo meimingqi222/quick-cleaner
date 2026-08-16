@@ -63,6 +63,21 @@ const HOME_EXACT: &[&str] = &[
     "\\music",
 ];
 
+/// 相对**用户 profile 根**、目录本身不能删但内容可以清的路径。
+///
+/// 用「profile 根 + 相对路径」而不是简单的尾部匹配：后者会把随便哪个目录
+/// 底下叫 `appdata` 的文件夹也一并挡住。而之所以不锚定当前用户的主目录，
+/// 是因为多 profile 机器上、以及跨账户提权时，扫描会走到别的用户的
+/// `AppData` 底下，那些同样不能整删。
+///
+/// `ProgramData` 不在这里——它挂在盘符根下，已经由 [`DRIVE_EXACT`] 覆盖。
+const PROFILE_EXACT: &[&str] = &[
+    "\\appdata",
+    "\\appdata\\local",
+    "\\appdata\\locallow",
+    "\\appdata\\roaming",
+];
+
 struct Guards {
     /// 归一化后的 %SystemRoot%，如 `c:\windows`
     windows: String,
@@ -70,6 +85,13 @@ struct Guards {
     home: Option<String>,
     /// 归一化后的真实前台操作用户主目录（跨账户提权时为原登录用户，如 `c:\users\alice`）
     orig_home: Option<String>,
+    /// 归一化后的「已知文件夹」实际落点（桌面 / 文档 / 下载 / 图片……）。
+    ///
+    /// 光靠 `HOME_EXACT` 里那份 `\desktop` 清单是不够的：OneDrive 备份会把
+    /// 桌面重定向到 `%USERPROFILE%\OneDrive\桌面`，中文系统上这些目录的磁盘
+    /// 名本身就是本地化的，企业环境还可能整体挪到网络盘。
+    /// 见 `platform::windows::real_user_known_folders`。
+    known_folders: Vec<String>,
 }
 
 fn guards() -> &'static Guards {
@@ -80,12 +102,21 @@ fn guards() -> &'static Guards {
         #[cfg(not(windows))]
         let orig_home = None;
 
+        #[cfg(windows)]
+        let known_folders = crate::platform::windows::real_user_known_folders()
+            .iter()
+            .map(|p| norm(p))
+            .collect();
+        #[cfg(not(windows))]
+        let known_folders = Vec::new();
+
         Guards {
             windows: norm_str(
                 &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
             ),
             home: dirs::home_dir().map(|h| norm(&h)),
             orig_home,
+            known_folders,
         }
     })
 }
@@ -98,7 +129,20 @@ pub fn norm(path: &Path) -> String {
 fn norm_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        out.push(if c == '/' { '\\' } else { c.to_ascii_lowercase() });
+        if c == '/' {
+            out.push('\\');
+        } else if c.is_ascii() {
+            // 绝大多数字符走这条：单字节、不展开
+            out.push(c.to_ascii_lowercase());
+        } else {
+            // 非 ASCII 也得折叠大小写。用户名带重音符时（`C:\Users\Ömer`），
+            // 只做 ASCII 折叠会让 `c:\users\ÖMER\desktop` 和守卫里存的
+            // `c:\users\ömer` 对不上，那个用户的桌面就保护不到了。
+            //
+            // `to_lowercase` 可能一对多（`İ` → `i̇`），但路径两边都过同一个
+            // 函数，比较依然自洽。
+            out.extend(c.to_lowercase());
+        }
     }
     while out.ends_with('\\') {
         out.pop();
@@ -111,6 +155,20 @@ fn at_or_under(lower: &str, base: &str) -> bool {
     lower.len() >= base.len()
         && lower.starts_with(base)
         && (lower.len() == base.len() || lower.as_bytes()[base.len()] == b'\\')
+}
+
+/// `lower` 是否恰好是某个用户 profile 的根，形如 `c:\users\alice`。
+///
+/// 「恰好」很重要：`c:\users\alice\appdata` 不算，否则 `PROFILE_EXACT` 的
+/// 相对路径就会在错误的层级上生效。
+fn is_profile_root(lower: &str) -> bool {
+    let Some(rest) = lower.get(2..) else {
+        return false;
+    };
+    let Some(name) = rest.strip_prefix("\\users\\") else {
+        return false;
+    };
+    !name.is_empty() && !name.contains('\\')
 }
 
 /// ASCII 大小写不敏感的前缀匹配，不分配。
@@ -144,17 +202,13 @@ pub fn is_system_root_dir(path: &Path) -> bool {
     }
 }
 
-/// 软件残留扫描的额外保护：AppData 及其直接子层不能整个当作残留删掉。
+/// 软件残留扫描的额外保护：公共骨架目录不能整个当作某个软件的残留删掉。
+///
+/// `AppData` 那几层以前只挡在这里，而 `clean_arbitrary`（磁盘透镜的任意
+/// 路径删除）走的是 [`is_protected`]，两条删除路径口径不一致。现在那几层
+/// 已经并进 [`is_protected`]，这里只额外补上「顶层骨架」这一档。
 pub fn is_protected_residual_path(path: &Path) -> bool {
-    if is_system_root_dir(path) {
-        return true;
-    }
-    let lower = norm(path);
-    lower.ends_with("\\appdata")
-        || lower.ends_with("\\appdata\\local")
-        || lower.ends_with("\\appdata\\roaming")
-        || lower.ends_with("\\appdata\\locallow")
-        || lower.ends_with("\\programdata")
+    is_system_root_dir(path) || is_protected(path)
 }
 
 /// 绝对不能删除的路径。
@@ -218,6 +272,19 @@ pub fn is_protected(path: &Path) -> bool {
         return true;
     }
 
+    // ---- 已知文件夹（可能被 OneDrive / 组策略重定向到任意位置）----
+    if g.known_folders.contains(&lower) {
+        return true;
+    }
+
+    // ---- 任意用户 profile 下的 AppData 各层 ----
+    if PROFILE_EXACT
+        .iter()
+        .any(|sfx| lower.strip_suffix(sfx).is_some_and(is_profile_root))
+    {
+        return true;
+    }
+
     false
 }
 
@@ -266,12 +333,61 @@ mod tests {
         assert!(!is_ntfs_meta_name("notes.txt"));
     }
 
+    /// 非 ASCII 的用户名也要能折叠大小写，否则守卫比对不上。
+    #[test]
+    fn normalisation_folds_non_ascii_case() {
+        assert_eq!(
+            norm(Path::new("C:/Users/ÖMER")),
+            norm(Path::new(r"c:\users\ömer"))
+        );
+        assert_eq!(norm(Path::new(r"D:\ÄÖÜ\")), r"d:\äöü");
+        // 中文没有大小写概念，原样保留
+        assert_eq!(norm(Path::new(r"C:\用户\文档")), r"c:\用户\文档");
+    }
+
     #[test]
     fn at_or_under_respects_component_boundary() {
         assert!(at_or_under("c:\\windows\\system32", "c:\\windows\\system32"));
         assert!(at_or_under("c:\\windows\\system32\\x", "c:\\windows\\system32"));
         // 不能把 system32foo 误判成 system32 的子路径
         assert!(!at_or_under("c:\\windows\\system32foo", "c:\\windows\\system32"));
+    }
+
+    /// AppData 那几层以前只有残留扫描挡着，磁盘透镜的任意路径删除绕得过去。
+    /// 现在两条路径共用同一份规则。
+    #[test]
+    fn profile_skeleton_dirs_are_protected_on_every_path() {
+        for p in [
+            r"C:\Users\me\AppData",
+            r"C:\Users\me\AppData\Local",
+            r"C:\Users\me\AppData\LocalLow",
+            r"C:\Users\me\AppData\Roaming",
+            r"C:\ProgramData",
+            // 别的用户的 profile 同样要挡住（多账户机器 / 跨账户提权）
+            r"D:\Users\someone-else\AppData\Local",
+        ] {
+            assert!(is_protected(Path::new(p)), "{p} 应当受保护");
+            assert!(is_protected_residual_path(Path::new(p)), "{p} 残留路径也该受保护");
+        }
+    }
+
+    /// 但它们的**内容**照样可以清——保护的是目录本身，不是整棵子树。
+    #[test]
+    fn contents_under_appdata_stay_cleanable() {
+        for p in [
+            r"C:\Users\me\AppData\Local\Temp",
+            r"C:\Users\me\AppData\Local\SomeApp\Cache",
+            r"C:\ProgramData\SomeVendor\logs",
+        ] {
+            assert!(!is_protected(Path::new(p)), "{p} 不该被挡住");
+        }
+    }
+
+    /// 名字里带 appdata 但不是那几层的目录不能被误伤。
+    #[test]
+    fn suffix_match_does_not_overreach() {
+        assert!(!is_protected(Path::new(r"C:\Users\me\myappdata")));
+        assert!(!is_protected(Path::new(r"C:\Users\me\AppData\Local\appdata")));
     }
 
     #[test]

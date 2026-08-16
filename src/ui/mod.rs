@@ -737,6 +737,11 @@ impl Root {
                     items: remaining,
                     total_file_size: total,
                 };
+                // 失败原因以前直接丢在这里——界面只显示「卸载失败」，
+                // 日志里也没有任何线索。至少让它留下一行。
+                if let Err(reason) = &result {
+                    crate::log!("卸载「{name}」失败：{reason}");
+                }
                 let ok = result.is_ok();
                 let (count, size) = (res.items.len(), fmt_size(res.total_file_size));
                 this.status = bilingual(|l| {
@@ -943,12 +948,81 @@ impl Root {
         }
     }
 
+    /// 三个清理入口共用的编排。
+    ///
+    /// 「置 cleaning → 建进度 → 写状态栏 → 起心跳 → 后台删 → 回主线程收尾」
+    /// 这套仪式以前在 `start_clean` / `start_clean_path` /
+    /// `start_clean_disk_selected` 里各抄了一遍，连「从内存 MFT 树剔除已删
+    /// 路径」那段都是逐行重复的。三份实现漂移过一次（清理任务曾经借用
+    /// scan_task 的槽位），收敛掉才不会有第二次。
+    ///
+    /// `work` 在后台线程上跑，`finish` 回到主线程收尾——差异全在这两个闭包里。
+    fn spawn_clean(
+        &mut self,
+        totals: (u64, u64),
+        status: Text,
+        work: impl FnOnce(&CleanProgress) -> CleanReport + Send + 'static,
+        finish: impl FnOnce(&mut Self, CleanReport, CleanSnapshot, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let (total_files, total_bytes) = totals;
+        self.cleaning = true;
+        let progress = Arc::new(CleanProgress::new(total_files, total_bytes));
+        self.clean_progress = Some(progress.clone());
+        self.status = status;
+        self.start_tick(cx);
+        cx.notify();
+
+        let clean = cx
+            .background_executor()
+            .spawn(async move { work(&progress) });
+
+        self.clean_task = Some(cx.spawn(async move |this, cx| {
+            let report: CleanReport = clean.await;
+            this.update(cx, |this, cx| {
+                this.cleaning = false;
+                let snap = this.clean_snapshot().unwrap_or_default();
+                this.freed_total += snap.bytes;
+                finish(this, report, snap, cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// 把已删除的路径从内存里的 MFT 树上摘掉，并把释放的空间补回可用容量。
+    ///
+    /// 不重扫：一次全盘 MFT 解析要好几秒，而删除的影响是局部的——祖先目录的
+    /// 体积由 `remove_path` 自动联动扣减。
+    ///
+    /// 摘完之后当前所在的目录可能已经不存在了（用户就站在被删的那一层里），
+    /// 所以要沿 `disk_path` 往回退到第一个仍然有效的节点。
+    fn prune_deleted_from_mft(&mut self, deleted: &[PathBuf], freed_bytes: u64) {
+        if let Some(mft) = &mut self.mft {
+            for path in deleted {
+                mft.remove_path(path);
+            }
+            self.mft_gen += 1;
+            while self.disk_path.len() > 1 {
+                let cur = *self.disk_path.last().unwrap();
+                if mft.tree.valid(cur) {
+                    break;
+                }
+                self.disk_path.pop();
+            }
+        }
+        if let Some((_, free)) = &mut self.disk_space {
+            *free += freed_bytes;
+        }
+    }
+
+    /// 智能清理页：删掉当前勾选的所有分类项。
     pub fn start_clean(&mut self, cx: &mut Context<Self>) {
         if self.cleaning || !self.scanned {
             return;
         }
-        let paths = self.selected_paths();
-        if paths.is_empty() {
+        let attempted = self.selected_paths();
+        if attempted.is_empty() {
             self.status = bilingual(|l| tr_status_nothing_selected(l).to_string());
             cx.notify();
             return;
@@ -959,31 +1033,19 @@ impl Root {
             .filter(|i| self.selected.contains(&i.path))
             .map(|i| i.file_count)
             .sum();
-        let total_bytes = self.selected_size();
+        let totals = (total_files, self.selected_size());
 
-        self.cleaning = true;
         self.last_failed.clear();
-        let progress = Arc::new(CleanProgress::new(total_files, total_bytes));
-        self.clean_progress = Some(progress.clone());
-        let n = paths.len();
-        self.status = bilingual(|l| tr_status_deleting_n(l, n));
-        self.start_tick(cx);
-        cx.notify();
-
-        let attempted = paths.clone();
+        let n = attempted.len();
         let targets = self.selected_targets();
-        let clean = cx
-            .background_executor()
-            .spawn(async move { clean_targets(&targets, &progress) });
 
-        self.clean_task = Some(cx.spawn(async move |this, cx| {
-            let report: CleanReport = clean.await;
-            this.update(cx, |this, cx| {
-                this.cleaning = false;
+        self.spawn_clean(
+            totals,
+            bilingual(|l| tr_status_deleting_n(l, n)),
+            move |p| clean_targets(&targets, p),
+            move |this, report, snap, _cx| {
                 this.last_failed = report.failed;
-                let snap = this.clean_snapshot().unwrap_or_default();
                 this.last_failed_files = snap.failed;
-                this.freed_total += snap.bytes;
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
                 let failed = this.last_failed.clone();
@@ -998,65 +1060,38 @@ impl Root {
                         tr_status_clean_done(l, files, &size)
                     }
                 });
-                cx.notify();
-            })
-            .ok();
-        }));
+            },
+            cx,
+        );
     }
 
+    /// 磁盘透镜：删掉单个用户点名的路径。
     pub fn start_clean_path(&mut self, path: PathBuf, size: u64, cx: &mut Context<Self>) {
         if self.cleaning {
             return;
         }
-        self.cleaning = true;
-        let progress = Arc::new(CleanProgress::new(0, size));
-        self.clean_progress = Some(progress.clone());
-        let shown = path.display().to_string();
-        self.status = bilingual(|l| tr_status_deleting_path(l, &shown));
-        self.start_tick(cx);
-        cx.notify();
-
         let target = path.clone();
-        let clean = cx
-            .background_executor()
-            .spawn(async move { clean_arbitrary(std::slice::from_ref(&target), &progress) });
+        let shown = path.display().to_string();
 
-        self.clean_task = Some(cx.spawn(async move |this, cx| {
-            let report: CleanReport = clean.await;
-            this.update(cx, |this, cx| {
-                this.cleaning = false;
-                let snap = this.clean_snapshot().unwrap_or_default();
-                this.freed_total += snap.bytes;
-                if report.failed.is_empty() {
-                    let (shown, files, size) =
-                        (path.display().to_string(), snap.files, fmt_size(snap.bytes));
-                    this.status = bilingual(|l| tr_status_deleted_path(l, &shown, files, &size));
-                    // 局部即时从内存树中剔除，祖先目录体积自动联动扣减，无需全局重扫
-                    if let Some(mft) = &mut this.mft {
-                        mft.remove_path(&path);
-                        this.mft_gen += 1;
-                        while this.disk_path.len() > 1 {
-                            let cur_node = *this.disk_path.last().unwrap();
-                            if !mft.tree.valid(cur_node) {
-                                this.disk_path.pop();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    if let Some((_, free)) = &mut this.disk_space {
-                        *free += snap.bytes;
-                    }
-                } else {
-                    let shown = path.display().to_string();
+        self.spawn_clean(
+            (0, size),
+            bilingual(|l| tr_status_deleting_path(l, &shown)),
+            move |p| clean_arbitrary(std::slice::from_ref(&target), p),
+            move |this, report, snap, _cx| {
+                let shown = path.display().to_string();
+                if !report.failed.is_empty() {
                     this.status = bilingual(|l| tr_status_delete_failed(l, &shown));
+                    return;
                 }
-                cx.notify();
-            })
-            .ok();
-        }));
+                let (files, size) = (snap.files, fmt_size(snap.bytes));
+                this.status = bilingual(|l| tr_status_deleted_path(l, &shown, files, &size));
+                this.prune_deleted_from_mft(std::slice::from_ref(&path), snap.bytes);
+            },
+            cx,
+        );
     }
 
+    /// 磁盘透镜：删掉当前勾选的一批路径。
     pub fn start_clean_disk_selected(&mut self, cx: &mut Context<Self>) {
         if self.cleaning || self.disk_sel.is_empty() {
             return;
@@ -1067,28 +1102,18 @@ impl Root {
             return;
         }
         let total_size = self.disk_selected_size();
-
-        self.cleaning = true;
-        let progress = Arc::new(CleanProgress::new(0, total_size));
-        self.clean_progress = Some(progress.clone());
         let n = targets.len();
-        self.status = bilingual(|l| tr_status_batch_deleting(l, n));
-        self.start_tick(cx);
-        cx.notify();
+        let to_clean = targets.clone();
 
-        let clean_targets = targets.clone();
-        let clean = cx
-            .background_executor()
-            .spawn(async move { clean_arbitrary(&clean_targets, &progress) });
-
-        self.clean_task = Some(cx.spawn(async move |this, cx| {
-            let report: CleanReport = clean.await;
-            this.update(cx, |this, cx| {
-                this.cleaning = false;
-                let snap = this.clean_snapshot().unwrap_or_default();
-                this.freed_total += snap.bytes;
+        self.spawn_clean(
+            (0, total_size),
+            bilingual(|l| tr_status_batch_deleting(l, n)),
+            move |p| clean_arbitrary(&to_clean, p),
+            move |this, report, snap, _cx| {
                 this.clear_disk_selection();
-                let (files, fails, size) = (snap.files, report.failed.len(), fmt_size(snap.bytes));
+
+                let (files, fails, size) =
+                    (snap.files, report.failed.len(), fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
                     if fails == 0 {
                         tr_status_batch_done(l, files, &size)
@@ -1096,30 +1121,16 @@ impl Root {
                         tr_status_batch_done_partial(l, &size, fails)
                     }
                 });
-                // 局部即时从内存树中扣减删除项，保留当前所在目录层级
-                if let Some(mft) = &mut this.mft {
-                    for t in &targets {
-                        if !report.failed.contains(t) {
-                            mft.remove_path(t);
-                        }
-                    }
-                    this.mft_gen += 1;
-                    while this.disk_path.len() > 1 {
-                        let cur_node = *this.disk_path.last().unwrap();
-                        if !mft.tree.valid(cur_node) {
-                            this.disk_path.pop();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                if let Some((_, free)) = &mut this.disk_space {
-                    *free += snap.bytes;
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
+
+                // 只摘真正删成功的那些
+                let deleted: Vec<PathBuf> = targets
+                    .into_iter()
+                    .filter(|t| !report.failed.contains(t))
+                    .collect();
+                this.prune_deleted_from_mft(&deleted, snap.bytes);
+            },
+            cx,
+        );
     }
 }
 

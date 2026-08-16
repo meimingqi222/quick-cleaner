@@ -70,6 +70,28 @@ pub fn scan_fixed_with_tree(
     scan_fixed_inner(targets, live, Some(tree))
 }
 
+/// 耗时最长的前 `n` 个目标，格式化成日志片段。
+///
+/// 单拎出来是因为它只服务于那一行日志：排序 + 格式化以前是无条件执行的，
+/// 结果却只是拼进一个字符串。
+fn slowest_targets(measured: &[(ScanItem, std::time::Duration, bool)], n: usize) -> Vec<String> {
+    let mut slowest: Vec<&(ScanItem, std::time::Duration, bool)> = measured.iter().collect();
+    slowest.sort_unstable_by_key(|(_, d, _)| std::cmp::Reverse(*d));
+    slowest
+        .iter()
+        .take(n)
+        .map(|(it, d, via_tree)| {
+            let how = if *via_tree { "查表" } else { "遍历" };
+            format!(
+                "{:?} {how} {} {}",
+                d,
+                crate::core::model::fmt_size(it.size),
+                it.path.display()
+            )
+        })
+        .collect()
+}
+
 fn scan_fixed_inner(
     targets: &[ScanTarget],
     live: &AtomicBool,
@@ -103,19 +125,7 @@ fn scan_fixed_inner(
         .collect();
 
     let via_tree = measured.iter().filter(|(_, _, t)| *t).count();
-    let mut slowest: Vec<(std::time::Duration, &std::path::Path, u64, bool)> = measured
-        .iter()
-        .map(|(it, d, t)| (*d, it.path.as_path(), it.size, *t))
-        .collect();
-    slowest.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
-    let top: Vec<String> = slowest
-        .iter()
-        .take(5)
-        .map(|(d, p, size, t)| {
-            let how = if *t { "查表" } else { "遍历" };
-            format!("{:?} {how} {} {}", d, crate::core::model::fmt_size(*size), p.display())
-        })
-        .collect();
+    let top = slowest_targets(&measured, 5);
 
     let results: Vec<ScanItem> = measured.into_iter().map(|(it, _, _)| it).collect();
     let total: u64 = results.iter().map(|it| it.size).sum();

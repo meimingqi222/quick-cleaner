@@ -435,7 +435,7 @@ impl Volume {
             return Err(if err == 5 {
                 MftError::AccessDenied
             } else {
-                MftError::Io(format!("CreateFileW 失败，错误码 {err}"))
+                MftError::Io(format!("CreateFileW (Win32 {err})"))
             });
         }
         Ok(Volume { handle })
@@ -480,7 +480,7 @@ impl Volume {
         };
         if ok == 0 {
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
-            return Err(MftError::Io(format!("定位到 {offset} 失败，错误码 {err}")));
+            return Err(MftError::Io(format!("SetFilePointerEx @{offset} (Win32 {err})")));
         }
 
         let mut read: u32 = 0;
@@ -495,7 +495,7 @@ impl Volume {
         };
         if ok == 0 {
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
-            return Err(MftError::Io(format!("读取 {offset} 失败，错误码 {err}")));
+            return Err(MftError::Io(format!("ReadFile @{offset} (Win32 {err})")));
         }
         Ok(read as usize)
     }
@@ -504,6 +504,10 @@ impl Volume {
 // ---------------------------------------------------------------------------
 // 字节解析辅助
 // ---------------------------------------------------------------------------
+
+// 说明：`MftError::Io` 的 payload 必须是**语言中立**的技术细节（API 名 +
+// Win32 错误码）。它会被 `ui::i18n::tr_mft_error` 原样嵌进本地化的外层文案里，
+// payload 自己写中文的话，英文界面上就会冒出半句中文。
 
 fn u16_at(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
@@ -545,6 +549,24 @@ fn apply_fixup(rec: &mut [u8], bytes_per_sector: usize) -> bool {
     true
 }
 
+/// 把 `len_size` / `off_size` 个小端字节拼成 u64。调用方保证 `n <= 8`。
+fn le_bytes_to_u64(b: &[u8], n: usize) -> u64 {
+    let mut v = 0u64;
+    for (i, &byte) in b.iter().take(n).enumerate() {
+        v |= (byte as u64) << (i * 8);
+    }
+    v
+}
+
+/// 把 `n` 字节的小端值按二进制补码符号扩展成 i64。调用方保证 `1 <= n <= 8`。
+///
+/// 不能写成「减去 `1 << (n*8)`」：`n == 8` 时那是 `1i64 << 64`，直接移位溢出。
+/// 左移到最高位再算术右移回来，`n == 8` 时 shift 为 0，天然退化成恒等变换。
+fn sign_extend(raw: u64, n: usize) -> i64 {
+    let shift = 64 - n * 8;
+    ((raw << shift) as i64) >> shift
+}
+
 fn parse_runs(runs: &[u8]) -> Vec<(i64, u64)> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -558,37 +580,81 @@ fn parse_runs(runs: &[u8]) -> Vec<(i64, u64)> {
         let len_size = (header & 0x0f) as usize;
         let off_size = (header >> 4) as usize;
         pos += 1;
-        if len_size == 0 || pos + len_size + off_size > runs.len() {
+        // 字段宽度是磁盘上的 4 bit，最大 15，但 u64/i64 最多装得下 8 字节。
+        // 不挡住就会在下面的移位上溢出——损坏记录能给出 15，而 off_size == 8
+        // 本身在大卷上完全合法，老写法在那里也会炸。
+        if len_size == 0 || len_size > 8 || off_size > 8 {
+            break;
+        }
+        if pos + len_size + off_size > runs.len() {
             break;
         }
 
-        let mut run_len: u64 = 0;
-        for i in 0..len_size {
-            run_len |= (runs[pos + i] as u64) << (i * 8);
-        }
+        let run_len = le_bytes_to_u64(&runs[pos..], len_size);
         pos += len_size;
 
+        // off_size == 0 是「稀疏段」：不占实际簇，跳过但不能中断整个 run list
         if off_size == 0 {
-            pos += off_size;
             continue;
         }
 
-        let mut run_off: i64 = 0;
-        for i in 0..off_size {
-            run_off |= (runs[pos + i] as i64) << (i * 8);
-        }
-        let sign_bit = 1i64 << (off_size * 8 - 1);
-        if run_off & sign_bit != 0 {
-            run_off -= 1i64 << (off_size * 8);
-        }
+        let run_off = sign_extend(le_bytes_to_u64(&runs[pos..], off_size), off_size);
         pos += off_size;
 
-        lcn += run_off;
+        // LCN 是累加出来的，每一步的增量都直接来自磁盘。加不动了说明这份
+        // run list 本身就是垃圾，后面的段也没有解析价值，就此收手。
+        let Some(next) = lcn.checked_add(run_off) else {
+            break;
+        };
+        lcn = next;
         if lcn >= 0 && run_len > 0 {
             out.push((lcn, run_len));
         }
     }
     out
+}
+
+/// 属性头的最小长度：常驻 0x18 字节，非常驻 0x40 字节。
+///
+/// 以前这里的下限是 0x10（只覆盖属性头的前 16 字节），但后面每一处读
+/// 0x10 / 0x14 / 0x20 / 0x30 偏移的代码都超出了这个范围。损坏或撕裂的
+/// 记录只要声明一个 `alen == 0x10` 的非常驻属性，就能让解析越界 panic。
+/// 这些偏移全部落在属性头内部，因此把下限提到真实头长度之后，后续读取
+/// 一次性全部安全，不必再逐处补检查。
+/// `$ATTRIBUTE_LIST` 允许的最大长度。
+///
+/// 真实卷上这份列表最多几十 KB（碎片极多的巨型文件），16 MB 是量级上
+/// 绰绰有余的天花板。它的作用不是精确，而是让「磁盘上声明的长度」在被
+/// 拿去分配内存之前有个上界。
+const MAX_ATTR_LIST_BYTES: u64 = 16 * 1024 * 1024;
+
+const ATTR_HDR_RESIDENT: usize = 0x18;
+const ATTR_HDR_NON_RESIDENT: usize = 0x40;
+
+/// 校验 `rec[pos..]` 处的属性头，返回 `(类型, 属性总长, 是否非常驻, 名字长度)`。
+///
+/// 返回 `None` 表示「到此为止」：属性表结束标记、越界、或长度字段不自洽。
+/// 调用方一律应当终止遍历，不要试图跳过继续——长度不可信时无从跳起。
+fn attr_header(rec: &[u8], pos: usize) -> Option<(u32, usize, bool, usize)> {
+    if pos + 0x10 > rec.len() {
+        return None;
+    }
+    let atype = u32_at(rec, pos);
+    if atype == 0xffff_ffff {
+        return None;
+    }
+    let alen = u32_at(rec, pos + 4) as usize;
+    let non_resident = rec[pos + 8] == 1;
+    let name_len = rec[pos + 9] as usize;
+    let min = if non_resident {
+        ATTR_HDR_NON_RESIDENT
+    } else {
+        ATTR_HDR_RESIDENT
+    };
+    if alen < min || pos + alen > rec.len() {
+        return None;
+    }
+    Some((atype, alen, non_resident, name_len))
 }
 
 #[derive(Clone, Debug)]
@@ -598,24 +664,14 @@ struct DataFragment {
 }
 
 fn collect_data_fragments(rec: &[u8], out: &mut Vec<DataFragment>) {
-    let attrs_off = u16_at(rec, 0x14) as usize;
-    let mut pos = attrs_off;
+    let mut pos = u16_at(rec, 0x14) as usize;
 
-    while pos + 8 <= rec.len() {
-        let atype = u32_at(rec, pos);
-        if atype == 0xffff_ffff {
-            break;
-        }
-        let alen = u32_at(rec, pos + 4) as usize;
-        if alen < 0x10 || pos + alen > rec.len() {
-            break;
-        }
-        let non_resident = rec[pos + 8] == 1;
-        let name_len = rec[pos + 9];
-        if atype == 0x80 && non_resident && name_len == 0 && pos + 0x22 <= rec.len() {
+    while let Some((atype, alen, non_resident, name_len)) = attr_header(rec, pos) {
+        if atype == 0x80 && non_resident && name_len == 0 {
             let start_vcn = u64_at(rec, pos + 0x10);
             let run_off = u16_at(rec, pos + 0x20) as usize;
-            if run_off < alen {
+            // run_off 必须落在属性内部，否则切片起点会跑到下一个属性里
+            if run_off >= ATTR_HDR_NON_RESIDENT && run_off < alen {
                 out.push(DataFragment {
                     start_vcn,
                     runs: parse_runs(&rec[pos + run_off..pos + alen]),
@@ -653,20 +709,10 @@ fn read_attribute_list(
     vol: &Volume,
     bytes_per_cluster: u64,
 ) -> Option<Vec<u8>> {
-    let attrs_off = u16_at(rec, 0x14) as usize;
-    let mut pos = attrs_off;
+    let mut pos = u16_at(rec, 0x14) as usize;
 
-    while pos + 8 <= rec.len() {
-        let atype = u32_at(rec, pos);
-        if atype == 0xffff_ffff {
-            break;
-        }
-        let alen = u32_at(rec, pos + 4) as usize;
-        if alen < 0x10 || pos + alen > rec.len() {
-            break;
-        }
+    while let Some((atype, alen, non_resident, _)) = attr_header(rec, pos) {
         if atype == 0x20 {
-            let non_resident = rec[pos + 8] == 1;
             if !non_resident {
                 let val_off = u16_at(rec, pos + 0x14) as usize;
                 let val_len = u32_at(rec, pos + 0x10) as usize;
@@ -676,20 +722,29 @@ fn read_attribute_list(
                 }
                 return None;
             }
-            let data_size = u64_at(rec, pos + 0x30) as usize;
+
+            // data_size 是磁盘上声明的长度，不能直接拿去 with_capacity——
+            // 一条损坏记录声明 2^40 字节就能把进程 OOM 掉。
+            let data_size = u64_at(rec, pos + 0x30);
+            if data_size > MAX_ATTR_LIST_BYTES {
+                return None;
+            }
+            let data_size = data_size as usize;
+
             let run_off = u16_at(rec, pos + 0x20) as usize;
-            if run_off >= alen {
+            if run_off < ATTR_HDR_NON_RESIDENT || run_off >= alen {
                 return None;
             }
             let runs = parse_runs(&rec[pos + run_off..pos + alen]);
             let mut buf = Vec::with_capacity(data_size);
             for (lcn, clusters) in runs {
-                let want = (clusters * bytes_per_cluster) as usize;
+                // 簇数同样来自磁盘：乘法要挡溢出，单次读取量也要挡住
+                let want = clusters
+                    .checked_mul(bytes_per_cluster)
+                    .filter(|&w| w <= MAX_ATTR_LIST_BYTES)? as usize;
+                let at = (lcn as u64).checked_mul(bytes_per_cluster)?;
                 let mut chunk = vec![0u8; want];
-                if vol
-                    .read_at(lcn as u64 * bytes_per_cluster, &mut chunk)
-                    .is_err()
-                {
+                if vol.read_at(at, &mut chunk).is_err() {
                     return None;
                 }
                 buf.extend_from_slice(&chunk);
@@ -728,17 +783,22 @@ fn read_mft_record(
 
     let mut vcn = 0u64;
     for &(lcn, clusters) in runs {
-        if target_vcn < vcn + clusters {
-            let lcn_at = lcn as u64 + (target_vcn - vcn);
+        // 簇数来自磁盘，累加可能溢出；饱和之后 target_vcn 必定落在区间内，
+        // 于是这一段被当成「命中」，再由下面的 checked 计算把它挡回去。
+        let end = vcn.saturating_add(clusters);
+        if target_vcn < end {
+            let lcn_at = (lcn as u64).checked_add(target_vcn - vcn)?;
+            let at = lcn_at
+                .checked_mul(bytes_per_cluster)?
+                .checked_add(within)?;
             let mut buf = vec![0u8; rec_size];
-            vol.read_at(lcn_at * bytes_per_cluster + within, &mut buf)
-                .ok()?;
+            vol.read_at(at, &mut buf).ok()?;
             if !apply_fixup(&mut buf, bytes_per_sector) {
                 return None;
             }
             return Some(buf);
         }
-        vcn += clusters;
+        vcn = end;
     }
     None
 }
@@ -775,18 +835,7 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
     let mut size = 0u64;
     let mut got_name = false;
 
-    while pos + 8 <= rec.len() {
-        let atype = u32_at(rec, pos);
-        if atype == 0xffff_ffff {
-            break;
-        }
-        let alen = u32_at(rec, pos + 4) as usize;
-        if alen < 0x10 || pos + alen > rec.len() {
-            break;
-        }
-        let non_resident = rec[pos + 8] == 1;
-        let name_len = rec[pos + 9] as usize;
-
+    while let Some((atype, alen, non_resident, name_len)) = attr_header(rec, pos) {
         match atype {
             0x30 if !non_resident => {
                 let val_off = u16_at(rec, pos + 0x14) as usize;
@@ -827,7 +876,10 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
             }
             0x80 if name_len == 0 => {
                 if non_resident {
-                    if u64_at(rec, pos + 0x10) == 0 && pos + 0x38 <= rec.len() {
+                    // 只认第一段（start_vcn == 0）上记录的总长度。
+                    // 这两处读取都落在非常驻属性头（0x40 字节）内部，
+                    // attr_header 已经保证了长度，不必再单独判边界。
+                    if u64_at(rec, pos + 0x10) == 0 {
                         size = u64_at(rec, pos + 0x30);
                     }
                 } else {
@@ -1476,6 +1528,147 @@ mod tests {
         let files = t.largest_files(10);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "video.mp4");
+    }
+
+    // -----------------------------------------------------------------
+    // 畸形记录的防御性解析
+    //
+    // $MFT 是从**裸卷**上读来的，而且是在系统正在写盘的时候读。fixup 校验
+    // 拦得住整扇区撕裂，拦不住所有字节组合。下面这组用例把「磁盘上的长度
+    // 字段在撒谎」的各种形态都固定下来：要求一律安静地放弃，绝不 panic。
+    // -----------------------------------------------------------------
+
+    /// 造一条最小可用的 FILE 记录：`len` 字节，属性表从 `attrs_off` 开始。
+    fn skeleton_record(len: usize, attrs_off: u16) -> Vec<u8> {
+        let mut rec = vec![0u8; len];
+        rec[0..4].copy_from_slice(b"FILE");
+        rec[0x14..0x16].copy_from_slice(&attrs_off.to_le_bytes());
+        rec[0x16..0x18].copy_from_slice(&0x01u16.to_le_bytes()); // in_use
+        rec
+    }
+
+    fn parse(rec: &[u8]) -> bool {
+        let mut e = Entry::default();
+        let mut links = Vec::new();
+        parse_record(rec, &mut e, &mut links)
+    }
+
+    /// 声明 alen = 0x10 的非常驻 $DATA：属性头还没读完记录就到头了。
+    /// 老代码在 `u64_at(rec, pos + 0x10)` 上直接越界 panic。
+    #[test]
+    fn truncated_non_resident_data_attr_is_ignored() {
+        let mut rec = skeleton_record(0x40, 0x30);
+        rec[0x30..0x34].copy_from_slice(&0x80u32.to_le_bytes()); // $DATA
+        rec[0x34..0x38].copy_from_slice(&0x10u32.to_le_bytes()); // alen 谎报成 0x10
+        rec[0x38] = 1; // non_resident
+        assert!(!parse(&rec), "属性头装不下就该整条放弃");
+    }
+
+    /// 常驻属性同理：alen 小于常驻头长度 0x18 时不能去读 0x10/0x14 偏移。
+    #[test]
+    fn truncated_resident_attr_is_ignored() {
+        let mut rec = skeleton_record(0x40, 0x30);
+        rec[0x30..0x34].copy_from_slice(&0x30u32.to_le_bytes()); // $FILE_NAME
+        rec[0x34..0x38].copy_from_slice(&0x10u32.to_le_bytes());
+        assert!(!parse(&rec));
+    }
+
+    /// alen 超出记录长度：不能继续往下走。
+    #[test]
+    fn attr_longer_than_record_stops_parsing() {
+        let mut rec = skeleton_record(0x80, 0x30);
+        rec[0x30..0x34].copy_from_slice(&0x80u32.to_le_bytes());
+        rec[0x34..0x38].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+        assert!(!parse(&rec));
+    }
+
+    /// alen = 0 会让 `pos += alen` 原地踏步。属性头下限保证了它必然被拒。
+    #[test]
+    fn zero_length_attr_cannot_spin_forever() {
+        let mut rec = skeleton_record(0x80, 0x30);
+        rec[0x30..0x34].copy_from_slice(&0x80u32.to_le_bytes());
+        rec[0x34..0x38].copy_from_slice(&0u32.to_le_bytes());
+        assert!(!parse(&rec));
+    }
+
+    /// attrs_off 指到记录外面。
+    #[test]
+    fn attrs_offset_past_end_is_ignored() {
+        let rec = skeleton_record(0x40, 0x9999);
+        assert!(!parse(&rec));
+    }
+
+    /// run list 的字段宽度是 4 bit，最大 15，但 u64 只装得下 8 字节。
+    /// 老代码在 `1i64 << (15 * 8 - 1)` 上移位溢出。
+    #[test]
+    fn runlist_rejects_oversized_field_widths() {
+        // header 0xF1 => len_size=1, off_size=15
+        let mut runs = vec![0u8; 17];
+        runs[0] = 0xF1;
+        runs[1] = 0x08;
+        assert!(parse_runs(&runs).is_empty());
+
+        // header 0x1F => len_size=15, off_size=1
+        let mut runs = vec![0u8; 17];
+        runs[0] = 0x1F;
+        assert!(parse_runs(&runs).is_empty());
+    }
+
+    /// off_size == 8 且偏移为负——**这在大卷上是完全合法的数据**。
+    /// 老代码的符号扩展写成「减去 1 << (off_size * 8)」，这里就是 `1i64 << 64`。
+    #[test]
+    fn runlist_handles_full_width_negative_offset() {
+        let mut runs = vec![0x11u8, 0x10, 0x64]; // +100 处 16 簇
+        runs.push(0x81); // len_size=1, off_size=8
+        runs.push(0x08); // 8 簇
+        runs.extend_from_slice(&(-2i64).to_le_bytes()); // 回退 2 簇
+        runs.push(0x00); // 终止符
+
+        assert_eq!(parse_runs(&runs), vec![(100, 16), (98, 8)]);
+    }
+
+    /// off_size == 0 是稀疏段：跳过这一段，但后面的段还要继续解析。
+    #[test]
+    fn runlist_skips_sparse_segment_and_continues() {
+        let runs = [
+            0x11u8, 0x10, 0x64, // +100 处 16 簇
+            0x01, 0x08, // 稀疏：8 簇，无偏移
+            0x11, 0x04, 0x0a, // 再 +10 处 4 簇
+            0x00,
+        ];
+        assert_eq!(parse_runs(&runs), vec![(100, 16), (110, 4)]);
+    }
+
+    /// 兜底：任意字节流喂进解析器都不能 panic。
+    ///
+    /// 用固定种子的 LCG 而不是随机数，保证失败可复现，也不用引入依赖。
+    #[test]
+    fn arbitrary_bytes_never_panic() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        for case in 0..2000 {
+            let len = 0x30 + (next() as usize % 0x400);
+            let mut rec: Vec<u8> = (0..len).map(|_| next() as u8).collect();
+            // 一半的用例保留合法的 FILE 头，好让解析真的走进属性循环
+            if case % 2 == 0 {
+                rec[0..4].copy_from_slice(b"FILE");
+                rec[0x16] |= 0x01;
+            }
+            let mut e = Entry::default();
+            let mut links = Vec::new();
+            let _ = parse_record(&rec, &mut e, &mut links);
+
+            let mut frags = Vec::new();
+            collect_data_fragments(&rec, &mut frags);
+            let _ = attribute_list_data_records(&rec);
+            let _ = parse_runs(&rec);
+        }
     }
 
     #[test]

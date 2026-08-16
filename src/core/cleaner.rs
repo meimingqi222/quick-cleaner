@@ -131,8 +131,19 @@ fn clear_readonly(path: &Path, md: &std::fs::Metadata) {
 }
 
 /// 递归删除一棵树，边删边把进度记到 `p` 上。
+///
+/// 每一层都重新过一遍 [`is_protected`]。以前只有入口 [`clean_path`] 查一次，
+/// 递归下去全程不设防——那依赖于「保护表里的目录只能从更上层进入，而上层
+/// 自己也受保护」这个巧合，而不是设计。这里是整个程序唯一真正动手删东西的
+/// 地方，纵深防御应该做在这一层。
+///
+/// 代价是每个节点多一次路径归一化（一次 String 分配）。相对于紧随其后的
+/// `DeleteFileW` 系统调用，这点开销可以忽略。
 pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
+        return CleanResult::Skipped;
+    }
+    if is_protected(path) {
         return CleanResult::Skipped;
     }
 
@@ -196,6 +207,9 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if std::fs::remove_dir(path).is_ok() && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
     } else {
+        // 文件删不掉会记进 `p.failed`（见 delete_file），目录删不掉以前
+        // 只体现在返回值上，进度条里的失败数因此偏少。
+        p.failed.fetch_add(1, Ordering::Relaxed);
         CleanResult::Failed
     }
 }
@@ -271,6 +285,55 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
     report
 }
 
+/// 删完之后的结果行：成功/跳过多少，失败的具体是哪些。
+///
+/// 失败清单封顶 20 条。一次清理如果失败几万个（多半是整个目录被占用），
+/// 前 20 条已经足够看出是哪一类问题了。
+fn audit_result(report: &CleanReport, p: &CleanProgress) {
+    const MAX_LISTED: usize = 20;
+    let snap = p.snapshot();
+    let shown: Vec<String> = report
+        .failed
+        .iter()
+        .take(MAX_LISTED)
+        .map(|f| f.display().to_string())
+        .collect();
+    let more = report.failed.len().saturating_sub(shown.len());
+
+    crate::log!(
+        "[删除] 完成：目标 ok={} skipped={} failed={}；文件 {} 个 / {}，失败 {} 个{}{}",
+        report.ok,
+        report.skipped,
+        report.failed.len(),
+        snap.files,
+        crate::core::model::fmt_size(snap.bytes),
+        snap.failed,
+        if shown.is_empty() {
+            String::new()
+        } else {
+            format!("；失败清单：{}", shown.join(" | "))
+        },
+        if more > 0 {
+            format!("（另有 {more} 条未列出）")
+        } else {
+            String::new()
+        }
+    );
+}
+
+/// 一次删除动作的审计日志。
+///
+/// 本程序**永久删除**文件，没有回收站可退。用户回来说「它删了不该删的东西」
+/// 的时候，如果日志里只有扫描耗时，那就等于什么都没有。这里记下每一批的
+/// 目标清单，出事时至少有据可查。
+///
+/// 只记目标（用户勾选的那一层），不记递归展开出的每个文件——一次清理动辄
+/// 几十万个文件，全记下来日志会先被自己撑爆，而定位问题靠的是顶层目标。
+fn audit(action: &str, paths: impl Iterator<Item = PathBuf>) {
+    let list: Vec<String> = paths.map(|p| p.display().to_string()).collect();
+    crate::log!("[删除] {action}，共 {} 个目标：{}", list.len(), list.join(" | "));
+}
+
 /// 一个清理目标及其处置方式。
 #[derive(Clone, Debug)]
 pub struct CleanTarget {
@@ -303,6 +366,10 @@ impl CleanTarget {
 
 /// 清理多个扫描目标。
 pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport {
+    audit(
+        "分类清理",
+        targets.iter().map(|t| t.path.clone()),
+    );
     let mut report = CleanReport::default();
     let mut bin_done = false;
     for t in targets {
@@ -335,11 +402,13 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             report.merge(clean_dir_contents(d, p));
         }
     }
+    audit_result(&report, p);
     report
 }
 
 /// 对用户在磁盘分析里手动选中的任意路径执行清理。
 pub fn clean_arbitrary(paths: &[PathBuf], p: &CleanProgress) -> CleanReport {
+    audit("用户手选路径", paths.iter().cloned());
     let mut report = CleanReport::default();
     for path in paths {
         if p.cancelled() {
@@ -352,6 +421,7 @@ pub fn clean_arbitrary(paths: &[PathBuf], p: &CleanProgress) -> CleanReport {
         }
         report.record(path, clean_path(path, p));
     }
+    audit_result(&report, p);
     report
 }
 

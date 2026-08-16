@@ -155,6 +155,9 @@ impl DiskSelectionState {
         if self.is_selected(path) {
             if self.selected.remove(&pb) {
                 self.sizes.remove(&pb);
+                // 这一项底下的排除记录现在没有依附对象了，必须一起清掉，
+                // 否则用户「取消再重新勾选」之后，那些子项会被静默漏删。
+                self.prune_orphan_exclusions();
             } else {
                 // 勾选来自某个祖先，记为局部排除，并从汇总里扣掉它的体积
                 self.excluded_sizes.insert(pb.clone(), size);
@@ -165,8 +168,67 @@ impl DiskSelectionState {
             self.excluded_sizes.remove(&pb);
         } else {
             self.selected.insert(pb.clone());
-            self.sizes.insert(pb, size);
+            self.sizes.insert(pb.clone(), size);
+            self.absorb_covered_descendants(&pb);
         }
+    }
+
+    /// 新勾选 `parent` 之后，把已被它覆盖的显式勾选子孙收编掉。
+    ///
+    /// 不做这一步的话，「先勾子目录、再勾父目录」会让 `sizes` 里同时留下
+    /// 两条记录，`total_size` 把同一批字节数了两遍——用户在执行删除**之前**
+    /// 看到的就是这个虚高的数字。`resolve_targets` 也会同时吐出父与子。
+    ///
+    /// 中间隔着排除项的子孙不能收编：它靠的是自己那条显式勾选活着，
+    /// 撤掉就真的不删了。
+    fn absorb_covered_descendants(&mut self, parent: &Path) {
+        let descendants: Vec<PathBuf> = self
+            .selected
+            .iter()
+            .filter(|d| d.as_path() != parent && d.starts_with(parent))
+            .cloned()
+            .collect();
+
+        for d in descendants {
+            self.selected.remove(&d);
+            if self.is_selected(&d) {
+                // 摘掉显式勾选后仍然是选中的 —— 说明确实被祖先覆盖了
+                self.sizes.remove(&d);
+            } else {
+                // 中间有排除挡着，得把显式勾选放回去
+                self.selected.insert(d);
+            }
+        }
+    }
+
+    /// 丢弃那些头上已经没有任何勾选祖先的排除记录。
+    ///
+    /// 排除只在「某个祖先被勾选」的语境下才有意义。祖先一旦取消勾选，
+    /// 残留的排除记录会在下次重新勾选时悄悄生效。
+    fn prune_orphan_exclusions(&mut self) {
+        let orphans: Vec<PathBuf> = self
+            .deselected
+            .iter()
+            .filter(|e| !self.has_selected_ancestor(e))
+            .cloned()
+            .collect();
+
+        for e in orphans {
+            self.deselected.remove(&e);
+            self.excluded_sizes.remove(&e);
+        }
+    }
+
+    /// 父链上是否存在显式勾选项（不含自身）。
+    fn has_selected_ancestor(&self, path: &Path) -> bool {
+        let mut cur = path.parent();
+        while let Some(p) = cur {
+            if self.selected.contains(p) {
+                return true;
+            }
+            cur = p.parent();
+        }
+        false
     }
 
     /// 把某项设为指定勾选状态（用于「全选/全不选」这类批量操作）。
@@ -309,6 +371,86 @@ mod tests {
         state.toggle(Path::new(r"C:\a"), 10);
         assert_eq!(state.len(), 1);
         assert_eq!(state.total_size(), 25);
+    }
+
+    /// 先勾子目录、再勾父目录：父项应当把子项收编，而不是两笔都记账。
+    ///
+    /// 这个数字会在**执行删除之前**显示给用户看，错了就是在误导人。
+    #[test]
+    fn selecting_a_parent_absorbs_already_selected_children() {
+        let mut st = DiskSelectionState::new();
+        let parent = PathBuf::from("C:\\a");
+        let child = PathBuf::from("C:\\a\\b");
+
+        st.toggle(&child, 100);
+        st.toggle(&parent, 1000);
+
+        assert_eq!(st.total_size(), 1000, "父子体积被重复累加了");
+        assert_eq!(st.len(), 1, "子项没有被父项收编");
+        assert_eq!(st.resolve_targets(), vec![parent.clone()]);
+        assert!(st.is_selected(&child), "子项仍应处于选中（继承自父）");
+    }
+
+    /// 但中间隔着排除项的孙子不能被收编——它靠自己那条显式勾选活着。
+    #[test]
+    fn absorption_stops_at_an_excluded_level() {
+        let mut st = DiskSelectionState::new();
+        let a = PathBuf::from("C:\\a");
+        let b = PathBuf::from("C:\\a\\b");
+        let c = PathBuf::from("C:\\a\\b\\c");
+
+        st.toggle(&a, 1000); // 勾 a
+        st.toggle(&b, 300); // 排除 b
+        st.toggle(&c, 50); // 但 b 底下的 c 还是要删
+
+        assert!(st.is_selected(&a));
+        assert!(!st.is_selected(&b));
+        assert!(st.is_selected(&c), "显式勾选的 c 不该被 b 的排除吃掉");
+
+        // 再勾一次 a（本就选中，这里退化成取消），c 的显式勾选要留着
+        let mut targets = st.resolve_targets();
+        targets.sort();
+        assert!(targets.contains(&c));
+    }
+
+    /// 取消父项时，它底下的排除记录必须一并作废。
+    ///
+    /// 否则「取消 → 重新勾选」之后，被排除过的子项会静默地继续不删，
+    /// 而界面上看起来整个目录都是勾上的。
+    #[test]
+    fn unchecking_a_parent_clears_its_exclusions() {
+        let mut st = DiskSelectionState::new();
+        let parent = PathBuf::from("C:\\a");
+        let child = PathBuf::from("C:\\a\\b");
+
+        st.toggle(&parent, 1000); // 勾父
+        st.toggle(&child, 100); // 排除子
+        assert_eq!(st.total_size(), 900);
+
+        st.toggle(&parent, 1000); // 取消父
+        assert!(!st.is_selected(&parent));
+        assert_eq!(st.total_size(), 0);
+
+        st.toggle(&parent, 1000); // 重新勾父
+        assert!(st.is_selected(&child), "重新勾选后子项仍被残留的排除挡着");
+        assert_eq!(st.total_size(), 1000);
+        assert_eq!(st.resolve_targets(), vec![parent]);
+    }
+
+    /// `clear` 之后必须是全新状态，不留任何残渣。
+    #[test]
+    fn clear_wipes_every_map() {
+        let mut st = DiskSelectionState::new();
+        let parent = PathBuf::from("C:\\a");
+        st.toggle(&parent, 1000);
+        st.toggle(&parent.join("b"), 100);
+        st.clear();
+
+        assert_eq!(st.total_size(), 0);
+        assert_eq!(st.len(), 0);
+        assert!(st.is_empty());
+        assert!(!st.is_selected(&parent));
+        assert!(st.resolve_targets().is_empty());
     }
 
     #[test]
