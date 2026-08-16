@@ -35,7 +35,7 @@ pub struct CategorySummary {
 pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummary> {
     let (mut cats, discovered) = rayon::join(
         || scan_fixed(targets, live),
-        || scan_discovered(live),
+        || scan_discovered(live, None),
     );
     merge_discovered(&mut cats, discovered);
     cats
@@ -43,22 +43,157 @@ pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummar
 
 /// **第一阶段**：扫固定路径表（`%TEMP%`、各种缓存目录……）。
 ///
-/// 目录位置是已知的，只需要称重，本机实测约 1 秒。
+/// 目录位置是已知的，只需要称重。本机实测约 4 秒——注意这个数字**不是**
+/// 被体积撑起来的：`go\pkg\mod` 是 0 字节却要 2.8 秒，`Kiro\logs` 只有
+/// 3.4 MB 却要 4 秒。瓶颈是文件**数**，几十万次目录元数据查询。
+/// 想快只有一条路：别去遍历。见 [`scan_fixed_with_tree`]。
 pub fn scan_fixed(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummary> {
-    let results: Vec<ScanItem> = targets
+    scan_fixed_inner(targets, live, None)
+}
+
+/// 阶段一的查表版：目标落在 `tree` 所属卷上时直接读 MFT 的聚合体积，
+/// 一次查表就是 O(路径深度)，完全不碰目录项。
+///
+/// 树上查不到的目标（不在这个卷上、或者是 MFT 快照之后新建的）自动退回
+/// 遍历，因此结果集与 [`scan_fixed`] 完全等价。
+///
+/// 唯一的差异在口径：MFT 的聚合体积统计卷上全部文件，而遍历会跳过
+/// `desktop.ini` 和符号链接，因此同一目录两条路径给出的体积会有零点几个
+/// 百分点的偏移。这个不一致在阶段二的双通道之间本来就存在。
+/// `last_modified` 在查表路径下拿不到（MFT 记录里没有可直接用的值），
+/// 置 0 ——该字段目前全项目没有读取方。
+pub fn scan_fixed_with_tree(
+    targets: &[ScanTarget],
+    live: &AtomicBool,
+    tree: &crate::core::disk::MftTree,
+) -> Vec<CategorySummary> {
+    scan_fixed_inner(targets, live, Some(tree))
+}
+
+fn scan_fixed_inner(
+    targets: &[ScanTarget],
+    live: &AtomicBool,
+    tree: Option<&crate::core::disk::MftTree>,
+) -> Vec<CategorySummary> {
+    let t0 = std::time::Instant::now();
+    // 逐个目标计时。目标是并行称重的，墙钟时间等于**最慢那一个**，
+    // 所以合计耗时没有意义，排行榜才有。
+    let measured: Vec<(ScanItem, std::time::Duration, bool)> = targets
         .par_iter()
         .filter(|t| t.path.exists())
-        .filter_map(|t| scan_dir(&t.path, &t.label, t.category, live))
+        .filter_map(|t| {
+            let started = std::time::Instant::now();
+            match tree.and_then(|tr| measure_via_tree(tr, &t.path)) {
+                Some((size, files)) => Some((
+                    ScanItem {
+                        path: t.path.clone(),
+                        label: t.label.clone(),
+                        size,
+                        file_count: files,
+                        category: t.category,
+                        last_modified: 0,
+                    },
+                    started.elapsed(),
+                    true,
+                )),
+                None => scan_dir(&t.path, &t.label, t.category, live)
+                    .map(|it| (it, started.elapsed(), false)),
+            }
+        })
         .collect();
+
+    let via_tree = measured.iter().filter(|(_, _, t)| *t).count();
+    let mut slowest: Vec<(std::time::Duration, &std::path::Path, u64, bool)> = measured
+        .iter()
+        .map(|(it, d, t)| (*d, it.path.as_path(), it.size, *t))
+        .collect();
+    slowest.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    let top: Vec<String> = slowest
+        .iter()
+        .take(5)
+        .map(|(d, p, size, t)| {
+            let how = if *t { "查表" } else { "遍历" };
+            format!("{:?} {how} {} {}", d, crate::core::model::fmt_size(*size), p.display())
+        })
+        .collect();
+
+    let results: Vec<ScanItem> = measured.into_iter().map(|(it, _, _)| it).collect();
+    let total: u64 = results.iter().map(|it| it.size).sum();
+    crate::log!(
+        "阶段一 scan_fixed 完成：{:?}，{}/{} 个目标命中（{} 个走 MFT 查表 / {} 个走遍历），合计 {}；最慢 5 个：{}",
+        t0.elapsed(),
+        results.len(),
+        targets.len(),
+        via_tree,
+        results.len() - via_tree,
+        crate::core::model::fmt_size(total),
+        top.join(" | ")
+    );
     aggregate(results)
+}
+
+/// 在 MFT 树上查一个目录的递归体积与文件数。查不到返回 `None`，调用方退回遍历。
+pub(crate) fn measure_via_tree(
+    tree: &crate::core::disk::MftTree,
+    path: &Path,
+) -> Option<(u64, u64)> {
+    if volume_of(path)? != tree.volume().to_ascii_uppercase() {
+        return None;
+    }
+    // `find_path` 逐层匹配，某一层对不上就提前收工。因此长度对不上就说明
+    // 这条路径不在树里（典型情况：MFT 快照之后才建出来的目录）。
+    let want = path
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count();
+    let chain = tree.find_path(path);
+    if chain.len() != want + 1 {
+        return None;
+    }
+    let node = *chain.last()?;
+    Some((tree.size_of(node), tree.file_count_of(node)))
+}
+
+/// 路径所在的盘符（大写）。没有 `X:` 前缀（UNC、非 Windows）时返回 `None`。
+fn volume_of(path: &Path) -> Option<char> {
+    let s = path.to_string_lossy();
+    let mut it = s.chars();
+    let c = it.next()?.to_ascii_uppercase();
+    (c.is_ascii_alphabetic() && it.next() == Some(':')).then_some(c)
+}
+
+/// 固定路径目标最集中的那个卷。
+///
+/// 阶段一要查表就得先解析一个卷的 MFT，只解析得起一个（一棵全盘树约
+/// 350 MB）。目标散落在多个盘上时选命中最多的那个，剩下的照旧遍历。
+pub fn dominant_volume(targets: &[ScanTarget]) -> Option<char> {
+    let mut count: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+    for t in targets {
+        if let Some(v) = volume_of(&t.path) {
+            *count.entry(v).or_default() += 1;
+        }
+    }
+    count.into_iter().max_by_key(|&(_, n)| n).map(|(v, _)| v)
 }
 
 /// **第二阶段**：发现式扫描构建产物。
 ///
 /// 这些目录散落在用户所有代码目录里，位置不确定，只能靠全盘检索，
 /// 是整轮扫描里最贵的一步（本机冷缓存 25 秒量级）。放在第二阶段异步补齐。
-pub fn scan_discovered(live: &AtomicBool) -> Vec<ScanItem> {
-    crate::core::devscan::discover(live)
+pub fn scan_discovered(
+    live: &AtomicBool,
+    prescanned: Option<crate::core::disk::MftScan>,
+) -> Vec<ScanItem> {
+    let t0 = std::time::Instant::now();
+    let items = crate::core::devscan::discover(live, prescanned);
+    let total: u64 = items.iter().map(|it| it.size).sum();
+    crate::log!(
+        "阶段二 scan_discovered 完成：{:?}，{} 条，合计 {}",
+        t0.elapsed(),
+        items.len(),
+        crate::core::model::fmt_size(total)
+    );
+    items
 }
 
 /// 把第二阶段的结果并进已有的分类汇总。
@@ -253,6 +388,35 @@ fn walk_at(dir: &Path, live: &AtomicBool, depth: usize) -> Acc {
 mod tests {
     use super::*;
 
+    #[test]
+    fn volume_of_reads_the_drive_letter() {
+        assert_eq!(volume_of(Path::new(r"C:\Users\me")), Some('C'));
+        // 小写盘符要归一化，否则和 MftTree::volume() 比不上
+        assert_eq!(volume_of(Path::new(r"d:\code")), Some('D'));
+        assert_eq!(volume_of(Path::new(r"C:\")), Some('C'));
+        // UNC 与相对路径没有盘符，只能走遍历
+        assert_eq!(volume_of(Path::new(r"\\server\share\x")), None);
+        assert_eq!(volume_of(Path::new("relative/path")), None);
+        assert_eq!(volume_of(Path::new("")), None);
+    }
+
+    #[test]
+    fn dominant_volume_picks_the_busiest_drive() {
+        let mk = |p: &str| ScanTarget {
+            path: PathBuf::from(p),
+            label: Text::same("t"),
+            category: CategoryId::UserTemp,
+        };
+        let targets = vec![
+            mk(r"C:\a"),
+            mk(r"C:\b"),
+            mk(r"D:\c"),
+            mk(r"\\unc\share"),
+        ];
+        assert_eq!(dominant_volume(&targets), Some('C'));
+        assert_eq!(dominant_volume(&[]), None);
+    }
+
     fn item(path: &str, size: u64, cat: CategoryId) -> ScanItem {
         ScanItem {
             path: PathBuf::from(path),
@@ -387,7 +551,7 @@ mod tests {
         }
 
         let t2 = Instant::now();
-        let discovered = crate::core::devscan::discover(&live);
+        let discovered = crate::core::devscan::discover(&live, None);
         println!("  发现式扫描: {:?}（{} 条）", t2.elapsed(), discovered.len());
 
         let t3 = Instant::now();

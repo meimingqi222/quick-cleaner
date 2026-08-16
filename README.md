@@ -68,6 +68,7 @@ quick-cleaner/
 │   │   ├── safety.rs           # Single source of truth for path safety rules
 │   │   ├── apps.rs             # App models and residual analyzers
 │   │   ├── disk.rs             # Disk tree models & selection state machine
+│   │   ├── log.rs              # File logging (%APPDATA%\QuickCleaner\quick-cleaner.log)
 │   │   └── model.rs            # Data formatting & shared tri-state models
 │   │
 │   ├── platform/               # OS abstraction layer (enforced by platform_contract!)

@@ -153,26 +153,44 @@ struct Hit {
 /// 发现所有开发垃圾目录并测算体积。
 ///
 /// 有管理员权限时走 MFT，否则退回文件系统遍历。
-pub fn discover(live: &AtomicBool) -> Vec<ScanItem> {
+///
+/// `prescanned` 是阶段一为了查表已经解析好的那个卷。它本来跑完就要被丢掉，
+/// 接过来直接用能省掉一整次全盘 MFT 解析（本机 C 盘 3.3 秒）。所有权在这里
+/// 终结，用完即释放，内存峰值和原来逐卷解析时一样是一棵树。
+pub fn discover(live: &AtomicBool, prescanned: Option<crate::core::disk::MftScan>) -> Vec<ScanItem> {
+    #[cfg(not(windows))]
+    let _ = prescanned;
     #[cfg(windows)]
     {
         if crate::platform::windows::security::is_elevated() {
-            let items = discover_via_mft(live);
+            let t0 = std::time::Instant::now();
+            let items = discover_via_mft(live, prescanned);
+            crate::log!("发现式扫描走 MFT 通道：{:?}，{} 条", t0.elapsed(), items.len());
             // 卷打不开（非 NTFS、被占用等）时会拿到空结果，此时仍需兜底
             if !items.is_empty() {
                 return items;
             }
+            crate::log!("MFT 通道无结果，回退遍历通道");
+        } else {
+            crate::log!("未提权，发现式扫描走遍历通道（慢得多）");
         }
     }
-    discover_via_walk(live)
+    let t0 = std::time::Instant::now();
+    let items = discover_via_walk(live);
+    crate::log!("发现式扫描走遍历通道：{:?}，{} 条", t0.elapsed(), items.len());
+    items
 }
 
 /// MFT 通道：在内存目录树上 DFS，体积直接读聚合值，无需二次遍历。
 #[cfg(windows)]
-fn discover_via_mft(live: &AtomicBool) -> Vec<ScanItem> {
+fn discover_via_mft(
+    live: &AtomicBool,
+    prescanned: Option<crate::core::disk::MftScan>,
+) -> Vec<ScanItem> {
     use crate::platform::windows::mft::scan_volume;
     use crate::platform::windows::volume::list_ntfs_volumes;
 
+    let mut prescanned = prescanned;
     let mut out = Vec::new();
     // 逐卷处理而不是并行扫全部：一棵全盘 MftTree 就可能占数百 MB，
     // 同时持有多个卷的树会让内存峰值失控。处理完一卷立刻释放。
@@ -180,8 +198,20 @@ fn discover_via_mft(live: &AtomicBool) -> Vec<ScanItem> {
         if !live.load(Ordering::Relaxed) {
             break;
         }
-        let Ok(scan) = scan_volume(vol, 0) else {
-            continue;
+        // 阶段一预解析过的那个卷直接接手，别再解析一遍
+        let scan = if prescanned.as_ref().is_some_and(|s| s.volume == vol) {
+            match prescanned.take() {
+                Some(s) => {
+                    crate::log!("卷 {vol}: 复用阶段一已解析的 MFT 树，省去一次全盘解析");
+                    s
+                }
+                None => continue,
+            }
+        } else {
+            match scan_volume(vol, 0) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
         };
         let tree = &scan.tree;
         let mut hits = Vec::new();
@@ -506,7 +536,7 @@ mod bench_probe {
             println!("是否已提权: {elevated}");
             if elevated {
                 let t = Instant::now();
-                let items = super::discover_via_mft(&live);
+                let items = super::discover_via_mft(&live, None);
                 let total: u64 = items.iter().map(|i| i.size).sum();
                 println!(
                     "MFT   通道: {:>7.2} 秒, {} 项, 合计 {}",

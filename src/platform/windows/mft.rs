@@ -1,5 +1,6 @@
+use rayon::prelude::*;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use std::os::windows::ffi::OsStrExt;
 
@@ -859,16 +860,25 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
 pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     let started = Instant::now();
 
+    // 对系统卷发起原始卷句柄读取是杀软重点盯防的行为（rawcopy / 勒索软件
+    // 都走这条路），实测 C: 比 D: 在这一步多花近 1 秒，怀疑是实时监控的钩子。
+    // 单独计时，免得这段时间被含混地算进「解析」里。
+    let t_open = Instant::now();
     let vol = Volume::open(letter)?;
+    let open_time = t_open.elapsed();
+    let t_vd = Instant::now();
     let vd = vol.volume_data()?;
+    let vd_time = t_vd.elapsed();
 
     let bytes_per_cluster = vd.bytes_per_cluster as u64;
     let bytes_per_sector = vd.bytes_per_sector as usize;
     let rec_size = vd.bytes_per_file_record_segment as usize;
     let mft_offset = vd.mft_start_lcn as u64 * bytes_per_cluster;
 
+    let t_first = Instant::now();
     let mut first = vec![0u8; rec_size.max(bytes_per_sector)];
     vol.read_at(mft_offset, &mut first)?;
+    let first_time = t_first.elapsed();
     if !apply_fixup(&mut first, bytes_per_sector) {
         return Err(MftError::NotNtfs);
     }
@@ -876,6 +886,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     collect_data_fragments(&first, &mut frags);
 
     let mut ext_records = 0usize;
+    let t_prep = Instant::now();
     if let Some(list) = read_attribute_list(&first, &vol, bytes_per_cluster) {
         let partial = flatten_fragments(frags.clone());
         for rec_no in attribute_list_data_records(&list) {
@@ -909,9 +920,14 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     let est_records = (mft_valid / rec_size as u64) as usize;
     let mut entries: Vec<Entry> = Vec::with_capacity(est_records + 1024);
 
+    let prep_time = t_prep.elapsed();
+
     let mut buf = vec![0u8; CHUNK_BYTES];
     let mut consumed: u64 = 0;
-    let mut links: Vec<(u32, u8)> = Vec::with_capacity(8);
+    // 读盘与解析在同一个循环里交织，只看总时长分不出谁是瓶颈。分开计时：
+    // 读盘占大头就该在 IO 上想办法（更大的块、异步预读），解析占大头就该
+    // 把 parse_record 并行化。两条路的代价完全不同，不测清楚不该动手。
+    let (mut io_time, mut parse_time) = (Duration::ZERO, Duration::ZERO);
     let mut hard_links: Vec<(u32, u32)> = Vec::new();
 
     'outer: for (lcn, clusters) in runs {
@@ -932,34 +948,63 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
                 break;
             }
 
+            let t_io = Instant::now();
             let got = vol.read_at(base + done, &mut buf[..want as usize])?;
+            io_time += t_io.elapsed();
             let full = got / rec_size;
             if full == 0 {
                 break 'outer;
             }
 
-            for k in 0..full {
-                let rec_no = entries.len() as u32;
-                let rec = &mut buf[k * rec_size..(k + 1) * rec_size];
-                let mut entry = Entry::default();
-                links.clear();
-                if apply_fixup(rec, bytes_per_sector) {
-                    parse_record(rec, &mut entry, &mut links);
-                }
-
-                if entry.base_ref != 0 {
-                    for &(p, _) in links.iter() {
-                        hard_links.push((entry.base_ref, p));
-                    }
-                } else if entry.used && !entry.is_dir && links.len() > 1 {
-                    for &(p, _) in links.iter() {
-                        if p != entry.parent {
-                            hard_links.push((rec_no, p));
+            // 块内并行解析。每条记录 1024 字节、彼此独立，`apply_fixup` 只改
+            // 本记录的缓冲区，是天然可并行的纯计算——实测这一步单线程要占掉
+            // 整个 MFT 解析的三成（C 盘 1.22 秒），而读盘已经贴着硬件上限。
+            //
+            // **顺序必须保持**：`entries` 的下标就是 MFT 记录号，而 `Entry::parent`
+            // 存的正是记录号。错一位整棵目录树就全乱了。`par_chunks_mut` 是
+            // 索引并行迭代器，经 `enumerate`/`map_init` 后 `collect` 到 Vec 仍
+            // 保序，因此记录号 = `base_rec + k` 成立。
+            //
+            // `links` 用 `map_init` 挂在每个 rayon 线程上复用：改成每条记录新建
+            // 就是三百多万次小分配，省下的解析时间会被分配器吃回去。
+            let t_parse = Instant::now();
+            let base_rec = entries.len() as u32;
+            let parsed: Vec<(Entry, Vec<(u32, u32)>)> = buf[..full * rec_size]
+                .par_chunks_mut(rec_size)
+                .enumerate()
+                .map_init(
+                    || Vec::<(u32, u8)>::with_capacity(8),
+                    |links, (k, rec)| {
+                        let rec_no = base_rec + k as u32;
+                        let mut entry = Entry::default();
+                        links.clear();
+                        if apply_fixup(rec, bytes_per_sector) {
+                            parse_record(rec, &mut entry, links);
                         }
-                    }
-                }
+
+                        // 硬链接是少数派，绝大多数记录这里返回空 Vec，不分配。
+                        let mut extra: Vec<(u32, u32)> = Vec::new();
+                        if entry.base_ref != 0 {
+                            for &(pa, _) in links.iter() {
+                                extra.push((entry.base_ref, pa));
+                            }
+                        } else if entry.used && !entry.is_dir && links.len() > 1 {
+                            for &(pa, _) in links.iter() {
+                                if pa != entry.parent {
+                                    extra.push((rec_no, pa));
+                                }
+                            }
+                        }
+                        (entry, extra)
+                    },
+                )
+                .collect();
+
+            for (entry, extra) in parsed {
                 entries.push(entry);
+                hard_links.extend(extra);
             }
+            parse_time += t_parse.elapsed();
 
             let advanced = (full * rec_size) as u64;
             done += advanced;
@@ -973,6 +1018,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
 
     let n = entries.len();
 
+    let t_merge = Instant::now();
     let mut merged_from_ext = 0u64;
     for i in 0..n {
         let (base, size) = (entries[i].base_ref as usize, entries[i].size);
@@ -985,6 +1031,9 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
         }
     }
 
+    let merge_time = t_merge.elapsed();
+
+    let t_agg = Instant::now();
     let mut dir_size = vec![0u64; n];
     let mut dir_files = vec![0u64; n];
     let mut total_size = 0u64;
@@ -1019,6 +1068,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
         hard_link_size += size;
         add_to_ancestors(&entries, &mut dir_size, &mut dir_files, parent, size);
     }
+    let agg_time = t_agg.elapsed();
     let unique_size = total_size;
     let unique_files = file_count;
     total_size += hard_link_size;
@@ -1050,7 +1100,30 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
             .collect()
     };
 
+    let t_tree = Instant::now();
     let tree = build_tree(letter, entries, dir_size, dir_files);
+    let tree_time = t_tree.elapsed();
+
+    crate::log!(
+        "MFT 解析 {letter}: 完成 {:?}（开卷 {:?} / 卷信息 {:?} / 首记录 {:?} / run list {:?} / 读盘 {:?} / 解析 {:?} / 扩展并回 {:?} / 聚合 {:?} / 建树 {:?}），扩展记录 {}，读入 {}，记录 {}/{}，{} 文件 / {} 目录，占用 {}",
+        started.elapsed(),
+        open_time,
+        vd_time,
+        first_time,
+        prep_time,
+        io_time,
+        parse_time,
+        merge_time,
+        agg_time,
+        tree_time,
+        ext_records,
+        crate::core::model::fmt_size(consumed),
+        n,
+        mft_valid / rec_size as u64,
+        file_count,
+        dir_count,
+        crate::core::model::fmt_size(total_size)
+    );
 
     Ok(MftScan {
         volume: letter,
@@ -1271,6 +1344,67 @@ mod tests {
         assert_eq!(t.path_of(10), r"C:\Users\me\big.iso");
         assert_eq!(t.path_of(6), r"C:\Windows");
         assert_eq!(t.path_of(t.root()), "C:");
+    }
+
+    /// 阶段一的查表路径。放在这里是因为树夹具在这个模块里，
+    /// 被测函数本身属于 `core::scanner`。
+    #[test]
+    fn measure_via_tree_matches_the_aggregated_size() {
+        use crate::core::scanner::measure_via_tree;
+        use std::path::Path;
+        let t = synthetic_tree();
+
+        // 目录取递归聚合值，文件取自身大小
+        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users")), Some((5050, 2)));
+        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\me")), Some((5000, 1)));
+        assert_eq!(
+            measure_via_tree(&t, Path::new(r"C:\Users\me\big.iso")),
+            Some((5000, 1))
+        );
+        // 大小写不敏感，和 NTFS 一致
+        assert_eq!(measure_via_tree(&t, Path::new(r"c:\users")), Some((5050, 2)));
+    }
+
+    /// 查不到就必须返回 None 让调用方退回遍历，绝不能把「走到一半」的
+    /// 那个祖先目录的体积当成结果——那会凭空多报几个 GB。
+    #[test]
+    fn measure_via_tree_refuses_partial_matches() {
+        use crate::core::scanner::measure_via_tree;
+        use std::path::Path;
+        let t = synthetic_tree();
+
+        // MFT 快照之后才建出来的目录：Users 有，nope 没有
+        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\nope")), None);
+        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\me\deep\er")), None);
+        // 不是这个卷
+        assert_eq!(measure_via_tree(&t, Path::new(r"D:\Users")), None);
+        // 没有盘符
+        assert_eq!(measure_via_tree(&t, Path::new(r"\\server\Users")), None);
+    }
+
+    /// 并行解析的正确性全押在「rayon 的索引并行迭代器保序」这一条上：
+    /// `entries` 的下标就是 MFT 记录号，而 `Entry::parent` 存的也是记录号，
+    /// 错一位整棵目录树就废了。这里把那条流水线原样跑一遍，钉住这个假设——
+    /// 万一将来换了迭代器组合或 rayon 改了行为，这个测试先红。
+    #[test]
+    fn parallel_chunk_mapping_preserves_order() {
+        const REC: usize = 16;
+        let mut buf: Vec<u8> = (0u32..4096).map(|i| (i % 251) as u8).collect();
+        let out: Vec<(usize, u8)> = buf
+            .par_chunks_mut(REC)
+            .enumerate()
+            .map_init(Vec::<u8>::new, |scratch: &mut Vec<u8>, (k, c): (usize, &mut [u8])| {
+                scratch.clear();
+                scratch.push(c[0]);
+                (k, c[0])
+            })
+            .collect();
+
+        assert_eq!(out.len(), 4096 / REC);
+        for (i, (k, b)) in out.iter().enumerate() {
+            assert_eq!(*k, i, "enumerate 的序号必须与 collect 后的下标一致");
+            assert_eq!(*b, ((i * REC) % 251) as u8, "第 {i} 块的内容错位了");
+        }
     }
 
     #[test]

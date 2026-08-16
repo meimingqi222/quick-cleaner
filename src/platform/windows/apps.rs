@@ -758,9 +758,16 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
 
     use std::os::windows::process::CommandExt;
     {
+        let t0 = std::time::Instant::now();
+        crate::log!("开始卸载「{}」，命令行: {cmd}", app.name);
         let mut child = if cmd.to_lowercase().contains("msiexec") {
+            // cmd.exe 是 console 程序，不给 CREATE_NO_WINDOW 就会弹一个黑框
+            // 杵在卸载向导旁边。这里只借 cmd 做命令行解析，本来就没有输出可看。
+            // 只对这一支加：另一支起的是软件自带的卸载器，其中少数是控制台
+            // 程序且会显示进度，不该替用户把它藏掉。
             std::process::Command::new("cmd")
                 .raw_arg(format!("/c {cmd}"))
+                .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
                 .spawn()
                 .map_err(|e| format!("启动卸载程序失败: {e}"))?
         } else {
@@ -815,6 +822,7 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
             std::time::Duration::from_secs(30 * 60),
         );
 
+        crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
         Ok(())
     }
 }

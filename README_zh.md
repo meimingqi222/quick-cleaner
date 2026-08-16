@@ -68,6 +68,7 @@ quick-cleaner/
 │   │   ├── safety.rs           # 路径安全防护规则（唯一事实来源）
 │   │   ├── apps.rs             # 软件模型与残留分析器
 │   │   ├── disk.rs             # 磁盘树与选择状态模型
+│   │   ├── log.rs              # 文件日志（%APPDATA%\QuickCleaner\quick-cleaner.log）
 │   │   └── model.rs            # 数据格式化与通用三态模型
 │   │
 │   ├── platform/               # 操作系统适配层（由 platform_contract! 编译期约束）

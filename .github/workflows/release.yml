@@ -39,9 +39,8 @@ jobs:
           $distDir = "dist/quick-cleaner-windows-x86_64"
           New-Item -ItemType Directory -Force -Path $distDir | Out-Null
           
-          # 拷贝二进制
+          # 只发 GUI 主程序；mftscan 是开发期的 MFT 校验 CLI，不进发行包
           Copy-Item "target/release/quick-cleaner.exe" "$distDir/"
-          Copy-Item "target/release/mftscan.exe" "$distDir/"
           
           # 拷贝双语说明与开源协议
           if (Test-Path "README.md") { Copy-Item "README.md" "$distDir/" }

@@ -8,6 +8,7 @@ pub mod cleaner;
 pub mod devscan;
 pub mod disk;
 pub mod i18n;
+pub mod log;
 pub mod model;
 pub mod safety;
 pub mod scanner;
