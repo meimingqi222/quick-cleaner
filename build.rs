@@ -1,8 +1,16 @@
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rerun-if-changed=assets/icon.icns");
+        println!("cargo:rerun-if-changed=assets/icon-512.png");
+        println!("cargo:rerun-if-changed=assets/icon.png");
+    }
+
     #[cfg(windows)]
     {
         println!("cargo:rerun-if-changed=assets/icon.ico");
-        println!("cargo:rerun-if-changed=build.rs");
 
         let mut res = winres::WindowsResource::new();
         if std::path::Path::new("assets/icon.ico").exists() {
@@ -48,4 +56,3 @@ fn main() {
         }
     }
 }
-

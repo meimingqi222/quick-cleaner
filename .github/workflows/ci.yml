@@ -43,3 +43,22 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Run tests
         run: cargo test
+
+  # 只跑 Windows 的代价已经吃过一次：`src/bin/mftscan.rs` 无条件 import
+  # `platform::mft`，macOS 上 `cargo build` 直接失败，却一直没人拦住。
+  # 平台适配层是双分支的，CI 也必须是。
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      # 废纸篓往返那个用例标了 #[ignore]：它会真的往运行者的废纸篓里写东西。
+      - name: Run tests
+        run: cargo test

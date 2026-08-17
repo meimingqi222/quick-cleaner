@@ -43,9 +43,15 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     } else if scanned && total > 0 {
         (fmt_size(total), tr_found_cleanable(lang).to_string())
     } else if scanned {
-        (tr_system_clean(lang).to_string(), tr_no_junk(lang).to_string())
+        (
+            tr_system_clean(lang).to_string(),
+            tr_no_junk(lang).to_string(),
+        )
     } else {
-        (String::from("Smart Scan"), tr_start_smart_scan(lang).to_string())
+        (
+            String::from("Smart Scan"),
+            tr_start_smart_scan(lang).to_string(),
+        )
     };
 
     let mut ring = div()
@@ -145,19 +151,29 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let blurb = if root.junk.scanning {
         match lang {
             Language::Zh => String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…"),
-            Language::En => String::from("Scanning system caches, application logs, build artifacts, and temp files…"),
+            Language::En => String::from(
+                "Scanning system caches, application logs, build artifacts, and temp files…",
+            ),
         }
     } else if scanned && total > 0 {
         match lang {
             Language::Zh => format!(
                 "已在 {} 个类别中发现 {} 可清理内容。",
-                root.junk.categories.iter().filter(|c| c.total_size > 0).count(),
+                root.junk
+                    .categories
+                    .iter()
+                    .filter(|c| c.total_size > 0)
+                    .count(),
                 fmt_size(total)
             ),
             Language::En => format!(
                 "Found {} cleanable items across {} categories.",
                 fmt_size(total),
-                root.junk.categories.iter().filter(|c| c.total_size > 0).count()
+                root.junk
+                    .categories
+                    .iter()
+                    .filter(|c| c.total_size > 0)
+                    .count()
             ),
         }
     } else if scanned {
@@ -168,7 +184,9 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     } else {
         match lang {
             Language::Zh => String::from("快速扫描系统缓存、开发依赖产物与磁盘占用。"),
-            Language::En => String::from("Quickly scan system caches, developer dependencies, and disk usage."),
+            Language::En => {
+                String::from("Quickly scan system caches, developer dependencies, and disk usage.")
+            }
         }
     };
 
@@ -188,7 +206,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_trash(PRIMARY, 18.), PRIMARY_FIXED, PRIMARY, 38.))
+                .child(icon_badge(
+                    icon_trash(PRIMARY, 18.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    38.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -200,19 +223,16 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_color(rgb(TEXT))
                                 .child(tr_view_junk(lang)),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(if root.junk.scanned {
-                                    fmt_size(total)
-                                } else {
-                                    match lang {
-                                        Language::Zh => "一键清理".into(),
-                                        Language::En => "Clean Junk".into(),
-                                    }
-                                }),
-                        ),
+                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(
+                            if root.junk.scanned {
+                                fmt_size(total)
+                            } else {
+                                match lang {
+                                    Language::Zh => "一键清理".into(),
+                                    Language::En => "Clean Junk".into(),
+                                }
+                            },
+                        )),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Junk;
@@ -229,7 +249,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_apps(PRIMARY, 18.), PRIMARY_FIXED, PRIMARY, 38.))
+                .child(icon_badge(
+                    icon_apps(PRIMARY, 18.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    38.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -241,22 +266,19 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_color(rgb(TEXT))
                                 .child(tr_view_apps(lang)),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(if root.apps.scanned {
-                                    match lang {
-                                        Language::Zh => format!("已发现 {} 款", root.apps.list.len()),
-                                        Language::En => format!("{} Apps", root.apps.list.len()),
-                                    }
-                                } else {
-                                    match lang {
-                                        Language::Zh => "卸载分析".into(),
-                                        Language::En => "Uninstall".into(),
-                                    }
-                                }),
-                        ),
+                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(
+                            if root.apps.scanned {
+                                match lang {
+                                    Language::Zh => format!("已发现 {} 款", root.apps.list.len()),
+                                    Language::En => format!("{} Apps", root.apps.list.len()),
+                                }
+                            } else {
+                                match lang {
+                                    Language::Zh => "卸载分析".into(),
+                                    Language::En => "Uninstall".into(),
+                                }
+                            },
+                        )),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Apps;
@@ -276,7 +298,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_disk(PRIMARY, 18.), PRIMARY_FIXED, PRIMARY, 38.))
+                .child(icon_badge(
+                    icon_disk(PRIMARY, 18.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    38.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -288,19 +315,16 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_color(rgb(TEXT))
                                 .child(tr_view_disk(lang)),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(if let Some(s) = &root.disk.mft {
-                                    fmt_size(s.total_size)
-                                } else {
-                                    match lang {
-                                        Language::Zh => "空间透镜".into(),
-                                        Language::En => "Storage".into(),
-                                    }
-                                }),
-                        ),
+                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(
+                            if let Some(s) = &root.disk.mft {
+                                fmt_size(s.total_size)
+                            } else {
+                                match lang {
+                                    Language::Zh => "空间透镜".into(),
+                                    Language::En => "Storage".into(),
+                                }
+                            },
+                        )),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Disk;

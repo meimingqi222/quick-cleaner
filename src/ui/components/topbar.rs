@@ -67,7 +67,10 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(icon_shield(if root.elevated { PRIMARY } else { OUTLINE }, 12.))
+                        .child(icon_shield(
+                            if root.elevated { PRIMARY } else { OUTLINE },
+                            12.,
+                        ))
                         .child(tr_elevation_mode(lang, root.elevated)),
                 ),
         )

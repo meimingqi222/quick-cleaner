@@ -12,7 +12,7 @@
 //! | --- | --- |
 //! | `is_elevated` | 当前进程是否已提权 |
 //! | `detect_system_language` | 系统显示语言（首次启动的默认界面语言） |
-//! | `list_ntfs_volumes` | 可供深度分析的卷 |
+//! | `list_volumes` | 可供深度分析的卷 |
 //! | `scan_volume` | 卷的整树空间分析 |
 //! | `get_volume_space` | 卷的总容量 / 可用容量 |
 //! | `list_installed_apps` | 已安装软件枚举 |
@@ -28,7 +28,7 @@ macro_rules! platform_contract {
         const _: () = {
             use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
             use crate::core::cleaner::{CleanProgress, CleanReport};
-            use crate::core::disk::{MftError, MftScan};
+            use crate::core::disk::{ScanError, ScanResult, VolumeId};
             use crate::core::i18n::Language;
             use std::path::Path;
             use std::sync::atomic::AtomicBool;
@@ -36,9 +36,9 @@ macro_rules! platform_contract {
             let _: fn() -> bool = is_elevated;
             let _: fn() -> Language = detect_system_language;
             let _: fn() -> bool = relaunch_as_admin_if_needed;
-            let _: fn() -> Vec<char> = list_ntfs_volumes;
-            let _: fn(char, usize) -> Result<MftScan, MftError> = scan_volume;
-            let _: fn(char) -> Option<(u64, u64)> = get_volume_space;
+            let _: fn() -> Vec<VolumeId> = list_volumes;
+            let _: fn(&VolumeId, usize) -> Result<ScanResult, ScanError> = scan_volume;
+            let _: fn(&VolumeId) -> Option<(u64, u64)> = get_volume_space;
             let _: fn(&AtomicBool) -> Vec<InstalledApp> = list_installed_apps;
             let _: fn(&InstalledApp) -> Result<(), String> = run_uninstaller_and_wait;
             let _: fn(&InstalledApp) -> ResidualScanResult = scan_residuals;
@@ -82,7 +82,7 @@ platform_contract!();
 pub mod fallback {
     use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
     use crate::core::cleaner::{CleanProgress, CleanReport};
-    use crate::core::disk::{MftError, MftScan};
+    use crate::core::disk::{ScanError, ScanResult, VolumeId};
     use crate::core::i18n::Language;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
@@ -100,16 +100,16 @@ pub mod fallback {
         false
     }
 
-    pub fn list_ntfs_volumes() -> Vec<char> {
+    pub fn list_volumes() -> Vec<VolumeId> {
         Vec::new()
     }
 
     /// 整树空间分析依赖 NTFS 的 `$MFT`，其它平台没有等价物。
-    pub fn scan_volume(_vol: char, _top_n: usize) -> Result<MftScan, MftError> {
-        Err(MftError::NotNtfs)
+    pub fn scan_volume(_vol: &VolumeId, _top_n: usize) -> Result<ScanResult, ScanError> {
+        Err(ScanError::NotNtfs)
     }
 
-    pub fn get_volume_space(_vol: char) -> Option<(u64, u64)> {
+    pub fn get_volume_space(_vol: &VolumeId) -> Option<(u64, u64)> {
         None
     }
 

@@ -6,6 +6,7 @@ pub mod text_input;
 pub mod theme;
 pub mod views;
 
+use crate::core::apps::filter_and_sort_apps;
 use crate::core::apps::{
     AppFilterPreset, AppSortState, InstalledApp, ResidualItem, ResidualScanResult,
 };
@@ -14,19 +15,25 @@ use crate::core::cleaner::{
     clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot, CleanTarget,
     Disposal,
 };
-use crate::core::safety::is_protected;
-use crate::core::apps::filter_and_sort_apps;
-use crate::core::disk::{DiskSelectionState, MftScan, Node};
+use crate::core::disk::{DiskSelectionState, Node, ScanResult, VolumeId};
 use crate::core::i18n::{bilingual, Language, Text};
-use crate::core::settings::Settings;
-use crate::core::model::{fmt_size, Check};
+use crate::core::model::{fmt_size, fmt_size_si, Check};
+use crate::core::safety::is_protected;
+#[cfg(windows)]
+use crate::core::scanner::dominant_volume;
+#[cfg(windows)]
+use crate::core::scanner::scan_discovered;
+#[cfg(not(windows))]
+use crate::core::scanner::scan_discovered_arc;
 use crate::core::scanner::{
-    apply_clean_result, dominant_volume, merge_discovered, scan_discovered, scan_fixed,
-    scan_fixed_with_tree, CategorySummary, ScanItem,
+    apply_clean_result, merge_discovered, scan_fixed, scan_fixed_with_tree, CategorySummary,
+    ScanItem,
 };
+use crate::core::settings::Settings;
+use crate::platform::scan_volume;
 use crate::platform::{
-    get_volume_space, is_elevated, list_installed_apps, list_ntfs_volumes, run_uninstaller_and_wait,
-    scan_residuals, clean_residuals, scan_volume, verify_residuals,
+    clean_residuals, get_volume_space, is_elevated, list_installed_apps, list_volumes,
+    run_uninstaller_and_wait, scan_residuals, verify_residuals,
 };
 // `components` 与 `views` 导出的名字没有共同前缀（`card` / `checkbox` /
 // `render_donut`），glob 进来就看不出谁是谁，所以显式列出。
@@ -40,12 +47,11 @@ use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
-    render_disk_clean_bar, render_disk_view, render_junk_view, DiskTab,
+    render_disk_clean_bar, render_disk_view, render_disk_volume_dropdown, render_junk_view,
+    DiskTab,
 };
 
-use gpui::{
-    div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window,
-};
+use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -278,14 +284,15 @@ pub struct ResidualState {
 
 /// 磁盘透镜（Disk Lens 空间分析）的状态。
 pub struct DiskState {
-    pub mft: Option<MftScan>,
+    /// 用 Arc 共享，macOS 上避免从缓存索引克隆 6.6M 条目的 SizeTree。
+    pub mft: Option<std::sync::Arc<ScanResult>>,
     pub scanning: bool,
     /// 保留错误值本身而不是渲染好的字符串：错误卡片会一直挂在界面上，
     /// 用户中途切语言时它也得跟着变。
-    pub error: Option<crate::core::disk::MftError>,
+    pub error: Option<crate::core::disk::ScanError>,
     pub task: Option<Task<()>>,
-    pub volumes: Vec<char>,
-    pub volume: char,
+    pub volumes: Vec<VolumeId>,
+    pub volume: VolumeId,
     pub tab: DiskTab,
     pub path: Vec<u32>,
     /// 磁盘透镜的勾选状态（含继承与局部排除），实现见 `core::disk`
@@ -294,6 +301,8 @@ pub struct DiskState {
     /// 当前目录（或最大文件列表）的渲染行缓存
     pub rows: Vec<DiskRow>,
     pub(super) rows_key: Option<DiskRowsKey>,
+    /// 磁盘切换下拉浮层菜单是否展开
+    pub volume_menu_open: bool,
     /// MFT 树每次被替换或就地修改就自增
     pub gen: u64,
 }
@@ -337,6 +346,13 @@ pub struct Root {
     pub residual: ResidualState,
     pub disk: DiskState,
     pub clean: CleanState,
+    /// macOS 用户目录索引缓存。垃圾扫描阶段加载/构建后存在这里。
+    /// 用 Arc 共享，避免克隆 6.6M 条目的 SizeTree。
+    #[cfg(not(windows))]
+    pub macos_index: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
+    /// macOS 整盘索引缓存（磁盘透镜显示 `/` 时用）。
+    #[cfg(not(windows))]
+    pub macos_root_index: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
 }
 
 /// 磁盘透镜列表里的一行，连同渲染需要的派生数据一起算好。
@@ -352,7 +368,7 @@ pub struct DiskRow {
 }
 
 /// 磁盘行缓存的失效键
-type DiskRowsKey = (char, u32, DiskTab, u64);
+type DiskRowsKey = (String, u32, DiskTab, u64);
 
 /// 软件列表视图缓存的失效键
 type AppsViewKey = (u64, AppFilterPreset, String, AppSortState);
@@ -369,13 +385,21 @@ pub struct AppsContextMenu {
 
 impl Root {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let volumes = list_ntfs_volumes();
-        let disk_volume = if volumes.contains(&'C') {
-            'C'
+        let volumes = list_volumes();
+        // Windows 上默认选 C 盘，其它平台选第一个（macOS 只有一个 `/`）
+        #[cfg(windows)]
+        let default_vol = VolumeId::from_drive_letter('C');
+        #[cfg(not(windows))]
+        let default_vol = volumes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| VolumeId::from_mount_point(std::path::PathBuf::from("/")));
+        let disk_volume = if volumes.contains(&default_vol) {
+            default_vol
         } else {
-            volumes.first().copied().unwrap_or('C')
+            volumes.first().cloned().unwrap_or(default_vol)
         };
-        let disk_space = get_volume_space(disk_volume);
+        let disk_space = get_volume_space(&disk_volume);
         let apps_focus_handle = cx.focus_handle();
         // 有配置文件就照配置文件，没有就按系统显示语言（中文系统用中文，其余英文）
         let settings = Settings::load();
@@ -447,6 +471,7 @@ impl Root {
                 space: disk_space,
                 rows: Vec::new(),
                 rows_key: None,
+                volume_menu_open: false,
                 gen: 0,
             },
 
@@ -459,6 +484,11 @@ impl Root {
                 last_failed_files: 0,
                 show_failed_details: false,
             },
+
+            #[cfg(not(windows))]
+            macos_index: None,
+            #[cfg(not(windows))]
+            macos_root_index: None,
         }
     }
 
@@ -510,6 +540,14 @@ impl Root {
         self.apps.context_menu = None;
     }
 
+    pub fn toggle_disk_volume_menu(&mut self) {
+        self.disk.volume_menu_open = !self.disk.volume_menu_open;
+    }
+
+    pub fn close_disk_volume_menu(&mut self) {
+        self.disk.volume_menu_open = false;
+    }
+
     /// 发起一轮扫描。**分两个阶段**，界面不必等最慢的那条通道。
     ///
     /// 第一阶段扫固定路径表（`%TEMP%`、各种缓存目录），本机约 1 秒就能出结果，
@@ -548,13 +586,26 @@ impl Root {
         //
         // 解析出来的树随后原样交给阶段二，一次解析两个阶段用，省掉第二次
         // 全盘解析。内存峰值不变——阶段二本来也要在内存里放一棵树。
+        // Windows 上读 $MFT 需要管理员权限，未提权时跳过预扫描。
+        //
+        // macOS：先加载/构建用户目录索引，阶段一在树上查表（毫秒级），
+        // 阶段二在树上 DFS。索引复用后首次启动和后续启动都受益。
+        #[cfg(windows)]
         let prescan_volume = if is_elevated() {
             dominant_volume(&targets)
         } else {
             None
         };
+        #[cfg(not(windows))]
+        let prescan_volume: Option<VolumeId> = None;
         let scan = cx.background_executor().spawn(async move {
-            let pre = prescan_volume.and_then(|v| scan_volume(v, 0).ok());
+            #[cfg(windows)]
+            let pre = prescan_volume.and_then(|v| scan_volume(&v, 0).ok());
+            #[cfg(not(windows))]
+            let pre = {
+                let _ = prescan_volume; // 消除未使用变量警告
+                crate::core::devscan::load_or_build_macos_index(&live)
+            };
             let cats = match &pre {
                 Some(s) => scan_fixed_with_tree(&targets, &live, &s.tree),
                 None => scan_fixed(&targets, &live),
@@ -570,7 +621,17 @@ impl Root {
                 this.select_recommended();
                 let total_str = fmt_size(this.total_cleanable());
                 this.status = bilingual(|l| tr_status_scan_fixed_done(l, &total_str));
-                this.start_discovery(gen, prescanned, cx);
+                // macOS：load_or_build_macos_index 已返回 Arc<ScanResult>，
+                // 存一份给磁盘透镜复用，另一份（Arc clone）交给 start_discovery。
+                #[cfg(not(windows))]
+                {
+                    this.macos_index = prescanned.clone();
+                    this.start_discovery_arc(gen, prescanned, cx);
+                }
+                #[cfg(windows)]
+                {
+                    this.start_discovery(gen, prescanned, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -582,10 +643,11 @@ impl Root {
     /// `gen` 是发起这轮扫描时的 `scan_gen`。回来时如果对不上，说明用户已经
     /// 点了「重新扫描」，这份结果属于上一轮，直接丢掉——否则会把过期数据
     /// （甚至是被取消后只跑了一半的数据）并进新列表。
+    #[cfg(windows)]
     fn start_discovery(
         &mut self,
         gen: u64,
-        prescanned: Option<crate::core::disk::MftScan>,
+        prescanned: Option<crate::core::disk::ScanResult>,
         cx: &mut Context<Self>,
     ) {
         self.junk.discovering = true;
@@ -593,6 +655,37 @@ impl Root {
         let discover = cx
             .background_executor()
             .spawn(async move { scan_discovered(&live, prescanned) });
+
+        self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
+            let items = discover.await;
+            this.update(cx, |this, cx| {
+                if this.junk.gen != gen {
+                    return;
+                }
+                this.junk.discovering = false;
+                merge_discovered(&mut this.junk.categories, items);
+                let total_str = fmt_size(this.total_cleanable());
+                this.status = bilingual(|l| tr_status_scan_done(l, &total_str));
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// macOS 专用：接受 `Arc<ScanResult>` 的 start_discovery 变体。
+    /// 避免从 prescanned 中 clone 6.6M 条目的 ScanResult。
+    #[cfg(not(windows))]
+    fn start_discovery_arc(
+        &mut self,
+        gen: u64,
+        prescanned: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.junk.discovering = true;
+        let live = self.live.clone();
+        let discover = cx
+            .background_executor()
+            .spawn(async move { scan_discovered_arc(&live, prescanned) });
 
         self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
             let items = discover.await;
@@ -697,7 +790,8 @@ impl Root {
         self.junk.toggle_item(path);
     }
 
-    pub fn switch_disk_volume(&mut self, vol: char, cx: &mut Context<Self>) {
+    pub fn switch_disk_volume(&mut self, vol: VolumeId, cx: &mut Context<Self>) {
+        self.disk.volume_menu_open = false;
         if self.disk.volume == vol && (self.disk.mft.is_some() || self.disk.scanning) {
             return;
         }
@@ -716,29 +810,76 @@ impl Root {
         }
         self.disk.scanning = true;
         self.disk.error = None;
-        let vol = self.disk.volume;
-        self.disk.space = get_volume_space(vol);
+        let vol = self.disk.volume.clone();
+        self.disk.space = get_volume_space(&vol);
         self.disk.sel.clear();
         let saved_path = self.current_disk_full_path();
-        self.status = bilingual(|l| tr_status_disk_scanning(l, vol));
+        self.status = bilingual(|l| tr_status_disk_scanning(l, &vol));
         self.start_tick(cx);
         cx.notify();
 
-        let scan = cx
-            .background_executor()
-            .spawn(async move { scan_volume(vol, 0) });
+        // macOS：磁盘透镜根据所选卷加载不同索引。
+        // 主卷 `/`：加载/构建整盘索引，首次可能需要 1-2 分钟。
+        // 其他卷：直接扫描。
+        // Windows：仍然走 scan_volume 解析 $MFT。
+        #[cfg(not(windows))]
+        let cached_root_index = self.macos_root_index.clone();
+        let scan = cx.background_executor().spawn(async move {
+            #[cfg(windows)]
+            {
+                scan_volume(&vol, 0).map(std::sync::Arc::new)
+            }
+            #[cfg(not(windows))]
+            {
+                let is_root = vol.mount_point() == std::path::Path::new("/");
+                if is_root {
+                    if let Some(scan) = cached_root_index {
+                        crate::log!("磁盘透镜复用已缓存整盘索引：{} 条记录", scan.records_read);
+                        Ok(scan)
+                    } else {
+                        let t0 = std::time::Instant::now();
+                        let live = std::sync::atomic::AtomicBool::new(true);
+                        let result =
+                            match crate::core::devscan::load_or_build_macos_root_index(&live) {
+                                Some(scan) => {
+                                    crate::log!("磁盘透镜加载整盘索引：{:?}", t0.elapsed());
+                                    Ok(scan)
+                                }
+                                None => Err(crate::core::disk::ScanError::Io(
+                                    "无法加载或构建整盘索引".into(),
+                                )),
+                            };
+                        result
+                    }
+                } else {
+                    let t0 = std::time::Instant::now();
+                    let result = scan_volume(&vol, 0).map(std::sync::Arc::new);
+                    crate::log!("磁盘透镜扫描外接卷 {}：{:?}", vol.display(), t0.elapsed());
+                    result
+                }
+            }
+        });
 
+        let vol_for_task = self.disk.volume.clone();
         self.disk.task = Some(cx.spawn(async move |this, cx| {
             let result = scan.await;
             this.update(cx, |this, cx| {
                 this.disk.scanning = false;
                 match result {
                     Ok(s) => {
-                        let (files, used) = (s.file_count, fmt_size(s.total_size));
+                        // 磁盘总占用用 statfs 的「总量-空闲」，不用 SizeTree 累加。
+                        // APFS 快照/克隆/硬链接会导致「所有文件大小相加」超过物理容量。
+                        // 使用 1000 进制（SI）与 macOS / CleanMyMac 对齐。
+                        let used = this
+                            .disk
+                            .space
+                            .map(|(total, free)| fmt_size_si(total - free))
+                            .unwrap_or_else(|| fmt_size(s.total_size));
+                        let files = s.file_count;
                         this.status = bilingual(|l| tr_status_disk_done(l, files, &used));
                         // 仅当 saved_path 确实属于当前卷时才尝试恢复层级；跨盘切换时直接回到新盘根目录
                         let is_same_vol = saved_path.as_ref().is_some_and(|p| {
-                            p.to_string_lossy().starts_with(&format!("{vol}:"))
+                            p.to_string_lossy().starts_with(vol_for_task.display())
                         });
                         if is_same_vol {
                             if let Some(target_path) = saved_path {
@@ -754,11 +895,17 @@ impl Root {
                         } else {
                             this.disk.path = vec![s.tree.root()];
                         }
+                        // 主卷 `/` 的整盘索引缓存起来，避免下次打开磁盘透镜重扫
+                        #[cfg(not(windows))]
+                        if vol_for_task.mount_point() == std::path::Path::new("/") {
+                            this.macos_root_index = Some(s.clone());
+                        }
                         this.disk.mft = Some(s);
                         this.disk.gen += 1;
                     }
                     Err(e) => {
-                        this.status = bilingual(|l| tr_status_disk_failed(l, &tr_mft_error(l, &e)));
+                        this.status =
+                            bilingual(|l| tr_status_disk_failed(l, &tr_scan_error(l, &e)));
                         this.disk.error = Some(e);
                         this.disk.mft = None;
                         this.disk.gen += 1;
@@ -856,6 +1003,48 @@ impl Root {
     /// 现在提前扫一遍留下候选集，卸载结束后再复核哪些还在，剩下的才是
     /// 官方卸载程序没清干净的部分。
     pub fn request_uninstall_app(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
+        if self.residual.scanning || self.clean.running {
+            return;
+        }
+        let lang = self.language;
+        let app_name = app.name.clone();
+        let size_str = if app.estimated_size > 0 {
+            format!(" ({})", fmt_size(app.estimated_size))
+        } else {
+            String::new()
+        };
+
+        let (title, body, detail) = match lang {
+            Language::Zh => (
+                format!("确认卸载「{app_name}」？"),
+                if cfg!(target_os = "macos") {
+                    format!("将把「{app_name}」{size_str} 移入废纸篓或调用自带卸载程序，完成后自动扫描并深度清理卸载残留。")
+                } else {
+                    format!("将启动「{app_name}」{size_str} 官方卸载程序，完成后自动扫描并深度清理卸载残留。")
+                },
+                "卸载完成后将自动唤起残留扫描，彻底清除关联配置与缓存。".to_string(),
+            ),
+            Language::En => (
+                format!("Uninstall \"{app_name}\"?"),
+                if cfg!(target_os = "macos") {
+                    format!("This will move \"{app_name}\"{size_str} to Trash or run its uninstaller, followed by automatic residual cleanup.")
+                } else {
+                    format!("This will launch the official uninstaller for \"{app_name}\"{size_str}, followed by automatic residual cleanup.")
+                },
+                "Residual files and configurations will be automatically scanned and cleaned up afterwards.".to_string(),
+            ),
+        };
+
+        self.confirm = Some(ConfirmRequest {
+            title,
+            body,
+            detail,
+            kind: ConfirmKind::UninstallApp(Box::new(app)),
+        });
+        cx.notify();
+    }
+
+    pub fn execute_uninstall_app(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
         let name = app.name.clone();
         let pre_target = app.clone();
         let uninst_target = app.clone();
@@ -903,6 +1092,19 @@ impl Root {
                 });
                 this.residual.selected = res.default_selection();
                 this.residual.result = Some(res);
+
+                // 卸载由外部卸载器执行，我们不知道确切删了哪些路径，
+                // 无法局部更新 SizeTree。失效磁盘透镜缓存，下次打开时
+                // 走 FSEvents 增量更新。
+                if ok {
+                    this.disk.mft = None;
+                    #[cfg(not(windows))]
+                    {
+                        this.macos_index = None;
+                        this.macos_root_index = None;
+                    }
+                }
+
                 cx.notify();
             })
             .ok();
@@ -966,8 +1168,16 @@ impl Root {
         let app_name = res.app_name.clone();
         let cleaning_name = res.app_name.clone();
         let cleaning_count = items_to_clean.len();
-        self.status =
-            bilingual(|l| tr_status_residual_cleaning(l, &cleaning_name, cleaning_count));
+        // 提取残留路径，用于清理后局部更新磁盘透镜
+        let residual_paths: Vec<PathBuf> = items_to_clean
+            .iter()
+            .filter_map(|it| match &it.kind {
+                crate::core::apps::ResidualKind::File(p, _)
+                | crate::core::apps::ResidualKind::Directory(p, _) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        self.status = bilingual(|l| tr_status_residual_cleaning(l, &cleaning_name, cleaning_count));
         cx.notify();
 
         let clean = cx
@@ -988,6 +1198,15 @@ impl Root {
                     this.apps.list.retain(|a| a.name != app_name);
                     this.apps.gen += 1;
                 }
+
+                // 同步更新磁盘透镜的 SizeTree：残留文件/目录在磁盘透镜里也显示，
+                // 不局部扣减的话切过去看还是旧大小。
+                let deleted: Vec<PathBuf> = residual_paths
+                    .iter()
+                    .filter(|p| !report.failed.contains(p))
+                    .cloned()
+                    .collect();
+                this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
 
                 let (ok, fails, size) = (report.ok, report.failed.len(), fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
@@ -1047,6 +1266,7 @@ impl Root {
             ConfirmKind::CleanSelected => self.start_clean(cx),
             ConfirmKind::CleanPath(p, size) => self.start_clean_path(p, size, cx),
             ConfirmKind::CleanDiskSelected => self.start_clean_disk_selected(cx),
+            ConfirmKind::UninstallApp(app) => self.execute_uninstall_app(*app, cx),
         }
     }
 
@@ -1063,25 +1283,23 @@ impl Root {
         if self.tick_task.is_some() {
             return;
         }
-        self.tick_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(50))
-                    .await;
-                let running = this
-                    .update(cx, |this, cx| {
-                        this.anim_phase = (this.anim_phase + 1) % 120;
-                        cx.notify();
-                        this.is_busy()
-                    })
-                    .unwrap_or(false);
-                if !running {
-                    this.update(cx, |this, _| {
-                        this.tick_task = None;
-                    })
-                    .ok();
-                    break;
-                }
+        self.tick_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let running = this
+                .update(cx, |this, cx| {
+                    this.anim_phase = (this.anim_phase + 1) % 120;
+                    cx.notify();
+                    this.is_busy()
+                })
+                .unwrap_or(false);
+            if !running {
+                this.update(cx, |this, _| {
+                    this.tick_task = None;
+                })
+                .ok();
+                break;
             }
         }));
     }
@@ -1140,22 +1358,30 @@ impl Root {
         }));
     }
 
-    /// 把已删除的路径从内存里的 MFT 树上摘掉，并把释放的空间补回可用容量。
+    /// 删除后局部更新 SizeTree，无需全量重扫。
     ///
-    /// 不重扫：一次全盘 MFT 解析要好几秒，而删除的影响是局部的——祖先目录的
-    /// 体积由 `remove_path` 自动联动扣减。
-    ///
-    /// 摘完之后当前所在的目录可能已经不存在了（用户就站在被删的那一层里），
-    /// 所以要沿 `disk_path` 往回退到第一个仍然有效的节点。
-    fn prune_deleted_from_mft(&mut self, deleted: &[PathBuf], freed_bytes: u64) {
+    /// 用 `Arc::make_mut` 获取可变引用，对每个已删路径调用
+    /// `ScanResult::remove_path`：标记子树为 unused，沿父链扣减聚合大小。
+    /// UI 立即看到目录消失和容量变化，当前位置保留不变。
+    fn prune_deleted_from_mft(
+        &mut self,
+        deleted: &[PathBuf],
+        freed_bytes: u64,
+        _cx: &mut Context<Self>,
+    ) {
         if let Some(mft) = &mut self.disk.mft {
+            // Arc::make_mut：如果 Arc 是独占的则直接获取可变引用，
+            // 否则克隆一份再修改——这里磁盘透镜的 Arc 通常独占，不会触发克隆。
+            let mft_mut = std::sync::Arc::make_mut(mft);
             for path in deleted {
-                mft.remove_path(path);
+                mft_mut.remove_path(path);
             }
             self.disk.gen += 1;
+
+            // 当前所在目录可能已被删除，沿 path 栈往回退到有效节点
             while self.disk.path.len() > 1 {
                 let cur = *self.disk.path.last().unwrap();
-                if mft.tree.valid(cur) {
+                if mft_mut.tree.valid(cur) {
                     break;
                 }
                 self.disk.path.pop();
@@ -1193,13 +1419,23 @@ impl Root {
             totals,
             bilingual(|l| tr_status_deleting_n(l, n)),
             move |p| clean_targets(&targets, p),
-            move |this, report, snap, _cx| {
+            move |this, report, snap, cx| {
                 this.clean.last_failed = report.failed;
                 this.clean.last_failed_files = snap.failed;
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
                 let failed = this.clean.last_failed.clone();
                 this.apply_clean_result(&attempted, &failed);
+
+                // 同步更新磁盘透镜的 SizeTree：垃圾清理删掉的路径
+                //（缓存、临时文件、构建产物）在磁盘透镜里也会显示，
+                // 不局部扣减的话切过去看还是旧大小。
+                let deleted: Vec<PathBuf> = attempted
+                    .iter()
+                    .filter(|p| !failed.contains(p))
+                    .cloned()
+                    .collect();
+                this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
 
                 let fails = this.clean.last_failed.len();
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
@@ -1228,7 +1464,7 @@ impl Root {
             (0, size),
             bilingual(|l| tr_status_deleting_path(l, &shown)),
             move |p| clean_arbitrary(std::slice::from_ref(&target), disposal, p),
-            move |this, report, snap, _cx| {
+            move |this, report, snap, cx| {
                 let shown = path.display().to_string();
                 if !report.failed.is_empty() {
                     this.status = bilingual(|l| tr_status_delete_failed(l, &shown));
@@ -1236,7 +1472,7 @@ impl Root {
                 }
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| tr_status_deleted_path(l, &shown, files, &size));
-                this.prune_deleted_from_mft(std::slice::from_ref(&path), snap.bytes);
+                this.prune_deleted_from_mft(std::slice::from_ref(&path), snap.bytes, cx);
             },
             cx,
         );
@@ -1261,11 +1497,10 @@ impl Root {
             (0, total_size),
             bilingual(|l| tr_status_batch_deleting(l, n)),
             move |p| clean_arbitrary(&to_clean, disposal, p),
-            move |this, report, snap, _cx| {
+            move |this, report, snap, cx| {
                 this.clear_disk_selection();
 
-                let (files, fails, size) =
-                    (snap.files, report.failed.len(), fmt_size(snap.bytes));
+                let (files, fails, size) = (snap.files, report.failed.len(), fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
                     if fails == 0 {
                         tr_status_batch_done(l, files, &size)
@@ -1279,7 +1514,7 @@ impl Root {
                     .into_iter()
                     .filter(|t| !report.failed.contains(t))
                     .collect();
-                this.prune_deleted_from_mft(&deleted, snap.bytes);
+                this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
             },
             cx,
         );
@@ -1304,8 +1539,13 @@ impl Root {
         };
         let tree = &scan.tree;
         let cur = *self.disk.path.last().unwrap_or(&tree.root());
-        let key: DiskRowsKey = (self.disk.volume, cur, self.disk.tab, self.disk.gen);
-        if self.disk.rows_key == Some(key) {
+        let key: DiskRowsKey = (
+            self.disk.volume.display().to_string(),
+            cur,
+            self.disk.tab,
+            self.disk.gen,
+        );
+        if self.disk.rows_key == Some(key.clone()) {
             return;
         }
 
@@ -1369,7 +1609,8 @@ impl Root {
     /// 受保护项虽然显示在列表里，但不参与勾选，也不能被「全选」带上，
     /// 否则表头复选框永远到不了全选状态。
     pub fn disk_selectable(&self) -> Vec<(PathBuf, u64)> {
-        self.disk.rows
+        self.disk
+            .rows
             .iter()
             .filter(|r| !r.protected)
             .map(|r| (r.path.clone(), r.node.size))
@@ -1456,10 +1697,13 @@ impl Render for Root {
             root = root.child(menu);
         }
 
+        if let Some(dropdown) = render_disk_volume_dropdown(self, cx) {
+            root = root.child(dropdown);
+        }
+
         root.into_any_element()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1676,8 +1920,14 @@ mod tests {
         let failed = vec![PathBuf::from(r"C:\rec\b")];
         j.apply_clean_result(&attempted, &failed);
 
-        assert!(!j.selected.contains(&PathBuf::from(r"C:\rec\a")), "删成功的还留在勾选里");
-        assert!(j.selected.contains(&PathBuf::from(r"C:\rec\b")), "删失败的不该被摘掉");
+        assert!(
+            !j.selected.contains(&PathBuf::from(r"C:\rec\a")),
+            "删成功的还留在勾选里"
+        );
+        assert!(
+            j.selected.contains(&PathBuf::from(r"C:\rec\b")),
+            "删失败的不该被摘掉"
+        );
     }
 
     #[test]
@@ -1689,6 +1939,9 @@ mod tests {
         assert_eq!(j.total_item_count(), 0);
         assert!(j.selected_targets().is_empty());
         j.select_recommended();
-        assert!(j.selection_is_recommended(), "空扫描结果 + 空勾选就是推荐状态");
+        assert!(
+            j.selection_is_recommended(),
+            "空扫描结果 + 空勾选就是推荐状态"
+        );
     }
 }

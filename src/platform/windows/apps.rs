@@ -79,7 +79,8 @@ fn scan_registry_uninstall(
             0,
             sam | KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE,
             &mut h_uninstall,
-        ) as u32 != ERROR_SUCCESS
+        ) as u32
+            != ERROR_SUCCESS
         {
             return out;
         }
@@ -113,10 +114,21 @@ fn scan_registry_uninstall(
                 let sub_wide = to_wide(&format!("{uninstall_path}\\{subkey_name}"));
                 let mut h_sub: HKEY = std::ptr::null_mut();
 
-                if RegOpenKeyExW(root, sub_wide.as_ptr(), 0, sam | KEY_QUERY_VALUE, &mut h_sub) as u32
+                if RegOpenKeyExW(
+                    root,
+                    sub_wide.as_ptr(),
+                    0,
+                    sam | KEY_QUERY_VALUE,
+                    &mut h_sub,
+                ) as u32
                     == ERROR_SUCCESS
                 {
-                    if let Some(app) = parse_app_entry(h_sub, &subkey_name, reg_root, &format!("{uninstall_path}\\{subkey_name}")) {
+                    if let Some(app) = parse_app_entry(
+                        h_sub,
+                        &subkey_name,
+                        reg_root,
+                        &format!("{uninstall_path}\\{subkey_name}"),
+                    ) {
                         out.push(app);
                     }
                     RegCloseKey(h_sub);
@@ -154,7 +166,13 @@ fn parse_app_entry(
         }
     }
     // 过滤 KB 补丁
-    if name.starts_with("KB") && name.chars().nth(2).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if name.starts_with("KB")
+        && name
+            .chars()
+            .nth(2)
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+    {
         return None;
     }
 
@@ -167,7 +185,8 @@ fn parse_app_entry(
         .trim()
         .to_string();
 
-    let (install_date, install_date_raw) = parse_install_date(read_reg_string(h_sub, "InstallDate"));
+    let (install_date, install_date_raw) =
+        parse_install_date(read_reg_string(h_sub, "InstallDate"));
 
     let install_location = read_reg_string(h_sub, "InstallLocation")
         .map(|s| s.trim().trim_matches('"').to_string())
@@ -312,7 +331,8 @@ fn scan_user_assist_map() -> UserAssistIndex {
             0,
             KEY_READ | KEY_ENUMERATE_SUB_KEYS,
             &mut h_ua,
-        ) as u32 != ERROR_SUCCESS
+        ) as u32
+            != ERROR_SUCCESS
         {
             return map;
         }
@@ -350,7 +370,8 @@ fn scan_user_assist_map() -> UserAssistIndex {
                 0,
                 KEY_READ | KEY_QUERY_VALUE,
                 &mut h_count,
-            ) as u32 == ERROR_SUCCESS
+            ) as u32
+                == ERROR_SUCCESS
             {
                 let mut val_idx: DWORD = 0;
                 let mut name_buf = [0u16; 1024];
@@ -378,7 +399,13 @@ fn scan_user_assist_map() -> UserAssistIndex {
                     let decoded = rot13(&raw_name);
                     let mut clean_name = decoded.to_lowercase();
                     if let Some(pos) = clean_name.find(':') {
-                        if pos > 0 && !clean_name.chars().nth(pos - 1).unwrap_or(' ').is_ascii_alphabetic() {
+                        if pos > 0
+                            && !clean_name
+                                .chars()
+                                .nth(pos - 1)
+                                .unwrap_or(' ')
+                                .is_ascii_alphabetic()
+                        {
                             clean_name = clean_name[pos + 1..].to_string();
                         }
                     }
@@ -499,7 +526,12 @@ fn deduce_install_location(app: &InstalledApp) -> Option<PathBuf> {
 
     // 1. 从 DisplayIcon 推断
     if let Some(icon) = &app.display_icon {
-        let clean = icon.split(',').next().unwrap_or("").trim_matches('"').trim();
+        let clean = icon
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .trim_matches('"')
+            .trim();
         let p = Path::new(clean);
         if p.exists() {
             if let Some(parent) = p.parent() {
@@ -557,7 +589,9 @@ fn scan_shortcuts_map() -> std::collections::HashMap<String, u64> {
     if let Some(appdata) = dirs::data_dir() {
         search_dirs.push(appdata.join(r"Microsoft\Windows\Start Menu\Programs"));
     }
-    search_dirs.push(PathBuf::from(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"));
+    search_dirs.push(PathBuf::from(
+        r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs",
+    ));
 
     for base in search_dirs {
         if !base.exists() {
@@ -575,7 +609,9 @@ fn scan_shortcuts_map() -> std::collections::HashMap<String, u64> {
                             if let Ok(accessed) = md.accessed().or_else(|_| md.modified()) {
                                 if let Ok(dur) = accessed.duration_since(std::time::UNIX_EPOCH) {
                                     let ts = dur.as_secs();
-                                    if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                                    if let Some(stem) =
+                                        entry.path().file_stem().and_then(|s| s.to_str())
+                                    {
                                         let stem_lower = stem.to_lowercase();
                                         map.entry(stem_lower.clone())
                                             .and_modify(|e: &mut u64| *e = (*e).max(ts))
@@ -699,7 +735,8 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
     });
 
     // 第二阶段：基于安装目录进行跨版本合并（例如浏览器自动更新留下的旧注册表残留项）
-    let mut loc_map: std::collections::HashMap<PathBuf, InstalledApp> = std::collections::HashMap::new();
+    let mut loc_map: std::collections::HashMap<PathBuf, InstalledApp> =
+        std::collections::HashMap::new();
     let mut final_list: Vec<InstalledApp> = Vec::new();
 
     for app in list {
@@ -742,9 +779,7 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
         return;
     }
     if path.is_dir() {
-        let _ = std::process::Command::new("explorer.exe")
-            .arg(path)
-            .spawn();
+        let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
     } else {
         let _ = std::process::Command::new("explorer.exe")
             .arg(format!("/select,{}", path.display()))
@@ -855,11 +890,18 @@ mod tests {
     fn live_registry_scan() {
         let live = AtomicBool::new(true);
         let apps = list_installed_apps(&live);
-        assert!(!apps.is_empty(), "Expected to find installed applications on Windows");
+        assert!(
+            !apps.is_empty(),
+            "Expected to find installed applications on Windows"
+        );
 
         // 验证 PotPlayer 等常见软件能够解析出最后使用时间或估算大小
         if let Some(pot) = apps.iter().find(|a| a.name.contains("PotPlayer")) {
-            assert!(pot.estimated_size > 0 || pot.last_used_date.is_some() || pot.install_location.is_some());
+            assert!(
+                pot.estimated_size > 0
+                    || pot.last_used_date.is_some()
+                    || pot.install_location.is_some()
+            );
         }
     }
 }
@@ -874,7 +916,10 @@ mod uninstaller_probe {
     fn probe_uninstaller() {
         let kw = std::env::var("QC_APP").unwrap_or_else(|_| "Kiro".into());
         let live = AtomicBool::new(true);
-        for a in list_installed_apps(&live).iter().filter(|a| a.name.contains(&kw)) {
+        for a in list_installed_apps(&live)
+            .iter()
+            .filter(|a| a.name.contains(&kw))
+        {
             println!("名称: {}", a.name);
             println!("  UninstallString      : {:?}", a.uninstall_string);
             println!("  QuietUninstallString : {:?}", a.quiet_uninstall_string);

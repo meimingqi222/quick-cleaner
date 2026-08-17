@@ -5,7 +5,9 @@ use crate::ui::components::buttons::ghost_button;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb, Animation, AnimationExt as _, Context, Div, IntoElement, SharedString};
+use gpui::{
+    div, prelude::*, px, rgb, Animation, AnimationExt as _, Context, Div, IntoElement, SharedString,
+};
 use std::time::Duration;
 
 /// 顶部扫描进度指示条（循环动画）
@@ -15,19 +17,14 @@ pub fn render_scan_line() -> Div {
         .w_full()
         .h(px(3.))
         .bg(rgb(SURF_HIGHEST))
-        .child(
-            div()
-                .h_full()
-                .bg(rgb(PRIMARY))
-                .with_animation(
-                    SharedString::from("scan-progress"),
-                    Animation::new(Duration::from_millis(1400)).repeat(),
-                    |bar, delta| {
-                        let w = (delta * 2.0).fract() * 100.0;
-                        bar.w(px(w))
-                    },
-                ),
-        )
+        .child(div().h_full().bg(rgb(PRIMARY)).with_animation(
+            SharedString::from("scan-progress"),
+            Animation::new(Duration::from_millis(1400)).repeat(),
+            |bar, delta| {
+                let w = (delta * 2.0).fract() * 100.0;
+                bar.w(px(w))
+            },
+        ))
 }
 
 /// 清理进行中的全局操作进度条

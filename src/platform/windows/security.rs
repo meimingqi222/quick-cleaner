@@ -150,7 +150,9 @@ pub fn relaunch_as_admin_if_needed() -> bool {
     // 跨账户提权（OTS）支持：提权前捕获真实前台用户的目录与 SID，
     // 传递给提权子进程，防止提权后路径错位指向管理员 Profile。
     if !args.iter().any(|a| a == "--orig-user-home") {
-        if let Some(home) = dirs::home_dir().or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)) {
+        if let Some(home) = dirs::home_dir()
+            .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))
+        {
             args.push("--orig-user-home".into());
             args.push(home.to_string_lossy().to_string());
         }
@@ -208,7 +210,10 @@ mod tests {
     #[test]
     fn test_quote_win_arg_with_spaces() {
         assert_eq!(quote_win_arg("hello world"), "\"hello world\"");
-        assert_eq!(quote_win_arg("C:\\Program Files\\App"), "\"C:\\Program Files\\App\"");
+        assert_eq!(
+            quote_win_arg("C:\\Program Files\\App"),
+            "\"C:\\Program Files\\App\""
+        );
     }
 
     #[test]
@@ -216,7 +221,9 @@ mod tests {
         assert_eq!(quote_win_arg("a\"b"), "\"a\\\"b\"");
         assert_eq!(quote_win_arg("a\\\"b"), "\"a\\\\\\\"b\"");
         assert_eq!(quote_win_arg("C:\\dir\\"), "C:\\dir\\");
-        assert_eq!(quote_win_arg("C:\\dir with spaces\\"), "\"C:\\dir with spaces\\\\\"");
+        assert_eq!(
+            quote_win_arg("C:\\dir with spaces\\"),
+            "\"C:\\dir with spaces\\\\\""
+        );
     }
 }
-

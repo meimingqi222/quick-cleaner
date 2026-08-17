@@ -33,10 +33,8 @@ pub struct CategorySummary {
 /// 其中 90% 以上花在发现式扫描上。界面走 [`scan_fixed`] + [`scan_discovered`]
 /// 两阶段，先把秒级出结果的部分显示出来。这里保留一次性版本给命令行与测试用。
 pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummary> {
-    let (mut cats, discovered) = rayon::join(
-        || scan_fixed(targets, live),
-        || scan_discovered(live, None),
-    );
+    let (mut cats, discovered) =
+        rayon::join(|| scan_fixed(targets, live), || scan_discovered(live, None));
     merge_discovered(&mut cats, discovered);
     cats
 }
@@ -65,7 +63,7 @@ pub fn scan_fixed(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySumm
 pub fn scan_fixed_with_tree(
     targets: &[ScanTarget],
     live: &AtomicBool,
-    tree: &crate::core::disk::MftTree,
+    tree: &crate::core::disk::SizeTree,
 ) -> Vec<CategorySummary> {
     scan_fixed_inner(targets, live, Some(tree))
 }
@@ -95,16 +93,37 @@ fn slowest_targets(measured: &[(ScanItem, std::time::Duration, bool)], n: usize)
 fn scan_fixed_inner(
     targets: &[ScanTarget],
     live: &AtomicBool,
-    tree: Option<&crate::core::disk::MftTree>,
+    tree: Option<&crate::core::disk::SizeTree>,
 ) -> Vec<CategorySummary> {
     let t0 = std::time::Instant::now();
     // 逐个目标计时。目标是并行称重的，墙钟时间等于**最慢那一个**，
     // 所以合计耗时没有意义，排行榜才有。
     let measured: Vec<(ScanItem, std::time::Duration, bool)> = targets
         .par_iter()
-        .filter(|t| t.path.exists())
+        .filter(|t| {
+            // tmutil:// 虚拟路径（APFS 本地快照）不走文件系统 exists() 检查
+            if t.path.to_string_lossy().starts_with("tmutil://") {
+                return true;
+            }
+            t.path.exists()
+        })
         .filter_map(|t| {
             let started = std::time::Instant::now();
+            // tmutil:// 虚拟路径：大小未知（APFS 快照是 COW 的），用 0 占位
+            if t.path.to_string_lossy().starts_with("tmutil://") {
+                return Some((
+                    ScanItem {
+                        path: t.path.clone(),
+                        label: t.label.clone(),
+                        size: 0,
+                        file_count: 0,
+                        category: t.category,
+                        last_modified: 0,
+                    },
+                    started.elapsed(),
+                    false,
+                ));
+            }
             match tree.and_then(|tr| measure_via_tree(tr, &t.path)) {
                 Some((size, files)) => Some((
                     ScanItem {
@@ -144,15 +163,31 @@ fn scan_fixed_inner(
 
 /// 在 MFT 树上查一个目录的递归体积与文件数。查不到返回 `None`，调用方退回遍历。
 pub(crate) fn measure_via_tree(
-    tree: &crate::core::disk::MftTree,
+    tree: &crate::core::disk::SizeTree,
     path: &Path,
 ) -> Option<(u64, u64)> {
-    if volume_of(path)? != tree.volume().to_ascii_uppercase() {
-        return None;
+    // Windows 上树是按卷构建的，volume_of 必须精确匹配。
+    // macOS 上树是按用户目录构建的（mount_point = /Users/<user>），
+    // volume_of 返回的是文件系统挂载点（/），两者不等。
+    // 改为：只要路径在树的挂载点之下就尝试查表，strip_prefix 和 find_path
+    // 会负责精确匹配。
+    #[cfg(windows)]
+    {
+        if &volume_of(path)? != tree.volume() {
+            return None;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // macOS：路径必须在树的挂载点（用户目录）之下
+        if !path.starts_with(tree.volume().mount_point()) {
+            return None;
+        }
     }
     // `find_path` 逐层匹配，某一层对不上就提前收工。因此长度对不上就说明
     // 这条路径不在树里（典型情况：MFT 快照之后才建出来的目录）。
-    let want = path
+    let relative = path.strip_prefix(tree.volume().mount_point()).ok()?;
+    let want = relative
         .components()
         .filter(|c| matches!(c, std::path::Component::Normal(_)))
         .count();
@@ -164,20 +199,53 @@ pub(crate) fn measure_via_tree(
     Some((tree.size_of(node), tree.file_count_of(node)))
 }
 
-/// 路径所在的盘符（大写）。没有 `X:` 前缀（UNC、非 Windows）时返回 `None`。
-fn volume_of(path: &Path) -> Option<char> {
-    let s = path.to_string_lossy();
-    let mut it = s.chars();
-    let c = it.next()?.to_ascii_uppercase();
-    (c.is_ascii_alphabetic() && it.next() == Some(':')).then_some(c)
+/// 路径所在的卷。
+///
+/// Windows 上从 `X:` 盘符前缀提取；macOS / Unix 上用 `list_volumes()` 枚举的
+/// 挂载点里找包含该路径的那个。找不到（UNC、相对路径、外接盘未挂载）返回 `None`。
+fn volume_of(path: &Path) -> Option<crate::core::disk::VolumeId> {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        let mut it = s.chars();
+        let c = it.next()?.to_ascii_uppercase();
+        if c.is_ascii_alphabetic() && it.next() == Some(':') {
+            return Some(crate::core::disk::VolumeId::from_drive_letter(c));
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        // macOS / Unix：路径必须以某个挂载点为前缀。
+        // 挂载点列表来自 `platform::list_volumes()`，根卷 `/` 永远在里面，
+        // 所以绝对路径至少能匹配到 `/`。相对路径和 UNC 不属于任何卷。
+        if !path.is_absolute() {
+            return None;
+        }
+        let volumes = crate::platform::list_volumes();
+        // 选最长前缀匹配：`/Volumes/外接盘/foo` 应匹配 `/Volumes/外接盘`
+        // 而不是 `/`。按挂载点长度降序排列后取第一个匹配的。
+        let mut best: Option<(usize, &crate::core::disk::VolumeId)> = None;
+        for vol in &volumes {
+            let mount = vol.mount_point();
+            if path.starts_with(mount) {
+                let len = mount.as_os_str().len();
+                if best.is_none_or(|(blen, _)| len > blen) {
+                    best = Some((len, vol));
+                }
+            }
+        }
+        best.map(|(_, v)| v.clone())
+    }
 }
 
 /// 固定路径目标最集中的那个卷。
 ///
 /// 阶段一要查表就得先解析一个卷的 MFT，只解析得起一个（一棵全盘树约
 /// 350 MB）。目标散落在多个盘上时选命中最多的那个，剩下的照旧遍历。
-pub fn dominant_volume(targets: &[ScanTarget]) -> Option<char> {
-    let mut count: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+pub fn dominant_volume(targets: &[ScanTarget]) -> Option<crate::core::disk::VolumeId> {
+    let mut count: std::collections::HashMap<crate::core::disk::VolumeId, usize> =
+        std::collections::HashMap::new();
     for t in targets {
         if let Some(v) = volume_of(&t.path) {
             *count.entry(v).or_default() += 1;
@@ -192,10 +260,29 @@ pub fn dominant_volume(targets: &[ScanTarget]) -> Option<char> {
 /// 是整轮扫描里最贵的一步（本机冷缓存 25 秒量级）。放在第二阶段异步补齐。
 pub fn scan_discovered(
     live: &AtomicBool,
-    prescanned: Option<crate::core::disk::MftScan>,
+    prescanned: Option<crate::core::disk::ScanResult>,
 ) -> Vec<ScanItem> {
     let t0 = std::time::Instant::now();
     let items = crate::core::devscan::discover(live, prescanned);
+    let total: u64 = items.iter().map(|it| it.size).sum();
+    crate::log!(
+        "阶段二 scan_discovered 完成：{:?}，{} 条，合计 {}",
+        t0.elapsed(),
+        items.len(),
+        crate::core::model::fmt_size(total)
+    );
+    items
+}
+
+/// macOS 专用：接受 `Arc<ScanResult>` 的 scan_discovered 变体。
+/// 避免从 UI 层 clone 6.6M 条目的 ScanResult。
+#[cfg(not(windows))]
+pub fn scan_discovered_arc(
+    live: &AtomicBool,
+    prescanned: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
+) -> Vec<ScanItem> {
+    let t0 = std::time::Instant::now();
+    let items = crate::core::devscan::discover_arc(live, prescanned);
     let total: u64 = items.iter().map(|it| it.size).sum();
     crate::log!(
         "阶段二 scan_discovered 完成：{:?}，{} 条，合计 {}",
@@ -227,7 +314,8 @@ pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>) {
 
         cat.items.append(&mut found);
         if cat.category.is_discovered() {
-            cat.items.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
+            cat.items
+                .sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         }
         cat.total_size = cat.items.iter().map(|it| it.size).sum();
     }
@@ -363,14 +451,21 @@ fn walk_at(dir: &Path, live: &AtomicBool, depth: usize) -> Acc {
             subdirs.push(entry.path());
         } else if ft.is_file() {
             // 忽略 desktop.ini（避免空目录显示噪点）
-            if entry.file_name().to_string_lossy().eq_ignore_ascii_case("desktop.ini") {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("desktop.ini")
+            {
                 continue;
             }
             acc.files += 1;
             if let Ok(md) = entry.metadata() {
                 acc.size += md.len();
                 if let Ok(m) = md.modified() {
-                    let t = m.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                    let t = m
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
                     acc.newest = acc.newest.max(t);
                 }
             }
@@ -400,14 +495,41 @@ mod tests {
 
     #[test]
     fn volume_of_reads_the_drive_letter() {
-        assert_eq!(volume_of(Path::new(r"C:\Users\me")), Some('C'));
-        // 小写盘符要归一化，否则和 MftTree::volume() 比不上
-        assert_eq!(volume_of(Path::new(r"d:\code")), Some('D'));
-        assert_eq!(volume_of(Path::new(r"C:\")), Some('C'));
+        #[cfg(windows)]
+        {
+            use crate::core::disk::VolumeId;
+            assert_eq!(
+                volume_of(Path::new(r"C:\Users\me")),
+                Some(VolumeId::from_drive_letter('C'))
+            );
+            // 小写盘符要归一化，否则和 SizeTree::volume() 比不上
+            assert_eq!(
+                volume_of(Path::new(r"d:\code")),
+                Some(VolumeId::from_drive_letter('D'))
+            );
+            assert_eq!(
+                volume_of(Path::new(r"C:\")),
+                Some(VolumeId::from_drive_letter('C'))
+            );
+        }
         // UNC 与相对路径没有盘符，只能走遍历
         assert_eq!(volume_of(Path::new(r"\\server\share\x")), None);
         assert_eq!(volume_of(Path::new("relative/path")), None);
         assert_eq!(volume_of(Path::new("")), None);
+
+        // macOS / Unix：绝对路径至少匹配到根卷 `/`
+        #[cfg(not(windows))]
+        {
+            let root_vol = volume_of(Path::new("/Users/me/Library/Caches"));
+            assert!(root_vol.is_some(), "绝对路径应当匹配到某个卷");
+            assert_eq!(
+                root_vol.unwrap().mount_point(),
+                std::path::Path::new("/"),
+                "无外接盘时应匹配到根卷"
+            );
+            // 相对路径不属于任何卷
+            assert_eq!(volume_of(Path::new("foo/bar")), None);
+        }
     }
 
     #[test]
@@ -417,13 +539,28 @@ mod tests {
             label: Text::same("t"),
             category: CategoryId::UserTemp,
         };
-        let targets = vec![
-            mk(r"C:\a"),
-            mk(r"C:\b"),
-            mk(r"D:\c"),
-            mk(r"\\unc\share"),
-        ];
-        assert_eq!(dominant_volume(&targets), Some('C'));
+        #[cfg(windows)]
+        let targets = [mk(r"C:\a"), mk(r"C:\b"), mk(r"D:\c"), mk(r"\\unc\share")];
+        #[cfg(windows)]
+        {
+            use crate::core::disk::VolumeId;
+            assert_eq!(
+                dominant_volume(&targets),
+                Some(VolumeId::from_drive_letter('C'))
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            // macOS 上所有绝对路径都落在根卷 `/`，所以 dominant_volume 应返回 `/`
+            let mac_targets = [mk("/Users/me/.npm"), mk("/Users/me/.cargo"), mk("/tmp")];
+            let dom = dominant_volume(&mac_targets);
+            assert!(dom.is_some(), "应当能选出主导卷");
+            assert_eq!(
+                dom.unwrap().mount_point(),
+                std::path::Path::new("/"),
+                "无外接盘时主导卷应是根卷"
+            );
+        }
         assert_eq!(dominant_volume(&[]), None);
     }
 
@@ -514,8 +651,14 @@ mod tests {
     #[test]
     fn works_across_multiple_categories() {
         let mut cats = vec![
-            summary(CategoryId::UserTemp, vec![item(r"C:\t", 200, CategoryId::UserTemp)]),
-            summary(CategoryId::DevBuild, vec![item(r"D:\p\target", 5000, CategoryId::DevBuild)]),
+            summary(
+                CategoryId::UserTemp,
+                vec![item(r"C:\t", 200, CategoryId::UserTemp)],
+            ),
+            summary(
+                CategoryId::DevBuild,
+                vec![item(r"D:\p\target", 5000, CategoryId::DevBuild)],
+            ),
         ];
 
         apply_clean_result(&mut cats, &[PathBuf::from(r"D:\p\target")], &[]);
@@ -541,7 +684,11 @@ mod tests {
 
         let t0 = Instant::now();
         let existing: Vec<_> = targets.iter().filter(|t| t.path.exists()).collect();
-        println!("  exists() 过滤: {:?}（剩 {} 个）", t0.elapsed(), existing.len());
+        println!(
+            "  exists() 过滤: {:?}（剩 {} 个）",
+            t0.elapsed(),
+            existing.len()
+        );
 
         let t1 = Instant::now();
         let mut per: Vec<(std::time::Duration, String, u64)> = existing
@@ -557,12 +704,21 @@ mod tests {
         per.sort_by_key(|b| std::cmp::Reverse(b.0));
         println!("  最慢的 15 个：");
         for (d, path, size) in per.iter().take(15) {
-            println!("    {:>9.2?}  {:>10}  {}", d, crate::core::model::fmt_size(*size), path);
+            println!(
+                "    {:>9.2?}  {:>10}  {}",
+                d,
+                crate::core::model::fmt_size(*size),
+                path
+            );
         }
 
         let t2 = Instant::now();
         let discovered = crate::core::devscan::discover(&live, None);
-        println!("  发现式扫描: {:?}（{} 条）", t2.elapsed(), discovered.len());
+        println!(
+            "  发现式扫描: {:?}（{} 条）",
+            t2.elapsed(),
+            discovered.len()
+        );
 
         let t3 = Instant::now();
         let cats = scan_all(&targets, &live);
@@ -603,7 +759,10 @@ mod tests {
         it.path = dir.clone();
         merge_discovered(&mut cats, vec![it]);
 
-        let dev = cats.iter().find(|c| c.category == CategoryId::DevBuild).unwrap();
+        let dev = cats
+            .iter()
+            .find(|c| c.category == CategoryId::DevBuild)
+            .unwrap();
         assert_eq!(dev.items.len(), 1);
         assert_eq!(dev.total_size, 4096);
         // 其它类别不该被牵连
@@ -628,7 +787,10 @@ mod tests {
         it.path = gone;
         merge_discovered(&mut cats, vec![it]);
 
-        let dev = cats.iter().find(|c| c.category == CategoryId::DevBuild).unwrap();
+        let dev = cats
+            .iter()
+            .find(|c| c.category == CategoryId::DevBuild)
+            .unwrap();
         assert!(dev.items.is_empty());
         assert_eq!(dev.total_size, 0);
     }
@@ -651,7 +813,10 @@ mod tests {
         again.path = dir.clone();
         merge_discovered(&mut cats, vec![again]);
 
-        let dev = cats.iter().find(|c| c.category == CategoryId::DevBuild).unwrap();
+        let dev = cats
+            .iter()
+            .find(|c| c.category == CategoryId::DevBuild)
+            .unwrap();
         assert_eq!(dev.items.len(), 1, "同一路径不能出现两条");
         assert_eq!(dev.total_size, 1000);
 
@@ -671,7 +836,10 @@ mod tests {
         b.path = big.clone();
         merge_discovered(&mut cats, vec![a, b]);
 
-        let dev = cats.iter().find(|c| c.category == CategoryId::DevBuild).unwrap();
+        let dev = cats
+            .iter()
+            .find(|c| c.category == CategoryId::DevBuild)
+            .unwrap();
         assert_eq!(dev.items[0].size, 5000);
         assert_eq!(dev.items[1].size, 100);
         assert_eq!(dev.total_size, 5100);

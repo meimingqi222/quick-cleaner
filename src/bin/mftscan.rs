@@ -6,12 +6,29 @@
 //!
 //! WizTree CSV 是正确性基准：目录行的“大小”列是递归真实大小，和我们
 //! 聚合出来的 dir_size 应当一致（活动系统上会有少量漂移，属正常）。
+//!
+//! 本工具是 NTFS 专属的：`platform::mft` 只在 Windows 分支存在。整个文件按平台
+//! 门禁，非 Windows 上只保留一个说明用途的 `main`，否则 `cargo build` 会在
+//! macOS / Linux 上直接失败（`unresolved import quick_cleaner::platform::mft`）。
 
+#[cfg(windows)]
+use quick_cleaner::core::disk::VolumeId;
+#[cfg(windows)]
 use quick_cleaner::core::model::fmt_size;
+#[cfg(windows)]
 use quick_cleaner::platform::{is_elevated, mft};
+#[cfg(windows)]
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::io::{BufRead, BufReader};
 
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("mftscan 用于验证 NTFS $MFT 解析，仅在 Windows 上可用。");
+    std::process::exit(1);
+}
+
+#[cfg(windows)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let letter = args
@@ -32,11 +49,12 @@ fn main() {
     // 对比模式下需要拿到很多目录，否则只取用户要的 top_n
     let want = if csv.is_some() { 200_000 } else { top_n };
 
-    let scan = match mft::scan_volume(letter, want) {
+    let vol = VolumeId::from_drive_letter(letter);
+    let scan = match mft::scan_volume(&vol, want) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("扫描失败：{e}");
-            if matches!(e, mft::MftError::AccessDenied) {
+            if matches!(e, mft::ScanError::AccessDenied) {
                 eprintln!("请以管理员身份运行。");
             }
             std::process::exit(1);
@@ -46,7 +64,11 @@ fn main() {
     println!("耗时      : {} ms", scan.elapsed_ms);
     println!("文件总数  : {}", scan.file_count);
     println!("目录总数  : {}", scan.dir_count);
-    println!("占用总量  : {} ({} 字节)", fmt_size(scan.total_size), scan.total_size);
+    println!(
+        "占用总量  : {} ({} 字节)",
+        fmt_size(scan.total_size),
+        scan.total_size
+    );
 
     println!("\n--- MFT 读取诊断 ---");
     println!("解析记录槽 : {}", scan.records_read);
@@ -85,7 +107,8 @@ fn main() {
 }
 
 /// 解析 WizTree 导出的 CSV，和 MFT 扫描结果逐目录对比。
-fn compare_with_wiztree(scan: &mft::MftScan, csv_path: &str) {
+#[cfg(windows)]
+fn compare_with_wiztree(scan: &mft::ScanResult, csv_path: &str) {
     println!("\n================ 与 WizTree 基准对比 ================");
     let file = match std::fs::File::open(csv_path) {
         Ok(f) => f,
@@ -130,11 +153,13 @@ fn compare_with_wiztree(scan: &mft::MftScan, csv_path: &str) {
     println!("WizTree 基准目录数 : {}", baseline.len());
     println!(
         "根目录 (C:)  基准 {} / {} 文件",
-        fmt_size(root_size), root_files
+        fmt_size(root_size),
+        root_files
     );
     println!(
         "根目录 (C:)  本次 {} / {} 文件",
-        fmt_size(scan.total_size), scan.file_count
+        fmt_size(scan.total_size),
+        scan.file_count
     );
     if root_size > 0 {
         let d = pct_diff(scan.total_size, root_size);
@@ -168,7 +193,10 @@ fn compare_with_wiztree(scan: &mft::MftScan, csv_path: &str) {
         }
     }
 
-    println!("\n对比了 {} 个目录（{} 个在基准中找不到）", matched, missing);
+    println!(
+        "\n对比了 {} 个目录（{} 个在基准中找不到）",
+        matched, missing
+    );
     if matched > 0 {
         println!(
             "完全一致 : {} ({:.1}%)",
@@ -197,6 +225,7 @@ fn compare_with_wiztree(scan: &mft::MftScan, csv_path: &str) {
     }
 }
 
+#[cfg(windows)]
 fn pct_diff(mine: u64, base: u64) -> f64 {
     if base == 0 {
         return 0.0;
@@ -205,11 +234,13 @@ fn pct_diff(mine: u64, base: u64) -> f64 {
 }
 
 /// 统一成小写、去掉结尾反斜杠，方便两边比对。
+#[cfg(windows)]
 fn normalize(p: &str) -> String {
     p.trim_end_matches('\\').to_ascii_lowercase()
 }
 
 /// 极简 CSV 解析：只需处理 WizTree 的双引号包裹字段。
+#[cfg(windows)]
 fn parse_csv_row(line: &str) -> Option<Vec<String>> {
     if line.is_empty() {
         return None;

@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 use std::os::windows::ffi::OsStrExt;
 
+use crate::core::disk::VolumeId;
+
 /// NTFS 把卷根目录固定放在 `$MFT` 的 5 号记录上。
 /// 对外以 `core::disk::ROOT_NODE` 的名字导出，UI 层不该直接写字面量 5。
 pub const ROOT_RECORD: u32 = 5;
@@ -29,8 +31,8 @@ pub struct Node {
 
 /// 扫描后保留下来的完整目录树，支持像 WizTree 那样逐层下钻。
 #[derive(Clone)]
-pub struct MftTree {
-    volume: char,
+pub struct SizeTree {
+    volume: VolumeId,
     entries: Vec<Entry>,
     dir_size: Vec<u64>,
     dir_files: Vec<u64>,
@@ -38,15 +40,20 @@ pub struct MftTree {
     child_at: Vec<u32>,
 }
 
-impl std::fmt::Debug for MftTree {
+impl std::fmt::Debug for SizeTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MftTree({}: {} 条记录)", self.volume, self.entries.len())
+        write!(
+            f,
+            "SizeTree({}: {} 条记录)",
+            self.volume,
+            self.entries.len()
+        )
     }
 }
 
-impl MftTree {
-    pub fn volume(&self) -> char {
-        self.volume
+impl SizeTree {
+    pub fn volume(&self) -> &VolumeId {
+        &self.volume
     }
 
     pub fn root(&self) -> u32 {
@@ -64,7 +71,7 @@ impl MftTree {
 
     pub fn name_of(&self, idx: u32) -> String {
         if idx == ROOT_RECORD {
-            return format!("{}:", self.volume);
+            return self.volume.display().to_string();
         }
         if !self.valid(idx) {
             return String::new();
@@ -110,7 +117,7 @@ impl MftTree {
     /// 解析单个节点的完整路径。
     ///
     /// 每次调用都会新建一次性缓存，只适合零星查询。批量解析（例如渲染
-    /// 一屏目录）务必用 [`MftTree::path_of_with`] 复用同一个缓存，
+    /// 一屏目录）务必用 [`SizeTree::path_of_with`] 复用同一个缓存，
     /// 否则每一行都要从头回溯到根。
     pub fn path_of(&self, idx: u32) -> String {
         let mut cache = HashMap::new();
@@ -119,7 +126,7 @@ impl MftTree {
 
     /// 复用调用方持有的缓存解析路径。同一批次里父链会被逐级记住。
     pub fn path_of_with(&self, idx: u32, cache: &mut HashMap<u32, String>) -> String {
-        resolve_path(&self.entries, idx, self.volume, cache)
+        resolve_path(&self.entries, idx, &self.volume, cache)
     }
 
     fn child_slice(&self, idx: u32) -> &[u32] {
@@ -127,7 +134,10 @@ impl MftTree {
         if i + 1 >= self.child_start.len() {
             return &[];
         }
-        let (a, b) = (self.child_start[i] as usize, self.child_start[i + 1] as usize);
+        let (a, b) = (
+            self.child_start[i] as usize,
+            self.child_start[i + 1] as usize,
+        );
         &self.child_at[a..b]
     }
 
@@ -152,7 +162,7 @@ impl MftTree {
 
     /// 子节点的原始下标切片，不分配、不排序。
     ///
-    /// [`MftTree::children`] 会克隆每个子节点的名字并按体积排序，适合渲染
+    /// [`SizeTree::children`] 会克隆每个子节点的名字并按体积排序，适合渲染
     /// 一屏列表；全树遍历（如开发垃圾发现）必须用这个，否则光是构造
     /// `Vec<Node>` 就会淹没遍历本身。
     pub fn child_indices(&self, idx: u32) -> &[u32] {
@@ -172,8 +182,7 @@ impl MftTree {
             .child_slice(idx)
             .iter()
             .filter(|&&c| {
-                self.valid(c)
-                    && !Self::is_ntfs_system_meta(c, &self.entries[c as usize].name)
+                self.valid(c) && !Self::is_ntfs_system_meta(c, &self.entries[c as usize].name)
             })
             .map(|&c| {
                 let e = &self.entries[c as usize];
@@ -181,8 +190,16 @@ impl MftTree {
                     idx: c,
                     name: e.name.clone(),
                     is_dir: e.is_dir,
-                    size: if e.is_dir { self.dir_size[c as usize] } else { e.size },
-                    file_count: if e.is_dir { self.dir_files[c as usize] } else { 1 },
+                    size: if e.is_dir {
+                        self.dir_size[c as usize]
+                    } else {
+                        e.size
+                    },
+                    file_count: if e.is_dir {
+                        self.dir_files[c as usize]
+                    } else {
+                        1
+                    },
                     own_size: if e.is_dir { self.own_size(c) } else { e.size },
                 }
             })
@@ -257,7 +274,10 @@ impl MftTree {
             // 直接在 child_slice 上线性查找。旧实现调 children()，那会克隆
             // 每个子节点的名字再按体积排序，只为了取其中一个匹配项。
             let hit = self.child_slice(cur).iter().copied().find(|&c| {
-                self.valid(c) && self.entries[c as usize].name.eq_ignore_ascii_case(&comp_str)
+                self.valid(c)
+                    && self.entries[c as usize]
+                        .name
+                        .eq_ignore_ascii_case(&comp_str)
             });
             match hit {
                 Some(idx) => {
@@ -320,13 +340,13 @@ impl MftTree {
 }
 
 #[derive(Clone, Debug)]
-pub struct MftScan {
-    pub volume: char,
+pub struct ScanResult {
+    pub volume: VolumeId,
     pub total_size: u64,
     pub file_count: u64,
     pub dir_count: u64,
     pub dirs: Vec<DirUsage>,
-    pub tree: MftTree,
+    pub tree: SizeTree,
     pub elapsed_ms: u64,
 
     pub records_read: u64,
@@ -339,7 +359,7 @@ pub struct MftScan {
     pub unique_files: u64,
 }
 
-impl MftScan {
+impl ScanResult {
     /// 快速就地剔除被删除的文件或文件夹并同步总盘符统计
     pub fn remove_path(&mut self, path: &std::path::Path) {
         if let Some(idx) = self.tree.find_node_by_path(path) {
@@ -353,18 +373,18 @@ impl MftScan {
 }
 
 #[derive(Debug)]
-pub enum MftError {
+pub enum ScanError {
     AccessDenied,
     NotNtfs,
     Io(String),
 }
 
-impl std::fmt::Display for MftError {
+impl std::fmt::Display for ScanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MftError::AccessDenied => write!(f, "需要管理员权限才能读取 $MFT"),
-            MftError::NotNtfs => write!(f, "该卷不是 NTFS 或无法获取卷信息"),
-            MftError::Io(e) => write!(f, "读取失败：{e}"),
+            ScanError::AccessDenied => write!(f, "需要管理员权限才能读取 $MFT"),
+            ScanError::NotNtfs => write!(f, "该卷不是 NTFS 或无法获取卷信息"),
+            ScanError::Io(e) => write!(f, "读取失败：{e}"),
         }
     }
 }
@@ -407,12 +427,10 @@ impl Drop for Volume {
 }
 
 impl Volume {
-    fn open(letter: char) -> Result<Self, MftError> {
+    fn open(letter: char) -> Result<Self, ScanError> {
         use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
         use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-        use winapi::um::winnt::{
-            FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ,
-        };
+        use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ};
 
         let path = format!("\\\\.\\{letter}:");
         let wide: Vec<u16> = std::ffi::OsStr::new(&path)
@@ -438,15 +456,15 @@ impl Volume {
             // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
             return Err(if err == 5 {
-                MftError::AccessDenied
+                ScanError::AccessDenied
             } else {
-                MftError::Io(format!("CreateFileW (Win32 {err})"))
+                ScanError::Io(format!("CreateFileW (Win32 {err})"))
             });
         }
         Ok(Volume { handle })
     }
 
-    fn volume_data(&self) -> Result<NtfsVolumeData, MftError> {
+    fn volume_data(&self) -> Result<NtfsVolumeData, ScanError> {
         use winapi::um::ioapiset::DeviceIoControl;
 
         let mut data = NtfsVolumeData::default();
@@ -466,12 +484,12 @@ impl Volume {
             )
         };
         if ok == 0 || data.bytes_per_cluster == 0 || data.bytes_per_file_record_segment == 0 {
-            return Err(MftError::NotNtfs);
+            return Err(ScanError::NotNtfs);
         }
         Ok(data)
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, MftError> {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, ScanError> {
         use winapi::um::fileapi::{ReadFile, SetFilePointerEx};
 
         // SAFETY: LARGE_INTEGER 是个纯 POD union，全零是合法位模式；
@@ -481,18 +499,13 @@ impl Volume {
 
         // SAFETY: 句柄有效，distance 按值传入，第三个参数传 null 表示
         // 不需要回报新位置——这是文档允许的。
-        let ok = unsafe {
-            SetFilePointerEx(
-                self.handle,
-                distance,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
+        let ok = unsafe { SetFilePointerEx(self.handle, distance, std::ptr::null_mut(), 0) };
         if ok == 0 {
             // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
-            return Err(MftError::Io(format!("SetFilePointerEx @{offset} (Win32 {err})")));
+            return Err(ScanError::Io(format!(
+                "SetFilePointerEx @{offset} (Win32 {err})"
+            )));
         }
 
         let mut read: u32 = 0;
@@ -511,7 +524,7 @@ impl Volume {
         if ok == 0 {
             // SAFETY: GetLastError 不接收参数，只读当前线程的错误码。
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
-            return Err(MftError::Io(format!("ReadFile @{offset} (Win32 {err})")));
+            return Err(ScanError::Io(format!("ReadFile @{offset} (Win32 {err})")));
         }
         Ok(read as usize)
     }
@@ -521,7 +534,7 @@ impl Volume {
 // 字节解析辅助
 // ---------------------------------------------------------------------------
 
-// 说明：`MftError::Io` 的 payload 必须是**语言中立**的技术细节（API 名 +
+// 说明：`ScanError::Io` 的 payload 必须是**语言中立**的技术细节（API 名 +
 // Win32 错误码）。它会被 `ui::i18n::tr_mft_error` 原样嵌进本地化的外层文案里，
 // payload 自己写中文的话，英文界面上就会冒出半句中文。
 
@@ -720,11 +733,7 @@ fn attribute_list_data_records(list: &[u8]) -> Vec<u64> {
     out
 }
 
-fn read_attribute_list(
-    rec: &[u8],
-    vol: &Volume,
-    bytes_per_cluster: u64,
-) -> Option<Vec<u8>> {
+fn read_attribute_list(rec: &[u8], vol: &Volume, bytes_per_cluster: u64) -> Option<Vec<u8>> {
     let mut pos = u16_at(rec, 0x14) as usize;
 
     while let Some((atype, alen, non_resident, _)) = attr_header(rec, pos) {
@@ -804,9 +813,7 @@ fn read_mft_record(
         let end = vcn.saturating_add(clusters);
         if target_vcn < end {
             let lcn_at = (lcn as u64).checked_add(target_vcn - vcn)?;
-            let at = lcn_at
-                .checked_mul(bytes_per_cluster)?
-                .checked_add(within)?;
+            let at = lcn_at.checked_mul(bytes_per_cluster)?.checked_add(within)?;
             let mut buf = vec![0u8; rec_size];
             vol.read_at(at, &mut buf).ok()?;
             if !apply_fixup(&mut buf, bytes_per_sector) {
@@ -925,7 +932,8 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
     true
 }
 
-pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
+pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanError> {
+    let letter = vol_id.drive_letter().ok_or(ScanError::NotNtfs)?;
     let started = Instant::now();
 
     // 对系统卷发起原始卷句柄读取是杀软重点盯防的行为（rawcopy / 勒索软件
@@ -948,7 +956,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     vol.read_at(mft_offset, &mut first)?;
     let first_time = t_first.elapsed();
     if !apply_fixup(&mut first, bytes_per_sector) {
-        return Err(MftError::NotNtfs);
+        return Err(ScanError::NotNtfs);
     }
     let mut frags: Vec<DataFragment> = Vec::new();
     collect_data_fragments(&first, &mut frags);
@@ -980,7 +988,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
 
     let runs = flatten_fragments(frags);
     if runs.is_empty() {
-        return Err(MftError::NotNtfs);
+        return Err(ScanError::NotNtfs);
     }
     let run_clusters: u64 = runs.iter().map(|&(_, c)| c).sum();
 
@@ -1081,7 +1089,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     }
 
     if entries.len() <= ROOT_RECORD as usize {
-        return Err(MftError::NotNtfs);
+        return Err(ScanError::NotNtfs);
     }
 
     let n = entries.len();
@@ -1142,16 +1150,14 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     total_size += hard_link_size;
     file_count += hard_links.len() as u64;
 
-    // 目录体积排行榜只有命令行工具 mftscan 用得上；GUI 走的是 MftTree
+    // 目录体积排行榜只有命令行工具 mftscan 用得上；GUI 走的是 SizeTree
     // 逐层下钻，不需要这份榜单。top_n 为 0 时直接跳过全盘排序与路径解析。
     let dirs: Vec<DirUsage> = if top_n == 0 {
         Vec::new()
     } else {
         let mut ranked: Vec<u32> = (0..n as u32)
             .filter(|&i| {
-                entries[i as usize].used
-                    && entries[i as usize].is_dir
-                    && dir_size[i as usize] > 0
+                entries[i as usize].used && entries[i as usize].is_dir && dir_size[i as usize] > 0
             })
             .collect();
         ranked.sort_unstable_by(|&a, &b| dir_size[b as usize].cmp(&dir_size[a as usize]));
@@ -1161,7 +1167,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
         ranked
             .iter()
             .map(|&i| DirUsage {
-                path: resolve_path(&entries, i, letter, &mut cache),
+                path: resolve_path(&entries, i, vol_id, &mut cache),
                 size: dir_size[i as usize],
                 file_count: dir_files[i as usize],
             })
@@ -1169,7 +1175,7 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
     };
 
     let t_tree = Instant::now();
-    let tree = build_tree(letter, entries, dir_size, dir_files);
+    let tree = build_tree(vol_id.clone(), entries, dir_size, dir_files);
     let tree_time = t_tree.elapsed();
 
     crate::log!(
@@ -1193,8 +1199,8 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
         crate::core::model::fmt_size(total_size)
     );
 
-    Ok(MftScan {
-        volume: letter,
+    Ok(ScanResult {
+        volume: vol_id.clone(),
         tree,
         total_size,
         file_count,
@@ -1213,11 +1219,11 @@ pub fn scan_volume(letter: char, top_n: usize) -> Result<MftScan, MftError> {
 }
 
 fn build_tree(
-    volume: char,
+    volume: VolumeId,
     entries: Vec<Entry>,
     dir_size: Vec<u64>,
     dir_files: Vec<u64>,
-) -> MftTree {
+) -> SizeTree {
     let n = entries.len();
 
     let mut counts = vec![0u32; n];
@@ -1251,7 +1257,7 @@ fn build_tree(
         }
     }
 
-    MftTree {
+    SizeTree {
         volume,
         entries,
         dir_size,
@@ -1293,11 +1299,12 @@ fn add_to_ancestors(
 fn resolve_path(
     entries: &[Entry],
     idx: u32,
-    letter: char,
+    volume: &VolumeId,
     cache: &mut HashMap<u32, String>,
 ) -> String {
+    let label = volume.display();
     if idx == ROOT_RECORD {
-        return format!("{letter}:");
+        return label.to_string();
     }
     if let Some(hit) = cache.get(&idx) {
         return hit.clone();
@@ -1305,7 +1312,7 @@ fn resolve_path(
 
     let mut chain: Vec<u32> = Vec::new();
     let mut cur = idx;
-    let mut base = format!("{letter}:");
+    let mut base = label.to_string();
     let mut depth = 0;
 
     loop {
@@ -1342,7 +1349,7 @@ fn resolve_path(
 mod tests {
     use super::*;
 
-    fn synthetic_tree() -> MftTree {
+    fn synthetic_tree() -> SizeTree {
         let mut entries = vec![Entry::default(); 12];
         let mut mk = |i: usize, parent: u32, name: &str, is_dir: bool, size: u64| {
             entries[i] = Entry {
@@ -1423,14 +1430,23 @@ mod tests {
         let t = synthetic_tree();
 
         // 目录取递归聚合值，文件取自身大小
-        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users")), Some((5050, 2)));
-        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\me")), Some((5000, 1)));
+        assert_eq!(
+            measure_via_tree(&t, Path::new(r"C:\Users")),
+            Some((5050, 2))
+        );
+        assert_eq!(
+            measure_via_tree(&t, Path::new(r"C:\Users\me")),
+            Some((5000, 1))
+        );
         assert_eq!(
             measure_via_tree(&t, Path::new(r"C:\Users\me\big.iso")),
             Some((5000, 1))
         );
         // 大小写不敏感，和 NTFS 一致
-        assert_eq!(measure_via_tree(&t, Path::new(r"c:\users")), Some((5050, 2)));
+        assert_eq!(
+            measure_via_tree(&t, Path::new(r"c:\users")),
+            Some((5050, 2))
+        );
     }
 
     /// 查不到就必须返回 None 让调用方退回遍历，绝不能把「走到一半」的
@@ -1443,7 +1459,10 @@ mod tests {
 
         // MFT 快照之后才建出来的目录：Users 有，nope 没有
         assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\nope")), None);
-        assert_eq!(measure_via_tree(&t, Path::new(r"C:\Users\me\deep\er")), None);
+        assert_eq!(
+            measure_via_tree(&t, Path::new(r"C:\Users\me\deep\er")),
+            None
+        );
         // 不是这个卷
         assert_eq!(measure_via_tree(&t, Path::new(r"D:\Users")), None);
         // 没有盘符
@@ -1461,11 +1480,14 @@ mod tests {
         let out: Vec<(usize, u8)> = buf
             .par_chunks_mut(REC)
             .enumerate()
-            .map_init(Vec::<u8>::new, |scratch: &mut Vec<u8>, (k, c): (usize, &mut [u8])| {
-                scratch.clear();
-                scratch.push(c[0]);
-                (k, c[0])
-            })
+            .map_init(
+                Vec::<u8>::new,
+                |scratch: &mut Vec<u8>, (k, c): (usize, &mut [u8])| {
+                    scratch.clear();
+                    scratch.push(c[0]);
+                    (k, c[0])
+                },
+            )
             .collect();
 
         assert_eq!(out.len(), 4096 / REC);
@@ -1732,9 +1754,18 @@ mod tests {
     #[test]
     fn flatten_orders_fragments_by_vcn() {
         let frags = vec![
-            DataFragment { start_vcn: 100, runs: vec![(0x50, 4)] },
-            DataFragment { start_vcn: 0, runs: vec![(0x10, 2), (0x30, 3)] },
-            DataFragment { start_vcn: 300, runs: vec![(0x90, 1)] },
+            DataFragment {
+                start_vcn: 100,
+                runs: vec![(0x50, 4)],
+            },
+            DataFragment {
+                start_vcn: 0,
+                runs: vec![(0x10, 2), (0x30, 3)],
+            },
+            DataFragment {
+                start_vcn: 300,
+                runs: vec![(0x90, 1)],
+            },
         ];
         assert_eq!(
             flatten_fragments(frags),

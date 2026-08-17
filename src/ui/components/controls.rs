@@ -77,11 +77,7 @@ pub fn loading_spinner(anim_phase: usize, size: f32, color: u32) -> gpui::AnyEle
     let radius = (size - 12.) / 2.0;
     let center = size / 2.0;
 
-    let mut container = div()
-        .w(px(size))
-        .h(px(size))
-        .flex_none()
-        .relative();
+    let mut container = div().w(px(size)).h(px(size)).flex_none().relative();
 
     // 8 个径向粒子，按当前相位动态计算透明度与大小
     for i in 0..count {
@@ -101,7 +97,13 @@ pub fn loading_spinner(anim_phase: usize, size: f32, color: u32) -> gpui::AnyEle
             6 => 0.12,
             _ => 0.06,
         };
-        let dot_size = if shift <= 1 { 8.0 } else if shift <= 3 { 7.0 } else { 6.0 };
+        let dot_size = if shift <= 1 {
+            8.0
+        } else if shift <= 3 {
+            7.0
+        } else {
+            6.0
+        };
 
         container = container.child(
             div()
@@ -116,7 +118,8 @@ pub fn loading_spinner(anim_phase: usize, size: f32, color: u32) -> gpui::AnyEle
     }
 
     // 中心柔和微光呼吸球
-    let pulse_opacity = 0.12 + 0.10 * (((anim_phase % 12) as f32 / 12.0) * std::f32::consts::PI).sin();
+    let pulse_opacity =
+        0.12 + 0.10 * (((anim_phase % 12) as f32 / 12.0) * std::f32::consts::PI).sin();
     container = container.child(
         div()
             .absolute()

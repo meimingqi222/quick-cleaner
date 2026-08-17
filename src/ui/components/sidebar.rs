@@ -5,9 +5,7 @@ use crate::ui::components::icons::*;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{
-    div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString,
-};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString};
 
 /// 主区域当前显示哪个视图
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,7 +57,10 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         let fg_color = if active { PRIMARY } else { MUTED };
 
         div()
-            .id(SharedString::from(format!("nav-{}", v.title_lang(Language::En))))
+            .id(SharedString::from(format!(
+                "nav-{}",
+                v.title_lang(Language::En)
+            )))
             .h(px(44.))
             .flex()
             .items_center()
@@ -67,12 +68,8 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             .px_3()
             .rounded_xl()
             .cursor_pointer()
-            .when(active, |d| {
-                d.bg(rgb(PRIMARY_FIXED))
-            })
-            .when(!active, |d| {
-                d.hover(|h| h.bg(rgb(SURF_LOW)))
-            })
+            .when(active, |d| d.bg(rgb(PRIMARY_FIXED)))
+            .when(!active, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
             .child(
                 div()
                     .w(px(24.))
@@ -163,13 +160,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         ),
                 )
                 // 导航项列表
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(items),
-                ),
+                .child(div().flex().flex_col().gap_1().children(items)),
         )
         // 底栏统计与语言切换
         .child(
@@ -217,7 +208,9 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .text_sm()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(PRIMARY))
-                                        .child(crate::core::model::fmt_size(root.clean.freed_total)),
+                                        .child(crate::core::model::fmt_size(
+                                            root.clean.freed_total,
+                                        )),
                                 ),
                         ),
                 )
@@ -228,12 +221,13 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .items_center()
                         .justify_between()
                         .px_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(if lang == Language::Zh { "界面语言" } else { "Language" }),
-                        )
+                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                            if lang == Language::Zh {
+                                "界面语言"
+                            } else {
+                                "Language"
+                            },
+                        ))
                         .child(
                             div()
                                 .id("lang-switch-container")

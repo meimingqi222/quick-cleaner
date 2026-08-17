@@ -4,10 +4,10 @@ use crate::core::apps::InstalledApp;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
-use crate::ui::theme::*;
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
+use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Div, SharedString};
 
@@ -17,7 +17,7 @@ pub(super) fn render_app_row(
     idx: usize,
     cx: &mut Context<Root>,
 ) -> AnyElement {
-    let has_uninstaller = app.uninstall_string.is_some() || app.quiet_uninstall_string.is_some();
+    let can_uninstall = app.can_uninstall();
     let app_for_uninst = app.clone();
     let app_for_resid = app.clone();
     let app_for_menu_rc = app.clone();
@@ -33,7 +33,7 @@ pub(super) fn render_app_row(
 
     let lang = root.language;
     let is_busy = root.residual.scanning || root.clean.running;
-    let uninst_enabled = has_uninstaller && !is_busy;
+    let uninst_enabled = can_uninstall && !is_busy;
     let resid_enabled = !is_busy;
 
     div()
@@ -170,13 +170,15 @@ pub(super) fn render_app_row(
                         .id(SharedString::from(format!("uninst-{idx}")))
                         .child(small_button(
                             crate::ui::i18n::tr_btn_uninstall(lang).to_string(),
-                            SURF_HIGH,
+                            CARD,
                             TEXT,
                             uninst_enabled,
                         ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_uninstall_app(app_for_uninst.clone(), cx);
-                        })),
+                        .when(uninst_enabled, |d| {
+                            d.on_click(cx.listener(move |this, _, _, cx| {
+                                this.request_uninstall_app(app_for_uninst.clone(), cx);
+                            }))
+                        }),
                 )
                 .child(
                     div()

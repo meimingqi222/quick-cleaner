@@ -96,7 +96,6 @@ impl Text {
             },
         }
     }
-
 }
 
 /// 把一个「按语言产文案」的函数求值成双语 [`Text`]。
@@ -129,7 +128,14 @@ mod tests {
 
     #[test]
     fn locale_tags_map_to_a_language() {
-        for zh in ["zh", "zh-CN", "zh_TW.UTF-8", "ZH-Hans", "zh_HK", "zh-Hant-MO"] {
+        for zh in [
+            "zh",
+            "zh-CN",
+            "zh_TW.UTF-8",
+            "ZH-Hans",
+            "zh_HK",
+            "zh-Hant-MO",
+        ] {
             assert_eq!(Language::from_locale_tag(zh), Language::Zh, "{zh}");
         }
         for en in ["en", "en-US", "en_GB.UTF-8", "ja-JP", "de_DE", "ru", ""] {
@@ -159,5 +165,4 @@ mod tests {
         assert_eq!(t.get(Language::Zh), "npm 缓存");
         assert_eq!(t.get(Language::En), "npm cache");
     }
-
 }

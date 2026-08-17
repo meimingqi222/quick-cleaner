@@ -302,7 +302,9 @@ mod tests {
     #[test]
     fn protects_system_subtrees() {
         assert!(is_protected(Path::new("C:\\Windows\\System32")));
-        assert!(is_protected(Path::new("C:\\Windows\\System32\\drivers\\etc")));
+        assert!(is_protected(Path::new(
+            "C:\\Windows\\System32\\drivers\\etc"
+        )));
         assert!(is_protected(Path::new("c:/windows/winsxs/whatever")));
         assert!(is_protected(Path::new("D:\\System Volume Information\\x")));
     }
@@ -347,10 +349,19 @@ mod tests {
 
     #[test]
     fn at_or_under_respects_component_boundary() {
-        assert!(at_or_under("c:\\windows\\system32", "c:\\windows\\system32"));
-        assert!(at_or_under("c:\\windows\\system32\\x", "c:\\windows\\system32"));
+        assert!(at_or_under(
+            "c:\\windows\\system32",
+            "c:\\windows\\system32"
+        ));
+        assert!(at_or_under(
+            "c:\\windows\\system32\\x",
+            "c:\\windows\\system32"
+        ));
         // 不能把 system32foo 误判成 system32 的子路径
-        assert!(!at_or_under("c:\\windows\\system32foo", "c:\\windows\\system32"));
+        assert!(!at_or_under(
+            "c:\\windows\\system32foo",
+            "c:\\windows\\system32"
+        ));
     }
 
     /// AppData 那几层以前只有残留扫描挡着，磁盘透镜的任意路径删除绕得过去。
@@ -367,7 +378,10 @@ mod tests {
             r"D:\Users\someone-else\AppData\Local",
         ] {
             assert!(is_protected(Path::new(p)), "{p} 应当受保护");
-            assert!(is_protected_residual_path(Path::new(p)), "{p} 残留路径也该受保护");
+            assert!(
+                is_protected_residual_path(Path::new(p)),
+                "{p} 残留路径也该受保护"
+            );
         }
     }
 
@@ -387,7 +401,9 @@ mod tests {
     #[test]
     fn suffix_match_does_not_overreach() {
         assert!(!is_protected(Path::new(r"C:\Users\me\myappdata")));
-        assert!(!is_protected(Path::new(r"C:\Users\me\AppData\Local\appdata")));
+        assert!(!is_protected(Path::new(
+            r"C:\Users\me\AppData\Local\appdata"
+        )));
     }
 
     #[test]

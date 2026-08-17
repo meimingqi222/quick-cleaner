@@ -1,5 +1,6 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
+use crate::core::apps::InstalledApp;
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
 use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
@@ -17,6 +18,7 @@ pub enum ConfirmKind {
     CleanSelected,
     CleanPath(PathBuf, u64),
     CleanDiskSelected,
+    UninstallApp(Box<InstalledApp>),
 }
 
 #[derive(Clone, Debug)]
@@ -27,13 +29,42 @@ pub struct ConfirmRequest {
     pub detail: String,
 }
 
-pub fn render_confirm_dialog(root: &Root, req: &ConfirmRequest, cx: &mut Context<Root>) -> impl IntoElement {
+pub fn render_confirm_dialog(
+    root: &Root,
+    req: &ConfirmRequest,
+    cx: &mut Context<Root>,
+) -> impl IntoElement {
     let lang = root.language;
     let cancel_label = tr_btn_cancel(lang);
-    let confirm_label = match lang {
-        Language::Zh => "确认永久删除",
-        Language::En => "Delete Permanently",
+    let is_uninstall = matches!(&req.kind, ConfirmKind::UninstallApp(_));
+    let confirm_label = match &req.kind {
+        ConfirmKind::UninstallApp(_) => match lang {
+            Language::Zh => "确认卸载",
+            Language::En => "Uninstall",
+        },
+        _ => match lang {
+            Language::Zh => "确认永久删除",
+            Language::En => "Delete Permanently",
+        },
     };
+
+    let badge = if is_uninstall {
+        icon_badge(
+            icon_apps(PRIMARY, 20.),
+            PRIMARY_FIXED,
+            PRIMARY,
+            40.,
+        )
+    } else {
+        icon_badge(
+            icon_trash(ERROR, 20.),
+            ERROR_CONTAINER,
+            ERROR,
+            40.,
+        )
+    };
+
+    let detail_color = if is_uninstall { OUTLINE } else { ERROR };
 
     div()
         .absolute()
@@ -56,7 +87,7 @@ pub fn render_confirm_dialog(root: &Root, req: &ConfirmRequest, cx: &mut Context
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(icon_badge(icon_trash(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.))
+                        .child(badge)
                         .child(
                             div()
                                 .text_lg()
@@ -74,7 +105,7 @@ pub fn render_confirm_dialog(root: &Root, req: &ConfirmRequest, cx: &mut Context
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(ERROR))
+                        .text_color(rgb(detail_color))
                         .child(req.detail.clone()),
                 )
                 .child(
@@ -145,7 +176,12 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .items_center()
             .justify_center()
             .gap_2()
-            .child(icon_badge(icon_shield(PRIMARY, 24.), PRIMARY_FIXED, PRIMARY, 52.))
+            .child(icon_badge(
+                icon_shield(PRIMARY, 24.),
+                PRIMARY_FIXED,
+                PRIMARY,
+                52.,
+            ))
             .child(
                 div()
                     .text_base()
@@ -153,12 +189,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .text_color(rgb(TEXT))
                     .child(empty_title),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(OUTLINE))
-                    .child(empty_desc),
-            )
+            .child(div().text_xs().text_color(rgb(OUTLINE)).child(empty_desc))
             .into_any_element()]
     } else {
         res.items
@@ -166,11 +197,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .enumerate()
             .map(|(idx, item)| {
                 let is_checked = root.residual.selected.contains(&idx);
-                let check_state = if is_checked {
-                    Check::On
-                } else {
-                    Check::Off
-                };
+                let check_state = if is_checked { Check::On } else { Check::Off };
 
                 div()
                     .id(SharedString::from(format!("resid-item-{idx}")))
@@ -309,7 +336,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .id("resid-select-rec")
                             .child(small_button(
                                 tr_batch_rec(lang).to_string(),
-                                if is_recommended { PRIMARY_FIXED } else { SURF_HIGH },
+                                if is_recommended {
+                                    PRIMARY_FIXED
+                                } else {
+                                    SURF_HIGH
+                                },
                                 if is_recommended { PRIMARY } else { TEXT },
                                 true,
                             ))
@@ -326,7 +357,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .id("resid-select-all")
                             .child(small_button(
                                 tr_batch_all(lang).to_string(),
-                                if all_selected { PRIMARY_FIXED } else { SURF_HIGH },
+                                if all_selected {
+                                    PRIMARY_FIXED
+                                } else {
+                                    SURF_HIGH
+                                },
                                 if all_selected { PRIMARY } else { TEXT },
                                 true,
                             ))
@@ -361,10 +396,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .child(
                         div()
                             .id("resid-cancel")
-                            .child(ghost_button(
-                                tr_btn_cancel(lang).to_string(),
-                                true,
-                            ))
+                            .child(ghost_button(tr_btn_cancel(lang).to_string(), true))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.residual.result = None;
                                 this.residual.selected.clear();
@@ -374,10 +406,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .child(
                         div()
                             .id("resid-clean")
-                            .child(danger_button(
-                                clean_btn_text,
-                                selected_count > 0,
-                            ))
+                            .child(danger_button(clean_btn_text, selected_count > 0))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clean_selected_residuals(cx);
                             })),
@@ -387,7 +416,10 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
 
     let modal_title = match lang {
         Language::Zh => format!("发现「{}」的 {} 项关联残留", res.app_name, total_items),
-        Language::En => format!("Found {} residual items for \"{}\"", total_items, res.app_name),
+        Language::En => format!(
+            "Found {} residual items for \"{}\"",
+            total_items, res.app_name
+        ),
     };
     let modal_sub = match lang {
         Language::Zh => format!(
@@ -425,7 +457,12 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .flex()
                             .items_start()
                             .gap_4()
-                            .child(icon_badge(icon_search(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 44.))
+                            .child(icon_badge(
+                                icon_search(PRIMARY, 20.),
+                                PRIMARY_FIXED,
+                                PRIMARY,
+                                44.,
+                            ))
                             .child(
                                 div()
                                     .flex_1()
@@ -438,12 +475,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                             .text_color(rgb(TEXT))
                                             .child(modal_title),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(modal_sub),
-                                    ),
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(modal_sub)),
                             ),
                     )
                     .child(

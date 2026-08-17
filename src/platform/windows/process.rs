@@ -183,7 +183,11 @@ mod tests {
     #[test]
     fn image_paths_are_normalised() {
         for p in list_processes().iter().filter(|p| !p.image_path.is_empty()) {
-            assert!(!p.image_path.contains('/'), "路径未归一化: {}", p.image_path);
+            assert!(
+                !p.image_path.contains('/'),
+                "路径未归一化: {}",
+                p.image_path
+            );
             assert_eq!(p.image_path, p.image_path.to_lowercase());
         }
     }

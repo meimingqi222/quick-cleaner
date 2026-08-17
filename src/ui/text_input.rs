@@ -146,7 +146,8 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.apps.search_marked
+        self.apps
+            .search_marked
             .as_ref()
             .map(|r| range_to_utf16(&self.apps.search, r))
     }

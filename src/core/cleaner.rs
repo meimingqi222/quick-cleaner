@@ -240,6 +240,21 @@ fn remove_file_forcing(path: &Path) -> bool {
 
 /// 清理单个路径本身（连同其内容）。
 pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
+    // tmutil:// 虚拟路径：APFS 本地快照，用 tmutil deletelocalsnapshots 删除
+    let path_str = path.to_string_lossy();
+    if let Some(snapshot) = path_str.strip_prefix("tmutil://snapshot/") {
+        p.note(path);
+        let status = std::process::Command::new("tmutil")
+            .arg("deletelocalsnapshots")
+            .arg(snapshot)
+            .status();
+        return match status {
+            Ok(s) if s.success() => CleanResult::Ok,
+            Ok(_) => CleanResult::Failed,
+            Err(_) => CleanResult::Failed,
+        };
+    }
+
     if std::fs::symlink_metadata(path).is_err() {
         return CleanResult::Skipped;
     }
@@ -331,7 +346,11 @@ fn audit_result(report: &CleanReport, p: &CleanProgress) {
 /// 几十万个文件，全记下来日志会先被自己撑爆，而定位问题靠的是顶层目标。
 fn audit(action: &str, paths: impl Iterator<Item = PathBuf>) {
     let list: Vec<String> = paths.map(|p| p.display().to_string()).collect();
-    crate::log!("[删除] {action}，共 {} 个目标：{}", list.len(), list.join(" | "));
+    crate::log!(
+        "[删除] {action}，共 {} 个目标：{}",
+        list.len(),
+        list.join(" | ")
+    );
 }
 
 /// 一个清理目标及其处置方式。
@@ -366,10 +385,7 @@ impl CleanTarget {
 
 /// 清理多个扫描目标。
 pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport {
-    audit(
-        "分类清理",
-        targets.iter().map(|t| t.path.clone()),
-    );
+    audit("分类清理", targets.iter().map(|t| t.path.clone()));
     let mut report = CleanReport::default();
     let mut bin_done = false;
     for t in targets {
@@ -569,8 +585,12 @@ mod tests {
     fn recycle_sweep_keeps_only_desktop_ini() {
         assert!(is_recycle_junk_entry("$IABC123"));
         assert!(is_recycle_junk_entry("$RABC123"));
-        assert!(is_recycle_junk_entry(".msys00010000000d0695f1e810a56094d18e"));
-        assert!(is_recycle_junk_entry(".xxxx00010000000d0695f1e810a56094d18e"));
+        assert!(is_recycle_junk_entry(
+            ".msys00010000000d0695f1e810a56094d18e"
+        ));
+        assert!(is_recycle_junk_entry(
+            ".xxxx00010000000d0695f1e810a56094d18e"
+        ));
         assert!(!is_recycle_junk_entry("desktop.ini"));
         assert!(!is_recycle_junk_entry("Desktop.ini"));
         assert!(!is_recycle_junk_entry("DESKTOP.INI"));
@@ -578,7 +598,11 @@ mod tests {
 
     #[test]
     fn ratio_is_bounded() {
-        let s = CleanSnapshot { total_files: 10, files: 999, ..Default::default() };
+        let s = CleanSnapshot {
+            total_files: 10,
+            files: 999,
+            ..Default::default()
+        };
         assert!((s.ratio() - 1.0).abs() < 1e-6);
         assert_eq!(CleanSnapshot::default().ratio(), 0.0);
     }
@@ -625,8 +649,10 @@ mod tests {
         std::fs::set_permissions(&f, perms).unwrap();
         assert!(std::fs::metadata(&f).unwrap().permissions().readonly());
 
-        assert_eq!(clean_path(&base, &CleanProgress::default()), CleanResult::Ok);
+        assert_eq!(
+            clean_path(&base, &CleanProgress::default()),
+            CleanResult::Ok
+        );
         assert!(!base.exists());
     }
-
 }

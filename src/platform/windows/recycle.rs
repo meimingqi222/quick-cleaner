@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use winapi::um::shellapi::{
-    SHEmptyRecycleBinW, SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
-    FOF_NOERRORUI, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
+    SHEmptyRecycleBinW, SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI,
+    FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
 };
 
 /// 把一个路径送进回收站，而不是直接抹掉。

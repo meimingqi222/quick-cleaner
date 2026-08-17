@@ -76,6 +76,27 @@ pub struct InstalledApp {
     pub uninstaller_missing: bool,
 }
 
+impl InstalledApp {
+    /// 该软件是否支持常规卸载操作。
+    ///
+    /// - macOS: 非系统组件应用均支持卸载（移入废纸篓或调用自带卸载程序）。
+    /// - Windows: 拥有有效的卸载命令行（且卸载器文件存在）的应用支持常规卸载。
+    pub fn can_uninstall(&self) -> bool {
+        if self.is_system_component {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            true
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            (self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some())
+                && !self.uninstaller_missing
+        }
+    }
+}
+
 /// 排序字段
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppSortColumn {
@@ -359,6 +380,12 @@ pub enum ResidualSource {
     InstallerFolderEntry,
     ProgramNameCache,
     DefaultProgramsEntry,
+    // macOS 专用
+    CacheDir,
+    LogDir,
+    PreferenceFile,
+    ContainerDir,
+    Other,
 }
 
 impl ResidualSource {
@@ -391,6 +418,11 @@ impl ResidualSource {
                 ResidualSource::InstallerFolderEntry => "安装器目录登记",
                 ResidualSource::ProgramNameCache => "程序名缓存",
                 ResidualSource::DefaultProgramsEntry => "默认程序登记",
+                ResidualSource::CacheDir => "缓存目录",
+                ResidualSource::LogDir => "日志目录",
+                ResidualSource::PreferenceFile => "偏好设置文件",
+                ResidualSource::ContainerDir => "沙盒容器",
+                ResidualSource::Other => "其他残留",
             },
             Language::En => match self {
                 ResidualSource::UninstallEntry => "Uninstall entry",
@@ -415,6 +447,11 @@ impl ResidualSource {
                 ResidualSource::InstallerFolderEntry => "Installer folder entry",
                 ResidualSource::ProgramNameCache => "Program name cache",
                 ResidualSource::DefaultProgramsEntry => "Default programs entry",
+                ResidualSource::CacheDir => "Cache directory",
+                ResidualSource::LogDir => "Log directory",
+                ResidualSource::PreferenceFile => "Preference file",
+                ResidualSource::ContainerDir => "Sandbox container",
+                ResidualSource::Other => "Other residual",
             },
         }
     }
@@ -484,7 +521,10 @@ impl ResidualScanResult {
     }
 
     pub fn certain_count(&self) -> usize {
-        self.items.iter().filter(|i| i.confidence.is_certain()).count()
+        self.items
+            .iter()
+            .filter(|i| i.confidence.is_certain())
+            .count()
     }
 }
 
@@ -509,9 +549,7 @@ fn cmp_ci(a: &str, b: &str) -> Ordering {
 }
 
 fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
-    haystack
-        .to_lowercase()
-        .contains(needle_lower)
+    haystack.to_lowercase().contains(needle_lower)
 }
 
 /// 时间戳排序用的键：0（无记录）在升序时要排到最后，而不是最前。
@@ -597,10 +635,30 @@ pub fn is_safe_app_token(name: &str) -> bool {
         return false;
     }
     const BLACKLIST: &[&str] = &[
-        "app", "apps", "microsoft", "windows", "system", "system32",
-        "program files", "program files (x86)", "common files", "appdata",
-        "local", "roaming", "locallow", "programdata", "temp", "tmp",
-        "users", "google", "apple", "intel", "amd", "nvidia", "adobe", "tencent",
+        "app",
+        "apps",
+        "microsoft",
+        "windows",
+        "system",
+        "system32",
+        "program files",
+        "program files (x86)",
+        "common files",
+        "appdata",
+        "local",
+        "roaming",
+        "locallow",
+        "programdata",
+        "temp",
+        "tmp",
+        "users",
+        "google",
+        "apple",
+        "intel",
+        "amd",
+        "nvidia",
+        "adobe",
+        "tencent",
     ];
     !BLACKLIST.contains(&lower.as_str())
 }
@@ -792,14 +850,20 @@ mod tests {
 
         let desc = AppSortState::new(AppSortColumn::LastUsed, SortDirection::Descending);
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::All, "", desc)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::All, "", desc)
+            ),
             ["AppRecent", "AppOld", "AppNever"]
         );
 
         // 升序时「从未使用」(raw = 0) 依然要沉到最后
         let asc = AppSortState::new(AppSortColumn::LastUsed, SortDirection::Ascending);
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::All, "", asc)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::All, "", asc)
+            ),
             ["AppOld", "AppRecent", "AppNever"]
         );
     }
@@ -814,12 +878,18 @@ mod tests {
 
         let state = AppSortState::new(AppSortColumn::Name, SortDirection::Ascending);
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::All, "fox", state)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::All, "fox", state)
+            ),
             ["Firefox"]
         );
         // 关键词也匹配开发者字段
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::All, "micro", state)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::All, "micro", state)
+            ),
             ["Visual Studio"]
         );
     }
@@ -828,18 +898,21 @@ mod tests {
     fn test_preset_filter_is_applied() {
         let mut big = create_test_app("Big", "Pub", 600 * 1024 * 1024, 0, 0);
         big.uninstall_string = None;
-        let apps = vec![
-            big,
-            create_test_app("Small", "Pub", 1024, 0, 0),
-        ];
+        let apps = vec![big, create_test_app("Small", "Pub", 1024, 0, 0)];
         let state = AppSortState::default();
 
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::Large, "", state)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::Large, "", state)
+            ),
             ["Big"]
         );
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::Orphan, "", state)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::Orphan, "", state)
+            ),
             ["Big"]
         );
         assert_eq!(
@@ -862,7 +935,10 @@ mod tests {
         let state = AppSortState::new(AppSortColumn::Name, SortDirection::Ascending);
 
         assert_eq!(
-            names(&apps, &filter_and_sort_apps(&apps, AppFilterPreset::Unused, "", state)),
+            names(
+                &apps,
+                &filter_and_sort_apps(&apps, AppFilterPreset::Unused, "", state)
+            ),
             ["NeverUsed", "Stale"]
         );
     }
@@ -940,10 +1016,7 @@ mod command_tests {
     fn shortest_existing_prefix_wins() {
         let short = r"C:\Foo.exe";
         let long = r"C:\Foo.exe bar";
-        let (exe, args) = split_command_with(
-            r"C:\Foo.exe bar --flag",
-            |p| p == short || p == long,
-        );
+        let (exe, args) = split_command_with(r"C:\Foo.exe bar --flag", |p| p == short || p == long);
         assert_eq!(exe, short);
         assert_eq!(args, vec!["bar", "--flag"]);
     }

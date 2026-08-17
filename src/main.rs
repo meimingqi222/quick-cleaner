@@ -7,10 +7,7 @@
 // 走的是 cargo test 的独立测试二进制，不受影响）。
 #![windows_subsystem = "windows"]
 
-use gpui::{
-    actions, px, size, App, AppContext, Application, Bounds, KeyBinding, WindowBounds,
-    WindowOptions,
-};
+use gpui::{actions, px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
 use quick_cleaner::ui::Root;
 
 actions!(quick_cleaner, [Quit]);
@@ -35,8 +32,13 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
+        #[cfg(target_os = "macos")]
+        quick_cleaner::platform::macos::set_dock_icon();
+
+        // macOS 上退出走系统菜单的 Cmd-Q，不自己绑；`KeyBinding` 也就只有
+        // 非 macOS 分支用得到，导入要跟着一起门禁，否则 macOS 上是个未使用导入。
         #[cfg(not(target_os = "macos"))]
-        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+        cx.bind_keys([gpui::KeyBinding::new("ctrl-q", Quit, None)]);
 
         cx.on_action(|_: &Quit, cx| cx.quit());
 

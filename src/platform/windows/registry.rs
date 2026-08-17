@@ -215,9 +215,13 @@ pub fn enum_string_values(root: HKEY, subpath: &str, sam: DWORD) -> Vec<(String,
                     dyn_data_buf.as_mut_ptr() as *mut u8,
                     &mut dyn_data_len,
                 );
-                if retry_res as u32 == ERROR_SUCCESS && (val_type == REG_SZ || val_type == REG_EXPAND_SZ) {
+                if retry_res as u32 == ERROR_SUCCESS
+                    && (val_type == REG_SZ || val_type == REG_EXPAND_SZ)
+                {
                     let name = from_wide(&name_buf[..name_len as usize]);
-                    let data = from_wide(&dyn_data_buf[..(dyn_data_len as usize / 2).min(dyn_data_buf.len())]);
+                    let data = from_wide(
+                        &dyn_data_buf[..(dyn_data_len as usize / 2).min(dyn_data_buf.len())],
+                    );
                     out.push((name, data));
                 }
             }
@@ -249,7 +253,6 @@ pub fn delete_reg_value(root: HKEY, subpath: &str, value_name: &str, sam: DWORD)
         ok
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -286,7 +289,13 @@ mod tests {
 
     #[test]
     fn wide_round_trips_including_cjk() {
-        for s in ["", "Software", r"C:\Program Files (x86)", "中文路径", "emoji 🚀"] {
+        for s in [
+            "",
+            "Software",
+            r"C:\Program Files (x86)",
+            "中文路径",
+            "emoji 🚀",
+        ] {
             let w = to_wide(s);
             assert_eq!(*w.last().unwrap(), 0, "必须以 NUL 结尾");
             assert_eq!(from_wide(&w), s);
@@ -356,7 +365,9 @@ mod tests {
             values.iter().any(|(n, _)| n == "ProductName"),
             "CurrentVersion 下应当有 ProductName"
         );
-        assert!(values.iter().all(|(n, v)| !n.contains('\0') && !v.contains('\0')));
+        assert!(values
+            .iter()
+            .all(|(n, v)| !n.contains('\0') && !v.contains('\0')));
     }
 
     /// 空子路径表示「就是这个根键本身」，不能因此炸掉。

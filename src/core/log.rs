@@ -212,7 +212,12 @@ mod tests {
 
         assert!(caught.is_err(), "这里本来就该 panic");
         let after = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        assert!(after > before, "panic 没有写进日志：{} -> {}", before, after);
+        assert!(
+            after > before,
+            "panic 没有写进日志：{} -> {}",
+            before,
+            after
+        );
 
         let tail = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(tail.contains("!!!!! panic"), "日志里没有 panic 标记行");

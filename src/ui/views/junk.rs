@@ -6,10 +6,10 @@ use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
+use crate::ui::components::icons::*;
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
-use crate::ui::components::icons::*;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -37,6 +37,8 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
         CategoryId::AiAgents => icon_sparkle(fg, size),
         CategoryId::DevBuild => icon_gear(fg, size),
         CategoryId::DevWorktrees => icon_shield(fg, size),
+        CategoryId::LocalSnapshots => icon_clock(fg, size),
+        CategoryId::IosBackup => icon_apps(fg, size),
     }
 }
 
@@ -105,7 +107,9 @@ fn render_category_items(
             rows.into_iter()
                 .map(|(i, path, label, path_text, file_count, size)| {
                     let checked = this.junk.selected.contains(&path);
-                    item_row(i, path, label, path_text, file_count, size, checked, lang, cx)
+                    item_row(
+                        i, path, label, path_text, file_count, size, checked, lang, cx,
+                    )
                 })
                 .collect()
         }),
@@ -115,18 +119,24 @@ fn render_category_items(
     .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)));
 
     let bar = metrics.map(|m| {
-        scrollbar(SharedString::from(format!("junk-thumb-{id:?}")), m, |thumb| {
-            thumb.on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    let Some(h) = this.junk.scroll.get(&id) else { return };
-                    let top: f32 = (-h.0.borrow().base_handle.offset().y).into();
-                    let mouse_y: f32 = event.position.y.into();
-                    this.junk.scroll_drag = Some((id, mouse_y, top.max(0.0)));
-                    cx.notify();
-                }),
-            )
-        })
+        scrollbar(
+            SharedString::from(format!("junk-thumb-{id:?}")),
+            m,
+            |thumb| {
+                thumb.on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        let Some(h) = this.junk.scroll.get(&id) else {
+                            return;
+                        };
+                        let top: f32 = (-h.0.borrow().base_handle.offset().y).into();
+                        let mouse_y: f32 = event.position.y.into();
+                        this.junk.scroll_drag = Some((id, mouse_y, top.max(0.0)));
+                        cx.notify();
+                    }),
+                )
+            },
+        )
     });
 
     div()
@@ -206,7 +216,11 @@ fn item_row(
         ))
         .child(right_cell(
             95.,
-            if size > 0 { fmt_size(size) } else { String::from("0 B") },
+            if size > 0 {
+                fmt_size(size)
+            } else {
+                String::from("0 B")
+            },
             if dim {
                 OUTLINE
             } else if size >= 1024 * 1024 * 1024 {
@@ -234,10 +248,30 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
     let is_recommended = root.selection_is_recommended();
 
     let actions: [BatchAction; 4] = [
-        (tr_batch_rec(lang), "rec", is_recommended, Root::select_recommended),
-        (tr_batch_all(lang), "all", picked == total && total > 0, Root::select_every),
-        (tr_batch_invert(lang), "invert", false, Root::invert_selection),
-        (tr_batch_clear(lang), "clear", picked == 0, Root::select_none),
+        (
+            tr_batch_rec(lang),
+            "rec",
+            is_recommended,
+            Root::select_recommended,
+        ),
+        (
+            tr_batch_all(lang),
+            "all",
+            picked == total && total > 0,
+            Root::select_every,
+        ),
+        (
+            tr_batch_invert(lang),
+            "invert",
+            false,
+            Root::invert_selection,
+        ),
+        (
+            tr_batch_clear(lang),
+            "clear",
+            picked == 0,
+            Root::select_none,
+        ),
     ];
 
     let buttons: Vec<_> = actions
@@ -328,7 +362,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .h(px(36.))
                 .flex_none()
                 .rounded_full()
-                .bg(rgb(if total > 0 { ERROR_CONTAINER } else { PRIMARY_FIXED }))
+                .bg(rgb(if total > 0 {
+                    ERROR_CONTAINER
+                } else {
+                    PRIMARY_FIXED
+                }))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -376,7 +414,10 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             .py_4()
             .child(
                 div()
-                    .id(SharedString::from(format!("cb-{}", id.name_lang(Language::En))))
+                    .id(SharedString::from(format!(
+                        "cb-{}",
+                        id.name_lang(Language::En)
+                    )))
                     .flex_none()
                     .cursor_pointer()
                     .child(checkbox(state))
@@ -387,7 +428,10 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("row-{}", id.name_lang(Language::En))))
+                    .id(SharedString::from(format!(
+                        "row-{}",
+                        id.name_lang(Language::En)
+                    )))
                     .flex_1()
                     .min_w(px(0.))
                     .flex()
@@ -428,7 +472,12 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                         ))
                                     }),
                             )
-                            .child(div().text_xs().text_color(rgb(MUTED)).child(id.desc_lang(lang))),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(id.desc_lang(lang)),
+                            ),
                     )
                     .child(
                         div()
@@ -508,7 +557,8 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .cursor_pointer()
                                 .child(tr_toggle_details(lang, root.clean.show_failed_details))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.clean.show_failed_details = !this.clean.show_failed_details;
+                                    this.clean.show_failed_details =
+                                        !this.clean.show_failed_details;
                                     cx.notify();
                                 })),
                         ),
@@ -547,11 +597,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     };
 
     let body: AnyElement = if root.junk.scanning {
-        loading_state_view(
-            loading_title,
-            loading_sub,
-            root.anim_phase,
-        )
+        loading_state_view(loading_title, loading_sub, root.anim_phase)
     } else {
         div()
             .flex()
@@ -648,7 +694,11 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(OUTLINE))
-                                .child(if lang == Language::Zh { "已选择清理" } else { "Selected for Cleaning" }),
+                                .child(if lang == Language::Zh {
+                                    "已选择清理"
+                                } else {
+                                    "Selected for Cleaning"
+                                }),
                         )
                         .child(
                             div()
@@ -675,10 +725,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                 .child(
                     div()
                         .id("clean-now")
-                        .child(danger_button(
-                            clean_btn_text,
-                            enabled,
-                        ))
+                        .child(danger_button(clean_btn_text, enabled))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.request_clean_selected(cx);
                         })),

@@ -30,28 +30,28 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     // 预设过滤 + 搜索 + 排序的结果由 Root 在 render 入口统一维护，
     // 这里只借用下标，不做任何拷贝。
-    let display_apps: Vec<&InstalledApp> =
-        root.apps.view.iter().filter_map(|&i| root.apps.list.get(i)).collect();
+    let display_apps: Vec<&InstalledApp> = root
+        .apps
+        .view
+        .iter()
+        .filter_map(|&i| root.apps.list.get(i))
+        .collect();
 
     // 顶部大标题与概览
-    let header = div()
-        .flex()
-        .justify_between()
-        .items_center()
-        .gap_4()
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .child(page_heading(
-                    tr_apps_heading(lang),
-                    tr_apps_subheading(lang),
-                )),
-        );
+    let header = div().flex().justify_between().items_center().gap_4().child(
+        div().flex_1().min_w(px(0.)).child(page_heading(
+            tr_apps_heading(lang),
+            tr_apps_subheading(lang),
+        )),
+    );
 
     let (label_storage, label_total_count, label_stale_count) = match lang {
         Language::Zh => ("估算总占用空间", "已安装应用总数", "长期未用软件 (>90天)"),
-        Language::En => ("Total Estimated Size", "Installed Applications", "Rarely Used (>90 days)"),
+        Language::En => (
+            "Total Estimated Size",
+            "Installed Applications",
+            "Rarely Used (>90 days)",
+        ),
     };
 
     let total_apps_display = match lang {
@@ -77,7 +77,12 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_disk(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 44.))
+                .child(icon_badge(
+                    icon_disk(PRIMARY, 20.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    44.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -108,7 +113,12 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_apps(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 44.))
+                .child(icon_badge(
+                    icon_apps(PRIMARY, 20.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    44.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -139,7 +149,12 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(icon_badge(icon_clock(CAUTION, 20.), CAUTION_CONTAINER, CAUTION, 44.))
+                .child(icon_badge(
+                    icon_clock(CAUTION, 20.),
+                    CAUTION_CONTAINER,
+                    CAUTION,
+                    44.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -168,7 +183,10 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         let active = root.apps.preset == p;
         let p_label = p.label_lang(lang);
         div()
-            .id(SharedString::from(format!("preset-app-{}", p.label_lang(Language::En))))
+            .id(SharedString::from(format!(
+                "preset-app-{}",
+                p.label_lang(Language::En)
+            )))
             .px_3()
             .py(px(4.))
             .rounded_full()
@@ -268,7 +286,10 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .items_center()
         .gap_2()
         .cursor_text()
-        .child(icon_search(if search_focused { PRIMARY } else { OUTLINE }, 13.))
+        .child(icon_search(
+            if search_focused { PRIMARY } else { OUTLINE },
+            13.,
+        ))
         .child(text_content)
         .when(!search_text.is_empty(), |d| {
             d.child(
@@ -309,23 +330,20 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         // 把输入处理器挂到焦点上。必须在绘制阶段调用 Window::handle_input，
         // 所以借一个零尺寸 canvas 拿到 bounds 并在它的 paint 回调里注册。
         .child(
-            gpui::canvas(
-                move |bounds, _window, _cx| bounds,
-                {
-                    let handle = root.apps.focus_handle.clone();
-                    let entity = cx.entity();
-                    move |_, bounds: gpui::Bounds<gpui::Pixels>, window, cx| {
-                        entity.update(cx, |this, _| {
-                            this.apps.search_bounds = Some(bounds);
-                        });
-                        window.handle_input(
-                            &handle,
-                            gpui::ElementInputHandler::new(bounds, entity.clone()),
-                            cx,
-                        );
-                    }
-                },
-            )
+            gpui::canvas(move |bounds, _window, _cx| bounds, {
+                let handle = root.apps.focus_handle.clone();
+                let entity = cx.entity();
+                move |_, bounds: gpui::Bounds<gpui::Pixels>, window, cx| {
+                    entity.update(cx, |this, _| {
+                        this.apps.search_bounds = Some(bounds);
+                    });
+                    window.handle_input(
+                        &handle,
+                        gpui::ElementInputHandler::new(bounds, entity.clone()),
+                        cx,
+                    );
+                }
+            })
             .absolute()
             .size_full(),
         );
@@ -368,7 +386,11 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(OUTLINE))
-                        .child(if lang == Language::Zh { "快速分类:" } else { "Presets:" }),
+                        .child(if lang == Language::Zh {
+                            "快速分类:"
+                        } else {
+                            "Presets:"
+                        }),
                 )
                 .child(div().flex().items_center().gap_2().children(preset_buttons))
                 .child(filter_stats_tag),
@@ -376,62 +398,59 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .child(search_box);
 
     // 辅助生成可点击排序列头
-    let make_header_col = |col: AppSortColumn, title: String, width: Option<f32>, align_right: bool| {
-        let active = root.apps.sort.column == col;
-        let indicator = root.apps.sort.indicator(col);
+    let make_header_col =
+        |col: AppSortColumn, title: String, width: Option<f32>, align_right: bool| {
+            let active = root.apps.sort.column == col;
+            let indicator = root.apps.sort.indicator(col);
 
-        let mut item = div()
-            .id(SharedString::from(format!("th-col-{}", col.id())))
-            .py(px(5.))
-            .px(px(4.))
-            .rounded_md()
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .hover(|h| h.bg(rgb(SURF_HIGH)))
-            .when(align_right, |d| d.justify_end())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(if active {
-                                gpui::FontWeight::BOLD
-                            } else {
-                                gpui::FontWeight::SEMIBOLD
-                            })
-                            .text_color(if active {
-                                rgb(PRIMARY)
-                            } else {
-                                rgb(TEXT)
-                            })
-                            .child(title),
-                    )
-                    .when(!indicator.is_empty(), |d| {
-                        d.child(
+            let mut item = div()
+                .id(SharedString::from(format!("th-col-{}", col.id())))
+                .py(px(5.))
+                .px(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                .when(align_right, |d| d.justify_end())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
                             div()
                                 .text_xs()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(PRIMARY))
-                                .child(indicator),
+                                .font_weight(if active {
+                                    gpui::FontWeight::BOLD
+                                } else {
+                                    gpui::FontWeight::SEMIBOLD
+                                })
+                                .text_color(if active { rgb(PRIMARY) } else { rgb(TEXT) })
+                                .child(title),
                         )
-                    }),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.apps.sort.toggle(col);
-                cx.notify();
-            }));
+                        .when(!indicator.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(PRIMARY))
+                                    .child(indicator),
+                            )
+                        }),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.apps.sort.toggle(col);
+                    cx.notify();
+                }));
 
-        if let Some(w) = width {
-            item = item.w(px(w)).flex_none();
-        } else {
-            item = item.flex_1().min_w(px(0.));
-        }
-        item
-    };
+            if let Some(w) = width {
+                item = item.w(px(w)).flex_none();
+            } else {
+                item = item.flex_1().min_w(px(0.));
+            }
+            item
+        };
 
     // 表格头（全部支持点击正逆序排序，并动态显示当前列项目数）
     let app_name_header = match lang {
@@ -447,11 +466,36 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .flex()
         .items_center()
         .gap_3()
-        .child(make_header_col(AppSortColumn::Name, app_name_header, None, false))
-        .child(make_header_col(AppSortColumn::Publisher, tr_th_publisher(lang).into(), Some(130.), false))
-        .child(make_header_col(AppSortColumn::LastUsed, tr_th_last_used(lang).into(), Some(110.), false))
-        .child(make_header_col(AppSortColumn::InstallDate, tr_th_installed_date(lang).into(), Some(100.), false))
-        .child(make_header_col(AppSortColumn::Size, tr_th_size(lang).into(), Some(95.), true))
+        .child(make_header_col(
+            AppSortColumn::Name,
+            app_name_header,
+            None,
+            false,
+        ))
+        .child(make_header_col(
+            AppSortColumn::Publisher,
+            tr_th_publisher(lang).into(),
+            Some(130.),
+            false,
+        ))
+        .child(make_header_col(
+            AppSortColumn::LastUsed,
+            tr_th_last_used(lang).into(),
+            Some(110.),
+            false,
+        ))
+        .child(make_header_col(
+            AppSortColumn::InstallDate,
+            tr_th_installed_date(lang).into(),
+            Some(100.),
+            false,
+        ))
+        .child(make_header_col(
+            AppSortColumn::Size,
+            tr_th_size(lang).into(),
+            Some(95.),
+            true,
+        ))
         .child(
             div()
                 .w(px(190.))
@@ -512,12 +556,24 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
     let footer_text = if root.apps.search.is_empty() {
         match lang {
-            Language::Zh => format!("当前列表展示 {} 款软件（总计 {} 款已装）", display_apps.len(), total_apps),
-            Language::En => format!("Displaying {} apps (Total {} installed)", display_apps.len(), total_apps),
+            Language::Zh => format!(
+                "当前列表展示 {} 款软件（总计 {} 款已装）",
+                display_apps.len(),
+                total_apps
+            ),
+            Language::En => format!(
+                "Displaying {} apps (Total {} installed)",
+                display_apps.len(),
+                total_apps
+            ),
         }
     } else {
         match lang {
-            Language::Zh => format!("搜索匹配 {} 款软件（总计 {} 款）", display_apps.len(), total_apps),
+            Language::Zh => format!(
+                "搜索匹配 {} 款软件（总计 {} 款）",
+                display_apps.len(),
+                total_apps
+            ),
             Language::En => format!("Matched {} apps (Total {})", display_apps.len(), total_apps),
         }
     };
@@ -543,13 +599,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .w(px(8.))
-                        .h(px(8.))
-                        .rounded_full()
-                        .bg(rgb(PRIMARY)),
-                )
+                .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(PRIMARY)))
                 .child(footer_text),
         )
         .child(
@@ -581,8 +631,12 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
     let lang = root.language;
     let menu = root.apps.context_menu.as_ref()?;
     let app = menu.app.clone();
-    let has_uninstaller = app.uninstall_string.is_some() || app.quiet_uninstall_string.is_some();
-    let has_location = app.install_location.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let can_uninstall = app.can_uninstall();
+    let has_location = app
+        .install_location
+        .as_ref()
+        .map(|p| p.exists())
+        .unwrap_or(false);
     let app_loc = app.install_location.clone();
 
     // 限制菜单弹出位置不超出视口边界
@@ -596,22 +650,38 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
     let app_name_for_loc = app.name.clone();
 
     let (ctx_open_folder, ctx_uninstall, ctx_force_clean, ctx_copy_path) = match lang {
-        Language::Zh => ("打开安装目录", "官方常规卸载", "强力残留清理", "复制安装路径"),
-        Language::En => ("Open Install Location", "Standard Uninstall", "Force Residual Clean", "Copy Install Path"),
+        Language::Zh => (
+            "打开安装目录",
+            "官方常规卸载",
+            "强力残留清理",
+            "复制安装路径",
+        ),
+        Language::En => (
+            "Open Install Location",
+            "Standard Uninstall",
+            "Force Residual Clean",
+            "Copy Install Path",
+        ),
     };
 
     let menu_view = div()
         .id("apps-context-menu-backdrop")
         .absolute()
         .inset_0()
-        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-            this.close_context_menu();
-            cx.notify();
-        }))
-        .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| {
-            this.close_context_menu();
-            cx.notify();
-        }))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.close_context_menu();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            cx.listener(|this, _, _, cx| {
+                this.close_context_menu();
+                cx.notify();
+            }),
+        )
         .child(
             card()
                 .id("apps-context-menu-card")
@@ -669,20 +739,16 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .when(has_location, |d| {
-                            d.text_color(rgb(TEXT))
-                                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                            d.text_color(rgb(TEXT)).hover(|h| h.bg(rgb(SURF_HIGH)))
                         })
-                        .when(!has_location, |d| {
-                            d.text_color(rgb(OUTLINE))
-                        })
+                        .when(!has_location, |d| d.text_color(rgb(OUTLINE)))
                         .child(ctx_open_folder)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(ref loc) = app_for_loc {
                                 crate::platform::reveal_in_explorer(loc);
                             } else {
-                                this.status = bilingual(|l| {
-                                    tr_status_no_install_path(l, &app_name_for_loc)
-                                });
+                                this.status =
+                                    bilingual(|l| tr_status_no_install_path(l, &app_name_for_loc));
                             }
                             this.close_context_menu();
                             cx.notify();
@@ -695,24 +761,22 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .px_3()
                         .py(px(7.))
                         .rounded_md()
-                        .cursor_pointer()
                         .flex()
                         .items_center()
                         .gap_2()
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .when(has_uninstaller, |d| {
-                            d.text_color(rgb(TEXT))
+                        .when(can_uninstall, |d| {
+                            d.cursor_pointer()
+                                .text_color(rgb(TEXT))
                                 .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_context_menu();
+                                    this.request_uninstall_app(app_for_uninst.clone(), cx);
+                                }))
                         })
-                        .when(!has_uninstaller, |d| {
-                            d.text_color(rgb(OUTLINE))
-                        })
+                        .when(!can_uninstall, |d| d.text_color(rgb(OUTLINE)))
                         .child(ctx_uninstall)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_context_menu();
-                            this.request_uninstall_app(app_for_uninst.clone(), cx);
-                        })),
                 )
                 // 3. 强力深度清理
                 .child(
@@ -757,8 +821,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                                 this.status = bilingual(|l| tr_status_install_path(l, &shown));
                             } else {
                                 let name = app_for_copy.name.clone();
-                                this.status =
-                                    bilingual(|l| tr_status_no_install_path(l, &name));
+                                this.status = bilingual(|l| tr_status_no_install_path(l, &name));
                             }
                             this.close_context_menu();
                             cx.notify();

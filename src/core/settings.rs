@@ -173,9 +173,18 @@ mod tests {
     /// 认得的语言值要真的被采纳，不能被 `unwrap_or_default` 悄悄吃掉。
     #[test]
     fn known_language_values_are_honoured() {
-        assert_eq!(Settings::merge_json(r#"{"language":"Zh"}"#).language, Language::Zh);
-        assert_eq!(Settings::merge_json(r#"{"language":"En"}"#).language, Language::En);
+        assert_eq!(
+            Settings::merge_json(r#"{"language":"Zh"}"#).language,
+            Language::Zh
+        );
+        assert_eq!(
+            Settings::merge_json(r#"{"language":"En"}"#).language,
+            Language::En
+        );
         // 认不出来的语言名 → 整份退回默认，而不是留个半吊子状态
-        assert_eq!(Settings::merge_json(r#"{"language":"Klingon"}"#), Settings::default());
+        assert_eq!(
+            Settings::merge_json(r#"{"language":"Klingon"}"#),
+            Settings::default()
+        );
     }
 }

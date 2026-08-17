@@ -179,7 +179,10 @@ fn collect_exe_names(app: &InstalledApp, install_dir: &str) -> Vec<String> {
         }
     };
 
-    for v in [&app.display_icon, &app.uninstall_string].into_iter().flatten() {
+    for v in [&app.display_icon, &app.uninstall_string]
+        .into_iter()
+        .flatten()
+    {
         let clean = v.split(',').next().unwrap_or("").trim_matches('"').trim();
         if let Some(f) = Path::new(clean).file_name().and_then(|f| f.to_str()) {
             push(f, &mut out);
@@ -418,7 +421,11 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 
     let mut roots: Vec<PathBuf> = Vec::new();
-    roots.extend([dirs::data_dir(), dirs::data_local_dir()].into_iter().flatten());
+    roots.extend(
+        [dirs::data_dir(), dirs::data_local_dir()]
+            .into_iter()
+            .flatten(),
+    );
     if let Some(local) = dirs::data_local_dir() {
         roots.push(local.join("Programs"));
         roots.push(local.join(r"VirtualStore\Program Files"));
@@ -459,7 +466,12 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             if ctx.name_matches(name) {
                 let p = entry.path();
                 if !is_protected_residual_path(&p) {
-                    push_dir(out, p, Confidence::Possible, ResidualSource::LikelyAppDataDir);
+                    push_dir(
+                        out,
+                        p,
+                        Confidence::Possible,
+                        ResidualSource::LikelyAppDataDir,
+                    );
                 }
             }
         }
@@ -533,7 +545,10 @@ fn scan_software_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
         let mut direct = vec![format!("{base}\\{}", ctx.name_token)];
         if is_safe_app_token(&ctx.publisher_token) {
-            direct.push(format!("{base}\\{}\\{}", ctx.publisher_token, ctx.name_token));
+            direct.push(format!(
+                "{base}\\{}\\{}",
+                ctx.publisher_token, ctx.name_token
+            ));
         }
         for sub in direct {
             if reg_key_exists(h, &sub, sam) {
@@ -546,8 +561,7 @@ fn scan_software_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
         // 模糊：枚举一层子键
         for sub in enum_subkeys(h, base, sam) {
-            if sub.eq_ignore_ascii_case(&ctx.name_token)
-                || sub.eq_ignore_ascii_case("WOW6432Node")
+            if sub.eq_ignore_ascii_case(&ctx.name_token) || sub.eq_ignore_ascii_case("WOW6432Node")
             {
                 continue;
             }
@@ -995,7 +1009,8 @@ mod tests {
         assert!(
             res.items
                 .iter()
-                .any(|i| i.source == ResidualSource::UninstallEntry && i.confidence == Confidence::Certain),
+                .any(|i| i.source == ResidualSource::UninstallEntry
+                    && i.confidence == Confidence::Certain),
             "「{}」的卸载登记项没被识别出来",
             target.name
         );
@@ -1021,7 +1036,11 @@ mod probe {
         };
         println!("软件: {} | 安装目录: {:?}", app.name, app.install_location);
         let res = scan_residuals(app);
-        println!("共 {} 项（确定 {} 项）:", res.items.len(), res.certain_count());
+        println!(
+            "共 {} 项（确定 {} 项）:",
+            res.items.len(),
+            res.certain_count()
+        );
         for it in &res.items {
             println!(
                 "  [{}][{}] {}",

@@ -25,7 +25,7 @@
 //!
 //! 从 `core` / `platform` 冒上来的错误 payload 必须是**语言中立**的
 //! （API 名、错误码、路径），因为它们会被原样嵌进这里的本地化外壳。
-//! 见 `tr_mft_error`。
+//! 见 `tr_scan_error`。
 
 use crate::core::i18n::Language;
 
@@ -338,7 +338,7 @@ pub fn tr_status_scan_done(lang: Language, total: &str) -> String {
     }
 }
 
-pub fn tr_status_disk_scanning(lang: Language, vol: char) -> String {
+pub fn tr_status_disk_scanning(lang: Language, vol: &crate::core::disk::VolumeId) -> String {
     match lang {
         Language::Zh => format!("正在深度分析磁盘 {vol}: 空间占用…"),
         Language::En => format!("Analyzing space usage on {vol}:…"),
@@ -396,7 +396,12 @@ pub fn tr_status_uninstall_failed(lang: Language, name: &str) -> String {
     }
 }
 
-pub fn tr_status_uninstall_residual(lang: Language, head: &str, count: usize, size: &str) -> String {
+pub fn tr_status_uninstall_residual(
+    lang: Language,
+    head: &str,
+    count: usize,
+    size: &str,
+) -> String {
     match lang {
         Language::Zh => format!("{head}，复核后仍有 {count} 项残留（{size}）"),
         Language::En => format!("{head} — {count} leftovers remain after verification ({size})"),
@@ -709,7 +714,9 @@ pub fn tr_category_empty(lang: Language) -> &'static str {
 pub fn tr_last_clean_skipped(lang: Language, count: usize) -> String {
     match lang {
         Language::Zh => format!("上次清理有 {count} 处项目被占用或受系统保护而跳过"),
-        Language::En => format!("{count} items were skipped last time — in use or system-protected"),
+        Language::En => {
+            format!("{count} items were skipped last time — in use or system-protected")
+        }
     }
 }
 
@@ -722,7 +729,7 @@ pub fn tr_toggle_details(lang: Language, expanded: bool) -> &'static str {
     }
 }
 
-pub fn tr_volume_root(lang: Language, vol: char) -> String {
+pub fn tr_volume_root(lang: Language, vol: &crate::core::disk::VolumeId) -> String {
     match lang {
         Language::Zh => format!("{vol}: 根目录"),
         Language::En => format!("{vol}: root"),
@@ -757,19 +764,23 @@ pub fn tr_status_no_install_path(lang: Language, name: &str) -> String {
     }
 }
 
-/// MFT 扫描失败原因。
+/// 扫描失败原因。
 ///
-/// `MftError` 自己的 `Display` 是给 `mftscan` 命令行和日志用的（固定中文），
+/// `ScanError` 自己的 `Display` 是给 `mftscan` 命令行和日志用的（固定中文），
 /// 界面上要跟随语言，所以在这里单独翻一份。
-pub fn tr_mft_error(lang: Language, err: &crate::core::disk::MftError) -> String {
-    use crate::core::disk::MftError;
+pub fn tr_scan_error(lang: Language, err: &crate::core::disk::ScanError) -> String {
+    use crate::core::disk::ScanError;
     match (lang, err) {
-        (Language::Zh, MftError::AccessDenied) => "需要管理员权限才能读取 $MFT".into(),
-        (Language::Zh, MftError::NotNtfs) => "该卷不是 NTFS 或无法获取卷信息".into(),
-        (Language::Zh, MftError::Io(e)) => format!("读取失败：{e}"),
-        (Language::En, MftError::AccessDenied) => "Administrator rights are required to read $MFT".into(),
-        (Language::En, MftError::NotNtfs) => "Not an NTFS volume, or volume info is unavailable".into(),
-        (Language::En, MftError::Io(e)) => format!("Read failed: {e}"),
+        (Language::Zh, ScanError::AccessDenied) => "需要管理员权限才能读取 $MFT".into(),
+        (Language::Zh, ScanError::NotNtfs) => "该卷不是 NTFS 或无法获取卷信息".into(),
+        (Language::Zh, ScanError::Io(e)) => format!("读取失败：{e}"),
+        (Language::En, ScanError::AccessDenied) => {
+            "Administrator rights are required to read $MFT".into()
+        }
+        (Language::En, ScanError::NotNtfs) => {
+            "Not an NTFS volume, or volume info is unavailable".into()
+        }
+        (Language::En, ScanError::Io(e)) => format!("Read failed: {e}"),
     }
 }
 
