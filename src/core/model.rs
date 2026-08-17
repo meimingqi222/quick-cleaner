@@ -82,9 +82,18 @@ mod tests {
     #[test]
     fn test_fmt_size() {
         assert_eq!(fmt_size(500), "500 B");
-        assert_eq!(fmt_size(2048), "2 KB");
-        assert_eq!(fmt_size(15 * 1024 * 1024), "15.0 MB");
-        assert_eq!(fmt_size(2 * 1024 * 1024 * 1024), "2.00 GB");
+        #[cfg(windows)]
+        {
+            assert_eq!(fmt_size(2048), "2 KB");
+            assert_eq!(fmt_size(15 * 1024 * 1024), "15.0 MB");
+            assert_eq!(fmt_size(2 * 1024 * 1024 * 1024), "2.00 GB");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(fmt_size(2000), "2 KB");
+            assert_eq!(fmt_size(15 * 1000 * 1000), "15.0 MB");
+            assert_eq!(fmt_size(2 * 1000 * 1000 * 1000), "2.00 GB");
+        }
     }
 
     #[test]

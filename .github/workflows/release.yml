@@ -84,7 +84,7 @@ jobs:
           retention-days: 7
 
   build-macos:
-    name: Build & Release (macOS x86_64)
+    name: Build & Release (macOS Universal, aarch64, x86_64)
     runs-on: macos-latest
 
     steps:
@@ -92,32 +92,50 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binaries
-        run: cargo build --release
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal/release
+          lipo -create \
+            -output target/universal/release/quick-cleaner \
+            target/aarch64-apple-darwin/release/quick-cleaner \
+            target/x86_64-apple-darwin/release/quick-cleaner
 
-      - name: Package macOS distribution
+      - name: Package macOS distributions
         run: |
           chmod +x scripts/package-macos.sh
-          ./scripts/package-macos.sh dist
+          mkdir -p dist
 
-          # 将 .app bundle 压缩为 zip
-          cd dist
-          zip -r -y quick-cleaner-macos-x86_64.zip QuickCleaner.app
+          # 1. Apple Silicon (aarch64) 版本
+          ./scripts/package-macos.sh dist/aarch64 target/aarch64-apple-darwin/release/quick-cleaner
+          (cd dist/aarch64 && zip -r -y ../quick-cleaner-macos-aarch64.zip QuickCleaner.app)
+          shasum -a 256 dist/quick-cleaner-macos-aarch64.zip | awk '{print $1"  quick-cleaner-macos-aarch64.zip"}' > dist/quick-cleaner-macos-aarch64.zip.sha256
 
-          # SHA256 校验和
-          shasum -a 256 quick-cleaner-macos-x86_64.zip | awk '{print $1"  quick-cleaner-macos-x86_64.zip"}' > quick-cleaner-macos-x86_64.zip.sha256
+          # 2. Intel (x86_64) 版本
+          ./scripts/package-macos.sh dist/x86_64 target/x86_64-apple-darwin/release/quick-cleaner
+          (cd dist/x86_64 && zip -r -y ../quick-cleaner-macos-x86_64.zip QuickCleaner.app)
+          shasum -a 256 dist/quick-cleaner-macos-x86_64.zip | awk '{print $1"  quick-cleaner-macos-x86_64.zip"}' > dist/quick-cleaner-macos-x86_64.zip.sha256
+
+          # 3. Universal 通用二进制版本 (推荐，同时支持 M 系列芯片与 Intel 芯片)
+          ./scripts/package-macos.sh dist/universal target/universal/release/quick-cleaner
+          (cd dist/universal && zip -r -y ../quick-cleaner-macos-universal.zip QuickCleaner.app)
+          shasum -a 256 dist/quick-cleaner-macos-universal.zip | awk '{print $1"  quick-cleaner-macos-universal.zip"}' > dist/quick-cleaner-macos-universal.zip.sha256
+
+          # 清理临时 bundle 文件夹，只保留 zip 与 sha256 供上传
+          rm -rf dist/aarch64 dist/x86_64 dist/universal
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x86_64
+          name: macos-binaries
           path: |
-            dist/quick-cleaner-macos-x86_64.zip
-            dist/quick-cleaner-macos-x86_64.zip.sha256
+            dist/quick-cleaner-macos-*.zip
+            dist/quick-cleaner-macos-*.zip.sha256
           retention-days: 7
 
   publish-release:
@@ -142,6 +160,10 @@ jobs:
           files: |
             dist/quick-cleaner-windows-x86_64.zip
             dist/quick-cleaner-windows-x86_64.zip.sha256
+            dist/quick-cleaner-macos-universal.zip
+            dist/quick-cleaner-macos-universal.zip.sha256
+            dist/quick-cleaner-macos-aarch64.zip
+            dist/quick-cleaner-macos-aarch64.zip.sha256
             dist/quick-cleaner-macos-x86_64.zip
             dist/quick-cleaner-macos-x86_64.zip.sha256
           generate_release_notes: true
