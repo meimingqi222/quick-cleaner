@@ -382,6 +382,62 @@ pub fn tr_status_uninstall_waiting(lang: Language, name: &str) -> String {
     }
 }
 
+pub fn tr_uninstall_progress_title(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("正在卸载「{name}」"),
+        Language::En => format!("Uninstalling \"{name}\""),
+    }
+}
+
+pub fn tr_uninstall_phase_discovering(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在分析应用及关联文件",
+        Language::En => "Analyzing the app and associated files",
+    }
+}
+
+pub fn tr_uninstall_phase_removing(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在移除应用程序",
+        Language::En => "Removing the application",
+    }
+}
+
+pub fn tr_uninstall_phase_verifying(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在确认卸载结果",
+        Language::En => "Verifying the uninstall result",
+    }
+}
+
+pub fn tr_uninstall_stage_discover(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "分析关联文件",
+        Language::En => "Analyze associated files",
+    }
+}
+
+pub fn tr_uninstall_stage_remove(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移除应用程序",
+        Language::En => "Remove application",
+    }
+}
+
+pub fn tr_uninstall_stage_verify(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "复核残留项目",
+        Language::En => "Verify remaining files",
+    }
+}
+
+pub fn tr_uninstall_keep_open(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "卸载完成前请保持 QuickCleaner 运行",
+        Language::En => "Keep QuickCleaner open until the uninstall completes",
+    }
+}
+
 pub fn tr_status_uninstall_done(lang: Language, name: &str) -> String {
     match lang {
         Language::Zh => format!("「{name}」官方卸载已完成"),
@@ -826,5 +882,130 @@ pub fn tr_to_be_recycled(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "移入回收站（暂不释放空间）",
         Language::En => "Moved to Recycle Bin (space not freed yet)",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// macOS 完全磁盘访问权限（Full Disk Access）引导
+// ---------------------------------------------------------------------------
+
+pub fn tr_fda_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "授予「完全磁盘访问权限」",
+        Language::En => "Grant Full Disk Access",
+    }
+}
+
+pub fn tr_fda_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "macOS 系统安全机制限制了对 Safari 缓存、邮件等系统目录的读取。开启完全磁盘访问权限后，QuickCleaner 可以进行更彻底的深度扫描与清理。",
+        Language::En => "macOS privacy protections restrict access to Safari caches, Mail, and system data. Full Disk Access enables QuickCleaner to perform a comprehensive deep clean.",
+    }
+}
+
+pub fn tr_fda_step1_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "1. 打开系统设置",
+        Language::En => "1. Open System Settings",
+    }
+}
+
+pub fn tr_fda_step1_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "点击下方按钮，将自动直达「隐私与安全性 → 完全磁盘访问」页面",
+        Language::En => {
+            "Click the button below to navigate directly to Privacy & Security → Full Disk Access"
+        }
+    }
+}
+
+pub fn tr_fda_step2_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "2. 找到 QuickCleaner",
+        Language::En => "2. Locate QuickCleaner",
+    }
+}
+
+pub fn tr_fda_step2_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "在应用列表中找到「QuickCleaner」（若不在列表中可点击「+」添加）",
+        Language::En => "Find \"QuickCleaner\" in the application list (or click \"+\" to add it)",
+    }
+}
+
+pub fn tr_fda_step3_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "3. 开启权限开关",
+        Language::En => "3. Enable the Switch",
+    }
+}
+
+pub fn tr_fda_step3_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "开启开关后返回本软件，点击「检查授权状态」即可完成配置",
+        Language::En => "Toggle the switch on, return here, and click \"Check Status\" to finish",
+    }
+}
+
+pub fn tr_fda_notice(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "💡 即使暂不授权，您仍可正常清理第三方应用缓存和开发构建产物；开启后将解锁 Apple 自带应用与系统垃圾的深度清理。",
+        Language::En => "💡 Even without authorization, you can still clean third-party caches and dev builds. Full access unlocks deep cleaning for Apple apps and system data.",
+    }
+}
+
+pub fn tr_fda_btn_open_settings(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "一键打开系统设置",
+        Language::En => "Open System Settings",
+    }
+}
+
+pub fn tr_fda_btn_check(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "检查授权状态",
+        Language::En => "Check Status",
+    }
+}
+
+pub fn tr_fda_btn_later(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "稍后配置",
+        Language::En => "Configure Later",
+    }
+}
+
+pub fn tr_fda_dont_ask(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "不再自动弹出提示",
+        Language::En => "Don't show automatically again",
+    }
+}
+
+pub fn tr_fda_status_granted(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "完全磁盘访问",
+        Language::En => "Full Disk Access",
+    }
+}
+
+pub fn tr_fda_status_limited(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "磁盘受限 (点击配置)",
+        Language::En => "Limited Access (Configure)",
+    }
+}
+
+pub fn tr_fda_check_success(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已成功获得完全磁盘访问权限！",
+        Language::En => "Full Disk Access granted successfully!",
+    }
+}
+
+pub fn tr_fda_check_failed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "未检测到完全磁盘访问权限。若您已在系统设置中开启，请尝试重启本应用生效。",
+        Language::En => "Full Disk Access not detected yet. If enabled in System Settings, try restarting the app.",
     }
 }

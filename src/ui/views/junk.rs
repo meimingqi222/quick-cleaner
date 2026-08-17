@@ -29,11 +29,13 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
     match cat {
         CategoryId::SystemTemp => icon_trash(fg, size),
         CategoryId::UserTemp => icon_sparkle(fg, size),
+        CategoryId::UserCache => icon_sparkle(fg, size),
         CategoryId::BrowserCache => icon_dashboard(fg, size),
         CategoryId::PackageCache => icon_apps(fg, size),
         CategoryId::Logs => icon_clock(fg, size),
         CategoryId::RecycleBin => icon_trash(fg, size),
         CategoryId::Thumbnails => icon_sparkle(fg, size),
+        CategoryId::BrokenLoginItems => icon_shield(fg, size),
         CategoryId::AiAgents => icon_sparkle(fg, size),
         CategoryId::DevBuild => icon_gear(fg, size),
         CategoryId::DevWorktrees => icon_shield(fg, size),
@@ -376,11 +378,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let (heading_title, heading_sub) = match lang {
         Language::Zh => (
             "智能清理",
-            "系统缓存、浏览器与包管理缓存默认已勾选；AI 助手缓存与项目构建产物需手动勾选",
+            "可重建的应用、浏览器与包管理缓存默认已勾选；临时数据与开发产物需手动勾选",
         ),
         Language::En => (
             "Smart Clean",
-            "System, browser & package caches selected by default; AI caches & dev builds require manual selection",
+            "Rebuildable app, browser and package caches are selected; temp data and dev builds require manual selection",
         ),
     };
 

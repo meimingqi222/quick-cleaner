@@ -49,19 +49,9 @@ pub fn render_confirm_dialog(
     };
 
     let badge = if is_uninstall {
-        icon_badge(
-            icon_apps(PRIMARY, 20.),
-            PRIMARY_FIXED,
-            PRIMARY,
-            40.,
-        )
+        icon_badge(icon_apps(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 40.)
     } else {
-        icon_badge(
-            icon_trash(ERROR, 20.),
-            ERROR_CONTAINER,
-            ERROR,
-            40.,
-        )
+        icon_badge(icon_trash(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.)
     };
 
     let detail_color = if is_uninstall { OUTLINE } else { ERROR };
@@ -83,18 +73,13 @@ pub fn render_confirm_dialog(
                 .flex_col()
                 .gap_3()
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(badge)
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(req.title.clone()),
-                        ),
+                    div().flex().items_center().gap_3().child(badge).child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(TEXT))
+                            .child(req.title.clone()),
+                    ),
                 )
                 .child(
                     div()
@@ -494,6 +479,226 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             .children(item_rows),
                     )
                     .child(footer),
+            )
+            .into_any_element(),
+    )
+}
+
+/// macOS 完全磁盘访问权限（Full Disk Access）引导弹窗
+pub fn render_fda_onboarding_modal(
+    root: &Root,
+    cx: &mut Context<Root>,
+) -> Option<impl IntoElement> {
+    if !root.show_fda_onboarding {
+        return None;
+    }
+
+    let lang = root.language;
+    let is_dismissed = root.settings.macos_fda_dismissed;
+    let check_state = if is_dismissed { Check::On } else { Check::Off };
+
+    let step_item = |num: &str, title: &str, desc: &str| {
+        div()
+            .flex()
+            .items_start()
+            .gap_3()
+            .p_2()
+            .rounded_lg()
+            .bg(rgb(SURF_LOW))
+            .child(
+                div()
+                    .w(px(22.))
+                    .h(px(22.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(rgb(PRIMARY_FIXED))
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(PRIMARY))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(num.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(TEXT))
+                            .child(title.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(desc.to_string()),
+                    ),
+            )
+    };
+
+    Some(
+        div()
+            .id("fda-modal-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgba(0x000000, 0.45))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                card()
+                    .id("fda-modal-card")
+                    .w(px(580.))
+                    .shadow_2xl()
+                    .p_6()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    // 头部
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_4()
+                            .child(icon_badge(
+                                icon_shield(PRIMARY, 22.),
+                                PRIMARY_FIXED,
+                                PRIMARY,
+                                48.,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(rgb(TEXT))
+                                            .child(tr_fda_title(lang)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(tr_fda_desc(lang)),
+                                    ),
+                            ),
+                    )
+                    // 步骤列表
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(step_item(
+                                "1",
+                                tr_fda_step1_title(lang),
+                                tr_fda_step1_desc(lang),
+                            ))
+                            .child(step_item(
+                                "2",
+                                tr_fda_step2_title(lang),
+                                tr_fda_step2_desc(lang),
+                            ))
+                            .child(step_item(
+                                "3",
+                                tr_fda_step3_title(lang),
+                                tr_fda_step3_desc(lang),
+                            )),
+                    )
+                    // 贴心提示
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(rgb(SURF_HIGH))
+                            .text_xs()
+                            .text_color(rgb(OUTLINE))
+                            .child(tr_fda_notice(lang)),
+                    )
+                    // 底部操作区
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .pt_2()
+                            .border_t_1()
+                            .border_color(rgba(OUTLINE_VAR, 0.4))
+                            // 不再自动提示复选框
+                            .child(
+                                div()
+                                    .id("fda-dont-ask-toggle")
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .cursor_pointer()
+                                    .child(checkbox(check_state))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(tr_fda_dont_ask(lang)),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_fda_dismissed(cx);
+                                    })),
+                            )
+                            // 按钮组
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("fda-later-btn")
+                                            .child(ghost_button(
+                                                tr_fda_btn_later(lang).to_string(),
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.close_fda_guide(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("fda-check-btn")
+                                            .child(small_button(
+                                                tr_fda_btn_check(lang).to_string(),
+                                                SURF_HIGH,
+                                                TEXT,
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.check_fda_permission(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("fda-open-settings-btn")
+                                            .child(primary_button(
+                                                tr_fda_btn_open_settings(lang).to_string(),
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|_this, _, _, _cx| {
+                                                #[cfg(target_os = "macos")]
+                                                crate::platform::macos::open_full_disk_access_settings();
+                                            })),
+                                    ),
+                            ),
+                    ),
             )
             .into_any_element(),
     )

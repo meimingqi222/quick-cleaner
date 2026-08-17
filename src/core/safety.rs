@@ -193,6 +193,13 @@ pub fn is_system_root_dir(path: &Path) -> bool {
     if lower.len() <= 3 {
         return true;
     }
+    #[cfg(target_os = "macos")]
+    if MACOS_PROTECTED_PREFIXES
+        .iter()
+        .any(|prefix| at_or_under(&lower, prefix))
+    {
+        return true;
+    }
     if lower == guards().windows {
         return true;
     }
@@ -221,6 +228,17 @@ pub fn is_protected(path: &Path) -> bool {
 
     // 盘符根目录，如 "c:" / "c:\"
     if lower.len() <= 3 {
+        return true;
+    }
+
+    // macOS 的系统骨架此前完全依赖 SIP/文件权限兜底；拿到完全磁盘访问后，
+    // 磁盘透镜的任意路径删除仍可能触碰其中部分内容。应用卸载有独立入口，
+    // 系统树和 /Applications 不应由通用清理器删除。
+    #[cfg(target_os = "macos")]
+    if MACOS_PROTECTED_PREFIXES
+        .iter()
+        .any(|prefix| at_or_under(&lower, prefix))
+    {
         return true;
     }
 
@@ -288,6 +306,21 @@ pub fn is_protected(path: &Path) -> bool {
     false
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_PROTECTED_PREFIXES: &[&str] = &[
+    "\\system",
+    "\\library",
+    "\\applications",
+    "\\bin",
+    "\\sbin",
+    "\\usr",
+    "\\private\\etc",
+    "\\private\\var\\db",
+    "\\private\\var\\root",
+    "\\private\\var\\vm",
+    "\\private\\var\\protected",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +330,25 @@ mod tests {
         assert!(is_protected(Path::new("C:\\")));
         assert!(is_protected(Path::new("C:")));
         assert!(is_protected(Path::new("D:\\")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn protects_macos_system_trees() {
+        for path in [
+            "/System/Library/CoreServices",
+            "/Library/Application Support",
+            "/Applications/Safari.app",
+            "/usr/local/bin/tool",
+            "/private/etc/hosts",
+            "/private/var/db/receipts/example.plist",
+        ] {
+            assert!(is_protected(Path::new(path)), "未保护 {path}");
+        }
+        assert!(
+            !is_protected(Path::new("/private/var/folders/user/C/cache")),
+            "每用户 Darwin 缓存仍需允许精确清理"
+        );
     }
 
     #[test]

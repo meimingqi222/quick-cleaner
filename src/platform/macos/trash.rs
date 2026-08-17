@@ -24,6 +24,15 @@ pub fn empty_trash(p: &CleanProgress) -> CleanReport {
 /// 注意这走的是当前进程的权限：`/Applications` 下 root 属主的 App 仍可能
 /// `EPERM`，需要上层提示用户授权，而不是在这里静默失败。
 pub fn move_to_trash(path: &Path) -> Result<(), String> {
+    match move_to_trash_with_file_manager(path) {
+        Ok(()) => Ok(()),
+        Err(file_manager_error) => move_to_trash_with_finder(path).map_err(|finder_error| {
+            format!("{file_manager_error}；Finder 回退也失败：{finder_error}")
+        }),
+    }
+}
+
+fn move_to_trash_with_file_manager(path: &Path) -> Result<(), String> {
     let s = path.to_str().ok_or("路径不是合法 UTF-8")?;
 
     // SAFETY: 下面全是标准 Cocoa 调用。每个对象的生命周期都在本函数内闭合：
@@ -76,6 +85,65 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
         let _: () = msg_send![ns_path, release];
         let _: () = msg_send![pool, drain];
         result
+    }
+}
+
+/// `NSFileManager` 可能因 App Management/TCC 权限拒绝 `/Applications` 下的
+/// bundle。与 Mole 的卸载策略一致，回退到 Finder 执行“移到废纸篓”，让
+/// macOS 走自己的授权流程。路径通过 argv 传入，不拼进 AppleScript。
+fn move_to_trash_with_finder(path: &Path) -> Result<(), String> {
+    let script = r#"on run argv
+set targetPath to POSIX file (item 1 of argv)
+tell application "Finder" to delete targetPath
+end run"#;
+    let mut child = std::process::Command::new("osascript")
+        .arg("-")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("无法启动 Finder：{error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        if let Err(error) = stdin.write_all(script.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("无法调用 Finder：{error}"));
+        }
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Finder 授权或移除操作超时".into());
+            }
+            Err(error) => return Err(format!("等待 Finder 失败：{error}")),
+        }
+    };
+
+    let mut reason = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        use std::io::Read;
+        let _ = stderr.read_to_string(&mut reason);
+    }
+
+    if status.success() && !path.exists() {
+        Ok(())
+    } else {
+        let reason = reason.trim();
+        Err(if reason.is_empty() {
+            "Finder 未移除目标".into()
+        } else {
+            reason.to_string()
+        })
     }
 }
 

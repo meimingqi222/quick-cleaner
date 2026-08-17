@@ -166,7 +166,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     }
 
     if !ft.is_dir() {
-        return delete_file(path, md.len(), p);
+        return delete_file(path, allocated_file_size(&md), p);
     }
 
     // 目录：先把内容清空，再删自己
@@ -180,7 +180,10 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
                 if ft.is_symlink() || ft.is_dir() {
                     subdirs.push(entry.path());
                 } else {
-                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let size = entry
+                        .metadata()
+                        .map(|metadata| allocated_file_size(&metadata))
+                        .unwrap_or(0);
                     files.push((entry.path(), size));
                 }
             }
@@ -211,6 +214,18 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
         // 只体现在返回值上，进度条里的失败数因此偏少。
         p.failed.fetch_add(1, Ordering::Relaxed);
         CleanResult::Failed
+    }
+}
+
+fn allocated_file_size(metadata: &std::fs::Metadata) -> u64 {
+    #[cfg(windows)]
+    {
+        metadata.len()
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.blocks().saturating_mul(512)
     }
 }
 
@@ -267,6 +282,18 @@ pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
 /// 清理目录**内容**但保留目录本身。
 pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
+
+    // read_dir 会跟随作为根目标的目录符号链接。固定扫描完成后路径仍可能
+    // 被其它进程替换，因此删除层必须再次用 symlink_metadata 阻断，不能
+    // 依赖扫描阶段的检查。
+    let Ok(md) = std::fs::symlink_metadata(dir) else {
+        report.skipped += 1;
+        return report;
+    };
+    if md.file_type().is_symlink() || !md.is_dir() || is_protected(dir) {
+        report.failed.push(dir.to_path_buf());
+        return report;
+    }
 
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -412,6 +439,22 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             continue;
         }
 
+        #[cfg(target_os = "macos")]
+        if is_launch_agent_plist(d) {
+            let result = match crate::platform::macos::trash::move_to_trash(d) {
+                Ok(()) => {
+                    p.files.fetch_add(1, Ordering::Relaxed);
+                    CleanResult::Ok
+                }
+                Err(_) => {
+                    p.failed.fetch_add(1, Ordering::Relaxed);
+                    CleanResult::Failed
+                }
+            };
+            report.record(d, result);
+            continue;
+        }
+
         if t.remove_dir {
             report.record(d, clean_path(d, p));
         } else {
@@ -420,6 +463,18 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
     }
     audit_result(&report, p);
     report
+}
+
+#[cfg(target_os = "macos")]
+fn is_launch_agent_plist(path: &Path) -> bool {
+    if path.extension().is_none_or(|ext| ext != "plist") {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    parent == Path::new("/Library/LaunchAgents")
+        || dirs::home_dir().is_some_and(|home| parent == home.join("Library/LaunchAgents"))
 }
 
 /// 手选路径的处置方式。
@@ -526,16 +581,27 @@ mod tests {
         base
     }
 
+    fn allocated_tree_size(path: &Path) -> u64 {
+        walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|metadata| allocated_file_size(&metadata))
+            .sum()
+    }
+
     #[test]
     fn progress_counts_match_actual_tree() {
         let base = make_tree("counts", 30, 512);
-        let p = CleanProgress::new(30, 30 * 512);
+        let expected_bytes = allocated_tree_size(&base);
+        let p = CleanProgress::new(30, expected_bytes);
 
         let report = clean_dir_contents(&base, &p);
         let snap = p.snapshot();
 
         assert_eq!(snap.files, 30);
-        assert_eq!(snap.bytes, 30 * 512);
+        assert_eq!(snap.bytes, expected_bytes);
         assert_eq!(snap.failed, 0);
         assert!(report.failed.is_empty());
         assert!((snap.ratio() - 1.0).abs() < 1e-6);
@@ -548,13 +614,55 @@ mod tests {
     #[test]
     fn clean_path_removes_root_and_counts() {
         let base = make_tree("root", 12, 256);
-        let p = CleanProgress::new(12, 12 * 256);
+        let expected_bytes = allocated_tree_size(&base);
+        let p = CleanProgress::new(12, expected_bytes);
 
         assert_eq!(clean_path(&base, &p), CleanResult::Ok);
         let snap = p.snapshot();
         assert_eq!(snap.files, 12);
-        assert_eq!(snap.bytes, 12 * 256);
+        assert_eq!(snap.bytes, expected_bytes);
         assert!(!base.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn emptying_symlink_root_never_touches_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join("qc_symlink_root_safety");
+        let target = root.join("target");
+        let link = root.join("cache-link");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), b"important").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let report = clean_dir_contents(&link, &CleanProgress::default());
+
+        assert_eq!(report.failed, vec![link]);
+        assert_eq!(
+            std::fs::read(target.join("keep.txt")).unwrap(),
+            b"important"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn only_launch_agent_plists_use_special_cleanup() {
+        let home = dirs::home_dir().unwrap();
+        assert!(is_launch_agent_plist(
+            &home.join("Library/LaunchAgents/com.example.broken.plist")
+        ));
+        assert!(is_launch_agent_plist(Path::new(
+            "/Library/LaunchAgents/com.example.broken.plist"
+        )));
+        assert!(!is_launch_agent_plist(
+            &home.join("Library/LaunchAgents/notes.txt")
+        ));
+        assert!(!is_launch_agent_plist(Path::new(
+            "/Library/LaunchDaemons/com.example.plist"
+        )));
     }
 
     #[test]

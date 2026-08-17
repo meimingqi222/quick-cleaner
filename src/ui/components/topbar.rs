@@ -21,6 +21,84 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         View::Disk => (is_mft_busy, tr_btn_reanalyze_disk(lang, is_mft_busy)),
     };
 
+    let title_area = div().flex().items_center().gap_3().child(
+        div()
+            .text_lg()
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(rgb(TEXT))
+            .child(root.view.title_lang(lang)),
+    );
+
+    #[cfg(target_os = "macos")]
+    let title_area = {
+        let is_granted = root.fda_status;
+        title_area.child(
+            div()
+                .id("fda-status-badge")
+                .px_2()
+                .py(px(2.))
+                .rounded_full()
+                .border_1()
+                .when(is_granted, |d| {
+                    d.bg(rgb(PRIMARY_FIXED))
+                        .border_color(rgb(PRIMARY))
+                        .text_color(rgb(PRIMARY))
+                })
+                .when(!is_granted, |d| {
+                    d.bg(rgb(CAUTION_CONTAINER))
+                        .border_color(rgba(CAUTION, 0.5))
+                        .text_color(rgb(CAUTION))
+                        .cursor_pointer()
+                        .hover(|h| h.opacity(0.85))
+                })
+                .text_xs()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(icon_shield(if is_granted { PRIMARY } else { CAUTION }, 12.))
+                .child(if is_granted {
+                    tr_fda_status_granted(lang)
+                } else {
+                    tr_fda_status_limited(lang)
+                })
+                .when(!is_granted, |d| {
+                    d.on_click(cx.listener(|this, _, _, cx| {
+                        this.open_fda_guide(cx);
+                    }))
+                }),
+        )
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let title_area = title_area.child(
+        div()
+            .px_2()
+            .py(px(2.))
+            .rounded_full()
+            .border_1()
+            .when(root.elevated, |d| {
+                d.bg(rgb(PRIMARY_FIXED))
+                    .border_color(rgb(PRIMARY))
+                    .text_color(rgb(PRIMARY))
+            })
+            .when(!root.elevated, |d| {
+                d.bg(rgb(SURF_LOW))
+                    .border_color(rgb(OUTLINE_VAR))
+                    .text_color(rgb(OUTLINE))
+            })
+            .text_xs()
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(icon_shield(
+                if root.elevated { PRIMARY } else { OUTLINE },
+                12.,
+            ))
+            .child(tr_elevation_mode(lang, root.elevated)),
+    );
+
     div()
         .h(px(60.))
         .flex_none()
@@ -34,46 +112,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         .border_b_1()
         .border_color(rgba(OUTLINE_VAR, 0.4))
         // 左侧标题
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(TEXT))
-                        .child(root.view.title_lang(lang)),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py(px(2.))
-                        .rounded_full()
-                        .border_1()
-                        .when(root.elevated, |d| {
-                            d.bg(rgb(PRIMARY_FIXED))
-                                .border_color(rgb(PRIMARY))
-                                .text_color(rgb(PRIMARY))
-                        })
-                        .when(!root.elevated, |d| {
-                            d.bg(rgb(SURF_LOW))
-                                .border_color(rgb(OUTLINE_VAR))
-                                .text_color(rgb(OUTLINE))
-                        })
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(icon_shield(
-                            if root.elevated { PRIMARY } else { OUTLINE },
-                            12.,
-                        ))
-                        .child(tr_elevation_mode(lang, root.elevated)),
-                ),
-        )
+        .child(title_area)
         // 右侧操作
         .child(
             div()
@@ -110,7 +149,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                             }
                             View::Disk => {
                                 if !this.disk.scanning {
-                                    this.start_mft_scan(cx);
+                                    this.restart_mft_scan(cx);
                                 }
                             }
                         })),

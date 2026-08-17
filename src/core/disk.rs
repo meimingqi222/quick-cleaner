@@ -200,14 +200,33 @@ pub mod fallback {
 
         /// 转成紧凑持久化格式，避免为每个节点复制完整路径。
         pub fn compact_entries(&self) -> Vec<TreeIndexEntry> {
+            // 增量替换会把旧节点标成 unused 并在末尾追加新节点。若把这些
+            // 墓碑也持久化，索引会在每轮保存后持续膨胀；日志中有效节点约
+            // 1721 万，但缓存已经增长到 3161 万条。保存时过滤墓碑并重映射
+            // parent，下次加载恢复成真正紧凑的树。
+            let mut remap = vec![u32::MAX; self.entries.len()];
+            let mut next = 0u32;
+            for (index, entry) in self.entries.iter().enumerate() {
+                if entry.used {
+                    remap[index] = next;
+                    next += 1;
+                }
+            }
+
             self.entries
                 .iter()
-                .map(|entry| TreeIndexEntry {
-                    parent: entry.parent,
+                .enumerate()
+                .filter(|(_, entry)| entry.used)
+                .map(|(index, entry)| TreeIndexEntry {
+                    parent: if index == ROOT_NODE as usize {
+                        ROOT_NODE
+                    } else {
+                        remap[entry.parent as usize]
+                    },
                     name: entry.name.clone(),
                     is_dir: entry.is_dir,
                     size: entry.size,
-                    used: entry.used,
+                    used: true,
                 })
                 .collect()
         }
@@ -687,6 +706,52 @@ pub mod fallback {
                 }
                 cur = self.entries[i].parent;
             }
+        }
+
+        /// 以当前文件系统大小新增或替换单个文件，并同步更新所有祖先聚合值。
+        ///
+        /// FSEvents 开启 FileEvents 后会给出精确文件路径。文件内容变化不应
+        /// 退化成重扫其整个父目录（例如 `~/work/.DS_Store` 会让 300 万节点
+        /// 的工作区被完整遍历）。父目录不在索引中时返回 false，由调用方
+        /// 回退到目录子树扫描。
+        pub fn upsert_file(&mut self, path: &Path, size: u64) -> bool {
+            let Some(parent_path) = path.parent() else {
+                return false;
+            };
+            let Some(parent) = self.find_node_by_path(parent_path) else {
+                return false;
+            };
+            if !self.is_dir(parent) {
+                return false;
+            }
+            if let Some(existing) = self.find_node_by_path(path) {
+                self.remove_subtree_inplace(existing);
+            }
+            let Some(name) = path.file_name() else {
+                return false;
+            };
+
+            self.entries.push(TreeEntry {
+                parent,
+                name: name.to_string_lossy().into_owned(),
+                is_dir: false,
+                size,
+                used: true,
+            });
+            self.dir_size.push(0);
+            self.dir_files.push(0);
+
+            let mut cur = parent;
+            loop {
+                let i = cur as usize;
+                self.dir_size[i] = self.dir_size[i].saturating_add(size);
+                self.dir_files[i] = self.dir_files[i].saturating_add(1);
+                if cur == ROOT_NODE {
+                    break;
+                }
+                cur = self.entries[i].parent;
+            }
+            true
         }
 
         fn mark_unused_recursive(&mut self, idx: u32) {
@@ -1384,6 +1449,26 @@ mod tests {
         assert!(!tree.valid(2));
         // other 子树不受影响
         assert_eq!(tree.size_of(7), 500);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn upsert_file_replaces_leaf_and_updates_ancestors() {
+        let mut tree = build_test_tree();
+        let file = PathBuf::from("/root/proj/b.txt");
+
+        assert!(tree.upsert_file(&file, 250));
+        tree.rebuild_child_arrays();
+
+        let node = tree.find_node_by_path(&file).unwrap();
+        assert_eq!(tree.size_of(node), 250);
+        assert_eq!(tree.size_of(tree.root()), 1_550);
+        assert_eq!(tree.file_count_of(tree.root()), 5);
+        assert_eq!(
+            tree.compact_entries().len(),
+            9,
+            "持久化时不应保留旧文件墓碑"
+        );
     }
 
     #[cfg(not(windows))]

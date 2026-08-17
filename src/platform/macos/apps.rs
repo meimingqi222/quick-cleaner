@@ -349,7 +349,7 @@ fn format_system_time(time: std::time::SystemTime) -> (Option<String>, u64) {
 ///
 /// 用 `defaults read` 命令而不是引入 `plist` crate——`defaults` 在所有
 /// macOS 上都有，且能处理二进制和 XML 两种格式。
-fn read_info_plist(plist_path: &Path) -> (Option<String>, Option<String>) {
+pub(crate) fn read_info_plist(plist_path: &Path) -> (Option<String>, Option<String>) {
     let Ok(output) = std::process::Command::new("defaults")
         .arg("read")
         .arg(plist_path)
@@ -457,17 +457,43 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
                 .arg("--wait-apps")
                 .arg(&uninstaller_path)
                 .status();
-            if let Ok(s) = status {
-                if s.success() {
-                    return Ok(());
+            match status {
+                Ok(exit) if exit.success() && wait_until_removed(loc) => return Ok(()),
+                Ok(exit) if exit.success() => {
+                    return Err(format!(
+                        "自带卸载程序已退出，但应用仍然存在：{}",
+                        loc.display()
+                    ));
+                }
+                Ok(exit) => {
+                    return Err(format!("自带卸载程序退出异常：{exit}"));
+                }
+                Err(error) => {
+                    return Err(format!("无法启动自带卸载程序：{error}"));
                 }
             }
-            // 卸载程序失败则回退到移入废纸篓
         }
     }
 
     // 回退：移入废纸篓
-    super::trash::move_to_trash(loc)
+    super::trash::move_to_trash(loc)?;
+    if loc.exists() {
+        Err(format!("卸载后应用程序仍然存在：{}", loc.display()))
+    } else {
+        Ok(())
+    }
+}
+
+/// 官方卸载器有时会在主窗口退出前后才完成最后一次 bundle 移除，给文件系统
+/// 一个很短的收敛窗口，避免刚退出就误判并再次送废纸篓。
+fn wait_until_removed(path: &Path) -> bool {
+    for _ in 0..50 {
+        if !path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    !path.exists()
 }
 
 /// 是否位于系统卷（SSV 密封只读）。

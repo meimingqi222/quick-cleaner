@@ -776,7 +776,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                                 }))
                         })
                         .when(!can_uninstall, |d| d.text_color(rgb(OUTLINE)))
-                        .child(ctx_uninstall)
+                        .child(ctx_uninstall),
                 )
                 // 3. 强力深度清理
                 .child(

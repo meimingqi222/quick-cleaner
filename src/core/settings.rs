@@ -39,6 +39,9 @@ pub struct Settings {
     /// 只作用于用户手选的任意路径。分类清理走的是固定白名单表（缓存、
     /// 临时文件、构建产物），把它们塞进回收站没有意义，只会让用户再清一次。
     pub delete_to_recycle_bin: bool,
+
+    /// macOS 专属：用户是否已勾选「不再提示完全磁盘访问权限引导」。
+    pub macos_fda_dismissed: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +49,7 @@ impl Default for Settings {
         Self {
             language: crate::platform::detect_system_language(),
             delete_to_recycle_bin: false,
+            macos_fda_dismissed: false,
         }
     }
 }
@@ -128,6 +132,7 @@ mod tests {
         let s = Settings {
             language: Language::En,
             delete_to_recycle_bin: true,
+            macos_fda_dismissed: true,
         };
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(Settings::merge_json(&text), s);
@@ -168,6 +173,14 @@ mod tests {
     fn recycle_bin_flag_round_trips() {
         let s = Settings::merge_json(r#"{"language":"En","delete_to_recycle_bin":true}"#);
         assert!(s.delete_to_recycle_bin);
+        assert!(!s.macos_fda_dismissed);
+    }
+
+    #[test]
+    fn macos_fda_dismissed_round_trips() {
+        let s = Settings::merge_json(r#"{"language":"Zh","macos_fda_dismissed":true}"#);
+        assert_eq!(s.language, Language::Zh);
+        assert!(s.macos_fda_dismissed);
     }
 
     /// 认得的语言值要真的被采纳，不能被 `unwrap_or_default` 悄悄吃掉。

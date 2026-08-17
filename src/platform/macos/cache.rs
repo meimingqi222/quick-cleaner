@@ -158,6 +158,12 @@ pub struct LoadedIndex {
 
 const INDEX_VERSION: u32 = 4;
 
+/// 串行化索引写入，并记录本进程已落盘的最高 FSEvents 水位。异步保存可能
+/// 乱序完成，较旧结果绝不能在较新结果之后覆盖索引文件。
+static INDEX_SAVE_WATERMARKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
 fn index_path(volume: &VolumeId) -> Option<PathBuf> {
     let mount = volume.mount_point().to_string_lossy();
     let key: String = mount.bytes().map(|byte| format!("{byte:02x}")).collect();
@@ -221,6 +227,21 @@ pub fn save_index(volume: &VolumeId, scan: &ScanResult, last_event_id: u64) {
     let Some(path) = index_path(volume) else {
         return;
     };
+    let mut watermarks = INDEX_SAVE_WATERMARKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if watermarks
+        .get(&path)
+        .is_some_and(|saved| *saved > last_event_id)
+    {
+        crate::log!(
+            "跳过过期索引保存：事件水位 {} < 已保存 {} ({})",
+            last_event_id,
+            watermarks[&path],
+            path.display()
+        );
+        return;
+    }
     let data = PersistedIndex {
         version: INDEX_VERSION,
         volume_mount: volume.mount_point().to_string_lossy().into_owned(),
@@ -234,8 +255,8 @@ pub fn save_index(volume: &VolumeId, scan: &ScanResult, last_event_id: u64) {
     };
     let compressed = lz4_flex::compress_prepend_size(&bytes);
     let temporary = path.with_extension("bin.tmp");
-    if std::fs::write(&temporary, compressed).is_ok() {
-        let _ = std::fs::rename(temporary, path);
+    if std::fs::write(&temporary, compressed).is_ok() && std::fs::rename(temporary, &path).is_ok() {
+        watermarks.insert(path, last_event_id);
     }
 }
 
@@ -268,6 +289,42 @@ pub(crate) fn isolate_cache_dir(test_name: &str) -> std::sync::MutexGuard<'stati
 mod tests {
     use super::*;
     use crate::core::disk::TreeSnapshotEntry;
+
+    fn test_scan(volume: VolumeId, size: u64) -> ScanResult {
+        let root = volume.mount_point().to_path_buf();
+        let tree = SizeTree::from_snapshot(
+            volume.clone(),
+            vec![
+                TreeSnapshotEntry {
+                    path: root.clone(),
+                    is_dir: true,
+                    size,
+                },
+                TreeSnapshotEntry {
+                    path: root.join("cache.bin"),
+                    is_dir: false,
+                    size,
+                },
+            ],
+        );
+        ScanResult {
+            volume,
+            total_size: size,
+            file_count: 1,
+            dir_count: 1,
+            dirs: Vec::new(),
+            tree,
+            elapsed_ms: 0,
+            records_read: 2,
+            records_expected: 2,
+            mft_run_bytes: 0,
+            ext_records: 0,
+            ext_data_merged: 0,
+            hard_links: 0,
+            unique_size: size,
+            unique_files: 1,
+        }
+    }
 
     #[test]
     fn index_tree_round_trip_preserves_sizes() {
@@ -335,5 +392,20 @@ mod tests {
         assert_eq!(loaded.file_count, cache.file_count);
         assert_eq!(loaded.top_dirs.len(), 1);
         assert_eq!(loaded.top_dirs[0].name, "Library");
+    }
+
+    #[test]
+    fn older_async_save_cannot_overwrite_newer_watermark() {
+        let _guard = isolate_cache_dir("index_watermark_order");
+        let volume = VolumeId::from_mount_point(PathBuf::from("/tmp/qc-watermark"));
+        let newer = test_scan(volume.clone(), 8192);
+        let older = test_scan(volume.clone(), 4096);
+
+        save_index(&volume, &newer, 20);
+        save_index(&volume, &older, 10);
+
+        let loaded = load_index(&volume).expect("索引应当能够重新加载");
+        assert_eq!(loaded.last_event_id, 20);
+        assert_eq!(loaded.scan.total_size, 8192);
     }
 }

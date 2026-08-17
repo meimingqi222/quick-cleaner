@@ -18,6 +18,8 @@ pub struct ScanItem {
     pub file_count: u64,
     pub category: CategoryId,
     pub last_modified: u64,
+    /// 是否由“推荐清理”默认勾选。必须由具体规则决定，不能只看分类。
+    pub recommended: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +107,9 @@ fn scan_fixed_inner(
             if t.path.to_string_lossy().starts_with("tmutil://") {
                 return true;
             }
-            t.path.exists()
+            // 固定目标本身是符号链接时绝不扫描。否则称重可能来自链接目标，
+            // 清理时也可能在目标被替换的竞态下触碰链接指向的数据。
+            std::fs::symlink_metadata(&t.path).is_ok_and(|md| !md.file_type().is_symlink())
         })
         .filter_map(|t| {
             let started = std::time::Instant::now();
@@ -119,6 +123,7 @@ fn scan_fixed_inner(
                         file_count: 0,
                         category: t.category,
                         last_modified: 0,
+                        recommended: t.recommended,
                     },
                     started.elapsed(),
                     false,
@@ -133,11 +138,12 @@ fn scan_fixed_inner(
                         file_count: files,
                         category: t.category,
                         last_modified: 0,
+                        recommended: t.recommended,
                     },
                     started.elapsed(),
                     true,
                 )),
-                None => scan_dir(&t.path, &t.label, t.category, live)
+                None => scan_dir(&t.path, &t.label, t.category, t.recommended, live)
                     .map(|it| (it, started.elapsed(), false)),
             }
         })
@@ -321,7 +327,7 @@ pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>) {
     }
 }
 
-/// 把散装条目按类别聚合成汇总。发现式类目条目可能上百，按体积降序更实用。
+/// 把散装条目按类别聚合成汇总，并按体积降序展示。
 fn aggregate(results: Vec<ScanItem>) -> Vec<CategorySummary> {
     let mut out: Vec<CategorySummary> = Vec::new();
     for cat in CategoryId::ALL {
@@ -330,9 +336,9 @@ fn aggregate(results: Vec<ScanItem>) -> Vec<CategorySummary> {
             .filter(|it| it.category == cat)
             .cloned()
             .collect();
-        if cat.is_discovered() {
-            items.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
-        }
+        // 动态缓存目标原本按文件系统枚举顺序展示，几 GB 的大项可能藏在
+        // 中间，而列表底部只剩几 KB 的 .DS_Store，看起来会与汇总值不符。
+        items.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         let total: u64 = items.iter().map(|it| it.size).sum();
         out.push(CategorySummary {
             category: cat,
@@ -394,11 +400,35 @@ impl Acc {
 }
 
 /// 扫描单个目录：大小 = 子树全部文件大小；文件数 = 全部文件数。
-fn scan_dir(dir: &Path, label: &Text, category: CategoryId, live: &AtomicBool) -> Option<ScanItem> {
+fn scan_dir(
+    dir: &Path,
+    label: &Text,
+    category: CategoryId,
+    recommended: bool,
+    live: &AtomicBool,
+) -> Option<ScanItem> {
     if !live.load(Ordering::Relaxed) {
         return None;
     }
-    let acc = walk(dir, live);
+    let md = std::fs::symlink_metadata(dir).ok()?;
+    if md.file_type().is_symlink() {
+        return None;
+    }
+    let acc = if md.is_file() {
+        Acc {
+            size: allocated_file_size(&md),
+            files: 1,
+            newest: md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs()),
+        }
+    } else if md.is_dir() {
+        walk(dir, live)
+    } else {
+        return None;
+    };
     Some(ScanItem {
         path: dir.to_path_buf(),
         label: label.clone(),
@@ -406,7 +436,20 @@ fn scan_dir(dir: &Path, label: &Text, category: CategoryId, live: &AtomicBool) -
         file_count: acc.files,
         category,
         last_modified: acc.newest,
+        recommended,
     })
+}
+
+fn allocated_file_size(md: &std::fs::Metadata) -> u64 {
+    #[cfg(windows)]
+    {
+        md.len()
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        md.blocks().saturating_mul(512)
+    }
 }
 
 /// 测算一个目录的子树体积。
@@ -460,7 +503,7 @@ fn walk_at(dir: &Path, live: &AtomicBool, depth: usize) -> Acc {
             }
             acc.files += 1;
             if let Ok(md) = entry.metadata() {
-                acc.size += md.len();
+                acc.size += allocated_file_size(&md);
                 if let Ok(m) = md.modified() {
                     let t = m
                         .duration_since(UNIX_EPOCH)
@@ -538,6 +581,7 @@ mod tests {
             path: PathBuf::from(p),
             label: Text::same("t"),
             category: CategoryId::UserTemp,
+            recommended: true,
         };
         #[cfg(windows)]
         let targets = [mk(r"C:\a"), mk(r"C:\b"), mk(r"D:\c"), mk(r"\\unc\share")];
@@ -564,6 +608,54 @@ mod tests {
         assert_eq!(dominant_volume(&[]), None);
     }
 
+    #[test]
+    fn fixed_file_target_reports_its_real_size() {
+        let path = std::env::temp_dir().join("qc_scan_single_file");
+        std::fs::write(&path, b"metadata").unwrap();
+        let live = AtomicBool::new(true);
+
+        let item = scan_dir(
+            &path,
+            &Text::same("single"),
+            CategoryId::UserTemp,
+            true,
+            &live,
+        )
+        .unwrap();
+
+        assert_eq!(
+            item.size,
+            allocated_file_size(&std::fs::metadata(&path).unwrap())
+        );
+        assert_eq!(item.file_count, 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixed_scan_rejects_symlink_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join("qc_scan_symlink_root");
+        let target = root.join("target");
+        let link = root.join("link");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), b"x").unwrap();
+        symlink(&target, &link).unwrap();
+        let targets = [ScanTarget {
+            path: link,
+            label: Text::same("link"),
+            category: CategoryId::UserTemp,
+            recommended: true,
+        }];
+
+        let cats = scan_fixed(&targets, &AtomicBool::new(true));
+
+        assert!(cats.iter().all(|cat| cat.items.is_empty()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn item(path: &str, size: u64, cat: CategoryId) -> ScanItem {
         ScanItem {
             path: PathBuf::from(path),
@@ -572,6 +664,7 @@ mod tests {
             file_count: size / 10,
             category: cat,
             last_modified: 0,
+            recommended: cat.default_selected(),
         }
     }
 
@@ -821,6 +914,25 @@ mod tests {
         assert_eq!(dev.total_size, 1000);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fixed_category_items_are_sorted_by_size() {
+        let cats = aggregate(vec![
+            item("/cache/tiny", 8 * 1024, CategoryId::UserTemp),
+            item("/cache/large", 4 * 1024 * 1024 * 1024, CategoryId::UserTemp),
+            item("/cache/medium", 128 * 1024 * 1024, CategoryId::UserTemp),
+        ]);
+
+        let user_temp = cats
+            .iter()
+            .find(|c| c.category == CategoryId::UserTemp)
+            .unwrap();
+        let sizes: Vec<u64> = user_temp.items.iter().map(|item| item.size).collect();
+        assert_eq!(
+            sizes,
+            vec![4 * 1024 * 1024 * 1024, 128 * 1024 * 1024, 8 * 1024]
+        );
     }
 
     /// 发现式类目条目可能上百，合并后要按体积降序，最大的排在最前面。

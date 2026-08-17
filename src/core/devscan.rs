@@ -295,7 +295,10 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
         // 取盘符再拼才是正确的 "C:\name"。
         if let Some(letter) = vol.drive_letter() {
             for name in CODE_ROOT_NAMES {
-                roots.push((PathBuf::from(format!(r"{letter}:\{name}")), NAMED_ROOT_DEPTH));
+                roots.push((
+                    PathBuf::from(format!(r"{letter}:\{name}")),
+                    NAMED_ROOT_DEPTH,
+                ));
             }
         }
     }
@@ -459,6 +462,7 @@ fn discover_via_mft(
                 // MFT 记录里没有直接可用的修改时间，这一列对开发垃圾也没有
                 // 展示价值（构建产物的时间戳随时在变）。
                 last_modified: 0,
+                recommended: false,
             });
         }
     }
@@ -568,6 +572,7 @@ fn collect_tree_and_build_items(
                 file_count: tree.file_count_of(idx),
                 category: marker.category,
                 last_modified: 0,
+                recommended: false,
             })
         })
         .collect()
@@ -775,22 +780,70 @@ fn refresh_macos_index(
     use crate::platform::macos::walk;
 
     let mount = volume.mount_point();
-    let mut roots: Vec<PathBuf> = changes
+    let mut changed_paths: Vec<PathBuf> = changes
         .paths
         .iter()
         .filter(|path| path.starts_with(mount))
-        .map(|path| {
-            if path.is_dir() {
-                path.clone()
-            } else {
-                path.parent().unwrap_or(mount).to_path_buf()
-            }
-        })
+        .cloned()
         .collect();
-    // 去掉等于 mount 本身的路径——它会吞掉所有其他路径，导致
-    // 4959 个变更被归并成 1 个根（mount），然后触发"根==mount"放弃增量。
-    // 这些路径的真正变更根是它们的直接子目录，保留更深的路径即可。
-    roots.retain(|path| path != mount);
+    changed_paths.sort();
+    changed_paths.dedup();
+
+    // FSEvents 可能把大量变化合并成索引根本身。这个事件不携带“究竟哪些
+    // 子目录变了”的信息，不能删掉后仍提交新的水位，否则被合并的变化会
+    // 永久漏进索引。宁可做一次一致性重扫。
+    if changed_paths.iter().any(|path| path == mount) {
+        crate::log!(
+            "refresh_macos_index: 收到索引根事件 {}，放弃增量",
+            mount.display()
+        );
+        return None;
+    }
+
+    enum FileChange {
+        Upsert(PathBuf, u64),
+        Remove(PathBuf),
+    }
+
+    let mut roots = Vec::new();
+    let mut file_changes = Vec::new();
+    let mut metadata_failed = 0usize;
+    for path in changed_paths {
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => roots.push(path),
+            Ok(metadata) => {
+                use std::os::unix::fs::MetadataExt;
+                let size = metadata.blocks().saturating_mul(512);
+                if scan
+                    .tree
+                    .find_node_by_path(path.parent().unwrap_or(mount))
+                    .is_none()
+                {
+                    roots.push(path.parent().unwrap_or(mount).to_path_buf());
+                } else {
+                    file_changes.push(FileChange::Upsert(path, size));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                file_changes.push(FileChange::Remove(path));
+            }
+            Err(_) => {
+                // 权限或瞬时 I/O 错误不能被解释成“文件已删除”，保留旧值。
+                metadata_failed += 1;
+            }
+        }
+    }
+
+    // 权限或瞬时 I/O 失败时，旧值是否仍正确不可知。继续提交最新 FSEvents
+    // 水位会永久吞掉这次事件，因此整轮增量必须放弃。
+    if metadata_failed > 0 {
+        crate::log!(
+            "refresh_macos_index: {} 个路径读取元数据失败，放弃增量",
+            metadata_failed
+        );
+        return None;
+    }
+
     roots.sort_by_key(|path| path.components().count());
     roots.dedup();
     let mut covered = Vec::new();
@@ -809,12 +862,7 @@ fn refresh_macos_index(
         changes.paths.len(),
         roots.len()
     );
-    if roots.is_empty() {
-        crate::log!("refresh_macos_index: 去重后无变更根，跳过增量更新");
-        return None;
-    }
     // 太多彼此独立的变化目录时，重扫局部区域反而比一次完整扫描更慢。
-    // 但有了并行扫描 + 跳过小目录/超大子树优化后，500 个根也能在几秒内完成。
     if roots.len() > 512 {
         crate::log!(
             "refresh_macos_index: 独立变更根 {} 个 > 512，放弃增量",
@@ -823,61 +871,69 @@ fn refresh_macos_index(
         return None;
     }
 
+    // 被目录重扫覆盖的文件无需先就地修改，否则新追加的文件节点不在旧 CSR
+    // 子数组里，随后移除父子树时无法一并标记，会留下孤立节点。
+    let mut files_updated = 0usize;
+    let mut paths_removed = 0usize;
+    for change in file_changes {
+        let path = match &change {
+            FileChange::Upsert(path, _) | FileChange::Remove(path) => path,
+        };
+        if roots.iter().any(|root| path.starts_with(root)) {
+            continue;
+        }
+        match change {
+            FileChange::Upsert(path, size) => {
+                if scan.tree.upsert_file(&path, size) {
+                    files_updated += 1;
+                }
+            }
+            FileChange::Remove(path) => {
+                if let Some(node) = scan.tree.find_node_by_path(&path) {
+                    scan.tree.remove_subtree_inplace(node);
+                    paths_removed += 1;
+                }
+            }
+        }
+    }
+    crate::log!(
+        "refresh_macos_index: 文件就地更新 {}，删除 {}，元数据失败 {}，目录重扫 {}",
+        files_updated,
+        paths_removed,
+        metadata_failed,
+        roots.len()
+    );
+
+    if roots.is_empty() {
+        scan.tree.rebuild_child_arrays();
+        refresh_scan_totals(&mut scan);
+        return Some(scan);
+    }
+
     // 并行扫描所有独立变更根，然后串行追加到树。
     // 之前串行扫描 65 个根要 5.7s（Notion 2s + Edge Cache 2s + Telegram 600ms），
     // 并行后墙钟时间等于最慢的那个子树。
     //
-    // 优化：旧树中记录数 < 200 的根跳过重扫。macOS Container 里有些
-    // 几十条记录的小目录因 TCC 权限检查阻塞 6 秒，跳过它们省 90% 增量耗时，
-    // 体积误差 < 1MB（相对 78GB 总量可忽略）。
-    // 同理跳过 iCloud Drive（~/Library/Mobile Documents）：文件可能被驱逐
-    // 到云端，getattrlistbulk 会阻塞等网络 I/O，23 秒扫 8K 条记录。
-    // 超大子树（>100K 记录）也跳过：重扫 /Users/yuqiang（6.6M 记录）要 74 秒，
-    // /System、/Library 等也很慢。这些目录变化通常很小，跳过误差可忽略。
-    const SKIP_THRESHOLD: u64 = 200;
-    const SKIP_LARGE_THRESHOLD: u64 = 100_000;
+    // 每个 FSEvents 变更根都必须重扫。之前为了速度跳过小目录、超大目录和
+    // iCloud Drive，但“保留旧数据”会让已删除文件永久留在索引里，也会漏掉
+    // 新文件。磁盘透镜展示的是文件系统事实，不能用已知错误换取刷新速度。
     use rayon::prelude::*;
     let t_par = std::time::Instant::now();
     struct SubtreeResult {
         root: PathBuf,
-        scan: crate::core::disk::ScanResult,
+        scan: Option<crate::core::disk::ScanResult>,
     }
     let scan_results: Vec<SubtreeResult> = roots
         .par_iter()
         .filter_map(|root| {
-            if !live.load(Ordering::Relaxed) || !root.exists() {
+            if !live.load(Ordering::Relaxed) {
                 return None;
             }
-            // 跳过 iCloud Drive 目录——文件可能被驱逐到云端，
-            // 扫描会阻塞在网络 I/O 上数十秒
-            if root.to_string_lossy().contains("Library/Mobile Documents/") {
-                crate::log!("  跳过 iCloud Drive 目录 {}，保留旧数据", root.display());
-                return None;
-            }
-            // 检查旧树中该根的记录数
-            if let Some(old_node) = scan.tree.find_node_by_path(root) {
-                let old_files = scan.tree.file_count_of(old_node);
-                if old_files < SKIP_THRESHOLD {
-                    crate::log!(
-                        "  跳过小目录 {}：旧记录 {} < {}，保留旧数据",
-                        root.display(),
-                        old_files,
-                        SKIP_THRESHOLD
-                    );
-                    return None;
-                }
-                // 超大子树跳过：重扫 /Users/yuqiang（6.6M 记录）要 74 秒，
-                // /System、/Library 等也很慢。这些目录变化占比极小，
-                // 跳过重扫的体积误差可忽略。
-                if old_files > SKIP_LARGE_THRESHOLD {
-                    crate::log!(
-                        "  跳过超大子树 {}：旧记录 {} > {}，保留旧数据",
-                        root.display(),
-                        old_files,
-                        SKIP_LARGE_THRESHOLD
-                    );
-                    return None;
-                }
+            if !root.exists() {
+                return Some(SubtreeResult {
+                    root: root.clone(),
+                    scan: None,
+                });
             }
             let local_volume = crate::core::disk::VolumeId::from_mount_point(root.clone());
             let t_sub = std::time::Instant::now();
@@ -893,7 +949,7 @@ fn refresh_macos_index(
                     );
                     Some(SubtreeResult {
                         root: root.clone(),
-                        scan: s,
+                        scan: Some(s),
                     })
                 }
                 Err(e) => {
@@ -912,72 +968,64 @@ fn refresh_macos_index(
         crate::log!("refresh_macos_index: 扫描被取消");
         return None;
     }
-    // 统计实际需要扫描的根数（排除被跳过的小目录、iCloud Drive 和超大子树）
-    let skipped = roots
-        .iter()
-        .filter(|r| {
-            if !r.exists() {
-                return false;
-            }
-            if r.to_string_lossy().contains("Library/Mobile Documents/") {
-                return true;
-            }
-            scan.tree
-                .find_node_by_path(r)
-                .map(|n| {
-                    let cnt = scan.tree.file_count_of(n);
-                    !(SKIP_THRESHOLD..=SKIP_LARGE_THRESHOLD).contains(&cnt)
-                })
-                .unwrap_or(false)
-        })
-        .count();
-    let expected = roots.iter().filter(|r| r.exists()).count() - skipped;
+    let expected = roots.len();
     if scan_results.len() < expected {
         crate::log!(
-            "refresh_macos_index: {}/{} 子树扫描失败（跳过 {} 个小目录），放弃增量",
+            "refresh_macos_index: {}/{} 子树扫描失败，放弃增量",
             expected - scan_results.len(),
-            expected,
-            skipped
+            expected
         );
         return None;
     }
     crate::log!(
-        "refresh_macos_index: 并行扫描 {} 个子树（跳过 {} 个小目录），总耗时 {:?}",
+        "refresh_macos_index: 并行扫描 {} 个子树，总耗时 {:?}",
         scan_results.len(),
-        skipped,
         t_par.elapsed()
     );
 
     // 串行追加到树——append_subtree 会修改树结构，不能并行
     for sr in scan_results {
-        // 在树中定位旧节点并就地移除
-        if let Some(old_node) = scan.tree.find_node_by_path(&sr.root) {
-            scan.tree.remove_subtree_inplace(old_node);
-        }
-
+        let Some(subtree) = sr.scan else {
+            if let Some(old_node) = scan.tree.find_node_by_path(&sr.root) {
+                scan.tree.remove_subtree_inplace(old_node);
+            }
+            continue;
+        };
         let root_name = sr
             .root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let parent_path = sr.root.parent().unwrap_or(mount);
-        let parent_node = scan.tree.find_node_by_path(parent_path);
+        let parent_idx = match scan.tree.find_node_by_path(parent_path) {
+            Some(parent) => parent,
+            None => {
+                crate::log!(
+                    "refresh_macos_index: 父目录 {} 不在树中，放弃增量更新 {}",
+                    parent_path.display(),
+                    sr.root.display()
+                );
+                return None;
+            }
+        };
 
-        if let Some(parent_idx) = parent_node {
-            scan.tree
-                .append_subtree(parent_idx, &sr.scan.tree, &root_name);
-        } else {
-            crate::log!(
-                "refresh_macos_index: 父目录 {} 不在树中，跳过 {}",
-                parent_path.display(),
-                sr.root.display()
-            );
+        // 在树中定位旧节点并就地移除
+        if let Some(old_node) = scan.tree.find_node_by_path(&sr.root) {
+            scan.tree.remove_subtree_inplace(old_node);
         }
+        scan.tree
+            .append_subtree(parent_idx, &subtree.tree, &root_name);
     }
 
     // 重建 CSR 子节点索引（一次 O(n) 整数操作，无 PathBuf 分配）
     scan.tree.rebuild_child_arrays();
 
+    refresh_scan_totals(&mut scan);
+    Some(scan)
+}
+
+#[cfg(not(windows))]
+fn refresh_scan_totals(scan: &mut crate::core::disk::ScanResult) {
     // 更新扫描元数据
     let total_size = scan.tree.size_of(scan.tree.root());
     let file_count = scan.tree.count_used_files();
@@ -990,7 +1038,6 @@ fn refresh_macos_index(
     scan.records_expected = records;
     scan.unique_size = total_size;
     scan.unique_files = file_count;
-    Some(scan)
 }
 
 /// macOS SizeTree 上的 DFS，与遍历通道 `collect` 保持完全一致的判定规则。
@@ -1067,6 +1114,7 @@ fn discover_via_walk_roots(roots: &[(PathBuf, usize)], live: &AtomicBool) -> Vec
                 file_count: acc.1,
                 category: hit.marker.category,
                 last_modified: acc.2,
+                recommended: false,
             }
         })
         .filter(|item| item.size > 0)
@@ -1335,6 +1383,139 @@ mod tests {
             "树通道不该识别无旁证的 target"
         );
         assert_eq!(walk_paths.len(), tree_paths.len(), "两条通道命中数应一致");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 小目录过去会被增量策略直接跳过并“保留旧数据”，导致已删除文件在
+    /// 重启或重新分析后复活。任何规模的变更根都必须以当前文件系统重建。
+    #[cfg(not(windows))]
+    #[test]
+    fn incremental_refresh_removes_deleted_file_from_small_directory() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_incremental_delete");
+        let changed_dir = base.join("small");
+        let deleted = changed_dir.join("gone.bin");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&changed_dir).unwrap();
+        std::fs::write(&deleted, vec![b'x'; 4096]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        assert!(original.tree.find_node_by_path(&deleted).is_some());
+
+        std::fs::remove_file(&deleted).unwrap();
+        let changes = Changes {
+            paths: vec![deleted.clone()],
+            last_event_id: 1,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live)
+            .expect("小目录删除应能增量更新");
+
+        assert!(
+            refreshed.tree.find_node_by_path(&deleted).is_none(),
+            "已删除文件不能残留在增量索引里"
+        );
+        assert_eq!(refreshed.file_count, 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn incremental_refresh_rejects_coalesced_root_event() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_root_event");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        let changes = Changes {
+            paths: vec![base.clone()],
+            last_event_id: 2,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+
+        assert!(refresh_macos_index(&volume, original, &changes, &live).is_none());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn incremental_refresh_rejects_metadata_errors() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+        use std::os::unix::ffi::OsStringExt;
+
+        let base = std::env::temp_dir().join("qc_devscan_metadata_error");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        let invalid = base.join(std::ffi::OsString::from_vec(b"invalid\0path".to_vec()));
+        let changes = Changes {
+            paths: vec![invalid],
+            last_event_id: 3,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+
+        assert!(refresh_macos_index(&volume, original, &changes, &live).is_none());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn incremental_refresh_updates_file_without_rescanning_parent() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+        use std::os::unix::fs::MetadataExt;
+
+        let base = std::env::temp_dir().join("qc_devscan_incremental_file");
+        let changed = base.join("direct.bin");
+        let untouched = base.join("large-subtree/keep.bin");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(untouched.parent().unwrap()).unwrap();
+        std::fs::write(&changed, vec![b'x'; 4096]).unwrap();
+        std::fs::write(&untouched, vec![b'y'; 4096]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        std::fs::write(&changed, vec![b'z'; 16 * 1024]).unwrap();
+        let expected_size = std::fs::metadata(&changed).unwrap().blocks() * 512;
+        let changes = Changes {
+            paths: vec![changed.clone()],
+            last_event_id: 1,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live).unwrap();
+        let changed_node = refreshed.tree.find_node_by_path(&changed).unwrap();
+        assert_eq!(refreshed.tree.size_of(changed_node), expected_size);
+        assert!(
+            refreshed.tree.find_node_by_path(&untouched).is_some(),
+            "更新直属文件不能影响未变化的庞大子树"
+        );
+        assert_eq!(refreshed.file_count, 2);
 
         let _ = std::fs::remove_dir_all(&base);
     }

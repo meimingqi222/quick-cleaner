@@ -385,6 +385,9 @@ pub enum ResidualSource {
     LogDir,
     PreferenceFile,
     ContainerDir,
+    ApplicationScript,
+    RecentDocumentList,
+    PackageReceipt,
     Other,
 }
 
@@ -422,6 +425,9 @@ impl ResidualSource {
                 ResidualSource::LogDir => "日志目录",
                 ResidualSource::PreferenceFile => "偏好设置文件",
                 ResidualSource::ContainerDir => "沙盒容器",
+                ResidualSource::ApplicationScript => "应用脚本目录",
+                ResidualSource::RecentDocumentList => "最近使用记录",
+                ResidualSource::PackageReceipt => "安装收据",
                 ResidualSource::Other => "其他残留",
             },
             Language::En => match self {
@@ -451,6 +457,9 @@ impl ResidualSource {
                 ResidualSource::LogDir => "Log directory",
                 ResidualSource::PreferenceFile => "Preference file",
                 ResidualSource::ContainerDir => "Sandbox container",
+                ResidualSource::ApplicationScript => "Application scripts",
+                ResidualSource::RecentDocumentList => "Recent document list",
+                ResidualSource::PackageReceipt => "Package receipt",
                 ResidualSource::Other => "Other residual",
             },
         }

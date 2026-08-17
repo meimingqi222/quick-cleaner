@@ -39,7 +39,7 @@ pub fn list_installed_apps(live: &AtomicBool) -> Vec<InstalledApp> {
             HKEY_LOCAL_MACHINE,
             KEY_READ | KEY_WOW64_32KEY,
             AppRegRoot::Hklm32,
-            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
             live,
         ));
     }
@@ -825,9 +825,12 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
                 .map_err(|e| format!("启动卸载程序失败（{exe}）: {e}"))?
         };
 
-        let _ = child
+        let status = child
             .wait()
             .map_err(|e| format!("等待卸载程序退出失败: {e}"))?;
+        if !status.success() {
+            return Err(format!("卸载程序退出异常：{status}"));
+        }
 
         // child.wait() 返回不代表卸载完成。绝大多数安装器会把自己复制到
         // 临时目录、以管理员身份重启，然后原进程立刻退出——于是这里马上
@@ -861,8 +864,41 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
             std::time::Duration::from_secs(30 * 60),
         );
 
-        crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
-        Ok(())
+        // 卸载器进程退出（甚至返回 0）不代表卸载成功：取消向导、外层
+        // bootstrapper 提前退出都可能留下原登记项。以最初枚举到的精确
+        // 注册表键为最终判据，给异步收尾留一个很短的落盘窗口。
+        for _ in 0..50 {
+            if !is_app_registered(app) {
+                crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        Err(format!(
+            "卸载程序已退出，但「{}」仍在已安装软件中",
+            app.name
+        ))
+    }
+}
+
+fn is_app_registered(app: &InstalledApp) -> bool {
+    let (root, sam) = match app.registry_root {
+        AppRegRoot::Hklm => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_64KEY),
+        AppRegRoot::Hklm32 => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_32KEY),
+        AppRegRoot::Hkcu => (HKEY_CURRENT_USER, KEY_READ),
+        AppRegRoot::SystemApp => return false,
+    };
+    let path = to_wide(&app.registry_subpath);
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: path 是以 NUL 结尾的 UTF-16；仅在打开成功时关闭有效句柄。
+    unsafe {
+        let opened = RegOpenKeyExW(root, path.as_ptr(), 0, sam | KEY_QUERY_VALUE, &mut key) as u32
+            == ERROR_SUCCESS;
+        if opened {
+            RegCloseKey(key);
+        }
+        opened
     }
 }
 

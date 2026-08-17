@@ -35,11 +35,13 @@ impl Safety {
 pub enum CategoryId {
     SystemTemp,
     UserTemp,
+    UserCache,
     BrowserCache,
     PackageCache,
     Logs,
     RecycleBin,
     Thumbnails,
+    BrokenLoginItems,
     // ---- 开发相关，默认不勾选 ----
     AiAgents,
     DevBuild,
@@ -50,14 +52,16 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
-    pub const ALL: [CategoryId; 12] = [
+    pub const ALL: [CategoryId; 14] = [
         CategoryId::SystemTemp,
         CategoryId::UserTemp,
+        CategoryId::UserCache,
         CategoryId::BrowserCache,
         CategoryId::PackageCache,
         CategoryId::Logs,
         CategoryId::RecycleBin,
         CategoryId::Thumbnails,
+        CategoryId::BrokenLoginItems,
         CategoryId::AiAgents,
         CategoryId::DevBuild,
         CategoryId::DevWorktrees,
@@ -67,11 +71,11 @@ impl CategoryId {
 
     /// 扫描完成后是否默认勾选。
     ///
-    /// 系统垃圾删掉只是重新生成，可以放心默认选中；开发类目不行——
-    /// 删掉 `node_modules` / `target` 意味着下次构建要重来一遍，
-    /// worktree 里甚至可能有没提交的改动。这些交给用户主动勾。
+    /// “推荐清理”只能包含明确标为 Safe 的类别。Caution 即使通常可以
+    /// 重建，也可能让用户丢失离线缓存、下载成本或废纸篓中的恢复机会，
+    /// 必须由用户主动勾选。
     pub fn default_selected(&self) -> bool {
-        !self.is_developer()
+        self.safety() == Safety::Safe
     }
 
     /// 是否属于开发者类目。
@@ -120,11 +124,13 @@ impl CategoryId {
             Language::Zh => match self {
                 CategoryId::SystemTemp => "系统临时文件",
                 CategoryId::UserTemp => "用户临时文件",
+                CategoryId::UserCache => "应用缓存",
                 CategoryId::BrowserCache => "浏览器缓存",
                 CategoryId::PackageCache => "包管理缓存",
                 CategoryId::Logs => "日志与崩溃转储",
                 CategoryId::RecycleBin => "回收站 / 废纸篓",
                 CategoryId::Thumbnails => "缩略图缓存",
+                CategoryId::BrokenLoginItems => "损坏的登录项",
                 CategoryId::AiAgents => "AI 编程助手缓存",
                 CategoryId::DevBuild => "项目构建产物与依赖",
                 CategoryId::DevWorktrees => "AI agent 临时 worktree",
@@ -134,11 +140,13 @@ impl CategoryId {
             Language::En => match self {
                 CategoryId::SystemTemp => "System Temp Files",
                 CategoryId::UserTemp => "User Temp Files",
+                CategoryId::UserCache => "Application Cache",
                 CategoryId::BrowserCache => "Browser Cache",
                 CategoryId::PackageCache => "Package Manager Cache",
                 CategoryId::Logs => "Logs & Crash Dumps",
                 CategoryId::RecycleBin => "Recycle Bin / Trash",
                 CategoryId::Thumbnails => "Thumbnail Cache",
+                CategoryId::BrokenLoginItems => "Broken Login Items",
                 CategoryId::AiAgents => "AI Assistant Cache",
                 CategoryId::DevBuild => "Build Artifacts & Deps",
                 CategoryId::DevWorktrees => "AI Agent Git Worktrees",
@@ -152,11 +160,13 @@ impl CategoryId {
         match self {
             CategoryId::SystemTemp => "🗑",
             CategoryId::UserTemp => "📂",
+            CategoryId::UserCache => "📂",
             CategoryId::BrowserCache => "🌐",
             CategoryId::PackageCache => "📦",
             CategoryId::Logs => "📝",
             CategoryId::RecycleBin => "♻️",
             CategoryId::Thumbnails => "🖼",
+            CategoryId::BrokenLoginItems => "🚫",
             CategoryId::AiAgents => "🤖",
             CategoryId::DevBuild => "🛠",
             CategoryId::DevWorktrees => "🌿",
@@ -175,11 +185,13 @@ impl CategoryId {
             Language::Zh => match self {
                 CategoryId::SystemTemp => "系统临时文件与系统更新残留",
                 CategoryId::UserTemp => "用户主目录下的应用临时文件",
+                CategoryId::UserCache => "应用明确存放在缓存目录中的可重建数据",
                 CategoryId::BrowserCache => "Chrome / Edge / Safari 等浏览器的缓存数据",
                 CategoryId::PackageCache => "npm / pnpm / cargo / go 等包管理器缓存",
                 CategoryId::Logs => "系统与应用日志、崩溃转储",
                 CategoryId::RecycleBin => "回收站/废纸篓中已删除的文件",
                 CategoryId::Thumbnails => "系统缩略图缓存，可安全重建",
+                CategoryId::BrokenLoginItems => "引用目标已不存在或配置已失效的启动项",
                 CategoryId::AiAgents => {
                     "Claude Code / Codex / Trae / Cursor 等 AI 编程工具的会话记录与缓存"
                 }
@@ -195,11 +207,15 @@ impl CategoryId {
             Language::En => match self {
                 CategoryId::SystemTemp => "System temporary files and update leftovers",
                 CategoryId::UserTemp => "Application temporary files under user profile",
+                CategoryId::UserCache => "Rebuildable data stored in application cache directories",
                 CategoryId::BrowserCache => "Cache files from Chrome, Edge, Firefox, Safari",
                 CategoryId::PackageCache => "Caches from npm, pnpm, Cargo, Go, pip, etc.",
                 CategoryId::Logs => "System and application event logs and crash dumps",
                 CategoryId::RecycleBin => "Deleted files in Recycle Bin or Trash",
                 CategoryId::Thumbnails => "System thumbnail cache, safe to rebuild",
+                CategoryId::BrokenLoginItems => {
+                    "Startup entries whose executable is missing or configuration is invalid"
+                }
                 CategoryId::AiAgents => {
                     "Session records and caches from Claude, Cursor, Trae, etc."
                 }
@@ -221,13 +237,23 @@ impl CategoryId {
 
     pub fn safety(&self) -> Safety {
         match self {
-            CategoryId::SystemTemp => Safety::Safe,
-            CategoryId::UserTemp => Safety::Safe,
-            CategoryId::BrowserCache => Safety::Caution,
-            CategoryId::PackageCache => Safety::Caution,
+            // Windows/macOS 临时目录都可能包含正在运行的安装事务、socket 或锁。
+            // 当前实现未按年龄和占用状态逐文件筛选，不能默认清理。
+            CategoryId::SystemTemp => Safety::Caution,
+            // 此类包含第三方应用缓存、窗口恢复状态和容器临时目录。
+            // 应用可能错误地把状态放进名为 Caches/tmp 的目录，不能承诺无损。
+            CategoryId::UserTemp => Safety::Caution,
+            CategoryId::UserCache => Safety::Safe,
+            // Service Worker、IndexedDB、Cookie 等状态数据已明确排除，剩余项
+            // 只有 HTTP/代码/着色器缓存和已完成的崩溃报告。
+            CategoryId::BrowserCache => Safety::Safe,
+            // 只收可重新下载或生成的包缓存；本地 Maven 仓库和泛 ~/.cache
+            // 不再归入此类。
+            CategoryId::PackageCache => Safety::Safe,
             CategoryId::Logs => Safety::Safe,
             CategoryId::RecycleBin => Safety::Caution,
             CategoryId::Thumbnails => Safety::Safe,
+            CategoryId::BrokenLoginItems => Safety::Safe,
             CategoryId::AiAgents => Safety::Caution,
             CategoryId::DevBuild => Safety::Caution,
             CategoryId::DevWorktrees => Safety::Danger,
@@ -246,6 +272,9 @@ pub struct ScanTarget {
     pub path: PathBuf,
     pub label: Text,
     pub category: CategoryId,
+    /// 是否属于“推荐清理”。同一分类里可以同时包含可无损重建的缓存和
+    /// 需要用户确认的历史/工作区数据，不能再只由分类推断。
+    pub recommended: bool,
 }
 
 /// 返回所有类别对应的扫描目标（支持跨平台）。
@@ -295,7 +324,7 @@ pub fn all_targets() -> Vec<ScanTarget> {
         t.push(target(
             local.join("CrashDumps"),
             Text::new("CrashDumps 崩溃转储", "CrashDumps"),
-            CategoryId::UserTemp,
+            CategoryId::Logs,
         ));
 
         // 浏览器缓存（全量覆盖 Default 及所有 Profile 1, Profile 2 ... 配置文件）
@@ -349,7 +378,7 @@ pub fn all_targets() -> Vec<ScanTarget> {
             CategoryId::PackageCache,
         ));
         t.push(target(
-            home.join(".bun"),
+            home.join(".bun\\install\\cache"),
             Text::new("bun 缓存", "bun cache"),
             CategoryId::PackageCache,
         ));
@@ -363,16 +392,11 @@ pub fn all_targets() -> Vec<ScanTarget> {
             Text::new("nuget 包缓存", "nuget package cache"),
             CategoryId::PackageCache,
         ));
-        t.push(target(
-            home.join(".m2\\repository"),
-            Text::new("maven 本地仓库", "maven local repository"),
-            CategoryId::PackageCache,
-        ));
-        t.push(target(
-            home.join(".cache"),
-            "~/.cache",
-            CategoryId::PackageCache,
-        ));
+        // ~/.m2/repository 可能包含仅在本机 mvn install 的私有构件，不能
+        // 当作可重新下载的缓存推荐清理。
+        // ~/.cache 里既有纯下载缓存，也可能有工具状态。按顶层子目录拆开，
+        // 才能只推荐已确认可重建的 OpenCode 缓存，同时保留其他项目供审阅。
+        push_home_cache_targets(&mut t, &home);
         t.push(target(
             local.join("uv\\cache"),
             Text::new("uv 缓存", "uv cache"),
@@ -430,16 +454,9 @@ pub fn all_targets() -> Vec<ScanTarget> {
         let logs = home.join("Library/Logs");
 
         // 系统与用户临时/缓存
-        t.push(target(
-            PathBuf::from("/private/tmp"),
-            "/private/tmp",
-            CategoryId::SystemTemp,
-        ));
-        t.push(target(
-            PathBuf::from("/private/var/tmp"),
-            "/private/var/tmp",
-            CategoryId::SystemTemp,
-        ));
+        // 不清空 /private/tmp 和 /private/var/tmp：其中可能有仍在运行的服务
+        // 使用的 socket、锁文件或安装事务。若以后恢复，必须按文件年龄和
+        // 占用状态逐项筛选，不能把整棵目录作为一个目标。
 
         // 浏览器缓存
         //
@@ -484,24 +501,31 @@ pub fn all_targets() -> Vec<ScanTarget> {
             Text::new("go 缓存", "go cache"),
             CategoryId::PackageCache,
         ));
-        t.push(target(
-            home.join(".cache"),
-            "~/.cache",
-            CategoryId::PackageCache,
-        ));
+        push_home_cache_targets(&mut t, &home);
         t.push(target(
             home.join("Library/Caches/Homebrew"),
             Text::new("Homebrew 缓存", "Homebrew cache"),
             CategoryId::PackageCache,
         ));
+        for (name, zh, en) in [
+            ("bun", "Bun 缓存", "Bun cache"),
+            ("go-build", "Go 构建缓存", "Go build cache"),
+            ("go", "Go 工具缓存", "Go tool cache"),
+            ("gopls", "gopls 缓存", "gopls cache"),
+            ("goimports", "goimports 缓存", "goimports cache"),
+            ("node-gyp", "node-gyp 缓存", "node-gyp cache"),
+            ("pip", "pip 缓存", "pip cache"),
+            ("typescript", "TypeScript 缓存", "TypeScript cache"),
+        ] {
+            t.push(target(
+                cache.join(name),
+                Text::new(zh, en),
+                CategoryId::PackageCache,
+            ));
+        }
 
         // 日志
         t.push(target(logs, "~/Library/Logs", CategoryId::Logs));
-        t.push(target(
-            PathBuf::from("/Library/Logs"),
-            "/Library/Logs",
-            CategoryId::Logs,
-        ));
 
         // 废纸篓
         t.push(target(
@@ -549,18 +573,9 @@ pub fn all_targets() -> Vec<ScanTarget> {
             Text::new("Xcode iOS DeviceSupport", "Xcode iOS DeviceSupport"),
             CategoryId::DevBuild,
         ));
-        t.push(target(
-            developer.join("Xcode/Archives"),
-            Text::new("Xcode Archives", "Xcode Archives"),
-            CategoryId::DevBuild,
-        ));
-
-        // 模拟器：不可用的设备镜像
-        t.push(target(
-            developer.join("CoreSimulator/Devices"),
-            Text::new("iOS 模拟器设备", "iOS Simulator Devices"),
-            CategoryId::DevBuild,
-        ));
+        // Xcode/Archives 可能是唯一留存的发布归档；CoreSimulator/Devices
+        // 包含仍在使用的模拟器及其中的应用数据。两者都不能仅凭目录位置
+        // 判定为构建垃圾，因此不进入智能清理候选。
 
         // iOS 备份（Danger：单个可达 100 GB+，删了不可恢复）
         t.push(target(
@@ -640,43 +655,111 @@ pub fn all_targets() -> Vec<ScanTarget> {
 
         // 浏览器 Application Support 下的缓存子目录
         // Chromium 系浏览器在 ~/Library/Application Support 下也存了大量缓存：
-        // Code Cache、GPUCache、Service Worker/CacheStorage、Crashpad/completed 等。
+        // Code Cache、GPUCache、着色器缓存、Crashpad/completed 等。
         // 这些不在 ~/Library/Caches 下，上面的展开够不到。
         push_browser_app_support_caches(&mut t, &app_support);
 
         // Firefox Profile 缓存
         push_firefox_profile_caches(&mut t, &app_support);
 
-        // Mail 附件下载（可能数 GB）
-        t.push(target(
-            home.join("Library/Mail Downloads"),
-            Text::new("Mail 附件下载", "Mail Downloads"),
-            CategoryId::UserTemp,
-        ));
-        t.push(target(
-            home.join("Library/Containers/com.apple.mail/Data/Library/Mail Downloads"),
-            Text::new("Mail 容器附件", "Mail Container Downloads"),
-            CategoryId::UserTemp,
-        ));
+        // Mail Downloads 中的附件是用户主动打开或保存过的文件，不是缓存，
+        // 不能进入智能清理候选。
 
         // Group Containers 下的缓存、临时文件、日志
         // 沙盒应用共享的容器目录，很多应用在这里堆缓存。
         push_group_container_caches(&mut t, &home);
 
-        // 不完整下载文件
-        push_incomplete_downloads(&mut t, &home);
-
-        // 系统崩溃报告：/Library/Logs 已覆盖 /Library/Logs/DiagnosticReports，
-        // 不单独列出，避免嵌套重复计算。
+        // .download/.crdownload/.part 可能是正在进行或可恢复的下载，不能仅凭
+        // 后缀判定为垃圾，因此不进入智能清理候选。
 
         // DNS 缓存目录（可安全清理）
         push_dns_cache_targets(&mut t);
 
         // .DS_Store 文件清理（限定常见目录，不做全盘扫描）
         push_dsstore_targets(&mut t, &home);
+
+        // 遗留 LaunchAgent：仅收配置无效或绝对执行路径已经不存在的 plist。
+        // 清理时走废纸篓而非永久删除，系统级条目会由 Finder 请求授权。
+        push_broken_login_items(&mut t, &home);
     }
 
     t
+}
+
+/// 扫描用户级和系统级 LaunchAgent 中可证明已损坏的登录项。
+#[cfg(target_os = "macos")]
+fn push_broken_login_items(t: &mut Vec<ScanTarget>, home: &Path) {
+    for root in [
+        home.join("Library/LaunchAgents"),
+        PathBuf::from("/Library/LaunchAgents"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "plist")
+                || !entry.file_type().is_ok_and(|kind| kind.is_file())
+                // 应用更新时执行文件与 plist 可能短暂不同步。至少持续一天
+                // 才视为遗留项，避免恰好在安装/更新窗口里误报。
+                || !is_older_than(&path, std::time::Duration::from_secs(24 * 60 * 60))
+                || !is_broken_launch_agent(&path)
+            {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            t.push(target(
+                path,
+                Text::new(
+                    format!("损坏的登录项 · {name}"),
+                    format!("Broken login item · {name}"),
+                ),
+                CategoryId::BrokenLoginItems,
+            ));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_older_than(path: &Path, age: std::time::Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|elapsed| elapsed >= age)
+}
+
+#[cfg(target_os = "macos")]
+fn is_broken_launch_agent(plist: &Path) -> bool {
+    let valid = std::process::Command::new("plutil")
+        .args(["-lint", "-s"])
+        .arg(plist)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !valid {
+        return true;
+    }
+
+    let read_value = |key: &str| {
+        std::process::Command::new("plutil")
+            .args(["-extract", key, "raw", "-o", "-"])
+            .arg(plist)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let Some(program) = read_value("Program").or_else(|| read_value("ProgramArguments.0")) else {
+        return true;
+    };
+
+    // 相对命令可能由 launchd 按 PATH 解析，无法仅凭文件系统路径证明损坏。
+    let program = Path::new(&program);
+    program.is_absolute()
+        && std::fs::symlink_metadata(program)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// `~/Library/Caches` 下已被更具体的目标认领的顶层目录。
@@ -698,6 +781,15 @@ const CLAIMED_USER_CACHE_DIRS: &[&str] = &[
     "Chromium",
     "com.operasoftware.Opera",
     "com.vivaldi.Vivaldi",
+    // ---- 明确可重建的包管理/编译缓存 ----
+    "bun",
+    "go-build",
+    "go",
+    "gopls",
+    "goimports",
+    "node-gyp",
+    "pip",
+    "typescript",
     // ---- LOCAL_AGENT_DIRS 里的目录名，避免与 AiAgents 双算 ----
     "claude-cli-nodejs",
     "amp",
@@ -731,10 +823,14 @@ fn push_user_cache_targets(t: &mut Vec<ScanTarget>, cache: &Path) {
         if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
-        t.push(target(
+        // `~/Library/Caches` 是约定上的缓存位置，但第三方软件并不总遵守：
+        // JetBrains 在这里放 LocalHistory/fileHistory，ms-playwright 也可能放
+        // 带登录态的 MCP 浏览器 Profile。未知目录只展示，不能默认勾选。
+        t.push(target_with_recommendation(
             entry.path(),
             format!("~/Library/Caches/{name}"),
             CategoryId::UserTemp,
+            false,
         ));
     }
 }
@@ -917,7 +1013,7 @@ fn push_external_volume_trashes(t: &mut Vec<ScanTarget>) {
 /// Chromium 系浏览器在 `~/Library/Application Support` 下的缓存子目录。
 ///
 /// Chrome / Arc / Brave / Edge 等都基于 Chromium，缓存布局一致：
-/// `<UserDataDir>/<Profile>/Code Cache`、`GPUCache`、`Service Worker/CacheStorage` 等。
+/// `<UserDataDir>/<Profile>/Code Cache`、`GPUCache`、着色器缓存等。
 /// 这些不在 `~/Library/Caches` 下，需要单独发现。
 #[cfg(target_os = "macos")]
 fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_support: &Path) {
@@ -972,18 +1068,8 @@ fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_support: &Path) 
                 }
             }
 
-            // Service Worker CacheStorage
-            let sw_cache = path.join("Service Worker/CacheStorage");
-            if sw_cache.is_dir() {
-                t.push(target(
-                    sw_cache,
-                    Text::new(
-                        format!("{name} · {profile_name} · Service Worker"),
-                        format!("{name} · {profile_name} · Service Worker"),
-                    ),
-                    CategoryId::BrowserCache,
-                ));
-            }
+            // Service Worker/CacheStorage 可能承载网站离线数据，不能当作普通
+            // HTTP/代码缓存清理。
         }
 
         // Crashpad 已完成的崩溃报告
@@ -1063,7 +1149,9 @@ fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) {
         // Caches 子目录
         let caches = group_dir.join("Library/Caches");
         if caches.is_dir() {
-            t.push(target(
+            // App Group 标识经常不含产品名，靠关键词黑名单无法可靠识别
+            // 密码管理器、同步工具等敏感应用，因此只展示、不默认清理。
+            t.push(target_with_recommendation(
                 caches,
                 Text::new(
                     format!("组容器缓存 · {}", entry.file_name().to_string_lossy()),
@@ -1073,6 +1161,7 @@ fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) {
                     ),
                 ),
                 CategoryId::UserTemp,
+                false,
             ));
         }
         // tmp 子目录
@@ -1103,34 +1192,6 @@ fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) {
                     ),
                 ),
                 CategoryId::Logs,
-            ));
-        }
-    }
-}
-
-/// `~/Downloads` 下的不完整下载文件。
-///
-/// 浏览器下载中断后会留下 `.download`（Safari）、`.crdownload`（Chrome）、
-/// `.part`（Firefox）等临时文件，可安全删除。
-#[cfg(target_os = "macos")]
-fn push_incomplete_downloads(t: &mut Vec<ScanTarget>, home: &Path) {
-    let downloads = home.join("Downloads");
-    if !downloads.is_dir() {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(&downloads) else {
-        return;
-    };
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".download") || name.ends_with(".crdownload") || name.ends_with(".part") {
-            t.push(target(
-                entry.path(),
-                Text::new(
-                    format!("不完整下载 · {name}"),
-                    format!("Incomplete Download · {name}"),
-                ),
-                CategoryId::UserTemp,
             ));
         }
     }
@@ -1198,7 +1259,7 @@ fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
                         format!(".DS_Store · ~/{dir}"),
                         format!(".DS_Store · ~/{dir}"),
                     ),
-                    CategoryId::UserTemp,
+                    CategoryId::UserCache,
                 ));
             }
             // 子目录里的 .DS_Store（只下一层，不做深度遍历）
@@ -1211,7 +1272,7 @@ fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
                             format!(".DS_Store · ~/{dir}/{name}"),
                             format!(".DS_Store · ~/{dir}/{name}"),
                         ),
-                        CategoryId::UserTemp,
+                        CategoryId::UserCache,
                     ));
                 }
             }
@@ -1511,10 +1572,11 @@ fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, home: &Path, local: &Path, roa
     // ---- CLI 型 agent ----
     for (dir, label, subs) in CLI_AGENTS {
         for sub in *subs {
-            t.push(target(
+            t.push(target_with_recommendation(
                 home.join(dir).join(sub),
                 format!("{label} · {sub}"),
                 AGENT,
+                matches!(*sub, "cache" | "log" | "logs" | "observability"),
             ));
         }
     }
@@ -1522,10 +1584,14 @@ fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, home: &Path, local: &Path, roa
     // ---- Electron / VS Code 系应用 ----
     for app in ROAMING_AGENT_APPS {
         for cache in ELECTRON_CACHE_DIRS {
-            t.push(target(
+            t.push(target_with_recommendation(
                 roaming.join(app).join(cache),
                 format!("{app} · {cache}"),
                 AGENT,
+                // CachedProfilesData 可能保存本地唯一的编辑器 Profile，
+                // blob_storage 也可能承载未保存的附件或草稿。两者继续展示，
+                // 但不能默认勾选。
+                !matches!(*cache, "CachedProfilesData" | "blob_storage"),
             ));
         }
     }
@@ -1536,13 +1602,48 @@ fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, home: &Path, local: &Path, roa
             t.push(target(local.join(dir), Text::new(*zh, *en), AGENT));
         } else {
             for sub in *subs {
-                t.push(target(
+                t.push(target_with_recommendation(
                     local.join(dir).join(sub),
                     Text::new(format!("{zh} · {sub}"), format!("{en} · {sub}")),
                     AGENT,
+                    true,
                 ));
             }
         }
+    }
+
+    // 明确限定到可重建叶子，避免把整个工具状态目录当缓存清掉。
+    t.push(target_with_recommendation(
+        home.join(".grok/logs"),
+        Text::new("Grok · 日志", "Grok · logs"),
+        AGENT,
+        true,
+    ));
+    t.push(target_with_recommendation(
+        roaming.join("Zed/node/cache"),
+        Text::new("Zed · npm 缓存", "Zed · npm cache"),
+        AGENT,
+        true,
+    ));
+    t.push(target_with_recommendation(
+        roaming.join("Zed/languages"),
+        Text::new("Zed · LSP 语言服务器", "Zed · LSP language servers"),
+        AGENT,
+        false,
+    ));
+    let zed_node = roaming.join("Zed/node");
+    for version in std::fs::read_dir(&zed_node).into_iter().flatten().flatten() {
+        if !version.file_name().to_string_lossy().starts_with("node-v")
+            || !version.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        t.push(target_with_recommendation(
+            version.path().join("cache"),
+            Text::new("Zed · npm 缓存", "Zed · npm cache"),
+            AGENT,
+            true,
+        ));
     }
 
     // ---- VS Code 系 AI 插件的全局存储 ----
@@ -1572,6 +1673,117 @@ fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, home: &Path, local: &Path, roa
             ));
         }
     }
+
+    push_obsolete_vscode_extensions(t, home);
+    push_orphaned_editor_workspaces(t, home, roaming);
+}
+
+/// 只报告已明确指向“用户主目录下不存在文件夹”的本地工作区。
+/// 远程 URI、外接盘和含百分号编码的 URI 都跳过，避免把暂时离线的项目误报。
+fn push_orphaned_editor_workspaces(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path) {
+    for host in VSCODE_HOSTS {
+        let root = roaming.join(host).join("User/workspaceStorage");
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(entry.path().join("workspace.json")) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                continue;
+            };
+            let Some(uri) = value.get("folder").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(raw_path) = uri.strip_prefix("file://") else {
+                continue;
+            };
+            if raw_path.contains('%') {
+                continue;
+            }
+            let project = Path::new(raw_path);
+            if !project.starts_with(home) || project.exists() {
+                continue;
+            }
+            t.push(target_with_recommendation(
+                entry.path(),
+                Text::new(
+                    format!("孤立工作区 · {host} · {}", project.display()),
+                    format!("Orphaned workspace · {host} · {}", project.display()),
+                ),
+                CategoryId::DevBuild,
+                false,
+            ));
+        }
+    }
+}
+
+/// VS Code 自己写入 `.obsolete` 的扩展版本已退出当前扩展集合，可以删除。
+/// 只信任清单中的单段目录名，并要求目录仍实际存在，避免把 JSON 内容当路径。
+fn push_obsolete_vscode_extensions(t: &mut Vec<ScanTarget>, home: &Path) {
+    let root = home.join(".vscode/extensions");
+    let Ok(bytes) = std::fs::read(root.join(".obsolete")) else {
+        return;
+    };
+    let Ok(serde_json::Value::Object(entries)) = serde_json::from_slice(&bytes) else {
+        return;
+    };
+    for (name, obsolete) in entries {
+        if obsolete != serde_json::Value::Bool(true)
+            || !matches!(
+                Path::new(&name).components().collect::<Vec<_>>().as_slice(),
+                [std::path::Component::Normal(_)]
+            )
+        {
+            continue;
+        }
+        let path = root.join(&name);
+        if !std::fs::symlink_metadata(&path).is_ok_and(|md| md.is_dir() && !md.is_symlink()) {
+            continue;
+        }
+        t.push(target_with_recommendation(
+            path,
+            Text::new(
+                format!("过期 VS Code 扩展 · {name}"),
+                format!("Obsolete VS Code extension · {name}"),
+            ),
+            CategoryId::DevBuild,
+            true,
+        ));
+    }
+}
+
+/// 展开 `~/.cache`，避免一个宽泛父目录掩盖子项目的不同安全级别。
+fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+    let root = home.join(".cache");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "opencode" {
+            t.push(target_with_recommendation(
+                entry.path(),
+                Text::new("OpenCode · 缓存", "OpenCode · cache"),
+                CategoryId::AiAgents,
+                true,
+            ));
+        } else {
+            t.push(target_with_recommendation(
+                entry.path(),
+                format!("~/.cache/{name}"),
+                CategoryId::UserTemp,
+                false,
+            ));
+        }
+    }
 }
 
 /// 构造一个扫描目标。
@@ -1580,10 +1792,21 @@ fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, home: &Path, local: &Path, roa
 /// （路径、`%TEMP%`、品牌名这类中英一致的标签占大多数），需要区分语言的
 /// 用 `Text::new(zh, en)` 显式传。
 fn target(path: PathBuf, label: impl Into<Text>, category: CategoryId) -> ScanTarget {
+    let recommended = category.default_selected();
+    target_with_recommendation(path, label, category, recommended)
+}
+
+fn target_with_recommendation(
+    path: PathBuf,
+    label: impl Into<Text>,
+    category: CategoryId,
+    recommended: bool,
+) -> ScanTarget {
     ScanTarget {
         path,
         label: label.into(),
         category,
+        recommended,
     }
 }
 
@@ -1604,11 +1827,17 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn targets_do_not_nest() {
         let targets = all_targets();
-        for a in &targets {
-            for b in &targets {
-                if a.path == b.path {
+        for (a_idx, a) in targets.iter().enumerate() {
+            for (b_idx, b) in targets.iter().enumerate() {
+                if a_idx == b_idx {
                     continue;
                 }
+                assert_ne!(
+                    a.path,
+                    b.path,
+                    "{} 被多个规则重复归类，体积会被重复计算",
+                    a.path.display()
+                );
                 assert!(
                     !b.path.starts_with(&a.path),
                     "{} 嵌套在 {} 里，体积会被重复计算",
@@ -1657,7 +1886,7 @@ mod tests {
         ];
 
         for t in &targets {
-            if !t.category.default_selected() {
+            if !t.recommended {
                 continue;
             }
             let path = t.path.to_string_lossy();
@@ -1736,6 +1965,132 @@ mod tests {
     }
 
     #[test]
+    fn ai_agent_recommendations_are_decided_per_target() {
+        let root = std::env::temp_dir().join(format!("qc_agent_rules_{}", std::process::id()));
+        let home = root.join("home");
+        let local = root.join("local");
+        let roaming = root.join("roaming");
+        let mut targets = Vec::new();
+
+        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
+
+        let claude_cache = home.join(".claude/cache");
+        let claude_projects = home.join(".claude/projects");
+        let cursor_cache = roaming.join("Cursor/Cache");
+        let cursor_profiles = roaming.join("Cursor/CachedProfilesData");
+        let cursor_blobs = roaming.join("Cursor/blob_storage");
+        assert!(targets
+            .iter()
+            .any(|target| target.path == claude_cache && target.recommended));
+        assert!(targets
+            .iter()
+            .any(|target| target.path == cursor_cache && target.recommended));
+        assert!(targets
+            .iter()
+            .any(|target| target.path == claude_projects && !target.recommended));
+        for path in [cursor_profiles, cursor_blobs] {
+            assert!(targets
+                .iter()
+                .any(|target| target.path == path && !target.recommended));
+        }
+    }
+
+    #[test]
+    fn only_vscode_declared_obsolete_extensions_are_recommended() {
+        let root = std::env::temp_dir().join(format!("qc_obsolete_ext_{}", std::process::id()));
+        let extensions = root.join(".vscode/extensions");
+        let old = extensions.join("example.tool-1.0.0");
+        let current = extensions.join("example.tool-2.0.0");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            extensions.join(".obsolete"),
+            r#"{"example.tool-1.0.0":true,"example.tool-2.0.0":false,"../escape":true}"#,
+        )
+        .unwrap();
+        let mut targets = Vec::new();
+
+        push_obsolete_vscode_extensions(&mut targets, &root);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, old);
+        assert!(targets[0].recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unknown_and_group_container_caches_require_manual_selection() {
+        let root = std::env::temp_dir().join(format!("qc_ambiguous_cache_{}", std::process::id()));
+        let cache = root.join("Library/Caches");
+        let group_cache =
+            root.join("Library/Group Containers/TEAM.password-manager/Library/Caches");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(cache.join("JetBrains")).unwrap();
+        std::fs::create_dir_all(cache.join("ms-playwright")).unwrap();
+        std::fs::create_dir_all(&group_cache).unwrap();
+        let mut targets = Vec::new();
+
+        push_user_cache_targets(&mut targets, &cache);
+        push_group_container_caches(&mut targets, &root);
+
+        for path in [
+            cache.join("JetBrains"),
+            cache.join("ms-playwright"),
+            group_cache,
+        ] {
+            let target = targets
+                .iter()
+                .find(|target| target.path == path)
+                .expect("含糊缓存仍应展示给用户");
+            assert!(!target.recommended);
+            assert_eq!(target.category, CategoryId::UserTemp);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn broken_launch_agent_requires_conclusive_evidence() {
+        let root = std::env::temp_dir().join("qc_broken_launch_agent_tests");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let write = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, body).unwrap();
+            path
+        };
+        let plist = |entry: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>{entry}</dict></plist>"#
+            )
+        };
+
+        let valid = write(
+            "valid.plist",
+            &plist("<key>Program</key><string>/bin/launchctl</string>"),
+        );
+        let missing = write(
+            "missing.plist",
+            &plist("<key>Program</key><string>/definitely/missing/quick-cleaner</string>"),
+        );
+        let relative = write(
+            "relative.plist",
+            &plist("<key>ProgramArguments</key><array><string>tool-on-path</string></array>"),
+        );
+        let empty = write("empty.plist", &plist(""));
+
+        assert!(!is_broken_launch_agent(&valid));
+        assert!(is_broken_launch_agent(&missing));
+        assert!(!is_broken_launch_agent(&relative));
+        assert!(is_broken_launch_agent(&empty));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn all_targets_are_absolute_and_categorised() {
         for t in all_targets() {
             // tmutil:// 虚拟路径（APFS 本地快照）不是文件系统路径，跳过绝对路径检查
@@ -1774,8 +2129,13 @@ mod tests {
     #[test]
     fn every_target_has_cleanable_contents() {
         for t in all_targets() {
-            if t.category == CategoryId::RecycleBin {
-                continue; // 回收站走 SHEmptyRecycleBin 特殊通道
+            if matches!(
+                t.category,
+                CategoryId::RecycleBin | CategoryId::BrokenLoginItems
+            ) {
+                // 废纸篓和损坏登录项都走平台专用通道；后者对 /Library 下的
+                // 系统级 plist 使用 Finder 授权移入废纸篓。
+                continue;
             }
             let probe = t.path.join("__probe__");
             assert!(
