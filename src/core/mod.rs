@@ -25,7 +25,7 @@ pub use cleaner::{
 };
 pub use disk::{DirUsage, DiskSelectionState, Node, ScanResult, VolumeId};
 pub use i18n::Language;
-pub use model::{commas, fmt_size, fmt_size_si, truncate, Check};
+pub use model::{commas, fmt_size, truncate, Check};
 pub use safety::{is_protected, is_system_root_dir};
 pub use scanner::{scan_all, CategorySummary, ScanItem};
 pub use settings::Settings;

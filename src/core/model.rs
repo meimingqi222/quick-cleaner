@@ -23,36 +23,20 @@ impl Check {
     }
 }
 
-/// 格式化字节大小为可读字符串（KB, MB, GB）
+/// 格式化字节大小为可读字符串（KB, MB, GB, TB）
 ///
-/// 使用 1024 进制（KiB/MiB/GiB），适合文件/目录大小显示。
+/// 进制按平台对齐系统显示标准：
+///   - Windows 资源管理器用 1024 进制（KiB/MiB/GiB），自 Windows 95 起未变
+///   - macOS Finder / 储存空间用 1000 进制（SI），自 10.6 Snow Leopard 起改用
+///
+/// 调用方无需关心平台差异，统一调 `fmt_size` 即可。
 pub fn fmt_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.0} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-/// 格式化字节大小为可读字符串（KB, MB, GB），使用 1000 进制。
-///
-/// macOS / CleanMyMac / Finder 以及磁盘制造商都使用 1000 进制（SI）
-/// 显示磁盘容量。磁盘透镜的总容量/已用/空闲用它显示，
-/// 才能和系统「关于本机 → 储存空间」以及 CleanMyMac 对齐。
-pub fn fmt_size_si(bytes: u64) -> String {
-    const KB: f64 = 1000.0;
-    const MB: f64 = KB * 1000.0;
-    const GB: f64 = MB * 1000.0;
-    const TB: f64 = GB * 1000.0;
+    // cfg!() 在编译时求值，整个 if 会在 const eval 阶段折叠为常量。
+    const BASE: f64 = if cfg!(windows) { 1024.0 } else { 1000.0 };
+    const KB: f64 = BASE;
+    const MB: f64 = KB * BASE;
+    const GB: f64 = MB * BASE;
+    const TB: f64 = GB * BASE;
 
     let b = bytes as f64;
     if b >= TB {

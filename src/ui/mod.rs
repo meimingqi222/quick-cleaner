@@ -17,7 +17,7 @@ use crate::core::cleaner::{
 };
 use crate::core::disk::{DiskSelectionState, Node, ScanResult, VolumeId};
 use crate::core::i18n::{bilingual, Language, Text};
-use crate::core::model::{fmt_size, fmt_size_si, Check};
+use crate::core::model::{fmt_size, Check};
 use crate::core::safety::is_protected;
 #[cfg(windows)]
 use crate::core::scanner::dominant_volume;
@@ -869,11 +869,10 @@ impl Root {
                     Ok(s) => {
                         // 磁盘总占用用 statfs 的「总量-空闲」，不用 SizeTree 累加。
                         // APFS 快照/克隆/硬链接会导致「所有文件大小相加」超过物理容量。
-                        // 使用 1000 进制（SI）与 macOS / CleanMyMac 对齐。
                         let used = this
                             .disk
                             .space
-                            .map(|(total, free)| fmt_size_si(total - free))
+                            .map(|(total, free)| fmt_size(total - free))
                             .unwrap_or_else(|| fmt_size(s.total_size));
                         let files = s.file_count;
                         this.status = bilingual(|l| tr_status_disk_done(l, files, &used));

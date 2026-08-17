@@ -3,7 +3,7 @@
 use super::disk_components::{render_breakdown_row, BreakdownItem};
 use crate::core::disk::{Node, ScanResult, SizeTree, VolumeId};
 use crate::core::i18n::Language;
-use crate::core::model::{fmt_size, fmt_size_si, truncate, Check};
+use crate::core::model::{fmt_size, truncate, Check};
 use crate::platform::get_volume_space;
 use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
@@ -104,10 +104,10 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     let used = tot.saturating_sub(fre);
                     match lang {
                         Language::Zh => {
-                            format!("已用 {} / 共 {}", fmt_size_si(used), fmt_size_si(tot))
+                            format!("已用 {} / 共 {}", fmt_size(used), fmt_size(tot))
                         }
                         Language::En => {
-                            format!("Used {} / Total {}", fmt_size_si(used), fmt_size_si(tot))
+                            format!("Used {} / Total {}", fmt_size(used), fmt_size(tot))
                         }
                     }
                 } else {
@@ -527,9 +527,9 @@ fn breakdown_for_tree(
         let used = tot.saturating_sub(fre);
         let used_pct = ((used as f64 / tot.max(1) as f64) * 100.0).round() as u64;
 
-        // 磁盘总容量/已用/空闲用 1000 进制（SI）显示，与 CleanMyMac / Finder 对齐
-        let used_str = fmt_size_si(used);
-        let fre_str = fmt_size_si(fre);
+        // 磁盘总容量/已用/空闲统一用 1024 进制，与文件/目录大小口径一致
+        let used_str = fmt_size(used);
+        let fre_str = fmt_size(fre);
 
         let mut items = Vec::new();
         let mut top_sum = 0u64;
@@ -793,8 +793,8 @@ fn render_left_lens_pane(root: &Root, scan: &ScanResult, cx: &mut Context<Root>)
 
     let total_cap_str = if let Some((tot, _)) = root.disk.space {
         match lang {
-            Language::Zh => format!("{} 总容量", fmt_size_si(tot)),
-            Language::En => format!("{} Total", fmt_size_si(tot)),
+            Language::Zh => format!("{} 总容量", fmt_size(tot)),
+            Language::En => format!("{} Total", fmt_size(tot)),
         }
     } else {
         match lang {
