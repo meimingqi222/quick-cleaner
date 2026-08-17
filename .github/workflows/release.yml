@@ -19,7 +19,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-and-release:
+  build-windows:
     name: Build & Release (Windows x86_64)
     runs-on: windows-latest
 
@@ -32,6 +32,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # gpui 0.2.2 在 release 模式下用 fxc.exe 编译 HLSL 着色器。
+      # windows-latest 自带 Windows SDK，但 fxc.exe 不一定在 PATH 中，
+      # 且 gpui build.rs 硬编码的 SDK 版本号 (10.0.26100.0) 不一定匹配。
+      # 这里主动搜索本机最新的 fxc.exe 并通过 GPUI_FXC_PATH 传给 gpui。
+      - name: Locate fxc.exe for gpui shader compilation
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Filter "fxc.exe" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq "x64" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $fxc) {
+            throw "未找到 fxc.exe，请确认 windows-latest 镜像已安装 Windows SDK"
+          }
+          Write-Host "找到 fxc.exe: $($fxc.FullName)"
+          "GPUI_FXC_PATH=$($fxc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build release binaries
         run: cargo build --release
 
@@ -40,29 +58,92 @@ jobs:
         run: |
           $distDir = "dist/quick-cleaner-windows-x86_64"
           New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-          
+
           # 只发 GUI 主程序；mftscan 是开发期的 MFT 校验 CLI，不进发行包
           Copy-Item "target/release/quick-cleaner.exe" "$distDir/"
-          
+
           # 拷贝双语说明与开源协议
           if (Test-Path "README.md") { Copy-Item "README.md" "$distDir/" }
           if (Test-Path "README_zh.md") { Copy-Item "README_zh.md" "$distDir/" }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$distDir/" }
-          
+
           # 压缩
           Compress-Archive -Path "$distDir/*" -DestinationPath "dist/quick-cleaner-windows-x86_64.zip" -Force
-          
+
           # SHA256 校验和
           $hash = (Get-FileHash -Path "dist/quick-cleaner-windows-x86_64.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  quick-cleaner-windows-x86_64.zip" | Out-File -Encoding utf8 "dist/quick-cleaner-windows-x86_64.zip.sha256"
 
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            dist/quick-cleaner-windows-x86_64.zip
+            dist/quick-cleaner-windows-x86_64.zip.sha256
+          retention-days: 7
+
+  build-macos:
+    name: Build & Release (macOS x86_64)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Package macOS distribution
+        run: |
+          chmod +x scripts/package-macos.sh
+          ./scripts/package-macos.sh dist
+
+          # 将 .app bundle 压缩为 zip
+          cd dist
+          zip -r -y quick-cleaner-macos-x86_64.zip QuickCleaner.app
+
+          # SHA256 校验和
+          shasum -a 256 quick-cleaner-macos-x86_64.zip | awk '{print $1"  quick-cleaner-macos-x86_64.zip"}' > quick-cleaner-macos-x86_64.zip.sha256
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: |
+            dist/quick-cleaner-macos-x86_64.zip
+            dist/quick-cleaner-macos-x86_64.zip.sha256
+          retention-days: 7
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact directories
+        run: |
+          find dist -name "*.zip" -exec mv {} dist/ \;
+          find dist -name "*.sha256" -exec mv {} dist/ \;
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/quick-cleaner-windows-x86_64.zip
             dist/quick-cleaner-windows-x86_64.zip.sha256
+            dist/quick-cleaner-macos-x86_64.zip
+            dist/quick-cleaner-macos-x86_64.zip.sha256
           generate_release_notes: true
           draft: false
           prerelease: false

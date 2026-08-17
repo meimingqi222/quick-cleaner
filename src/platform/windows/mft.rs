@@ -1377,7 +1377,7 @@ mod tests {
         for (i, fc) in [(5, 3u64), (6, 1), (7, 2), (9, 1)] {
             dir_files[i] = fc;
         }
-        build_tree('C', entries, dir_size, dir_files)
+        build_tree(VolumeId::from_drive_letter('C'), entries, dir_size, dir_files)
     }
 
     #[test]
@@ -1555,7 +1555,7 @@ mod tests {
         let mut dir_files = vec![0u64; 16];
         dir_size[5] = 4_064_100_000;
         dir_files[5] = 4;
-        let t = build_tree('C', entries, dir_size, dir_files);
+        let t = build_tree(VolumeId::from_drive_letter('C'), entries, dir_size, dir_files);
 
         // 验证根目录下过滤掉了 $MFT, $LogFile, $Extend，只保留 MyData
         let kids = t.children(t.root());

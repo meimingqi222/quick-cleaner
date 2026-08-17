@@ -290,9 +290,13 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
     }
 
     #[cfg(windows)]
-    for vol in crate::platform::windows::volume::list_ntfs_volumes() {
-        for name in CODE_ROOT_NAMES {
-            roots.push((PathBuf::from(format!(r"{vol}:\{name}")), NAMED_ROOT_DEPTH));
+    for vol in crate::platform::windows::volume::list_volumes() {
+        // VolumeId 的 Display 是 "C:"（带冒号），直接拼会得到 "C::\name"。
+        // 取盘符再拼才是正确的 "C:\name"。
+        if let Some(letter) = vol.drive_letter() {
+            for name in CODE_ROOT_NAMES {
+                roots.push((PathBuf::from(format!(r"{letter}:\{name}")), NAMED_ROOT_DEPTH));
+            }
         }
     }
 
@@ -421,7 +425,7 @@ fn discover_via_mft(
             break;
         }
         // 阶段一预解析过的那个卷直接接手，别再解析一遍
-        let scan = if prescanned.as_ref().is_some_and(|s| &s.volume == &vol) {
+        let scan = if prescanned.as_ref().is_some_and(|s| s.volume == vol) {
             match prescanned.take() {
                 Some(s) => {
                     crate::log!("卷 {vol}: 复用阶段一已解析的 MFT 树，省去一次全盘解析");
