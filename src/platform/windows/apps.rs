@@ -6,6 +6,7 @@ use crate::core::apps::{
 use crate::core::safety::is_system_root_dir;
 use crate::platform::windows::registry::{from_wide, read_reg_dword, read_reg_string, to_wide};
 use rayon::prelude::*;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -774,17 +775,55 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
 }
 
 /// 在 Windows 资源管理器中打开指定目录或定位高亮指定文件
+///
+/// 文件定位优先走 Shell API `SHOpenFolderAndSelectItems`。老实现用
+/// `explorer /select,<path>` 命令行，而路径带空格时 std Command 会把整个参数
+/// 加引号（`"/select,C:\my files\x.jpg"`），explorer 把整个 token 当成一个
+/// 不存在的文件夹，回退打开默认位置（文档）——表现为「定位总是打开文档目录」。
+/// PIDL 走 COM 接口，没有命令行解析，天然免疫。
 pub fn reveal_in_explorer(path: &std::path::Path) {
     if !path.exists() {
         return;
     }
     if path.is_dir() {
         let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
-    } else {
-        let _ = std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
+        return;
     }
+    // 直接编码原始 UTF-16，不走 to_string_lossy（非 UTF-8 文件名会丢字节）
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: wide 以 NUL 结尾且活到调用结束。ILCreateFromPathW 返回的 PIDL
+    // 由 COM 任务分配器分配，用完必须 CoTaskMemFree 释放。
+    let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
+    if !pidl.is_null() {
+        // SAFETY: pidl 指向文件本身的 PIDL。传 cidl=0 表示在父文件夹中选中
+        // pidl 指向的项——传 1 + null apidl 是 UB（原实现的 bug）。
+        unsafe {
+            winapi::um::shlobj::SHOpenFolderAndSelectItems(
+                pidl,
+                0,
+                std::ptr::null(),
+                0,
+            );
+            winapi::um::combaseapi::CoTaskMemFree(pidl as *mut _);
+        }
+        return;
+    }
+    // PIDL 创建失败（典型：路径超 MAX_PATH）退回命令行方案
+    let _ = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{}", path.display()))
+        .spawn();
+}
+
+// winapi 0.3 没绑定 ILCreateFromPathW（它在 shlobj_core.h，winapi 的 shlobj
+// module 只覆盖了 SHGetFolderPath 一族）。这里手动声明，签名与 SDK 一致：
+//   PIDLIST_ABSOLUTE ILCreateFromPathW(LPCWSTR pszPath);
+// 返回值是 COM 分配的 ITEMIDLIST 指针，失败返回 NULL。
+extern "system" {
+    fn ILCreateFromPathW(pszpath: winapi::um::winnt::LPCWSTR) -> *mut winapi::um::shtypes::ITEMIDLIST;
 }
 
 /// 使用系统默认程序打开文件或目录

@@ -112,6 +112,8 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
 
     // 2. 并行提取真实尺寸与感知哈希 (dHash)
     // size 和 mtime 已从索引获取，无需再调 std::fs::metadata。
+    // 关键：dimensions 与 dual_hash 共用一次 image::open——之前各调一次，
+    // 968 张图就是 1936 次完整 JPEG/PNG 解码，合并后砍掉一半解码开销。
     let candidates: Vec<PhotoCandidate> = candidates_with_meta
         .into_par_iter()
         .filter_map(|(path, size, mtime)| {
@@ -119,8 +121,17 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
                 return None;
             }
 
-            let dims = image::image_dimensions(&path).unwrap_or_else(|_| estimate_dimensions(size));
-            let dual_hash = compute_dual_hash(&path);
+            let (dims, dual_hash) = match image::open(&path) {
+                Ok(img) => ((img.width(), img.height()), compute_dual_hash_from_image(&img)),
+                Err(_) => (estimate_dimensions(size), None),
+            };
+
+            let stem_lower = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let parent = path.parent().map(|p| p.to_path_buf());
 
             Some(PhotoCandidate {
                 path,
@@ -128,6 +139,8 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
                 mtime,
                 dimensions: dims,
                 dual_hash,
+                stem_lower,
+                parent,
             })
         })
         .collect();
@@ -266,11 +279,18 @@ struct PhotoCandidate {
     mtime: u64,
     dimensions: (u32, u32),
     dual_hash: Option<(u64, u64)>, // (dHash, aHash)
+    /// 预计算的小写文件名（不含扩展名），供聚类比较复用。
+    /// 全互联聚类里每对候选都要比较 stem，之前每次 are_photos_similar
+    /// 都做 2-4 次 to_lowercase() 分配，968 张图就是上万次堆分配。
+    stem_lower: String,
+    /// 预计算的父目录，避免每次比较都调 path.parent()。
+    parent: Option<PathBuf>,
 }
 
 /// 计算双重感知指纹 (dHash 结构梯度 + aHash 空间明暗分布)
-fn compute_dual_hash(path: &Path) -> Option<(u64, u64)> {
-    let img = image::open(path).ok()?;
+///
+/// 接受已打开的 `&DynamicImage`，与 dimensions 提取共用一次解码。
+fn compute_dual_hash_from_image(img: &image::DynamicImage) -> Option<(u64, u64)> {
     let gray = img
         .resize_exact(9, 8, image::imageops::FilterType::Triangle)
         .to_luma8();
@@ -306,7 +326,7 @@ fn compute_dual_hash(path: &Path) -> Option<(u64, u64)> {
 
 /// 判断两张照片是否为真正的相似照片、连拍或同源变体
 fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
-    let same_dir = a.path.parent() == b.path.parent();
+    let same_dir = a.parent == b.parent;
 
     let (w1, h1) = a.dimensions;
     let (w2, h2) = b.dimensions;
@@ -318,22 +338,12 @@ fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
         false
     };
 
-    let stem_a = a
-        .path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let stem_b = b
-        .path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let is_burst = is_sequential_camera_name(&a.path, &b.path);
+    let stem_a = &a.stem_lower;
+    let stem_b = &b.stem_lower;
+    let is_burst = is_sequential_camera_name(stem_a, stem_b);
     let same_stem = !stem_a.is_empty()
         && !stem_b.is_empty()
-        && (stem_a == stem_b || stem_a.starts_with(&stem_b) || stem_b.starts_with(&stem_a));
+        && (stem_a == stem_b || stem_a.starts_with(stem_b) || stem_b.starts_with(stem_a));
 
     // 1. 双重感知哈希比较 (Dual Perceptual Hash)
     if let (Some((dh_a, ah_a)), Some((dh_b, ah_b))) = (a.dual_hash, b.dual_hash) {
@@ -368,19 +378,15 @@ fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
     false
 }
 
-fn is_sequential_camera_name(a: &Path, b: &Path) -> bool {
-    let stem_a = a.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let stem_b = b.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+fn is_sequential_camera_name(stem_a: &str, stem_b: &str) -> bool {
     if stem_a.is_empty() || stem_b.is_empty() {
         return false;
     }
 
     let prefixes = ["img_", "dsc_", "pxl_", "sam_", "dji_", "photo_"];
-    let lower_a = stem_a.to_lowercase();
-    let lower_b = stem_b.to_lowercase();
 
     for prefix in prefixes {
-        if lower_a.starts_with(prefix) && lower_b.starts_with(prefix) {
+        if stem_a.starts_with(prefix) && stem_b.starts_with(prefix) {
             return true;
         }
     }
