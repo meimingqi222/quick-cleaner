@@ -258,10 +258,14 @@ mod tests {
             "scan_volume_does_not_return_not_ntfs",
         );
 
-        let tmp = std::env::temp_dir();
+        let tmp = std::env::temp_dir().join("qc_test_scan_vol_isolated");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        std::fs::write(tmp.join("sub/test.bin"), b"12345").unwrap();
+
         let vol = VolumeId::from_mount_point(tmp.clone());
         let result = scan_volume(&vol, 0);
-        // 扫描可能因为权限问题部分失败，但不应返回 NotNtfs
+        // 扫描不应返回 NotNtfs
         assert!(
             !matches!(result, Err(ScanError::NotNtfs)),
             "scan_volume 不应返回 NotNtfs"
@@ -269,8 +273,9 @@ mod tests {
         if let Ok(scan) = result {
             assert!(
                 scan.file_count > 0 || scan.dir_count > 0,
-                "临时目录不应该是空的"
+                "测试目录不应该是空的"
             );
         }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

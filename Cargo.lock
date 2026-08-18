@@ -3430,6 +3430,7 @@ dependencies = [
  "dirs 5.0.1",
  "fsevent-sys",
  "gpui",
+ "image",
  "libc",
  "lz4_flex",
  "objc",

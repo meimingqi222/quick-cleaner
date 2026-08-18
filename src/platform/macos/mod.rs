@@ -13,7 +13,9 @@ pub mod tcc;
 pub mod trash;
 pub mod walk;
 
-pub use apps::{list_installed_apps, reveal_in_explorer, run_uninstaller_and_wait};
+pub use apps::{
+    list_installed_apps, open_in_default_app, reveal_in_explorer, run_uninstaller_and_wait,
+};
 pub use disk::{
     detect_system_language, get_volume_space, is_elevated, list_volumes,
     relaunch_as_admin_if_needed, scan_volume,

@@ -787,6 +787,17 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
     }
 }
 
+/// 使用系统默认程序打开文件或目录
+pub fn open_in_default_app(path: &std::path::Path) {
+    if !path.exists() {
+        return;
+    }
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", ""])
+        .arg(path)
+        .spawn();
+}
+
 /// 运行软件官方卸载向导并等待其退出
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
     let cmd = app

@@ -45,6 +45,7 @@ macro_rules! platform_contract {
             let _: fn(&[ResidualItem], &CleanProgress) -> CleanReport = clean_residuals;
             let _: fn(Vec<ResidualItem>) -> Vec<ResidualItem> = verify_residuals;
             let _: fn(&Path) = reveal_in_explorer;
+            let _: fn(&Path) = open_in_default_app;
         };
     };
 }
@@ -138,6 +139,8 @@ pub mod fallback {
     }
 
     pub fn reveal_in_explorer(_path: &Path) {}
+
+    pub fn open_in_default_app(_path: &Path) {}
 }
 
 #[cfg(all(not(windows), not(target_os = "macos")))]

@@ -156,7 +156,7 @@ pub struct LoadedIndex {
     pub last_event_id: u64,
 }
 
-const INDEX_VERSION: u32 = 4;
+const INDEX_VERSION: u32 = 5;
 
 /// 串行化索引写入，并记录本进程已落盘的最高 FSEvents 水位。异步保存可能
 /// 乱序完成，较旧结果绝不能在较新结果之后覆盖索引文件。
@@ -299,11 +299,13 @@ mod tests {
                     path: root.clone(),
                     is_dir: true,
                     size,
+                    mtime: 0,
                 },
                 TreeSnapshotEntry {
                     path: root.join("cache.bin"),
                     is_dir: false,
                     size,
+                    mtime: 0,
                 },
             ],
         );
@@ -337,16 +339,19 @@ mod tests {
                     path: root.clone(),
                     is_dir: true,
                     size: 4096,
+                    mtime: 0,
                 },
                 TreeSnapshotEntry {
                     path: root.join("project"),
                     is_dir: true,
                     size: 4096,
+                    mtime: 0,
                 },
                 TreeSnapshotEntry {
                     path: root.join("project").join("target.bin"),
                     is_dir: false,
                     size: 4096,
+                    mtime: 0,
                 },
             ],
         );

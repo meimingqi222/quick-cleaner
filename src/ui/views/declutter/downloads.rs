@@ -1,0 +1,406 @@
+//! 下载项整理视图 (Downloads View)
+
+use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::DeclutterTab;
+use crate::core::declutter::clean_declutter_items;
+use crate::core::i18n::Language;
+use crate::core::model::fmt_size;
+use crate::ui::components::controls::checkbox;
+use crate::ui::components::icons::{icon_badge, icon_downloads};
+use crate::ui::theme::*;
+use crate::ui::Root;
+use gpui::prelude::*;
+use gpui::{div, px, rgb, AnyElement, Context, SharedString};
+use std::path::PathBuf;
+
+pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
+    let state = &root.declutter;
+
+    let tab_nav = render_unified_nav_header(
+        DeclutterTab::Downloads,
+        match lang {
+            Language::Zh => "下载项整理",
+            Language::En => "Downloads",
+        },
+        lang,
+        cx,
+    );
+    let total_sel: u64 = state.total_downloads_cleanable();
+    let total_sel_count = state.download_items.iter().filter(|f| f.selected).count();
+
+    let rows: Vec<AnyElement> = if state.download_items.is_empty() {
+        vec![render_empty_state_card(
+            "📥",
+            match lang {
+                Language::Zh => "下载文件夹暂无可清理项",
+                Language::En => "No downloads found",
+            },
+            match lang {
+                Language::Zh => "您的 Downloads 文件夹中没有可识别的历史安装包或残留归档。",
+                Language::En => "No installer packages or archives found in Downloads.",
+            },
+        )]
+    } else {
+        state
+            .download_items
+            .iter()
+            .take(100)
+            .enumerate()
+            .map(|(idx, item)| {
+                let is_sel = item.selected;
+                let d_path = item.path.clone();
+                let d_name = item.filename.clone();
+
+                div()
+                    .id(SharedString::from(format!("down-row-{idx}")))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_6()
+                    .py_4()
+                    .border_b_1()
+                    .border_color(rgba(OUTLINE_VAR, 0.2))
+                    .when(is_sel, |d| d.bg(rgba(PRIMARY, 0.05)))
+                    .when(!is_sel, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            let x: f32 = event.position.x.into();
+                            let y: f32 = event.position.y.into();
+                            this.open_declutter_context_menu(d_path.clone(), d_name.clone(), x, y);
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("down-sel-{idx}")))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .cursor_pointer()
+                            .child(checkbox(if is_sel {
+                                crate::core::model::Check::On
+                            } else {
+                                crate::core::model::Check::Off
+                            }))
+                            .child(icon_badge(
+                                icon_downloads(0x0078d4, 18.),
+                                0xe0f2fe,
+                                0x0078d4,
+                                36.,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(rgb(TEXT))
+                                            .overflow_hidden()
+                                            .child(item.filename.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(OUTLINE))
+                                            .overflow_hidden()
+                                            .child(item.path.to_string_lossy().to_string()),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(f) = this.declutter.download_items.get_mut(idx) {
+                                    f.selected = !f.selected;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("btn-reveal-down-{idx}")))
+                                    .px_2()
+                                    .py(px(2.))
+                                    .rounded_md()
+                                    .bg(rgb(SURF_HIGH))
+                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(rgb(MUTED))
+                                    .cursor_pointer()
+                                    .child(match lang {
+                                        Language::Zh => "定位",
+                                        Language::En => "Reveal",
+                                    })
+                                    .on_click({
+                                        let p = item.path.clone();
+                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            crate::platform::reveal_in_explorer(&p);
+                                        })
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("btn-open-down-{idx}")))
+                                    .px_2()
+                                    .py(px(2.))
+                                    .rounded_md()
+                                    .bg(rgb(SURF_HIGH))
+                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(rgb(MUTED))
+                                    .cursor_pointer()
+                                    .child(match lang {
+                                        Language::Zh => "打开",
+                                        Language::En => "Open",
+                                    })
+                                    .on_click({
+                                        let p = item.path.clone();
+                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            crate::platform::open_in_default_app(&p);
+                                        })
+                                    }),
+                            )
+                            .child(
+                                div().w(px(60.)).flex().justify_center().child(
+                                    div()
+                                        .px_2()
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .bg(rgb(SURF_HIGH))
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(if lang == Language::Zh {
+                                            item.kind_zh
+                                        } else {
+                                            item.kind_en
+                                        }),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(90.))
+                                    .text_right()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(PRIMARY))
+                                    .child(fmt_size(item.size)),
+                            )
+                            .child(
+                                div()
+                                    .w(px(90.))
+                                    .text_right()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(item.downloaded_at_str.clone()),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    };
+
+    div()
+        .id("declutter-downloads-view")
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .id("declutter-downloads-scroll-inner")
+                .flex_1()
+                .min_h(px(0.))
+                .overflow_scroll()
+                .p_8()
+                .pb_8()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .child(tab_nav)
+                .child(
+                    div()
+                        .flex_none()
+                        .p_6()
+                        .rounded_xl()
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgba(OUTLINE_VAR, 0.4))
+                        .shadow_sm()
+                        .flex()
+                        .items_end()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_xl()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(match lang {
+                                            Language::Zh => "审查下载项",
+                                            Language::En => "Review Downloads",
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(match lang {
+                                            Language::Zh => "清理 Downloads 目录中残留的历史安装包、压缩归档与临时文件。",
+                                            Language::En => "Clean old DMG installers, archives and temp files from ~/Downloads.",
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xl()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(PRIMARY))
+                                .child(if lang == Language::Zh {
+                                    format!("{} 项", state.download_items.len())
+                                } else {
+                                    format!("{} items", state.download_items.len())
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .rounded_xl()
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgba(OUTLINE_VAR, 0.4))
+                        .shadow_sm()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .px_6()
+                                .py_3()
+                                .bg(rgb(SURF_LOW))
+                                .border_b_1()
+                                .border_color(rgba(OUTLINE_VAR, 0.25))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(OUTLINE))
+                                .child(div().flex_1().min_w(px(0.)).child(match lang {
+                                    Language::Zh => "文件名",
+                                    Language::En => "FILE NAME",
+                                }))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap_8()
+                                        .child(div().w(px(70.)).text_center().child(match lang {
+                                            Language::Zh => "类型",
+                                            Language::En => "KIND",
+                                        }))
+                                        .child(div().w(px(100.)).text_right().child(match lang {
+                                            Language::Zh => "大小",
+                                            Language::En => "SIZE",
+                                        }))
+                                        .child(div().w(px(100.)).text_right().child(match lang {
+                                            Language::Zh => "下载时间",
+                                            Language::En => "DOWNLOADED",
+                                        })),
+                                ),
+                        )
+                        .child(div().flex().flex_col().children(rows)),
+                ),
+        )
+        .child(
+            div()
+                .h(px(70.))
+                .flex_none()
+                .px_8()
+                .bg(rgb(CARD))
+                .border_t_1()
+                .border_color(rgba(OUTLINE_VAR, 0.35))
+                .shadow_md()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(rgb(TEXT))
+                        .child(if lang == Language::Zh {
+                            format!("已选 {} 个项目 • 释放 {}", total_sel_count, fmt_size(total_sel))
+                        } else {
+                            format!("{total_sel_count} items selected • {}", fmt_size(total_sel))
+                        }),
+                )
+                .child(
+                    div()
+                        .id("btn-remove-selected-downloads")
+                        .px_6()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(rgb(PRIMARY))
+                        .when(total_sel_count > 0, |d| {
+                            d.hover(|h| h.bg(rgb(PRIMARY_BRIGHT))).cursor_pointer()
+                        })
+                        .when(total_sel_count == 0, |d| d.opacity(0.4))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(ON_PRIMARY))
+                        .child(match lang {
+                            Language::Zh => "清理所选项 ›",
+                            Language::En => "Remove Selected ›",
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let paths_to_delete: Vec<PathBuf> = this
+                                .declutter
+                                .download_items
+                                .iter()
+                                .filter(|f| f.selected)
+                                .map(|f| f.path.clone())
+                                .collect();
+
+                            if !paths_to_delete.is_empty() {
+                                let report = clean_declutter_items(&paths_to_delete, true);
+                                this.declutter.download_items.retain(|f| !f.selected);
+                                this.status = crate::core::i18n::Text::new(
+                                    format!(
+                                        "已清理 {} 个下载项，释放 {}",
+                                        report.deleted_files,
+                                        fmt_size(report.freed_bytes)
+                                    ),
+                                    format!(
+                                        "Cleaned {} downloads, freed {}",
+                                        report.deleted_files,
+                                        fmt_size(report.freed_bytes)
+                                    ),
+                                );
+                                cx.notify();
+                            }
+                        })),
+                ),
+        )
+        .into_any_element()
+}

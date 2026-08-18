@@ -55,12 +55,16 @@ mod vtype {
 /// `ATTR_CMN_ERROR`：libc 没暴露，手动定义。
 const ATTR_CMN_ERROR: u32 = 0x20000000;
 
+/// `ATTR_CMN_MODTIME`：libc 没暴露，手动定义。
+const ATTR_CMN_MODTIME: u32 = 0x00000400;
+
 /// 单条目录条目的信息。
 struct DirEntry {
     name: String,
     is_dir: bool,
     is_reg: bool,
     size: u64,
+    mtime: u64,
 }
 
 /// 解析 `getattrlistbulk` 返回的缓冲区里的一条记录。
@@ -87,6 +91,7 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
     // 属性按 bit 值升序排列（见 getattrlist(2) man page 与计划文档 §5.1）：
     //   ATTR_CMN_NAME      = 0x00000001  (bit 0)
     //   ATTR_CMN_OBJTYPE   = 0x00000008  (bit 3)
+    //   ATTR_CMN_MODTIME   = 0x00000400  (bit 10)
     //   ATTR_CMN_ERROR     = 0x20000000  (bit 29)
     // 写反会静默拿到错误数值——尤其是带错误码的条目（权限被拒等），
     // 会把 NAME/OBJTYPE 读到错位的字节上，产生垃圾名和垃圾类型。
@@ -108,7 +113,15 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
         off += std::mem::size_of::<u32>();
     }
 
-    // ATTR_CMN_ERROR：u_int32_t 错误码，排在 NAME 和 OBJTYPE 之后
+    // ATTR_CMN_MODTIME：timespec（tv_sec + tv_nsec），各 8 字节
+    let mut mtime: u64 = 0;
+    if common & ATTR_CMN_MODTIME != 0 {
+        let tv_sec = std::ptr::read_unaligned(ptr.add(off) as *const i64);
+        mtime = tv_sec.max(0) as u64;
+        off += std::mem::size_of::<libc::timespec>();
+    }
+
+    // ATTR_CMN_ERROR：u_int32_t 错误码，排在 NAME、OBJTYPE、MODTIME 之后
     if common & ATTR_CMN_ERROR != 0 {
         off += std::mem::size_of::<u32>();
     }
@@ -129,6 +142,7 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
         is_dir: obj_type == vtype::VDIR,
         is_reg: obj_type == vtype::VREG,
         size,
+        mtime,
     })
 }
 
@@ -139,11 +153,12 @@ fn enumerate_dir(dir_fd: libc::c_int) -> Vec<DirEntry> {
     let mut entries = Vec::new();
     let mut buf = vec![0u8; BULK_BUF_SIZE];
 
-    // 构造 attrlist：请求 NAME、OBJTYPE、ALLOCSIZE
+    // 构造 attrlist：请求 NAME、MODTIME、OBJTYPE、ALLOCSIZE
     let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
     al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
     al.commonattr = libc::ATTR_CMN_RETURNED_ATTRS
         | libc::ATTR_CMN_NAME
+        | ATTR_CMN_MODTIME
         | ATTR_CMN_ERROR
         | libc::ATTR_CMN_OBJTYPE;
     al.fileattr = libc::ATTR_FILE_ALLOCSIZE;
@@ -255,6 +270,7 @@ struct RawEntry {
     name: String,
     is_dir: bool,
     size: u64, // 文件的大小，目录为 0
+    mtime: u64,
 }
 
 impl Collector {
@@ -326,6 +342,7 @@ fn scan_root_nthreads(
             name: label,
             is_dir: true,
             size: 0,
+            mtime: 0,
         });
         collector.dir_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -443,6 +460,7 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
                 name: entry.name.clone(),
                 is_dir: entry.is_dir,
                 size: if entry.is_dir { 0 } else { entry.size },
+                mtime: entry.mtime,
             });
         }
 
@@ -563,6 +581,7 @@ fn build_size_tree(volume: VolumeId, entries: Vec<RawEntry>) -> SizeTree {
             is_dir: e.is_dir,
             size: e.size,
             used: true,
+            mtime: e.mtime,
         });
     }
 
@@ -582,7 +601,10 @@ mod tests {
 
     #[test]
     fn scan_temp_dir() {
-        let tmp = std::env::temp_dir();
+        let tmp = std::env::temp_dir().join("qc_test_walk_scan_temp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        std::fs::write(tmp.join("a.txt"), b"123").unwrap();
         let vol = VolumeId::from_mount_point(tmp.clone());
         let live = AtomicBool::new(true);
         let result = scan_root(&tmp, vol, &live).expect("扫描临时目录应当成功");
@@ -591,15 +613,19 @@ mod tests {
             "临时目录不应该是空的"
         );
         assert!(result.elapsed_ms < 10_000, "扫描临时目录不该超过 10 秒");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn scan_cancellation() {
-        let tmp = std::env::temp_dir();
+        let tmp = std::env::temp_dir().join("qc_test_walk_cancel");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
         let vol = VolumeId::from_mount_point(tmp.clone());
         let live = AtomicBool::new(false); // 立即取消
         let result = scan_root(&tmp, vol, &live);
         assert!(result.is_err(), "取消的扫描应当返回错误");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 回归测试：`parse_bulk_entry` 在 `ATTR_CMN_ERROR` 被设置时，
@@ -699,6 +725,54 @@ mod tests {
         assert_eq!(entry.name, "readable.txt");
         assert!(entry.is_reg);
         assert_eq!(entry.size, 4096, "fileattr 中的 ALLOCSIZE 应当被读取");
+    }
+
+    /// 验证带 ATTR_CMN_MODTIME 的记录能正确解析 NAME、OBJTYPE、MODTIME、ALLOCSIZE。
+    #[test]
+    fn parse_bulk_entry_with_modtime() {
+        let name_bytes = b"photo.jpg";
+        let attrref_size = std::mem::size_of::<libc::attrreference_t>();
+        let attrset_size = std::mem::size_of::<libc::attribute_set_t>();
+        let timespec_size = std::mem::size_of::<libc::timespec>();
+
+        // 布局（属性按 bit 升序）：[u32 length] [attribute_set_t] [attrreference_t] [u32 objtype] [timespec] [i64 allocsize] [name\0]
+        let attrref_off = 4 + attrset_size;
+        let objtype_off = attrref_off + attrref_size;
+        let modtime_off = objtype_off + 4;
+        let alloc_size_off = modtime_off + timespec_size;
+        let name_start = alloc_size_off + 8;
+        let name_len = name_bytes.len() + 1;
+        let total_len = name_start + name_len;
+
+        let mut buf = vec![0u8; total_len];
+        buf[0..4].copy_from_slice(&(total_len as u32).to_ne_bytes());
+        // commonattr = NAME | OBJTYPE | MODTIME
+        buf[4..8].copy_from_slice(
+            &(libc::ATTR_CMN_NAME | libc::ATTR_CMN_OBJTYPE | ATTR_CMN_MODTIME).to_ne_bytes(),
+        );
+        // fileattr = ALLOCSIZE
+        buf[4 + 12..4 + 16].copy_from_slice(&libc::ATTR_FILE_ALLOCSIZE.to_ne_bytes());
+
+        // attrreference_t
+        let name_offset = (name_start - attrref_off) as i32;
+        buf[attrref_off..attrref_off + 4].copy_from_slice(&name_offset.to_ne_bytes());
+        buf[attrref_off + 4..attrref_off + 8].copy_from_slice(&(name_len as u32).to_ne_bytes());
+
+        // objtype = VREG
+        buf[objtype_off..objtype_off + 4].copy_from_slice(&vtype::VREG.to_ne_bytes());
+        // timespec: tv_sec = 1700000000, tv_nsec = 0
+        buf[modtime_off..modtime_off + 8].copy_from_slice(&1700000000i64.to_ne_bytes());
+        buf[modtime_off + 8..modtime_off + 16].copy_from_slice(&0i64.to_ne_bytes());
+        // allocsize = 8192
+        buf[alloc_size_off..alloc_size_off + 8].copy_from_slice(&8192i64.to_ne_bytes());
+        // name
+        buf[name_start..name_start + name_bytes.len()].copy_from_slice(name_bytes);
+
+        let entry = unsafe { parse_bulk_entry(buf.as_ptr()) }.expect("应当能解析出条目");
+        assert_eq!(entry.name, "photo.jpg");
+        assert!(entry.is_reg);
+        assert_eq!(entry.size, 8192);
+        assert_eq!(entry.mtime, 1700000000, "MODTIME 应当被正确解析");
     }
 
     /// 扫描真实的 `~/Library`（约 92 万文件，约 12 秒）。

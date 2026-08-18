@@ -190,12 +190,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         }
     };
 
-    // 底部 3 块快速入口卡片
+    // 底部 4 块快速入口卡片
     let quick_cards = div()
         .flex()
-        .gap_4()
+        .gap_3()
         .w_full()
-        .max_w(px(720.))
+        .max_w(px(860.))
         .child(
             card()
                 .id("quick-junk")
@@ -331,6 +331,46 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                     if this.disk.mft.is_none() && this.disk.error.is_none() && !this.disk.scanning {
                         this.start_mft_scan(cx);
                     }
+                    cx.notify();
+                })),
+        )
+        .child(
+            card()
+                .id("quick-declutter")
+                .flex_1()
+                .p_4()
+                .cursor_pointer()
+                .hover(|h| h.bg(rgb(SURF_LOW)))
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(icon_badge(
+                    icon_declutter(PRIMARY, 18.),
+                    PRIMARY_FIXED,
+                    PRIMARY,
+                    38.,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(TEXT))
+                                .child(match lang {
+                                    Language::Zh => "冗余整理",
+                                    Language::En => "Declutter",
+                                }),
+                        )
+                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(match lang {
+                            Language::Zh => "重复/大文件",
+                            Language::En => "Duplicates/Photos",
+                        })),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.view = View::Declutter;
                     cx.notify();
                 })),
         );

@@ -64,6 +64,53 @@ impl std::fmt::Display for VolumeId {
     }
 }
 
+/// 冗余整理时跳过的目录名（跨平台共享）。
+///
+/// 隐藏目录、构建产物、依赖缓存等不含用户内容，整理时不应进入。
+pub fn is_declutter_ignored_dir_name(name: &str) -> bool {
+    let s = name.to_lowercase();
+    // 排除所有隐藏目录（以 . 开头，如 .cache, .npm, .cargo, .gradle, .git, .vscode, .idea 等）
+    if s.starts_with('.') {
+        return true;
+    }
+    matches!(
+        s.as_str(),
+        "node_modules"
+            | "library"
+            | "appdata"
+            | "application data"
+            | "application support"
+            | "local settings"
+            | "target"
+            | "dist"
+            | "build"
+            | "out"
+            | "bin"
+            | "obj"
+            | "pkg"
+            | "vendor"
+            | "pods"
+            | "deriveddata"
+            | "bower_components"
+            | "venv"
+            | "env"
+            | "__pycache__"
+            | "cache"
+            | "caches"
+            | "temp"
+            | "tmp"
+            | "logs"
+            | "gems"
+            | "site-packages"
+            | "docs"
+            | "doc"
+            | "documentation"
+            | "manual"
+            | "sdk"
+            | "javadoc"
+    )
+}
+
 #[cfg(windows)]
 pub use crate::platform::windows::mft::{
     DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD as ROOT_NODE,
@@ -117,6 +164,8 @@ pub mod fallback {
         pub is_dir: bool,
         pub size: u64,
         pub used: bool,
+        /// 文件最后修改时间（Unix 秒），目录为 0。
+        pub mtime: u64,
     }
 
     /// 持久化索引使用的路径节点，适合测试和局部子树合并。
@@ -126,6 +175,9 @@ pub mod fallback {
         pub is_dir: bool,
         /// 文件为直接分配大小，目录为聚合后的实际占用。
         pub size: u64,
+        /// 文件最后修改时间（Unix 秒），目录为 0。
+        #[serde(default)]
+        pub mtime: u64,
     }
 
     /// 紧凑持久化节点：只保存父节点下标和名称，不重复保存完整路径。
@@ -136,6 +188,9 @@ pub mod fallback {
         pub is_dir: bool,
         pub size: u64,
         pub used: bool,
+        /// 文件最后修改时间（Unix 秒），目录为 0。
+        #[serde(default)]
+        pub mtime: u64,
     }
 
     impl Default for SizeTree {
@@ -156,6 +211,7 @@ pub mod fallback {
                     is_dir: true,
                     size: 0,
                     used: true,
+                    mtime: 0,
                 }],
                 dir_size: vec![0],
                 dir_files: vec![0],
@@ -194,6 +250,7 @@ pub mod fallback {
                     path: PathBuf::from(self.path_of_with(idx as u32, &mut cache)),
                     is_dir: entry.is_dir,
                     size: self.size_of(idx as u32),
+                    mtime: entry.mtime,
                 })
                 .collect()
         }
@@ -227,6 +284,7 @@ pub mod fallback {
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: true,
+                    mtime: entry.mtime,
                 })
                 .collect()
         }
@@ -241,6 +299,7 @@ pub mod fallback {
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: entry.used,
+                    mtime: entry.mtime,
                 })
                 .collect();
             Self::build_from_entries(volume, entries)
@@ -264,6 +323,7 @@ pub mod fallback {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             }];
             let mut path_to_idx = HashMap::new();
             path_to_idx.insert(root_path.clone(), ROOT_NODE);
@@ -288,6 +348,7 @@ pub mod fallback {
                     is_dir: entry.is_dir,
                     size: if entry.is_dir { 0 } else { entry.size },
                     used: true,
+                    mtime: entry.mtime,
                 });
                 path_to_idx.insert(entry.path, idx);
             }
@@ -606,6 +667,38 @@ pub mod fallback {
                 .collect()
         }
 
+        /// 递归遍历指定子树（带最大深度和目录过滤），收集所有符合条件的
+        /// 文件节点下标、体积与修改时间。
+        pub fn collect_subtree_files(
+            &self,
+            root_idx: u32,
+            max_depth: usize,
+            min_size: u64,
+            max_size: u64,
+        ) -> Vec<(u32, u64, u64)> {
+            let mut out = Vec::new();
+            let mut stack = vec![(root_idx, 0usize)];
+            while let Some((cur, depth)) = stack.pop() {
+                if !self.valid(cur) {
+                    continue;
+                }
+                for &c in self.child_slice(cur) {
+                    if !self.valid(c) {
+                        continue;
+                    }
+                    let e = &self.entries[c as usize];
+                    if e.is_dir {
+                        if depth < max_depth && !super::is_declutter_ignored_dir_name(&e.name) {
+                            stack.push((c, depth + 1));
+                        }
+                    } else if e.size >= min_size && e.size <= max_size {
+                        out.push((c, e.size, e.mtime));
+                    }
+                }
+            }
+            out
+        }
+
         pub fn find_path(&self, full_path: &Path) -> Vec<u32> {
             let mut path_indices = vec![self.root()];
             let relative = full_path
@@ -715,6 +808,11 @@ pub mod fallback {
         /// 的工作区被完整遍历）。父目录不在索引中时返回 false，由调用方
         /// 回退到目录子树扫描。
         pub fn upsert_file(&mut self, path: &Path, size: u64) -> bool {
+            self.upsert_file_with_mtime(path, size, 0)
+        }
+
+        /// 与 [`upsert_file`] 相同，但同时设置 mtime。
+        pub fn upsert_file_with_mtime(&mut self, path: &Path, size: u64, mtime: u64) -> bool {
             let Some(parent_path) = path.parent() else {
                 return false;
             };
@@ -737,6 +835,7 @@ pub mod fallback {
                 is_dir: false,
                 size,
                 used: true,
+                mtime,
             });
             self.dir_size.push(0);
             self.dir_files.push(0);
@@ -820,6 +919,7 @@ pub mod fallback {
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: true,
+                    mtime: entry.mtime,
                 });
                 self.dir_size.push(new_dir_size);
                 self.dir_files.push(new_dir_files);
@@ -1373,6 +1473,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             }, // 0
             TreeIndexEntry {
                 parent: 0,
@@ -1380,6 +1481,7 @@ mod tests {
                 is_dir: false,
                 size: 100,
                 used: true,
+                mtime: 0,
             }, // 1
             TreeIndexEntry {
                 parent: 0,
@@ -1387,6 +1489,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             }, // 2
             TreeIndexEntry {
                 parent: 2,
@@ -1394,6 +1497,7 @@ mod tests {
                 is_dir: false,
                 size: 200,
                 used: true,
+                mtime: 0,
             }, // 3
             TreeIndexEntry {
                 parent: 2,
@@ -1401,6 +1505,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             }, // 4
             TreeIndexEntry {
                 parent: 4,
@@ -1408,6 +1513,7 @@ mod tests {
                 is_dir: false,
                 size: 300,
                 used: true,
+                mtime: 0,
             }, // 5
             TreeIndexEntry {
                 parent: 4,
@@ -1415,6 +1521,7 @@ mod tests {
                 is_dir: false,
                 size: 400,
                 used: true,
+                mtime: 0,
             }, // 6
             TreeIndexEntry {
                 parent: 0,
@@ -1422,6 +1529,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             }, // 7
             TreeIndexEntry {
                 parent: 7,
@@ -1429,6 +1537,7 @@ mod tests {
                 is_dir: false,
                 size: 500,
                 used: true,
+                mtime: 0,
             }, // 8
         ];
         SizeTree::from_compact(vol, entries)
@@ -1492,6 +1601,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 used: true,
+                mtime: 0,
             },
             TreeIndexEntry {
                 parent: 0,
@@ -1499,6 +1609,7 @@ mod tests {
                 is_dir: false,
                 size: 999,
                 used: true,
+                mtime: 0,
             },
         ];
         let new_subtree = SizeTree::from_compact(new_vol, new_entries);

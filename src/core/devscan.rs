@@ -668,6 +668,8 @@ fn load_or_build_macos_index_for(
                             crate::log!(
                                 "增量更新返回 None（变更根目录 >512 或父节点缺失），回退全量扫描"
                             );
+                            // 注：metadata_failed 的情况已在上面跳过，
+                            // 走到这里说明是变更根 >512 或父节点缺失
                             match full_macos_scan(root, &volume, live) {
                                 Ok(scan) => std::sync::Arc::new(scan),
                                 Err(error) => {
@@ -807,7 +809,7 @@ fn refresh_macos_index(
     }
 
     enum FileChange {
-        Upsert(PathBuf, u64),
+        Upsert(PathBuf, u64, u64), // (path, size, mtime)
         Remove(PathBuf),
     }
 
@@ -820,6 +822,12 @@ fn refresh_macos_index(
             Ok(metadata) => {
                 use std::os::unix::fs::MetadataExt;
                 let size = metadata.blocks().saturating_mul(512);
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 if scan
                     .tree
                     .find_node_by_path(path.parent().unwrap_or(mount))
@@ -827,7 +835,7 @@ fn refresh_macos_index(
                 {
                     roots.push(path.parent().unwrap_or(mount).to_path_buf());
                 } else {
-                    file_changes.push(FileChange::Upsert(path, size));
+                    file_changes.push(FileChange::Upsert(path, size, mtime));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -840,14 +848,14 @@ fn refresh_macos_index(
         }
     }
 
-    // 权限或瞬时 I/O 失败时，旧值是否仍正确不可知。继续提交最新 FSEvents
-    // 水位会永久吞掉这次事件，因此整轮增量必须放弃。
+    // 权限或瞬时 I/O 失败时跳过该路径，保留旧值。不再因为个别路径失败
+    // 就放弃整轮增量——12 万个变更路径中 1 个失败就回退全量扫描（100+ 秒）
+    // 完全不合理。被跳过的路径会在下次全量扫描或用户手动「重新分析」时修正。
     if metadata_failed > 0 {
         crate::log!(
-            "refresh_macos_index: {} 个路径读取元数据失败，放弃增量",
+            "refresh_macos_index: {} 个路径读取元数据失败，跳过这些路径继续增量",
             metadata_failed
         );
-        return None;
     }
 
     roots.sort_by_key(|path| path.components().count());
@@ -883,14 +891,14 @@ fn refresh_macos_index(
     let mut paths_removed = 0usize;
     for change in file_changes {
         let path = match &change {
-            FileChange::Upsert(path, _) | FileChange::Remove(path) => path,
+            FileChange::Upsert(path, _, _) | FileChange::Remove(path) => path,
         };
         if roots.iter().any(|root| path.starts_with(root)) {
             continue;
         }
         match change {
-            FileChange::Upsert(path, size) => {
-                if scan.tree.upsert_file(&path, size) {
+            FileChange::Upsert(path, size, mtime) => {
+                if scan.tree.upsert_file_with_mtime(&path, size, mtime) {
                     files_updated += 1;
                 }
             }
@@ -1467,9 +1475,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// 单个路径元数据读取失败时，增量更新应跳过该路径继续处理，
+    /// 而不是放弃整个增量回退全量扫描。
     #[cfg(not(windows))]
     #[test]
-    fn incremental_refresh_rejects_metadata_errors() {
+    fn incremental_refresh_skips_metadata_errors() {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
         use std::os::unix::ffi::OsStringExt;
@@ -1490,7 +1500,11 @@ mod tests {
             raw_event_count: 1,
         };
 
-        assert!(refresh_macos_index(&volume, original, &changes, &live).is_none());
+        // 修复后：单个 metadata 失败不再放弃整个增量，应返回 Some。
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live)
+            .expect("单个路径失败不应放弃整个增量更新");
+        // 原始索引内容应保留（没有因失败路径而丢失）
+        assert!(refreshed.tree.valid(refreshed.tree.root()));
         let _ = std::fs::remove_dir_all(base);
     }
 

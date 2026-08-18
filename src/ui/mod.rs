@@ -48,8 +48,8 @@ use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
-    render_disk_clean_bar, render_disk_view, render_disk_volume_dropdown, render_junk_view,
-    DiskTab,
+    render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,
+    render_disk_volume_dropdown, render_junk_view, DeclutterContextMenu, DeclutterState, DiskTab,
 };
 
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
@@ -388,6 +388,7 @@ pub struct Root {
     pub residual: ResidualState,
     pub disk: DiskState,
     pub clean: CleanState,
+    pub declutter: DeclutterState,
     /// macOS 用户目录索引缓存。垃圾扫描阶段加载/构建后存在这里。
     /// 用 Arc 共享，避免克隆 6.6M 条目的 SizeTree。
     #[cfg(not(windows))]
@@ -541,6 +542,8 @@ impl Root {
                 show_failed_details: false,
             },
 
+            declutter: DeclutterState::default(),
+
             #[cfg(not(windows))]
             macos_index: None,
             #[cfg(not(windows))]
@@ -647,6 +650,19 @@ impl Root {
 
     pub fn close_context_menu(&mut self) {
         self.apps.context_menu = None;
+    }
+
+    pub fn open_declutter_context_menu(&mut self, path: PathBuf, filename: String, x: f32, y: f32) {
+        self.declutter.context_menu = Some(DeclutterContextMenu {
+            path,
+            filename,
+            x,
+            y,
+        });
+    }
+
+    pub fn close_declutter_context_menu(&mut self) {
+        self.declutter.context_menu = None;
     }
 
     pub fn toggle_disk_volume_menu(&mut self) {
@@ -941,6 +957,7 @@ impl Root {
         // Windows：仍然走 scan_volume 解析 $MFT。
         #[cfg(not(windows))]
         let cached_root_index = self.macos_root_index.clone();
+        let scan_t0 = std::time::Instant::now();
         let scan = cx.background_executor().spawn(async move {
             #[cfg(windows)]
             {
@@ -999,7 +1016,8 @@ impl Root {
                             .map(|(total, free)| fmt_size(total - free))
                             .unwrap_or_else(|| fmt_size(s.total_size));
                         let files = s.file_count;
-                        this.status = bilingual(|l| tr_status_disk_done(l, files, &used));
+                        let elapsed = scan_t0.elapsed().as_secs_f64();
+                        this.status = bilingual(|l| tr_status_disk_done(l, files, &used, elapsed));
                         // 仅当 saved_path 确实属于当前卷时才尝试恢复层级；跨盘切换时直接回到新盘根目录
                         let is_same_vol = saved_path.as_ref().is_some_and(|p| {
                             p.to_string_lossy().starts_with(vol_for_task.display())
@@ -1838,6 +1856,105 @@ impl Root {
             .map(|r| (r.path.clone(), r.node.size))
             .collect()
     }
+
+    pub fn start_declutter_scan(&mut self, cx: &mut Context<Self>) {
+        if self.declutter.scanning {
+            return;
+        }
+        self.declutter.scanning = true;
+        self.status = bilingual(|l| match l {
+            Language::Zh => "正在利用索引与多线程深度扫描大文件、重复文件与相似图片...".to_string(),
+            Language::En => {
+                "Scanning for large files, duplicates and similar photos (indexed)...".to_string()
+            }
+        });
+        cx.notify();
+
+        let live = self.live.clone();
+        let mft_tree = self.disk.mft.clone();
+        #[cfg(not(windows))]
+        let macos_idx = self
+            .macos_index
+            .clone()
+            .or_else(|| self.macos_root_index.clone());
+
+        cx.spawn(async move |this, cx| {
+            let scan_data = cx
+                .background_executor()
+                .spawn(async move {
+                    let t_start = std::time::Instant::now();
+                    #[cfg(windows)]
+                    let tree_ref = mft_tree.as_ref().map(|s| &s.tree);
+                    #[cfg(not(windows))]
+                    let tree_ref = mft_tree
+                        .as_ref()
+                        .map(|s| &s.tree)
+                        .or_else(|| macos_idx.as_ref().map(|s| &s.tree));
+
+                    let (downloads, (large_files, (duplicates, photos))) = rayon::join(
+                        || crate::core::declutter::scan_downloads_folder(&live, tree_ref),
+                        || {
+                            rayon::join(
+                                || {
+                                    crate::core::declutter::scan_large_old_files(
+                                        &live, 50_000_000, tree_ref,
+                                    )
+                                },
+                                || {
+                                    rayon::join(
+                                        || {
+                                            crate::core::declutter::scan_duplicate_files(
+                                                &live, tree_ref,
+                                            )
+                                        },
+                                        || {
+                                            crate::core::declutter::scan_similar_photos(
+                                                &live, tree_ref,
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    );
+
+                    (
+                        downloads,
+                        large_files,
+                        duplicates,
+                        photos,
+                        t_start.elapsed(),
+                    )
+                })
+                .await;
+
+            this.update(cx, |this, cx| {
+                this.declutter.scanning = false;
+                this.declutter.scanned = true;
+                this.declutter.scan_elapsed_secs = Some(scan_data.4.as_secs_f64());
+                this.declutter.download_items = scan_data.0;
+                this.declutter.large_files = scan_data.1;
+                this.declutter.duplicate_groups = scan_data.2;
+                this.declutter.photo_groups = scan_data.3;
+
+                let savings = this.declutter.total_potential_savings();
+                crate::log!(
+                    "[Declutter] 全盘智能整理扫描完成: 总耗时 {:?}, 发现可优化空间 {}",
+                    scan_data.4,
+                    fmt_size(savings)
+                );
+                this.status = bilingual(move |l| match l {
+                    Language::Zh => {
+                        format!("文件整理扫描完成，发现可优化空间 {}", fmt_size(savings))
+                    }
+                    Language::En => format!("Declutter scan complete, found {}", fmt_size(savings)),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl Render for Root {
@@ -1850,6 +1967,7 @@ impl Render for Root {
             View::Apps if self.residual.uninstall.is_some() => render_uninstall_progress(self),
             View::Apps => render_apps_view(self, window, cx),
             View::Disk => render_disk_view(self, cx),
+            View::Declutter => render_declutter_view(self, cx),
         };
 
         let mut main = div()
@@ -1861,7 +1979,16 @@ impl Render for Root {
             .flex_col()
             .child(render_top_bar(self, cx));
 
-        if self.junk.scanning {
+        let is_scanning = match self.view {
+            View::Dashboard | View::Junk => self.junk.scanning,
+            View::Apps => {
+                self.residual.uninstall.is_none() && (self.apps.scanning || self.residual.scanning)
+            }
+            View::Disk => self.disk.scanning,
+            View::Declutter => self.declutter.scanning,
+        };
+
+        if is_scanning {
             main = main.child(render_scan_line());
         }
 
@@ -1922,6 +2049,10 @@ impl Render for Root {
 
         if let Some(menu) = render_apps_context_menu(self, cx) {
             root = root.child(menu);
+        }
+
+        if let Some(declutter_menu) = render_declutter_context_menu(self, cx) {
+            root = root.child(declutter_menu);
         }
 
         if let Some(dropdown) = render_disk_volume_dropdown(self, cx) {

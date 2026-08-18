@@ -306,6 +306,37 @@ impl SizeTree {
         }
     }
 
+    /// 递归遍历指定子树（带最大深度和目录过滤），收集所有符合条件的文件节点下标、体积与修改时间
+    pub fn collect_subtree_files(
+        &self,
+        root_idx: u32,
+        max_depth: usize,
+        min_size: u64,
+        max_size: u64,
+    ) -> Vec<(u32, u64, u64)> {
+        let mut out = Vec::new();
+        let mut stack = vec![(root_idx, 0usize)];
+        while let Some((cur, depth)) = stack.pop() {
+            if !self.valid(cur) {
+                continue;
+            }
+            for &c in self.child_slice(cur) {
+                if !self.valid(c) {
+                    continue;
+                }
+                let e = &self.entries[c as usize];
+                if e.is_dir {
+                    if depth < max_depth && !is_declutter_ignored_dir_name(&e.name) {
+                        stack.push((c, depth + 1));
+                    }
+                } else if e.size >= min_size && e.size <= max_size {
+                    out.push((c, e.size, e.mtime));
+                }
+            }
+        }
+        out
+    }
+
     /// 从内存树中即时扣除并标记已删除节点（同时扣减所有祖先目录大小与文件数）
     pub fn remove_node(&mut self, idx: u32) {
         if !self.valid(idx) || idx == self.root() {
@@ -388,6 +419,9 @@ impl std::fmt::Display for ScanError {
         }
     }
 }
+
+// 跨平台共享的目录过滤函数，定义在 core::disk 中。
+pub use crate::core::disk::is_declutter_ignored_dir_name;
 
 // ---------------------------------------------------------------------------
 // Windows 原生结构与 FFI
@@ -834,6 +868,7 @@ struct Entry {
     size: u64,
     used: bool,
     base_ref: u32,
+    mtime: u64,
 }
 
 fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool {
@@ -857,9 +892,23 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
     let mut name = String::new();
     let mut size = 0u64;
     let mut got_name = false;
+    let mut mtime: u64 = 0;
 
     while let Some((atype, alen, non_resident, name_len)) = attr_header(rec, pos) {
         match atype {
+            // $STANDARD_INFORMATION (type 0x10)：解析修改时间
+            0x10 if !non_resident => {
+                let val_off = u16_at(rec, pos + 0x14) as usize;
+                let v = pos + val_off;
+                // 修改时间在偏移 0x08（跳过创建时间），FILETIME 格式
+                if v + 0x10 <= rec.len() {
+                    let filetime = u64_at(rec, v + 0x08);
+                    // FILETIME → Unix epoch 秒：减去 11644473600（1601→1970），再除以 1e7
+                    if filetime > 116_444_736_000_000_000 {
+                        mtime = (filetime - 116_444_736_000_000_000) / 10_000_000;
+                    }
+                }
+            }
             0x30 if !non_resident => {
                 let val_off = u16_at(rec, pos + 0x14) as usize;
                 let val_len = u32_at(rec, pos + 0x10) as usize;
@@ -929,6 +978,7 @@ fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool
     out.is_dir = is_dir;
     out.size = if is_dir { 0 } else { size };
     out.used = true;
+    out.mtime = mtime;
     true
 }
 
@@ -1359,6 +1409,7 @@ mod tests {
                 size,
                 used: true,
                 base_ref: 0,
+                mtime: 0,
             };
         };
         mk(5, 5, "", true, 0);
@@ -1547,6 +1598,7 @@ mod tests {
                 size,
                 used: true,
                 base_ref: 0,
+                mtime: 0,
             };
         };
         mk(0, 5, "$MFT", false, 3_000_000_000);

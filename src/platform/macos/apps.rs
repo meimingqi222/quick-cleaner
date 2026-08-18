@@ -414,6 +414,14 @@ pub fn reveal_in_explorer(path: &Path) {
         .spawn();
 }
 
+/// 使用系统默认程序打开文件或目录
+pub fn open_in_default_app(path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let _ = std::process::Command::new("open").arg(path).spawn();
+}
+
 /// 目录的**实际磁盘占用**（不是逻辑大小）。
 ///
 /// APFS 有透明压缩、clone 和稀疏文件，`metadata().len()`（逻辑大小）会显著

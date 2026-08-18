@@ -14,10 +14,17 @@ pub enum View {
     Junk,
     Apps,
     Disk,
+    Declutter,
 }
 
 impl View {
-    pub const ALL: [View; 4] = [View::Dashboard, View::Junk, View::Apps, View::Disk];
+    pub const ALL: [View; 5] = [
+        View::Dashboard,
+        View::Junk,
+        View::Apps,
+        View::Disk,
+        View::Declutter,
+    ];
 
     /// 中文文案。**仅供日志与命令行**，界面上用 `title_lang(lang)`——
     /// 顶栏标题就曾经因为调了这个而在英文模式下一直显示中文。
@@ -35,6 +42,8 @@ impl View {
             (View::Apps, Language::En) => "Apps",
             (View::Disk, Language::Zh) => "磁盘透镜",
             (View::Disk, Language::En) => "Disk Lens",
+            (View::Declutter, Language::Zh) => "冗余整理",
+            (View::Declutter, Language::En) => "Declutter",
         }
     }
 
@@ -44,6 +53,7 @@ impl View {
             View::Junk => icon_trash(fg, 18.),
             View::Apps => icon_apps(fg, 18.),
             View::Disk => icon_disk(fg, 18.),
+            View::Declutter => icon_declutter(fg, 18.),
         }
     }
 }

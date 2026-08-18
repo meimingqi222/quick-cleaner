@@ -1,0 +1,543 @@
+//! 重复文件比对视图 (Duplicates Comparison View)
+
+use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::DeclutterTab;
+use crate::core::declutter::clean_declutter_items;
+use crate::core::i18n::Language;
+use crate::core::model::fmt_size;
+use crate::ui::components::controls::checkbox;
+use crate::ui::components::icons::{icon_badge, icon_files_duplicate, icon_trash};
+use crate::ui::theme::*;
+use crate::ui::Root;
+use gpui::prelude::*;
+use gpui::{div, px, rgb, AnyElement, Context, SharedString};
+use std::path::PathBuf;
+
+pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
+    let state = &root.declutter;
+
+    let total_cleanable: u64 = state
+        .duplicate_groups
+        .iter()
+        .map(|g| g.cleanable_size())
+        .sum();
+    let total_selected_count: usize = state
+        .duplicate_groups
+        .iter()
+        .flat_map(|g| &g.files)
+        .filter(|f| f.selected)
+        .count();
+
+    let tab_nav = render_unified_nav_header(
+        DeclutterTab::Duplicates,
+        match lang {
+            Language::Zh => "重复文件",
+            Language::En => "Duplicates",
+        },
+        lang,
+        cx,
+    );
+
+    // 取前 50 组展示以保证 GPUI 极速流畅渲染
+    let display_groups: Vec<_> = state.duplicate_groups.iter().take(50).enumerate().collect();
+
+    let groups_view: Vec<AnyElement> = if display_groups.is_empty() {
+        vec![render_empty_state_card(
+            "📑",
+            match lang {
+                Language::Zh => "未发现重复文件",
+                Language::En => "No duplicate files found",
+            },
+            match lang {
+                Language::Zh => "您的磁盘非常整洁，未发现占用空间的完全相同文件副本。",
+                Language::En => "Your drive is clean with no identical duplicate files.",
+            },
+        )]
+    } else {
+        display_groups
+            .into_iter()
+            .map(|(g_idx, group)| {
+                let file_rows = group.files.iter().enumerate().map(|(f_idx, file)| {
+                    let is_sel = file.selected;
+                    let is_orig = file.is_original;
+                    let f_path = file.path.clone();
+                    let f_name = group.filename.clone();
+
+                    div()
+                        .id(SharedString::from(format!("dup-row-{g_idx}-{f_idx}")))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px_6()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(rgba(OUTLINE_VAR, 0.2))
+                        .when(is_sel, |d| d.bg(rgba(ERROR, 0.06)))
+                        .when(!is_sel, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                let x: f32 = event.position.x.into();
+                                let y: f32 = event.position.y.into();
+                                this.open_declutter_context_menu(
+                                    f_path.clone(),
+                                    f_name.clone(),
+                                    x,
+                                    y,
+                                );
+                                cx.notify();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("dup-sel-{g_idx}-{f_idx}")))
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .items_center()
+                                .gap_4()
+                                .cursor_pointer()
+                                .child(checkbox(if is_sel {
+                                    crate::core::model::Check::On
+                                } else {
+                                    crate::core::model::Check::Off
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(rgb(TEXT))
+                                                .overflow_hidden()
+                                                .child(file.path_display.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(OUTLINE))
+                                                .overflow_hidden()
+                                                .child(if lang == Language::Zh {
+                                                    format!("修改时间: {}", file.modified_at_str)
+                                                } else {
+                                                    format!("Modified: {}", file.modified_at_str)
+                                                }),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(g) = this.declutter.duplicate_groups.get_mut(g_idx)
+                                    {
+                                        if let Some(f) = g.files.get_mut(f_idx) {
+                                            f.selected = !f.selected;
+                                            cx.notify();
+                                        }
+                                    }
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "btn-reveal-dup-{g_idx}-{f_idx}"
+                                        )))
+                                        .px_2()
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .bg(rgb(SURF_HIGH))
+                                        .hover(|h| {
+                                            h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                        })
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(MUTED))
+                                        .cursor_pointer()
+                                        .child(match lang {
+                                            Language::Zh => "定位",
+                                            Language::En => "Reveal",
+                                        })
+                                        .on_click({
+                                            let p = file.path.clone();
+                                            cx.listener(
+                                                move |_, _event: &gpui::ClickEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    crate::platform::reveal_in_explorer(&p);
+                                                },
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "btn-open-dup-{g_idx}-{f_idx}"
+                                        )))
+                                        .px_2()
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .bg(rgb(SURF_HIGH))
+                                        .hover(|h| {
+                                            h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                        })
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(MUTED))
+                                        .cursor_pointer()
+                                        .child(match lang {
+                                            Language::Zh => "打开",
+                                            Language::En => "Open",
+                                        })
+                                        .on_click({
+                                            let p = file.path.clone();
+                                            cx.listener(
+                                                move |_, _event: &gpui::ClickEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    crate::platform::open_in_default_app(&p);
+                                                },
+                                            )
+                                        }),
+                                )
+                                .when(is_orig, |d| {
+                                    d.child(
+                                        div()
+                                            .px_2()
+                                            .py(px(2.))
+                                            .rounded_md()
+                                            .bg(rgb(SURF_HIGH))
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(rgb(OUTLINE))
+                                            .child(match lang {
+                                                Language::Zh => "原件",
+                                                Language::En => "ORIGINAL",
+                                            }),
+                                    )
+                                })
+                                .when(!is_orig && is_sel, |d| {
+                                    d.child(
+                                        div()
+                                            .px_2()
+                                            .py(px(2.))
+                                            .rounded_md()
+                                            .bg(rgb(ERROR_CONTAINER))
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(rgb(ERROR))
+                                            .child(match lang {
+                                                Language::Zh => "副本",
+                                                Language::En => "DUPLICATE",
+                                            }),
+                                    )
+                                }),
+                        )
+                });
+
+                div()
+                    .flex_none()
+                    .rounded_xl()
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(rgba(OUTLINE_VAR, 0.4))
+                    .shadow_sm()
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .px_6()
+                            .py_3()
+                            .bg(rgb(SURF_LOW))
+                            .border_b_1()
+                            .border_color(rgba(OUTLINE_VAR, 0.25))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(icon_badge(
+                                        icon_files_duplicate(0x7547ab, 18.),
+                                        0xefdbff,
+                                        0x7547ab,
+                                        32.,
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(rgb(TEXT))
+                                                    .overflow_hidden()
+                                                    .child(group.filename.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(OUTLINE))
+                                                    .overflow_hidden()
+                                                    .child(if lang == Language::Zh {
+                                                        format!(
+                                                            "{} · {} 份相同副本",
+                                                            fmt_size(group.size_per_copy),
+                                                            group.files.len()
+                                                        )
+                                                    } else {
+                                                        format!(
+                                                            "{} · {} identical copies",
+                                                            fmt_size(group.size_per_copy),
+                                                            group.files.len()
+                                                        )
+                                                    }),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(div().flex().flex_col().children(file_rows))
+                    .into_any_element()
+            })
+            .collect()
+    };
+
+    div()
+        .id("declutter-dups-view")
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .id("declutter-dups-scroll-inner")
+                .flex_1()
+                .min_h(px(0.))
+                .overflow_scroll()
+                .p_8()
+                .pb_8()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .child(tab_nav)
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_end()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_2xl()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(match lang {
+                                            Language::Zh => "重复文件",
+                                            Language::En => "Duplicate Files",
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(if lang == Language::Zh {
+                                            format!(
+                                                "共发现 {} 组完全相同的重复副本占用磁盘空间。{}",
+                                                state.duplicate_groups.len(),
+                                                if state.duplicate_groups.len() > 50 {
+                                                    "（列表展示占用空间最大的前 50 组）"
+                                                } else {
+                                                    ""
+                                                }
+                                            )
+                                        } else {
+                                            format!(
+                                                "Found {} sets of identical duplicate files hoarding storage.{}",
+                                                state.duplicate_groups.len(),
+                                                if state.duplicate_groups.len() > 50 {
+                                                    " (Displaying top 50 largest groups)"
+                                                } else {
+                                                    ""
+                                                }
+                                            )
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("btn-auto-mark-newest")
+                                        .px_4()
+                                        .py_2()
+                                        .rounded_lg()
+                                        .bg(rgb(SURF_HIGH))
+                                        .border_1()
+                                        .border_color(rgba(OUTLINE_VAR, 0.4))
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(TEXT))
+                                        .hover(|h| h.bg(rgb(SURF_LOW)))
+                                        .cursor_pointer()
+                                        .child(match lang {
+                                            Language::Zh => "保留最新副本",
+                                            Language::En => "Keep Newest",
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.declutter.pick_duplicates_keep_newest();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("btn-auto-mark-oldest")
+                                        .px_4()
+                                        .py_2()
+                                        .rounded_lg()
+                                        .bg(rgb(SURF_HIGH))
+                                        .border_1()
+                                        .border_color(rgba(OUTLINE_VAR, 0.4))
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(TEXT))
+                                        .hover(|h| h.bg(rgb(SURF_LOW)))
+                                        .cursor_pointer()
+                                        .child(match lang {
+                                            Language::Zh => "保留最旧副本",
+                                            Language::En => "Keep Oldest",
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.declutter.pick_duplicates_keep_oldest();
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .children(groups_view),
+        )
+        // 底部悬浮操作条 (Stitch Duplicates Bottom Bar)
+        .child(
+            div()
+                .h(px(70.))
+                .flex_none()
+                .px_8()
+                .bg(rgb(CARD))
+                .border_t_1()
+                .border_color(rgba(OUTLINE_VAR, 0.35))
+                .shadow_md()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(icon_badge(
+                            icon_trash(ERROR, 18.),
+                            ERROR_CONTAINER,
+                            ERROR,
+                            36.,
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(if lang == Language::Zh {
+                                            format!("已选择 {} 个重复文件", total_selected_count)
+                                        } else {
+                                            format!("{total_selected_count} duplicates selected")
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(if lang == Language::Zh {
+                                            format!("预计释放 {}", fmt_size(total_cleanable))
+                                        } else {
+                                            format!("Reclaiming {} of space", fmt_size(total_cleanable))
+                                        }),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("btn-remove-selected-dups")
+                        .px_6()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(rgb(PRIMARY))
+                        .when(total_selected_count > 0, |d| {
+                            d.hover(|h| h.bg(rgb(PRIMARY_BRIGHT))).cursor_pointer()
+                        })
+                        .when(total_selected_count == 0, |d| d.opacity(0.4))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(ON_PRIMARY))
+                        .child(match lang {
+                            Language::Zh => "清理所选项 ›",
+                            Language::En => "Remove Selected ›",
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let paths_to_delete: Vec<PathBuf> = this
+                                .declutter
+                                .duplicate_groups
+                                .iter()
+                                .flat_map(|g| &g.files)
+                                .filter(|f| f.selected)
+                                .map(|f| f.path.clone())
+                                .collect();
+
+                            if !paths_to_delete.is_empty() {
+                                let report = clean_declutter_items(&paths_to_delete, true);
+                                for g in &mut this.declutter.duplicate_groups {
+                                    g.files.retain(|f| !f.selected);
+                                }
+                                this.declutter.duplicate_groups.retain(|g| g.files.len() >= 2);
+                                this.status = crate::core::i18n::Text::new(
+                                    format!(
+                                        "已清理 {} 个重复文件，释放 {}",
+                                        report.deleted_files,
+                                        fmt_size(report.freed_bytes)
+                                    ),
+                                    format!(
+                                        "Cleaned {} duplicate files, freed {}",
+                                        report.deleted_files,
+                                        fmt_size(report.freed_bytes)
+                                    ),
+                                );
+                                cx.notify();
+                            }
+                        })),
+                ),
+        )
+        .into_any_element()
+}

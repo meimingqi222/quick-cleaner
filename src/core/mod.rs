@@ -5,14 +5,18 @@
 pub mod apps;
 pub mod categories;
 pub mod cleaner;
+pub mod declutter;
 pub mod devscan;
 pub mod disk;
+pub mod fs_query;
 pub mod i18n;
 pub mod log;
 pub mod model;
 pub mod safety;
 pub mod scanner;
 pub mod settings;
+
+pub use fs_query::{FSIndexEngine, FileIndexQuery, IndexedFile, QueryFilter};
 
 pub use apps::{
     AppFilterPreset, AppRegRoot, AppSortColumn, AppSortState, InstalledApp, ResidualKind,

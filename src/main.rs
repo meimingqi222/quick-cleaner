@@ -35,10 +35,23 @@ fn main() {
         #[cfg(target_os = "macos")]
         quick_cleaner::platform::macos::set_dock_icon();
 
-        // macOS 上退出走系统菜单的 Cmd-Q，不自己绑；`KeyBinding` 也就只有
-        // 非 macOS 分支用得到，导入要跟着一起门禁，否则 macOS 上是个未使用导入。
+        #[cfg(target_os = "macos")]
+        {
+            cx.set_menus(vec![gpui::Menu {
+                name: "QuickCleaner".into(),
+                items: vec![gpui::MenuItem::action("Quit QuickCleaner", Quit)],
+            }]);
+            cx.bind_keys([
+                gpui::KeyBinding::new("cmd-q", Quit, None),
+                gpui::KeyBinding::new("cmd-w", Quit, None),
+            ]);
+        }
+
         #[cfg(not(target_os = "macos"))]
-        cx.bind_keys([gpui::KeyBinding::new("ctrl-q", Quit, None)]);
+        cx.bind_keys([
+            gpui::KeyBinding::new("ctrl-q", Quit, None),
+            gpui::KeyBinding::new("alt-f4", Quit, None),
+        ]);
 
         cx.on_action(|_: &Quit, cx| cx.quit());
 

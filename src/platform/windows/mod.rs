@@ -11,7 +11,8 @@ pub mod user_env;
 pub mod volume;
 
 pub use apps::{
-    dir_or_file_size, list_installed_apps, reveal_in_explorer, run_uninstaller_and_wait,
+    dir_or_file_size, list_installed_apps, open_in_default_app, reveal_in_explorer,
+    run_uninstaller_and_wait,
 };
 pub use mft::{scan_volume, ScanError, SizeTree};
 pub use recycle::{

@@ -345,10 +345,14 @@ pub fn tr_status_disk_scanning(lang: Language, vol: &crate::core::disk::VolumeId
     }
 }
 
-pub fn tr_status_disk_done(lang: Language, files: u64, size: &str) -> String {
+pub fn tr_status_disk_done(lang: Language, files: u64, size: &str, elapsed_secs: f64) -> String {
     match lang {
-        Language::Zh => format!("磁盘分析完成：已索引 {files} 个文件，占用 {size}"),
-        Language::En => format!("Disk analysis complete — {files} files indexed, {size} used"),
+        Language::Zh => {
+            format!("磁盘分析完成：已索引 {files} 个文件，占用 {size}，耗时 {elapsed_secs:.1}s")
+        }
+        Language::En => format!(
+            "Disk analysis complete — {files} files indexed, {size} used, took {elapsed_secs:.1}s"
+        ),
     }
 }
 

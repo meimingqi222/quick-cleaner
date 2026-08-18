@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 lz4_flex = "0.14.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 展开里带着 `#[cfg(feature = "cargo-clippy")]`——那是
