@@ -96,8 +96,11 @@ pub trait FileIndexQuery: Send + Sync {
     /// 1. 范围文件查询（支持深度、体积范围、扩展名过滤，带中断检查）
     fn query_files(&self, filter: &QueryFilter, live: &AtomicBool) -> Vec<IndexedFile>;
 
-    /// 2. 毫秒级单路径/目录体积与文件总数称重 (O(1) 或极速查表)
-    fn measure_path(&self, path: &Path) -> Option<(u64, u64)>;
+    /// 2. 毫秒级单路径/目录体积称重 (O(1) 查表或极速遍历)
+    ///
+    /// 返回 `(size, files, newest_mtime)`（字节 / 文件数 / 子树内最新 mtime 秒）。
+    /// 路径不存在、符号链接或非普通文件返回 `None`。
+    fn measure_path(&self, path: &Path, live: &AtomicBool) -> Option<(u64, u64, u64)>;
 
     /// 3. 大文件 Top-N 极速提取 (专门优化大文件视图)
     fn query_large_files(
@@ -257,37 +260,17 @@ impl<'a> FileIndexQuery for FSIndexEngine<'a> {
         results
     }
 
-    fn measure_path(&self, path: &Path) -> Option<(u64, u64)> {
-        // 1. 尝试从 SizeTree 查表
+    fn measure_path(&self, path: &Path, live: &AtomicBool) -> Option<(u64, u64, u64)> {
+        // 1. 有树时走 O(1) 表查（带卷/挂载点守卫，避免 UNC 等跨卷路径误命中）。
+        //    表查通道没有子树最新 mtime，last_modified 返回 0，与 MFT 通道口径一致。
         if let Some(t) = self.tree {
-            if let Some(node_idx) = t.find_node_by_path(path) {
-                return Some((t.size_of(node_idx), t.file_count_of(node_idx)));
+            if let Some((size, files)) = crate::core::scanner::measure_via_tree(t, path) {
+                return Some((size, files, 0));
             }
         }
 
-        // 2. 回退：直接文件系统统计
-        let meta = std::fs::symlink_metadata(path).ok()?;
-        if meta.is_file() {
-            Some((meta.len(), 1))
-        } else if meta.is_dir() {
-            let mut total_size = 0u64;
-            let mut total_files = 0u64;
-            for entry in WalkDir::new(path)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                if entry.file_type().is_file() {
-                    if let Ok(m) = entry.metadata() {
-                        total_size += m.len();
-                        total_files += 1;
-                    }
-                }
-            }
-            Some((total_size, total_files))
-        } else {
-            None
-        }
+        // 2. 回退：scanner::measure_target 并行遍历（allocated 口径 / 跳 symlink / 并行）
+        crate::core::scanner::measure_target(path, live)
     }
 
     fn query_large_files(
@@ -419,11 +402,12 @@ mod tests {
         let files = engine.query_files(&filter, &live);
         assert!(files.len() >= 2);
 
-        let measure = engine.measure_path(&temp_dir);
+        let measure = engine.measure_path(&temp_dir, &live);
         assert!(measure.is_some());
-        let (sz, count) = measure.unwrap();
+        let (sz, count, newest) = measure.unwrap();
         assert!(sz >= 30);
         assert!(count >= 2);
+        assert!(newest > 0, "应有最新 mtime");
 
         let buckets = engine.query_duplicate_buckets(&[temp_dir.clone()], 1, &live);
         assert!(!buckets.is_empty());

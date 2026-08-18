@@ -50,7 +50,7 @@ fn move_file_to_trash(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        crate::platform::windows::recycle::move_to_recycle_bin(path).is_ok()
+        crate::platform::windows::recycle::move_to_recycle_bin(path)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {

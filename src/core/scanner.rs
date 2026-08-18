@@ -1,6 +1,7 @@
 //! 垃圾扫描与体积统计引擎
 
 use crate::core::categories::{CategoryId, ScanTarget};
+use crate::core::fs_query::FileIndexQuery;
 use crate::core::i18n::Text;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -74,16 +75,15 @@ pub fn scan_fixed_with_tree(
 ///
 /// 单拎出来是因为它只服务于那一行日志：排序 + 格式化以前是无条件执行的，
 /// 结果却只是拼进一个字符串。
-fn slowest_targets(measured: &[(ScanItem, std::time::Duration, bool)], n: usize) -> Vec<String> {
-    let mut slowest: Vec<&(ScanItem, std::time::Duration, bool)> = measured.iter().collect();
-    slowest.sort_unstable_by_key(|(_, d, _)| std::cmp::Reverse(*d));
+fn slowest_targets(measured: &[(ScanItem, std::time::Duration)], n: usize) -> Vec<String> {
+    let mut slowest: Vec<&(ScanItem, std::time::Duration)> = measured.iter().collect();
+    slowest.sort_unstable_by_key(|(_, d)| std::cmp::Reverse(*d));
     slowest
         .iter()
         .take(n)
-        .map(|(it, d, via_tree)| {
-            let how = if *via_tree { "查表" } else { "遍历" };
+        .map(|(it, d)| {
             format!(
-                "{:?} {how} {} {}",
+                "{:?} {} {}",
                 d,
                 crate::core::model::fmt_size(it.size),
                 it.path.display()
@@ -98,9 +98,12 @@ fn scan_fixed_inner(
     tree: Option<&crate::core::disk::SizeTree>,
 ) -> Vec<CategorySummary> {
     let t0 = std::time::Instant::now();
+    // 统一走 FSIndexEngine：有树先查表（带卷/挂载点守卫），查不到回退
+    // scanner::measure_target 并行遍历，两通道口径完全一致。
+    let engine = crate::core::fs_query::FSIndexEngine::new(tree);
     // 逐个目标计时。目标是并行称重的，墙钟时间等于**最慢那一个**，
     // 所以合计耗时没有意义，排行榜才有。
-    let measured: Vec<(ScanItem, std::time::Duration, bool)> = targets
+    let measured: Vec<(ScanItem, std::time::Duration)> = targets
         .par_iter()
         .filter(|t| {
             // tmutil:// 虚拟路径（APFS 本地快照）不走文件系统 exists() 检查
@@ -126,41 +129,36 @@ fn scan_fixed_inner(
                         recommended: t.recommended,
                     },
                     started.elapsed(),
-                    false,
                 ));
             }
-            match tree.and_then(|tr| measure_via_tree(tr, &t.path)) {
-                Some((size, files)) => Some((
-                    ScanItem {
-                        path: t.path.clone(),
-                        label: t.label.clone(),
-                        size,
-                        file_count: files,
-                        category: t.category,
-                        last_modified: 0,
-                        recommended: t.recommended,
-                    },
-                    started.elapsed(),
-                    true,
-                )),
-                None => scan_dir(&t.path, &t.label, t.category, t.recommended, live)
-                    .map(|it| (it, started.elapsed(), false)),
-            }
+            engine
+                .measure_path(&t.path, live)
+                .map(|(size, files, newest)| {
+                    (
+                        ScanItem {
+                            path: t.path.clone(),
+                            label: t.label.clone(),
+                            size,
+                            file_count: files,
+                            category: t.category,
+                            last_modified: newest,
+                            recommended: t.recommended,
+                        },
+                        started.elapsed(),
+                    )
+                })
         })
         .collect();
 
-    let via_tree = measured.iter().filter(|(_, _, t)| *t).count();
     let top = slowest_targets(&measured, 5);
 
-    let results: Vec<ScanItem> = measured.into_iter().map(|(it, _, _)| it).collect();
+    let results: Vec<ScanItem> = measured.into_iter().map(|(it, _)| it).collect();
     let total: u64 = results.iter().map(|it| it.size).sum();
     crate::log!(
-        "阶段一 scan_fixed 完成：{:?}，{}/{} 个目标命中（{} 个走 MFT 查表 / {} 个走遍历），合计 {}；最慢 5 个：{}",
+        "阶段一 scan_fixed 完成：{:?}，{}/{} 个目标命中，合计 {}；最慢 5 个：{}",
         t0.elapsed(),
         results.len(),
         targets.len(),
-        via_tree,
-        results.len() - via_tree,
         crate::core::model::fmt_size(total),
         top.join(" | ")
     );
@@ -399,18 +397,21 @@ impl Acc {
     }
 }
 
-/// 扫描单个目录：大小 = 子树全部文件大小；文件数 = 全部文件数。
-fn scan_dir(
-    dir: &Path,
-    label: &Text,
-    category: CategoryId,
-    recommended: bool,
-    live: &AtomicBool,
-) -> Option<ScanItem> {
+/// 测算单个目标（文件或目录子树），返回 `(总字节数, 文件数, 最新 mtime 秒)`。
+///
+/// `FSIndexEngine::measure_path` 的树查回退通道，与 [`measure_dir`] 共用
+/// 同一套遍历口径：
+/// - 并行：前几层 rayon（见 [`walk_at`]）；
+/// - 口径：macOS 用磁盘块分配（blocks × 512），Windows 用逻辑大小；
+/// - 跳过符号链接（只计链接本身没意义，清理还可能碰到目标数据）；
+/// - 忽略 `desktop.ini`（空目录噪音）。
+///
+/// 路径不存在、符号链接或非普通文件类型返回 `None`。
+pub(crate) fn measure_target(path: &Path, live: &AtomicBool) -> Option<(u64, u64, u64)> {
     if !live.load(Ordering::Relaxed) {
         return None;
     }
-    let md = std::fs::symlink_metadata(dir).ok()?;
+    let md = std::fs::symlink_metadata(path).ok()?;
     if md.file_type().is_symlink() {
         return None;
     }
@@ -425,19 +426,11 @@ fn scan_dir(
                 .map_or(0, |d| d.as_secs()),
         }
     } else if md.is_dir() {
-        walk(dir, live)
+        walk(path, live)
     } else {
         return None;
     };
-    Some(ScanItem {
-        path: dir.to_path_buf(),
-        label: label.clone(),
-        size: acc.size,
-        file_count: acc.files,
-        category,
-        last_modified: acc.newest,
-        recommended,
-    })
+    Some((acc.size, acc.files, acc.newest))
 }
 
 fn allocated_file_size(md: &std::fs::Metadata) -> u64 {
@@ -614,20 +607,14 @@ mod tests {
         std::fs::write(&path, b"metadata").unwrap();
         let live = AtomicBool::new(true);
 
-        let item = scan_dir(
-            &path,
-            &Text::same("single"),
-            CategoryId::UserTemp,
-            true,
-            &live,
-        )
-        .unwrap();
+        let (size, files, newest) = measure_target(&path, &live).unwrap();
 
         assert_eq!(
-            item.size,
+            size,
             allocated_file_size(&std::fs::metadata(&path).unwrap())
         );
-        assert_eq!(item.file_count, 1);
+        assert_eq!(files, 1);
+        assert!(newest > 0, "单文件应带 mtime");
         let _ = std::fs::remove_file(path);
     }
 
