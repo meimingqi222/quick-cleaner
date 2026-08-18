@@ -789,15 +789,21 @@ fn refresh_macos_index(
     changed_paths.sort();
     changed_paths.dedup();
 
-    // FSEvents 可能把大量变化合并成索引根本身。这个事件不携带“究竟哪些
-    // 子目录变了”的信息，不能删掉后仍提交新的水位，否则被合并的变化会
-    // 永久漏进索引。宁可做一次一致性重扫。
+    // FSEvents 在事件量过大时会合并事件，合并后的根路径事件会带
+    // MustScanSubDirs / UserDropped / KernelDropped 等 flag——这些 flag
+    // 已经在 fsevents.rs 里检测并标记为 requires_full_scan=true，调用方
+    // 不会进入本函数。能走到这里的根路径事件只是根目录自身的元数据变化
+    // （权限、修改时间等），对文件树结构没有影响，可以安全跳过，继续
+    // 处理其余子目录变更。
     if changed_paths.iter().any(|path| path == mount) {
+        let before = changed_paths.len();
+        changed_paths.retain(|path| path != mount);
         crate::log!(
-            "refresh_macos_index: 收到索引根事件 {}，放弃增量",
-            mount.display()
+            "refresh_macos_index: 过滤根路径自身事件 {}（{} → {} 条变更）",
+            mount.display(),
+            before,
+            changed_paths.len()
         );
-        return None;
     }
 
     enum FileChange {
@@ -1429,16 +1435,20 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn incremental_refresh_rejects_coalesced_root_event() {
+    fn incremental_refresh_skips_benign_root_event() {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
+        // requires_full_scan=false 时的根路径事件只是根目录自身的元数据
+        // 变化（权限/修改时间），不是 FSEvents 合并事件。应该跳过该条事件、
+        // 继续返回 Some(scan)，而不是放弃整个增量。
         let base = std::env::temp_dir().join("qc_devscan_root_event");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let live = AtomicBool::new(true);
         let volume = VolumeId::from_mount_point(base.clone());
         let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        let original_records = original.records_read;
         let changes = Changes {
             paths: vec![base.clone()],
             last_event_id: 2,
@@ -1448,7 +1458,12 @@ mod tests {
             raw_event_count: 1,
         };
 
-        assert!(refresh_macos_index(&volume, original, &changes, &live).is_none());
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live)
+            .expect("benign root event should not abort incremental refresh");
+        assert_eq!(
+            refreshed.records_read, original_records,
+            "根路径元数据事件不应改变记录数"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
