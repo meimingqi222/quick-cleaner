@@ -625,6 +625,11 @@ impl Root {
             }
             cx.notify();
         }
+        // 非 macOS 平台没有 FDA 概念，显式消费 cx 以避免 clippy unused_variables
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = cx;
+        }
     }
 
     pub fn open_app_context_menu(&mut self, app: InstalledApp, x: f32, y: f32) {
