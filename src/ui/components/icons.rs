@@ -740,3 +740,284 @@ pub fn icon_zip(fg: u32, size: f32) -> AnyElement {
         )
         .into_any_element()
 }
+
+/// 文件夹文件图标
+pub fn icon_folder_file(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.88;
+    let h = size * 0.65;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .flex()
+                .child(div().w(px(w * 0.44)).h(px(2.5)).rounded_t_sm().bg(rgb(fg))),
+        )
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_b_sm()
+                .rounded_tr_sm()
+                .bg(rgba(fg, 0.25))
+                .border_1()
+                .border_color(rgb(fg)),
+        )
+        .into_any_element()
+}
+
+/// 通用空白文档图标
+pub fn icon_file_generic(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.68;
+    let h = size * 0.85;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(fg))
+                .bg(rgba(fg, 0.15)),
+        )
+        .into_any_element()
+}
+
+/// 文本/文档图标（三条横线）
+pub fn icon_file_doc(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.68;
+    let h = size * 0.85;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(fg))
+                .bg(rgba(fg, 0.15))
+                .flex()
+                .flex_col()
+                .justify_center()
+                .px(px(2.))
+                .gap(px(1.5))
+                .child(div().w_full().h(px(1.2)).rounded_full().bg(rgb(fg)))
+                .child(div().w(px(w * 0.75)).h(px(1.2)).rounded_full().bg(rgb(fg)))
+                .child(div().w(px(w * 0.5)).h(px(1.2)).rounded_full().bg(rgb(fg))),
+        )
+        .into_any_element()
+}
+
+/// 代码源文件图标（<> 符号）
+pub fn icon_file_code(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.72;
+    let h = size * 0.85;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(fg))
+                .bg(rgba(fg, 0.15))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(fg))
+                .child("<>"),
+        )
+        .into_any_element()
+}
+
+/// 数据库文件图标（多层圆柱体）
+pub fn icon_file_database(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.75;
+    let h = size * 0.85;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .flex()
+                .flex_col()
+                .justify_between()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(h * 0.28))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(rgb(fg))
+                        .bg(rgba(fg, 0.2)),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(h * 0.28))
+                        .rounded_b_full()
+                        .border_b_1()
+                        .border_x_1()
+                        .border_color(rgb(fg))
+                        .bg(rgba(fg, 0.2)),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(h * 0.28))
+                        .rounded_b_full()
+                        .border_b_1()
+                        .border_x_1()
+                        .border_color(rgb(fg))
+                        .bg(rgba(fg, 0.2)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// 可执行程序/应用图标
+pub fn icon_file_exe(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.78;
+    let h = size * 0.78;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(fg))
+                .bg(rgba(fg, 0.2))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .w(px(w * 0.45))
+                        .h(px(h * 0.45))
+                        .rounded_xs()
+                        .bg(rgb(fg)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// 定位/文件夹打开指示图标
+pub fn icon_locate(fg: u32, size: f32) -> AnyElement {
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .text_color(rgb(fg))
+        .child("↗")
+        .into_any_element()
+}
+
+/// 文件类型视觉分类
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileVisualKind {
+    Directory,
+    Executable,
+    Database,
+    Code,
+    Document,
+    Archive,
+    Media,
+    Generic,
+}
+
+impl FileVisualKind {
+    pub fn from_name(name: &str, is_dir: bool) -> Self {
+        if is_dir {
+            return Self::Directory;
+        }
+        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "exe" | "msi" | "bat" | "cmd" | "ps1" | "vbs" | "com" | "dll" | "sys" => {
+                Self::Executable
+            }
+            "db" | "sqlite" | "sqlite3" | "dat" | "bin" | "sql" | "mdb" | "accdb" | "db3"
+            | "rdb" => Self::Database,
+            "rs" | "go" | "py" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "h" | "hpp"
+            | "java" | "kt" | "swift" | "rb" | "php" | "html" | "css" | "scss" | "json"
+            | "yaml" | "yml" | "toml" | "xml" | "md" | "sh" | "lua" | "vue" => Self::Code,
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "log" | "rtf"
+            | "csv" | "ini" | "cfg" | "conf" => Self::Document,
+            "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso" | "cab" | "tgz" => {
+                Self::Archive
+            }
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" | "bmp" | "mp4" | "mkv"
+            | "avi" | "mov" | "mp3" | "wav" | "flac" | "aac" | "webm" => Self::Media,
+            _ => Self::Generic,
+        }
+    }
+
+    /// 返回该类型对应的精致原生矢量图标（无厚重背景底板，极简克制）
+    pub fn badge(&self, size: f32) -> AnyElement {
+        let fg = match self {
+            Self::Directory => 0xD97706,   // 琥珀暖金
+            Self::Executable => 0x7C3AED,  // 科技深紫
+            Self::Database => 0x0891B2,    // 沉稳青碧
+            Self::Code => 0x059669,        // 翠绿源码
+            Self::Document => 0x2563EB,    // 经典文档蓝
+            Self::Archive => 0xC2410C,     // 暖橙归档
+            Self::Media => 0xDB2777,       // 玫红媒体
+            Self::Generic => 0x64748B,     // 优雅中性灰
+        };
+        let icon = match self {
+            Self::Directory => icon_folder_file(fg, size),
+            Self::Executable => icon_file_exe(fg, size),
+            Self::Database => icon_file_database(fg, size),
+            Self::Code => icon_file_code(fg, size),
+            Self::Document => icon_file_doc(fg, size),
+            Self::Archive => icon_zip(fg, size),
+            Self::Media => icon_photos_similar(fg, size),
+            Self::Generic => icon_file_generic(fg, size),
+        };
+        div()
+            .w(px(size))
+            .h(px(size))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon)
+            .into_any_element()
+    }
+}
+

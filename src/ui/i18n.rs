@@ -1013,3 +1013,125 @@ pub fn tr_fda_check_failed(lang: Language) -> &'static str {
         Language::En => "Full Disk Access not detected yet. If enabled in System Settings, try restarting the app.",
     }
 }
+
+// ---- 文件搜索 ----
+
+pub fn tr_search_heading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "文件搜索",
+        Language::En => "File Search",
+    }
+}
+
+pub fn tr_search_subheading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "全盘索引，秒级检索任意文件",
+        Language::En => "Full-disk index, instant file search",
+    }
+}
+
+pub fn tr_file_search_placeholder(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "输入文件名关键词…",
+        Language::En => "Type a filename keyword…",
+    }
+}
+
+pub fn tr_search_results(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 条结果"),
+        Language::En => format!("{count} result{}", if count == 1 { "" } else { "s" }),
+    }
+}
+
+pub fn tr_search_empty(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "输入关键词开始搜索",
+        Language::En => "Type to start searching",
+    }
+}
+
+pub fn tr_search_no_results(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "未找到匹配文件",
+        Language::En => "No matching files found",
+    }
+}
+
+pub fn tr_search_indexing(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在构建全盘搜索索引…",
+        Language::En => "Building full-disk search index…",
+    }
+}
+
+pub fn tr_search_ready(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "搜索索引就绪",
+        Language::En => "Search index ready",
+    }
+}
+
+pub fn tr_search_no_index(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "无法构建搜索索引",
+        Language::En => "Failed to build search index",
+    }
+}
+
+pub fn tr_search_need_admin(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "文件搜索需要管理员权限才能读取 $MFT，请以管理员身份重新运行",
+        Language::En => "File search requires administrator privileges to read $MFT. Please relaunch as admin",
+    }
+}
+
+pub fn tr_search_open_in_explorer(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "在文件管理器中打开",
+        Language::En => "Open in file manager",
+    }
+}
+
+pub fn tr_search_col_name(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "名称",
+        Language::En => "Name",
+    }
+}
+
+pub fn tr_search_col_path(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "路径",
+        Language::En => "Path",
+    }
+}
+
+pub fn tr_search_col_size(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "大小",
+        Language::En => "Size",
+    }
+}
+
+pub fn tr_search_building_index(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在构建搜索索引，完成后即可搜索…",
+        Language::En => "Building search index, search will be available when done…",
+    }
+}
+
+pub fn tr_search_col_kind(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "类型",
+        Language::En => "Type",
+    }
+}
+
+pub fn tr_search_sort_kind(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "按类型聚合",
+        Language::En => "By Type",
+    }
+}
+

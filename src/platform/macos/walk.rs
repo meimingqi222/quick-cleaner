@@ -572,12 +572,16 @@ fn build_size_tree(volume: VolumeId, entries: Vec<RawEntry>) -> SizeTree {
         }
     }
 
-    // 转换成 SizeTree 的内部结构
+    // 转换成 SizeTree 的内部结构：名字灌入连续 name_pool，entry 只存偏移
     let mut tree_entries = Vec::with_capacity(n);
+    let mut name_pool = Vec::with_capacity(n * 16);
     for e in &entries {
+        let name_off = name_pool.len() as u32;
+        name_pool.extend_from_slice(e.name.as_bytes());
         tree_entries.push(TreeEntry {
             parent: e.parent,
-            name: e.name.clone(),
+            name_off,
+            name_len: e.name.len() as u16,
             is_dir: e.is_dir,
             size: e.size,
             used: true,
@@ -588,6 +592,7 @@ fn build_size_tree(volume: VolumeId, entries: Vec<RawEntry>) -> SizeTree {
     SizeTree::from_parts(
         volume,
         tree_entries,
+        name_pool,
         dir_size,
         dir_files,
         child_start,

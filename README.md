@@ -2,17 +2,17 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
-> **Blazing-fast, native, and safe Windows disk space analyzer & deep system cleaner**  
+> **Native, multi-threaded Windows disk space analyzer & system cleaner**  
 > Built with **Rust + GPUI**, zero WebView / Electron overhead, millisecond-level responsiveness, and GPU-accelerated rendering.
 
 ---
 
 ## Key Features
 
-### 1. NTFS $MFT Blazing-Fast Disk Analyzer (Disk Lens)
-- **Millisecond-Level Whole-Drive Indexing**: Directly parses the NTFS Master File Table (`$MFT`) without slow recursive filesystem walks. Indexes millions of files in 3-5 seconds (performance comparable to WizTree / Everything).
-- **Hierarchical Storage Lens**: Interactive donut charts and drillable directory trees to quickly pinpoint space-hogging large files and bloated folders.
-- **Multi-Volume Support**: Seamlessly switch between NTFS volumes (C:, D:, E:, etc.), automatically detecting total capacity and usage breakdowns.
+### 1. NTFS $MFT Raw Sector Disk Analyzer (Disk Lens)
+- **Fast Whole-Drive Indexing**: Directly parses the NTFS Master File Table (`$MFT`) without recursive filesystem walks. Indexes millions of files in 3-5 seconds.
+- **Hierarchical Storage Lens**: Interactive charts and drillable directory trees to quickly pinpoint space-hogging large files and bloated folders.
+- **Multi-Volume Support**: Switch between NTFS volumes (C:, D:, E:, etc.), automatically detecting total capacity and usage breakdowns.
 
 ### 2. CleanFlow Smart Junk Cleaning
 - **Comprehensive Coverage Across 10 Categories**:
@@ -42,7 +42,7 @@
 - **GPUI High-Performance Native UI**: Powered by Zed's GPUI rendering engine in pure Rust. Delivers sub-millisecond cold starts and smooth 60/120fps micro-animations.
 - **Two-Phase Scan**: The system-junk categories appear in about a second so the app is usable immediately; the expensive whole-disk hunt for build artifacts continues in the background and merges in when it finishes. (Measured on the dev machine: 33s before, first results in under 3s now.)
 - **Remembers Your Choices**: Language is detected from the Windows display language on first launch (Chinese system → Chinese, anything else → English) and persisted to `%APPDATA%\QuickCleaner\settings.json` once you pick one.
-- **Seamless Multilingual Support**: Every string — including the status bar, scan result labels and residual source badges — is bilingual (English / `中文`), switchable live from the sidebar pill. Scan results carry both languages with them, so switching never triggers a re-scan.
+- **Complete Multilingual Support**: Every string — including the status bar, scan result labels and residual source badges — is bilingual (English / `中文`), switchable live from the sidebar pill. Scan results carry both languages with them, so switching never triggers a re-scan.
 - **Refined Material / Fluent Aesthetic**: Free of excessive decorations or generic AI tropes, featuring a clean color token system and PerMonitorV2 High-DPI screen scaling.
 
 ---

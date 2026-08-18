@@ -45,11 +45,13 @@ use crate::ui::components::{
     ConfirmRequest, View,
 };
 use crate::ui::i18n::*;
+use crate::ui::text_input::clamp_search_sel;
 use crate::ui::theme::*;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
     render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,
-    render_disk_volume_dropdown, render_junk_view, DeclutterContextMenu, DeclutterState, DiskTab,
+    render_disk_volume_dropdown, render_junk_view, render_search_view, DeclutterContextMenu,
+    DeclutterState, DiskTab,
 };
 
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
@@ -274,6 +276,8 @@ pub struct AppsState {
     /// 软件表也走虚拟化列表，句柄需长期持有
     pub scroll: gpui::UniformListScrollHandle,
     pub scroll_drag: Option<(f32, f32)>,
+    /// 文本拖拽选区的锚点字节偏移（鼠标按下时的位置）
+    pub text_drag: Option<usize>,
     pub focus_handle: gpui::FocusHandle,
     pub context_menu: Option<AppsContextMenu>,
 }
@@ -292,6 +296,63 @@ pub enum UninstallPhase {
     Discovering = 0,
     Removing = 1,
     Verifying = 2,
+}
+
+/// 文件搜索结果排序列（表头配置）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchSortCol {
+    /// 按名称字母序
+    Name,
+    /// 按路径字母序
+    Path,
+    /// 按体积大小
+    Size,
+}
+
+impl Default for SearchSortCol {
+    fn default() -> Self {
+        Self::Size
+    }
+}
+
+/// 文件快速检索状态。
+///
+/// 搜索框走和 AppsState 搜索框一样的 IME 管线（EntityInputHandler），
+/// 通过 `active_input` 字段区分当前哪个输入框获得焦点。
+pub struct SearchState {
+    pub query: String,
+    /// 搜索框光标/选区的**字节**范围
+    pub sel: std::ops::Range<usize>,
+    /// 输入法组合中文本的字节范围
+    pub marked: Option<std::ops::Range<usize>>,
+    /// 搜索框最近一次绘制的位置，定位输入法候选窗口
+    pub bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    pub focus_handle: gpui::FocusHandle,
+    pub results: Vec<crate::core::disk::SearchHit>,
+    /// 是否正在后台构建搜索索引
+    pub indexing: bool,
+    pub index_task: Option<Task<()>>,
+    /// Windows: 所有卷的 MFT 树。macOS: 复用 Root::macos_root_index。
+    #[cfg(windows)]
+    pub indices: Vec<std::sync::Arc<crate::core::disk::ScanResult>>,
+    /// 文本拖拽选区的锚点字节偏移
+    pub text_drag: Option<usize>,
+    /// 搜索结果虚拟列表
+    pub scroll: gpui::UniformListScrollHandle,
+    /// 滚动条拖拽状态：(按下时鼠标 y, 按下时滚动 top)
+    pub scroll_drag: Option<(f32, f32)>,
+    /// 异步搜索任务句柄（用于防抖）
+    pub search_task: Option<Task<()>>,
+    /// 是否正在搜索中
+    pub is_searching: bool,
+    /// 一级排序：是否开启同类型文件聚合（默认开启）
+    pub group_by_kind: bool,
+    /// 二级排序：表头排序列（名称 / 路径 / 大小，默认大小）
+    pub sort_col: SearchSortCol,
+    /// 排序方向：true 为升序（A-Z / 小到大），false 为降序（Z-A / 大到小）
+    pub sort_asc: bool,
+    /// 结果集版本号，用于虚拟列表刷新
+    pub gen: u64,
 }
 
 pub struct UninstallProgress {
@@ -378,6 +439,9 @@ pub struct Root {
     pub confirm: Option<ConfirmRequest>,
     pub tick_task: Option<Task<()>>,
     pub anim_phase: usize,
+    /// 搜索框光标闪烁状态（true=显示，false=隐藏）
+    pub cursor_blink_visible: bool,
+    pub cursor_blink_task: Option<Task<()>>,
     /// macOS 专属：是否已获得完全磁盘访问权限（FDA）。
     pub fda_status: bool,
     /// 是否展示完全磁盘访问权限引导模态弹窗。
@@ -389,11 +453,10 @@ pub struct Root {
     pub disk: DiskState,
     pub clean: CleanState,
     pub declutter: DeclutterState,
-    /// macOS 用户目录索引缓存。垃圾扫描阶段加载/构建后存在这里。
-    /// 用 Arc 共享，避免克隆 6.6M 条目的 SizeTree。
-    #[cfg(not(windows))]
-    pub macos_index: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
-    /// macOS 整盘索引缓存（磁盘透镜显示 `/` 时用）。
+    pub search: SearchState,
+    /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
+    /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
+    /// 省掉 ~700MB 重复内存。
     #[cfg(not(windows))]
     pub macos_root_index: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
 }
@@ -444,6 +507,7 @@ impl Root {
         };
         let disk_space = get_volume_space(&disk_volume);
         let apps_focus_handle = cx.focus_handle();
+        let search_focus_handle = cx.focus_handle();
         // 有配置文件就照配置文件，没有就按系统显示语言（中文系统用中文，其余英文）
         let settings = Settings::load();
         #[cfg(target_os = "macos")]
@@ -467,6 +531,8 @@ impl Root {
             confirm: None,
             tick_task: None,
             anim_phase: 0,
+            cursor_blink_visible: true,
+            cursor_blink_task: None,
             fda_status,
             show_fda_onboarding,
 
@@ -503,6 +569,7 @@ impl Root {
                 view_key: None,
                 scroll: gpui::UniformListScrollHandle::new(),
                 scroll_drag: None,
+                text_drag: None,
                 focus_handle: apps_focus_handle,
                 context_menu: None,
             },
@@ -544,8 +611,28 @@ impl Root {
 
             declutter: DeclutterState::default(),
 
-            #[cfg(not(windows))]
-            macos_index: None,
+            search: SearchState {
+                query: String::new(),
+                sel: 0..0,
+                marked: None,
+                bounds: None,
+                focus_handle: search_focus_handle,
+                results: Vec::new(),
+                indexing: false,
+                index_task: None,
+                #[cfg(windows)]
+                indices: Vec::new(),
+                text_drag: None,
+                scroll: gpui::UniformListScrollHandle::new(),
+                scroll_drag: None,
+                search_task: None,
+                is_searching: false,
+                group_by_kind: true,
+                sort_col: SearchSortCol::Size,
+                sort_asc: false,
+                gen: 0,
+            },
+
             #[cfg(not(windows))]
             macos_root_index: None,
         }
@@ -729,7 +816,9 @@ impl Root {
             #[cfg(not(windows))]
             let pre = {
                 let _ = prescan_volume; // 消除未使用变量警告
-                crate::core::devscan::load_or_build_macos_index(&live)
+                // 直接用整盘索引——它包含用户目录，省掉单独构建/持有
+                // 用户目录索引的 ~700MB 内存。有缓存时加载同样快。
+                crate::core::devscan::load_or_build_macos_root_index(&live)
             };
             let cats = match &pre {
                 Some(s) => scan_fixed_with_tree(&targets, &live, &s.tree),
@@ -746,15 +835,26 @@ impl Root {
                 this.select_recommended();
                 let total_str = fmt_size(this.total_cleanable());
                 this.status = bilingual(|l| tr_status_scan_fixed_done(l, &total_str));
-                // macOS：load_or_build_macos_index 已返回 Arc<ScanResult>，
-                // 存一份给磁盘透镜复用，另一份（Arc clone）交给 start_discovery。
+                // macOS：prescanned 现在是整盘索引，直接作为 macos_root_index
+                // 给磁盘透镜复用。不再单独持有 macos_index（用户目录索引）——
+                // 整盘索引已包含用户目录，省掉 ~700MB 重复内存。
                 #[cfg(not(windows))]
                 {
-                    this.macos_index = prescanned.clone();
+                    this.macos_root_index = prescanned.clone();
                     this.start_discovery_arc(gen, prescanned, cx);
                 }
                 #[cfg(windows)]
                 {
+                    // 把垃圾扫描阶段解析的 MFT 存到搜索索引里，搜索功能
+                    // 可以直接复用，不必再扫一遍同一个卷。
+                    if let Some(s) = &prescanned {
+                        let arc = std::sync::Arc::new(s.clone());
+                        if !this.search.indices.iter().any(|existing| {
+                            existing.volume == arc.volume
+                        }) {
+                            this.search.indices.push(arc);
+                        }
+                    }
                     this.start_discovery(gen, prescanned, cx);
                 }
                 cx.notify();
@@ -1041,7 +1141,16 @@ impl Root {
                         if vol_for_task.mount_point() == std::path::Path::new("/") {
                             this.macos_root_index = Some(s.clone());
                         }
-                        this.disk.mft = Some(s);
+                        this.disk.mft = Some(s.clone());
+                        // 磁盘透镜扫完的 MFT 也存到搜索索引，搜索可复用
+                        #[cfg(windows)]
+                        {
+                            if !this.search.indices.iter().any(|existing| {
+                                existing.volume == s.volume
+                            }) {
+                                this.search.indices.push(s);
+                            }
+                        }
                         this.disk.gen += 1;
                     }
                     Err(e) => {
@@ -1056,6 +1165,328 @@ impl Root {
             })
             .ok();
         }));
+    }
+
+    // ---- 文件快速检索 ----
+
+    /// 搜索索引是否已就绪（可以立即搜索，不需要后台构建）。
+    fn search_index_ready(&self) -> bool {
+        #[cfg(windows)]
+        {
+            !self.search.indices.is_empty()
+        }
+        #[cfg(not(windows))]
+        {
+            self.macos_root_index.is_some()
+        }
+    }
+
+    /// 启动后台构建搜索索引。Windows 逐卷解析 $MFT；macOS 加载整盘索引。
+    pub fn start_search_index(&mut self, cx: &mut Context<Self>) {
+        if self.search.indexing {
+            return;
+        }
+
+        // Windows：如果搜索索引已经构建过，直接复用
+        #[cfg(windows)]
+        {
+            if !self.search.indices.is_empty() {
+                self.status = bilingual(|l| tr_search_ready(l).to_string());
+                self.run_search();
+                cx.notify();
+                return;
+            }
+        }
+
+        // macOS：如果已经有整盘索引，直接复用
+        #[cfg(not(windows))]
+        {
+            if self.macos_root_index.is_some() {
+                self.run_search();
+                cx.notify();
+                return;
+            }
+        }
+
+        // Windows：如果磁盘透镜已有 MFT 结果，直接复用，避免重复扫描
+        #[cfg(windows)]
+        {
+            if let Some(mft) = &self.disk.mft {
+                crate::log!("文件搜索：复用磁盘透镜已扫描的 MFT 索引（{} 条记录）",
+                    mft.records_read);
+                self.search.indices.clear();
+                self.search.indices.push(mft.clone());
+                self.status = bilingual(|l| tr_search_ready(l).to_string());
+                self.run_search();
+                cx.notify();
+                return;
+            }
+        }
+
+        // Windows 未提权时无法读 $MFT
+        #[cfg(windows)]
+        if !is_elevated() {
+            crate::log!("文件搜索：未提权，无法读取 $MFT");
+            self.status = bilingual(|l| tr_search_need_admin(l).to_string());
+            cx.notify();
+            return;
+        }
+
+        self.search.indexing = true;
+        self.status = bilingual(|l| tr_search_indexing(l).to_string());
+        self.start_tick(cx);
+        cx.notify();
+
+        let live = self.live.clone();
+        #[cfg(not(windows))]
+        let cached = self.macos_root_index.clone();
+
+        let scan = cx.background_executor().spawn(async move {
+            #[cfg(windows)]
+            {
+                use crate::platform::windows::mft::scan_volume;
+                use crate::platform::windows::volume::list_volumes;
+                let vols = list_volumes();
+                crate::log!("文件搜索：开始扫描 {} 个卷的 $MFT", vols.len());
+                let mut indices = Vec::new();
+                for vol in &vols {
+                    if !live.load(std::sync::atomic::Ordering::Relaxed) {
+                        crate::log!("文件搜索：扫描被取消");
+                        break;
+                    }
+                    crate::log!("文件搜索：扫描卷 {vol}");
+                    match scan_volume(vol, 0) {
+                        Ok(s) => {
+                            crate::log!("文件搜索：卷 {vol} 扫描完成，{} 条记录", s.records_read);
+                            indices.push(std::sync::Arc::new(s));
+                        }
+                        Err(e) => {
+                            crate::log!("文件搜索：卷 {vol} 扫描失败：{e:?}");
+                        }
+                    }
+                }
+                crate::log!("文件搜索：全部卷扫描完成，{} 个索引", indices.len());
+                indices
+            }
+            #[cfg(not(windows))]
+            {
+                if let Some(s) = cached {
+                    vec![s]
+                } else {
+                    match crate::core::devscan::load_or_build_macos_root_index(&live) {
+                        Some(s) => vec![s],
+                        None => vec![],
+                    }
+                }
+            }
+        });
+
+        self.search.index_task = Some(cx.spawn(async move |this, cx| {
+            let result = scan.await;
+            this.update(cx, |this, cx| {
+                this.search.indexing = false;
+                #[cfg(windows)]
+                {
+                    this.search.indices = result;
+                }
+                #[cfg(not(windows))]
+                {
+                    if let Some(s) = result.first() {
+                        this.macos_root_index = Some(s.clone());
+                    }
+                }
+                if this.search_index_ready() {
+                    this.status = bilingual(|l| tr_search_ready(l).to_string());
+                    this.run_search();
+                } else {
+                    this.status = bilingual(|l| tr_search_no_index(l).to_string());
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// 执行搜索（在主线程，索引已就绪时调用）。
+    pub fn run_search(&mut self) {
+        let query = self.search.query.trim();
+        if query.is_empty() {
+            self.search.results.clear();
+            self.search.gen += 1;
+            return;
+        }
+
+        let max_results = 500;
+        let mut all_hits = Vec::new();
+
+        #[cfg(windows)]
+        {
+            for idx in &self.search.indices {
+                all_hits.extend(idx.tree.search(query, max_results));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Some(idx) = &self.macos_root_index {
+                all_hits.extend(idx.tree.search(query, max_results));
+            }
+        }
+
+        // 合并后按大小降序，截断
+        all_hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        all_hits.truncate(max_results);
+        self.search.results = all_hits;
+        self.search.gen += 1;
+    }
+
+    /// 搜索框文本变化时触发搜索（带 120ms 防抖与后台异步检索，避免主线程打字卡顿）。
+    pub fn search_input_changed(&mut self, cx: &mut Context<Self>) {
+        if !self.search_index_ready() {
+            return;
+        }
+        let query = self.search.query.trim().to_string();
+        if query.is_empty() {
+            self.search.search_task = None;
+            self.search.results.clear();
+            self.search.is_searching = false;
+            self.search.gen += 1;
+            cx.notify();
+            return;
+        }
+
+        self.search.is_searching = true;
+        cx.notify();
+
+        #[cfg(windows)]
+        let indices = self.search.indices.clone();
+        #[cfg(not(windows))]
+        let macos_idx = self.macos_root_index.clone();
+
+        self.search.search_task = Some(cx.spawn(async move |this, cx| {
+            // 防抖延迟：120ms 内再次输入会由新任务替换
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+
+            let hits = cx.background_executor().spawn(async move {
+                let max_results = 500;
+                let mut all_hits = Vec::new();
+                #[cfg(windows)]
+                {
+                    for idx in &indices {
+                        all_hits.extend(idx.tree.search(&query, max_results));
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    if let Some(idx) = &macos_idx {
+                        all_hits.extend(idx.tree.search(&query, max_results));
+                    }
+                }
+                all_hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+                all_hits.truncate(max_results);
+                all_hits
+            }).await;
+
+            this.update(cx, |this, cx| {
+                this.search.results = hits;
+                this.apply_search_sort();
+                this.search.is_searching = false;
+                cx.notify();
+            }).ok();
+        }));
+    }
+
+    /// 执行文件搜索结果排序（一级：同类型文件聚合；二级：表头列排序与升降序）
+    pub fn apply_search_sort(&mut self) {
+        let group_by_kind = self.search.group_by_kind;
+        let col = self.search.sort_col;
+        let asc = self.search.sort_asc;
+
+        self.search.results.sort_by(|a, b| {
+            // 一级排序：按文件类型分类聚合
+            let kind_cmp = if group_by_kind {
+                let ka = crate::ui::components::icons::FileVisualKind::from_name(&a.name, a.is_dir) as u8;
+                let kb = crate::ui::components::icons::FileVisualKind::from_name(&b.name, b.is_dir) as u8;
+                ka.cmp(&kb)
+            } else {
+                std::cmp::Ordering::Equal
+            };
+
+            // 二级排序：按表头配置（名称 / 路径 / 大小）
+            let col_cmp = match col {
+                SearchSortCol::Name => {
+                    let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+                    if asc { cmp } else { cmp.reverse() }
+                }
+                SearchSortCol::Path => {
+                    let cmp = a.path.to_lowercase().cmp(&b.path.to_lowercase());
+                    if asc { cmp } else { cmp.reverse() }
+                }
+                SearchSortCol::Size => {
+                    let cmp = a.size.cmp(&b.size);
+                    if asc { cmp } else { cmp.reverse() }
+                }
+            };
+
+            kind_cmp
+                .then(col_cmp)
+                .then_with(|| b.size.cmp(&a.size))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        self.search.gen = self.search.gen.wrapping_add(1);
+    }
+
+    /// 切换一级排序开关：是否按同类型文件聚合
+    pub fn search_toggle_group_by_kind(&mut self, cx: &mut Context<Self>) {
+        self.search.group_by_kind = !self.search.group_by_kind;
+        self.apply_search_sort();
+        cx.notify();
+    }
+
+    /// 点击表头切换二级排序列与升降序
+    pub fn search_toggle_sort(&mut self, col: SearchSortCol, cx: &mut Context<Self>) {
+        if self.search.sort_col == col {
+            self.search.sort_asc = !self.search.sort_asc;
+        } else {
+            self.search.sort_col = col;
+            // 切换到新列时的自然默认方向：大小默认降序（大文件优先），其他列默认升序
+            self.search.sort_asc = match col {
+                SearchSortCol::Size => false,
+                _ => true,
+            };
+        }
+        self.apply_search_sort();
+        cx.notify();
+    }
+
+    /// 搜索框退格键
+    pub fn file_search_backspace(&mut self, cx: &mut Context<Self>) {
+        let sel = clamp_search_sel(&self.search.query, self.search.sel.clone());
+        if sel.start != sel.end {
+            self.search.query.replace_range(sel.clone(), "");
+            self.search.sel = sel.start..sel.start;
+        } else if sel.start > 0 {
+            let prev = self.search.query[..sel.start]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.search.query.replace_range(prev..sel.start, "");
+            self.search.sel = prev..prev;
+        }
+        self.search.marked = None;
+        self.search_input_changed(cx);
+    }
+
+    /// 清空搜索框
+    pub fn file_search_clear(&mut self, cx: &mut Context<Self>) {
+        self.search.search_task = None;
+        self.search.query.clear();
+        self.search.sel = 0..0;
+        self.search.marked = None;
+        self.search.results.clear();
+        self.search.is_searching = false;
+        self.search.gen += 1;
+        cx.notify();
     }
 
     /// 用户主动点击“重新分析”时不能直接复用进程内索引；清空它后让加载器
@@ -1265,7 +1696,6 @@ impl Root {
                 this.disk.mft = None;
                 #[cfg(not(windows))]
                 {
-                    this.macos_index = None;
                     this.macos_root_index = None;
                 }
 
@@ -1508,6 +1938,40 @@ impl Root {
         }));
     }
 
+    /// 唤醒输入框光标（立即设为可见，并确保闪烁定时任务运行）。
+    pub fn poke_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_blink_visible = true;
+        cx.notify();
+        self.ensure_cursor_blink(cx);
+    }
+
+    /// 确保光标闪烁任务正在运行（以 530ms 频率翻转光标可见性）。
+    pub fn ensure_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        if self.cursor_blink_task.is_some() {
+            return;
+        }
+        self.cursor_blink_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(530))
+                .await;
+            let should_continue = this
+                .update(cx, |this, cx| {
+                    this.cursor_blink_visible = !this.cursor_blink_visible;
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+
+            if !should_continue {
+                this.update(cx, |this, _| {
+                    this.cursor_blink_task = None;
+                })
+                .ok();
+                break;
+            }
+        }));
+    }
+
     pub fn clean_snapshot(&self) -> Option<CleanSnapshot> {
         self.clean.progress.as_ref().map(|p| p.snapshot())
     }
@@ -1671,7 +2135,6 @@ impl Root {
                     this.disk.mft = None;
                     #[cfg(not(windows))]
                     {
-                        this.macos_index = None;
                         this.macos_root_index = None;
                     }
                 }
@@ -1873,10 +2336,7 @@ impl Root {
         let live = self.live.clone();
         let mft_tree = self.disk.mft.clone();
         #[cfg(not(windows))]
-        let macos_idx = self
-            .macos_index
-            .clone()
-            .or_else(|| self.macos_root_index.clone());
+        let macos_idx = self.macos_root_index.clone();
 
         cx.spawn(async move |this, cx| {
             let scan_data = cx
@@ -1961,6 +2421,10 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_render_caches();
 
+        if self.search.focus_handle.is_focused(window) || self.apps.focus_handle.is_focused(window) {
+            self.ensure_cursor_blink(cx);
+        }
+
         let content = match self.view {
             View::Dashboard => render_dashboard_view(self, cx),
             View::Junk => render_junk_view(self, cx),
@@ -1968,6 +2432,7 @@ impl Render for Root {
             View::Apps => render_apps_view(self, window, cx),
             View::Disk => render_disk_view(self, cx),
             View::Declutter => render_declutter_view(self, cx),
+            View::Search => render_search_view(self, window, cx),
         };
 
         let mut main = div()
@@ -1986,6 +2451,7 @@ impl Render for Root {
             }
             View::Disk => self.disk.scanning,
             View::Declutter => self.declutter.scanning,
+            View::Search => self.search.indexing,
         };
 
         if is_scanning {

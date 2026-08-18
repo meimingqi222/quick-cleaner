@@ -15,15 +15,17 @@ pub enum View {
     Apps,
     Disk,
     Declutter,
+    Search,
 }
 
 impl View {
-    pub const ALL: [View; 5] = [
+    pub const ALL: [View; 6] = [
         View::Dashboard,
         View::Junk,
         View::Apps,
         View::Disk,
         View::Declutter,
+        View::Search,
     ];
 
     /// 中文文案。**仅供日志与命令行**，界面上用 `title_lang(lang)`——
@@ -44,6 +46,8 @@ impl View {
             (View::Disk, Language::En) => "Disk Lens",
             (View::Declutter, Language::Zh) => "冗余整理",
             (View::Declutter, Language::En) => "Declutter",
+            (View::Search, Language::Zh) => "文件搜索",
+            (View::Search, Language::En) => "File Search",
         }
     }
 
@@ -54,6 +58,7 @@ impl View {
             View::Apps => icon_apps(fg, 18.),
             View::Disk => icon_disk(fg, 18.),
             View::Declutter => icon_declutter(fg, 18.),
+            View::Search => icon_search(fg, 18.),
         }
     }
 }
@@ -108,6 +113,9 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 }
                 if v == View::Apps && !this.apps.scanned && !this.apps.scanning {
                     this.start_apps_scan(cx);
+                }
+                if v == View::Search && !this.search.indexing {
+                    this.start_search_index(cx);
                 }
                 cx.notify();
             }))

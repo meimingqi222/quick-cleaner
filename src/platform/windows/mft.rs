@@ -30,10 +30,15 @@ pub struct Node {
 }
 
 /// 扫描后保留下来的完整目录树，支持像 WizTree 那样逐层下钻。
+///
+/// 名字存在 `name_pool: Vec<u8>` 连续池里，`Entry` 只存
+/// `(name_off, name_len)`，省掉每条记录一次 String 堆分配。
+/// 6.3M 条目 × ~40 字节 allocator overhead ≈ 250MB。
 #[derive(Clone)]
 pub struct SizeTree {
     volume: VolumeId,
     entries: Vec<Entry>,
+    name_pool: Vec<u8>,
     dir_size: Vec<u64>,
     dir_files: Vec<u64>,
     child_start: Vec<u32>,
@@ -69,6 +74,14 @@ impl SizeTree {
         self.valid(idx) && self.entries[idx as usize].is_dir
     }
 
+    /// 取节点名字的 `&str` 引用（零拷贝，直接从 name_pool 切）。
+    fn entry_name_str(&self, idx: u32) -> &str {
+        let e = &self.entries[idx as usize];
+        let off = e.name_off as usize;
+        let end = off + e.name_len as usize;
+        std::str::from_utf8(&self.name_pool[off..end]).unwrap_or("")
+    }
+
     pub fn name_of(&self, idx: u32) -> String {
         if idx == ROOT_RECORD {
             return self.volume.display().to_string();
@@ -76,7 +89,7 @@ impl SizeTree {
         if !self.valid(idx) {
             return String::new();
         }
-        self.entries[idx as usize].name.clone()
+        self.entry_name_str(idx).to_string()
     }
 
     pub fn size_of(&self, idx: u32) -> u64 {
@@ -126,7 +139,7 @@ impl SizeTree {
 
     /// 复用调用方持有的缓存解析路径。同一批次里父链会被逐级记住。
     pub fn path_of_with(&self, idx: u32, cache: &mut HashMap<u32, String>) -> String {
-        resolve_path(&self.entries, idx, &self.volume, cache)
+        resolve_path(&self.entries, &self.name_pool, idx, &self.volume, cache)
     }
 
     fn child_slice(&self, idx: u32) -> &[u32] {
@@ -174,7 +187,7 @@ impl SizeTree {
         if !self.valid(idx) {
             return "";
         }
-        &self.entries[idx as usize].name
+        self.entry_name_str(idx)
     }
 
     pub fn children(&self, idx: u32) -> Vec<Node> {
@@ -182,13 +195,13 @@ impl SizeTree {
             .child_slice(idx)
             .iter()
             .filter(|&&c| {
-                self.valid(c) && !Self::is_ntfs_system_meta(c, &self.entries[c as usize].name)
+                self.valid(c) && !Self::is_ntfs_system_meta(c, self.entry_name_str(c))
             })
             .map(|&c| {
                 let e = &self.entries[c as usize];
                 Node {
                     idx: c,
-                    name: e.name.clone(),
+                    name: self.entry_name_str(c).to_string(),
                     is_dir: e.is_dir,
                     size: if e.is_dir {
                         self.dir_size[c as usize]
@@ -230,7 +243,7 @@ impl SizeTree {
             if heap.len() == n && e.size <= heap.peek().map(|Reverse((s, _))| *s).unwrap_or(0) {
                 continue;
             }
-            if Self::is_ntfs_system_meta(i as u32, &e.name) {
+            if Self::is_ntfs_system_meta(i as u32, self.entry_name_str(i as u32)) {
                 continue;
             }
             heap.push(Reverse((e.size, i as u32)));
@@ -245,7 +258,7 @@ impl SizeTree {
             .into_iter()
             .map(|(size, i)| Node {
                 idx: i,
-                name: self.entries[i as usize].name.clone(),
+                name: self.entry_name_str(i).to_string(),
                 is_dir: false,
                 size,
                 file_count: 1,
@@ -274,10 +287,7 @@ impl SizeTree {
             // 直接在 child_slice 上线性查找。旧实现调 children()，那会克隆
             // 每个子节点的名字再按体积排序，只为了取其中一个匹配项。
             let hit = self.child_slice(cur).iter().copied().find(|&c| {
-                self.valid(c)
-                    && self.entries[c as usize]
-                        .name
-                        .eq_ignore_ascii_case(&comp_str)
+                self.valid(c) && self.entry_name_str(c).eq_ignore_ascii_case(&comp_str)
             });
             match hit {
                 Some(idx) => {
@@ -306,6 +316,52 @@ impl SizeTree {
         }
     }
 
+    /// 全树子串搜索（类似 Everything）。
+    ///
+    /// 大小写不敏感，匹配节点名（不含路径）。命中后沿父链回溯拼完整路径。
+    /// `max_results` 截断结果数。跳过 NTFS 系统元数据节点。
+    /// 空查询返回空 Vec。
+    pub fn search(&self, query: &str, max_results: usize) -> Vec<crate::core::disk::SearchHit> {
+        if query.is_empty() || max_results == 0 {
+            return Vec::new();
+        }
+        let q = query.to_ascii_lowercase();
+        let mut cache = std::collections::HashMap::new();
+        let mut hits = Vec::new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if !e.used {
+                continue;
+            }
+            // 跳过 NTFS 系统元数据（$MFT、$LogFile 等）
+            if Self::is_ntfs_system_meta(i as u32, self.entry_name_str(i as u32)) {
+                continue;
+            }
+            let name = self.entry_name_str(i as u32);
+            if !name.to_ascii_lowercase().contains(&q) {
+                continue;
+            }
+            let path = self.path_of_with(i as u32, &mut cache);
+            let size = if e.is_dir {
+                self.dir_size[i]
+            } else {
+                e.size
+            };
+            hits.push(crate::core::disk::SearchHit {
+                path,
+                name: name.to_string(),
+                is_dir: e.is_dir,
+                size,
+                mtime: e.mtime,
+            });
+            if hits.len() >= max_results {
+                break;
+            }
+        }
+        // 按大小降序，让大文件/大目录排前面
+        hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        hits
+    }
+
     /// 递归遍历指定子树（带最大深度和目录过滤），收集所有符合条件的文件节点下标、体积与修改时间
     pub fn collect_subtree_files(
         &self,
@@ -326,7 +382,8 @@ impl SizeTree {
                 }
                 let e = &self.entries[c as usize];
                 if e.is_dir {
-                    if depth < max_depth && !is_declutter_ignored_dir_name(&e.name) {
+                    if depth < max_depth && !is_declutter_ignored_dir_name(self.entry_name_str(c))
+                    {
                         stack.push((c, depth + 1));
                     }
                 } else if e.size >= min_size && e.size <= max_size {
@@ -860,15 +917,21 @@ fn read_mft_record(
     None
 }
 
+/// 解析阶段的条目。`name` 是临时字段——`build_tree` 会把名字灌入
+/// `name_pool` 并清空它，之后 `Entry` 就只剩定长字段。
+/// 解析阶段 `name` 占 24 字节栈空间 + 堆分配；建树后释放。
 #[derive(Clone, Default)]
 struct Entry {
     parent: u32,
-    name: String,
+    name_off: u32,
+    name_len: u16,
     is_dir: bool,
-    size: u64,
     used: bool,
+    size: u64,
     base_ref: u32,
     mtime: u64,
+    /// 临时：解析阶段存名字，build_tree 灌入 name_pool 后清空。
+    name: String,
 }
 
 fn parse_record(rec: &[u8], out: &mut Entry, links: &mut Vec<(u32, u8)>) -> bool {
@@ -1217,7 +1280,7 @@ pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanEr
         ranked
             .iter()
             .map(|&i| DirUsage {
-                path: resolve_path(&entries, i, vol_id, &mut cache),
+                path: resolve_path(&entries, &[], i, vol_id, &mut cache),
                 size: dir_size[i as usize],
                 file_count: dir_files[i as usize],
             })
@@ -1270,7 +1333,7 @@ pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanEr
 
 fn build_tree(
     volume: VolumeId,
-    entries: Vec<Entry>,
+    mut entries: Vec<Entry>,
     dir_size: Vec<u64>,
     dir_files: Vec<u64>,
 ) -> SizeTree {
@@ -1307,9 +1370,23 @@ fn build_tree(
         }
     }
 
+    // 把名字灌入连续 name_pool，entry 只存偏移。
+    // 解析阶段每条 Entry.name 是独立堆分配；这里一次性释放掉，
+    // 之后 Entry 就只剩定长字段，省掉 6.3M × ~40 字节 allocator overhead。
+    let mut name_pool = Vec::with_capacity(n * 16);
+    for e in &mut entries {
+        let off = name_pool.len() as u32;
+        name_pool.extend_from_slice(e.name.as_bytes());
+        e.name_off = off;
+        e.name_len = e.name.len() as u16;
+        e.name.clear();
+        e.name.shrink_to_fit();
+    }
+
     SizeTree {
         volume,
         entries,
+        name_pool,
         dir_size,
         dir_files,
         child_start,
@@ -1348,6 +1425,7 @@ fn add_to_ancestors(
 
 fn resolve_path(
     entries: &[Entry],
+    name_pool: &[u8],
     idx: u32,
     volume: &VolumeId,
     cache: &mut HashMap<u32, String>,
@@ -1388,8 +1466,17 @@ fn resolve_path(
 
     let mut path = base;
     for &c in chain.iter().rev() {
+        let e = &entries[c as usize];
+        // name_pool 为空时（build_tree 之前的 dirs 排行榜路径）回退到 entry.name
+        let name: &str = if name_pool.is_empty() {
+            &e.name
+        } else {
+            let off = e.name_off as usize;
+            let end = off + e.name_len as usize;
+            std::str::from_utf8(&name_pool[off..end]).unwrap_or("")
+        };
         path.push('\\');
-        path.push_str(&entries[c as usize].name);
+        path.push_str(name);
         cache.insert(c, path.clone());
     }
     path
@@ -1404,12 +1491,14 @@ mod tests {
         let mut mk = |i: usize, parent: u32, name: &str, is_dir: bool, size: u64| {
             entries[i] = Entry {
                 parent,
-                name: name.to_string(),
+                name_off: 0,
+                name_len: 0,
                 is_dir,
                 size,
                 used: true,
                 base_ref: 0,
                 mtime: 0,
+                name: name.to_string(),
             };
         };
         mk(5, 5, "", true, 0);
@@ -1593,12 +1682,14 @@ mod tests {
         let mut mk = |i: usize, parent: u32, name: &str, is_dir: bool, size: u64| {
             entries[i] = Entry {
                 parent,
-                name: name.to_string(),
+                name_off: 0,
+                name_len: 0,
                 is_dir,
                 size,
                 used: true,
                 base_ref: 0,
                 mtime: 0,
+                name: name.to_string(),
             };
         };
         mk(0, 5, "$MFT", false, 3_000_000_000);

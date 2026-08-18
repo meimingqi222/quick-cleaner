@@ -179,7 +179,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         );
 
     // 快速分类过滤预设标签
-    let preset_buttons = AppFilterPreset::ALL.iter().map(|&p| {
+    let preset_buttons: Vec<AnyElement> = AppFilterPreset::ALL.iter().map(|&p| {
         let active = root.apps.preset == p;
         let p_label = p.label_lang(lang);
         div()
@@ -214,139 +214,61 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                 this.apps.preset = p;
                 cx.notify();
             }))
-    });
+            .into_any_element()
+    })
+    .collect();
 
     let search_focused = root.apps.focus_handle.is_focused(window);
-    let search_text = &root.apps.search;
+    let search_text = root.apps.search.clone();
+    let apps_focus_handle = root.apps.focus_handle.clone();
+    let search_sel = root.apps.search_sel.clone();
+    let search_marked = root.apps.search_marked.clone();
+    let font_size = 12.0;
 
-    let cursor_bar = if search_focused {
-        Some(
-            div()
-                .w(px(1.5))
-                .h(px(13.))
-                .flex_none()
-                .rounded_full()
-                .bg(rgb(PRIMARY)),
-        )
-    } else {
-        None
-    };
+    let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
+    let cursor_x =
+        crate::ui::text_input::x_for_index_layout(&search_text, sel.start, font_size, window);
+    let sel_x1 =
+        crate::ui::text_input::x_for_index_layout(&search_text, sel.start, font_size, window);
+    let sel_x2 =
+        crate::ui::text_input::x_for_index_layout(&search_text, sel.end, font_size, window);
 
-    let search_placeholder = tr_search_placeholder(lang);
-    let text_content = if search_text.is_empty() {
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .children(cursor_bar)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(OUTLINE))
-                    .child(search_placeholder),
-            )
-    } else {
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .flex()
-            .items_center()
-            .gap(px(1.5))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(rgb(TEXT))
-                    .child(search_text.clone()),
-            )
-            .children(cursor_bar)
-    };
-
-    let search_box = div()
-        .id("apps-search-box")
-        .track_focus(&root.apps.focus_handle)
-        // 输入处理器所借的 canvas 是绝对定位的，需要这个定位上下文
-        .relative()
-        .w(px(240.))
-        .h(px(32.))
-        .px_3()
-        .rounded_full()
-        .bg(rgb(SURF_LOW))
-        .border_1()
-        .when(search_focused, |d| {
-            d.border_color(rgb(PRIMARY)).bg(rgb(CARD))
-        })
-        .when(!search_focused, |d| {
-            d.border_color(rgba(OUTLINE_VAR, 0.6))
-                .hover(|h| h.bg(rgb(SURF_HIGH)))
-        })
-        .flex()
-        .items_center()
-        .gap_2()
-        .cursor_text()
-        .child(icon_search(
-            if search_focused { PRIMARY } else { OUTLINE },
-            13.,
-        ))
-        .child(text_content)
-        .when(!search_text.is_empty(), |d| {
-            d.child(
-                div()
-                    .id("clear-search-btn")
-                    .px_1()
-                    .rounded_full()
-                    .text_xs()
-                    .text_color(rgb(OUTLINE))
-                    .cursor_pointer()
-                    .hover(|h| h.text_color(rgb(ERROR)))
-                    .child("✕")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.search_clear();
-                        cx.notify();
-                    })),
-            )
-        })
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.apps.focus_handle.focus(window);
+    let search_box = crate::ui::components::search_box::search_box(
+        crate::ui::components::search_box::SearchBoxSpec {
+            id: SharedString::from("apps-search-box"),
+            focus_handle: &apps_focus_handle,
+            text: &search_text,
+            placeholder: SharedString::from(tr_search_placeholder(lang)),
+            selection: sel,
+            marked: search_marked,
+            width: 240.,
+            height: 32.,
+            font_size,
+            cursor_h: 13.,
+            focused: search_focused,
+            cursor_visible: root.cursor_blink_visible,
+            cursor_x,
+            sel_x1,
+            sel_x2,
+            is_file_search: false,
+        },
+        |this, cx| {
+            this.search_clear();
             cx.notify();
-        }))
-        // 只处理编辑键。字符输入（含输入法组合）全部由 EntityInputHandler
-        // 接管，见 ui::text_input——这里再追加一次会让每个字母输入两遍。
-        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-            match event.keystroke.key.as_str() {
-                "backspace" => {
-                    this.search_backspace();
-                    cx.notify();
-                }
-                "escape" => {
-                    this.search_clear();
-                    cx.notify();
-                }
-                _ => {}
-            }
-        }))
-        // 把输入处理器挂到焦点上。必须在绘制阶段调用 Window::handle_input，
-        // 所以借一个零尺寸 canvas 拿到 bounds 并在它的 paint 回调里注册。
-        .child(
-            gpui::canvas(move |bounds, _window, _cx| bounds, {
-                let handle = root.apps.focus_handle.clone();
-                let entity = cx.entity();
-                move |_, bounds: gpui::Bounds<gpui::Pixels>, window, cx| {
-                    entity.update(cx, |this, _| {
-                        this.apps.search_bounds = Some(bounds);
-                    });
-                    window.handle_input(
-                        &handle,
-                        gpui::ElementInputHandler::new(bounds, entity.clone()),
-                        cx,
-                    );
-                }
-            })
-            .absolute()
-            .size_full(),
-        );
+        },
+        |this, cx| {
+            this.search_backspace();
+            cx.notify();
+        },
+        |this, cx| {
+            this.search_clear();
+            cx.notify();
+        },
+        |this, bounds| {
+            this.apps.search_bounds = Some(bounds);
+        },
+        cx,
+    );
 
     let filter_stats_text = if root.apps.search.is_empty() {
         match lang {

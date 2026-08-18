@@ -111,6 +111,16 @@ pub fn is_declutter_ignored_dir_name(name: &str) -> bool {
     )
 }
 
+/// 文件搜索结果条目。跨平台共用。
+#[derive(Clone, Debug)]
+pub struct SearchHit {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime: u64,
+}
+
 #[cfg(windows)]
 pub use crate::platform::windows::mft::{
     DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD as ROOT_NODE,
@@ -146,10 +156,15 @@ pub mod fallback {
     ///
     /// 与 Windows 的 `SizeTree` API 完全一致，但内部用紧凑数组存储，
     /// 由 `platform::macos::walk::build_size_tree` 构造。
+    ///
+    /// 名字存在 `name_pool: Vec<u8>` 连续池里，`TreeEntry` 只存
+    /// `(name_off, name_len)`，省掉每条记录一次 String 堆分配。
+    /// 6.6M 条目 × ~40 字节 allocator overhead ≈ 260MB。
     #[derive(Clone, Debug)]
     pub struct SizeTree {
         volume: VolumeId,
         entries: Vec<TreeEntry>,
+        name_pool: Vec<u8>,
         dir_size: Vec<u64>,
         dir_files: Vec<u64>,
         child_start: Vec<u32>,
@@ -157,13 +172,18 @@ pub mod fallback {
     }
 
     /// SizeTree 的内部条目，与 Windows 的 `Entry` 等价。
+    ///
+    /// 名字不存 `String` 而存 `(name_off, name_len)`，指向
+    /// `SizeTree::name_pool` 中的 UTF-8 字节区间。定长 36 字节，
+    /// vs 原 `String` 版本 52 字节 + 堆分配。
     #[derive(Clone, Debug, Default)]
     pub struct TreeEntry {
         pub parent: u32,
-        pub name: String,
+        pub name_off: u32,
+        pub name_len: u16,
         pub is_dir: bool,
-        pub size: u64,
         pub used: bool,
+        pub size: u64,
         /// 文件最后修改时间（Unix 秒），目录为 0。
         pub mtime: u64,
     }
@@ -203,16 +223,21 @@ pub mod fallback {
         /// 构造一棵空树（只有根节点占位）。
         pub fn empty(volume: VolumeId) -> Self {
             let label = volume.display().to_string();
+            let mut name_pool = Vec::new();
+            let name_off = name_pool.len() as u32;
+            name_pool.extend_from_slice(label.as_bytes());
             Self {
                 volume,
                 entries: vec![TreeEntry {
                     parent: 0,
-                    name: label,
+                    name_off,
+                    name_len: label.len() as u16,
                     is_dir: true,
                     size: 0,
                     used: true,
                     mtime: 0,
                 }],
+                name_pool,
                 dir_size: vec![0],
                 dir_files: vec![0],
                 child_start: vec![0, 0],
@@ -224,6 +249,7 @@ pub mod fallback {
         pub fn from_parts(
             volume: VolumeId,
             entries: Vec<TreeEntry>,
+            name_pool: Vec<u8>,
             dir_size: Vec<u64>,
             dir_files: Vec<u64>,
             child_start: Vec<u32>,
@@ -232,11 +258,28 @@ pub mod fallback {
             Self {
                 volume,
                 entries,
+                name_pool,
                 dir_size,
                 dir_files,
                 child_start,
                 child_at,
             }
+        }
+
+        /// 把名字追加到池里，返回 `(name_off, name_len)`。
+        /// 供 `build_from_entries` / `append_subtree` 等构造路径使用。
+        fn pool_push(&mut self, name: &str) -> (u32, u16) {
+            let off = self.name_pool.len() as u32;
+            self.name_pool.extend_from_slice(name.as_bytes());
+            (off, name.len() as u16)
+        }
+
+        /// 取节点名字的 `&str` 引用（零拷贝，直接从 name_pool 切）。
+        fn entry_name_str(&self, idx: u32) -> &str {
+            let e = &self.entries[idx as usize];
+            let off = e.name_off as usize;
+            let end = off + e.name_len as usize;
+            std::str::from_utf8(&self.name_pool[off..end]).unwrap_or("")
         }
 
         /// 把完整目录树转换成适合持久化的扁平索引。
@@ -280,7 +323,7 @@ pub mod fallback {
                     } else {
                         remap[entry.parent as usize]
                     },
-                    name: entry.name.clone(),
+                    name: self.entry_name_str(index as u32).to_string(),
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: true,
@@ -291,18 +334,23 @@ pub mod fallback {
 
         /// 从紧凑持久化节点重建运行时目录树。
         pub fn from_compact(volume: VolumeId, compact: Vec<TreeIndexEntry>) -> Self {
-            let entries: Vec<TreeEntry> = compact
-                .into_iter()
-                .map(|entry| TreeEntry {
+            let n = compact.len();
+            let mut entries = Vec::with_capacity(n);
+            let mut name_pool = Vec::with_capacity(n * 16);
+            for entry in compact {
+                let name_off = name_pool.len() as u32;
+                name_pool.extend_from_slice(entry.name.as_bytes());
+                entries.push(TreeEntry {
                     parent: entry.parent,
-                    name: entry.name,
+                    name_off,
+                    name_len: entry.name.len() as u16,
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: entry.used,
                     mtime: entry.mtime,
-                })
-                .collect();
-            Self::build_from_entries(volume, entries)
+                });
+            }
+            Self::build_from_entries_with_pool(volume, entries, name_pool)
         }
 
         /// 从持久化的扁平节点重建运行时目录树。
@@ -317,14 +365,11 @@ pub mod fallback {
                     .count()
             });
 
-            let mut entries = vec![TreeEntry {
-                parent: ROOT_NODE,
-                name: volume.display().to_string(),
-                is_dir: true,
-                size: 0,
-                used: true,
-                mtime: 0,
-            }];
+            // 先用 (parent, name, is_dir, size, mtime) 中间结构，最后灌入 name_pool
+            let mut raw: Vec<(u32, String, bool, u64, u64)> =
+                Vec::with_capacity(snapshot.len() + 1);
+            raw.push((ROOT_NODE, volume.display().to_string(), true, 0, 0));
+
             let mut path_to_idx = HashMap::new();
             path_to_idx.insert(root_path.clone(), ROOT_NODE);
 
@@ -341,22 +386,48 @@ pub mod fallback {
                 let Some(&parent) = path_to_idx.get(parent_path) else {
                     continue;
                 };
-                let idx = entries.len() as u32;
-                entries.push(TreeEntry {
+                let idx = raw.len() as u32;
+                raw.push((
                     parent,
-                    name: name.to_string_lossy().into_owned(),
-                    is_dir: entry.is_dir,
-                    size: if entry.is_dir { 0 } else { entry.size },
-                    used: true,
-                    mtime: entry.mtime,
-                });
+                    name.to_string_lossy().into_owned(),
+                    entry.is_dir,
+                    if entry.is_dir { 0 } else { entry.size },
+                    entry.mtime,
+                ));
                 path_to_idx.insert(entry.path, idx);
             }
 
-            Self::build_from_entries(volume, entries)
+            Self::build_from_raw(volume, raw)
         }
 
-        fn build_from_entries(volume: VolumeId, entries: Vec<TreeEntry>) -> Self {
+        /// 从 `(parent, name, is_dir, size, mtime)` 列表构建树。
+        /// `from_snapshot` 和 `from_compact` 的共用后端。
+        fn build_from_raw(volume: VolumeId, raw: Vec<(u32, String, bool, u64, u64)>) -> Self {
+            let n = raw.len();
+            let mut entries = Vec::with_capacity(n);
+            let mut name_pool = Vec::with_capacity(n * 16);
+            for (parent, name, is_dir, size, mtime) in raw {
+                let name_off = name_pool.len() as u32;
+                name_pool.extend_from_slice(name.as_bytes());
+                entries.push(TreeEntry {
+                    parent,
+                    name_off,
+                    name_len: name.len() as u16,
+                    is_dir,
+                    size,
+                    used: true,
+                    mtime,
+                });
+            }
+            Self::build_from_entries_with_pool(volume, entries, name_pool)
+        }
+
+        /// 从已填好 name_pool 的 entries 构建 CSR 索引和聚合数组。
+        fn build_from_entries_with_pool(
+            volume: VolumeId,
+            entries: Vec<TreeEntry>,
+            name_pool: Vec<u8>,
+        ) -> Self {
             let n = entries.len();
             let mut dir_size = vec![0u64; n];
             let mut dir_files = vec![0u64; n];
@@ -400,7 +471,7 @@ pub mod fallback {
                 }
             }
 
-            Self::from_parts(volume, entries, dir_size, dir_files, child_start, child_at)
+            Self::from_parts(volume, entries, name_pool, dir_size, dir_files, child_start, child_at)
         }
 
         pub fn volume(&self) -> &VolumeId {
@@ -427,7 +498,7 @@ pub mod fallback {
             if !self.valid(idx) {
                 return String::new();
             }
-            self.entries[idx as usize].name.clone()
+            self.entry_name_str(idx).to_string()
         }
 
         pub fn size_of(&self, idx: u32) -> u64 {
@@ -560,7 +631,7 @@ pub mod fallback {
 
             let mut path = base;
             for &node in chain.iter().rev() {
-                let name = &self.entries[node as usize].name;
+                let name = self.entry_name_str(node);
                 if !path.ends_with('/') {
                     path.push('/');
                 }
@@ -598,7 +669,7 @@ pub mod fallback {
             if !self.valid(idx) {
                 return "";
             }
-            &self.entries[idx as usize].name
+            self.entry_name_str(idx)
         }
 
         pub fn children(&self, idx: u32) -> Vec<Node> {
@@ -610,7 +681,7 @@ pub mod fallback {
                     let e = &self.entries[c as usize];
                     Node {
                         idx: c,
-                        name: e.name.clone(),
+                        name: self.entry_name_str(c).to_string(),
                         is_dir: e.is_dir,
                         size: if e.is_dir {
                             self.dir_size[c as usize]
@@ -658,7 +729,7 @@ pub mod fallback {
                 .into_iter()
                 .map(|(size, i)| Node {
                     idx: i,
-                    name: self.entries[i as usize].name.clone(),
+                    name: self.entry_name_str(i).to_string(),
                     is_dir: false,
                     size,
                     file_count: 1,
@@ -688,7 +759,9 @@ pub mod fallback {
                     }
                     let e = &self.entries[c as usize];
                     if e.is_dir {
-                        if depth < max_depth && !super::is_declutter_ignored_dir_name(&e.name) {
+                        if depth < max_depth
+                            && !super::is_declutter_ignored_dir_name(self.entry_name_str(c))
+                        {
                             stack.push((c, depth + 1));
                         }
                     } else if e.size >= min_size && e.size <= max_size {
@@ -720,17 +793,16 @@ pub mod fallback {
                 }
                 let hit = self.child_slice(cur).iter().copied().find(|&c| {
                     self.valid(c) && {
+                        let name = self.entry_name_str(c);
                         // macOS 文件系统大小写不敏感（APFS 默认），
                         // 用 eq_ignore_ascii_case 匹配，避免 Devin/devin 查不到。
                         #[cfg(not(windows))]
                         {
-                            self.entries[c as usize]
-                                .name
-                                .eq_ignore_ascii_case(&comp_str)
+                            name.eq_ignore_ascii_case(&comp_str)
                         }
                         #[cfg(windows)]
                         {
-                            self.entries[c as usize].name == comp_str
+                            name == comp_str.as_ref()
                         }
                     }
                 });
@@ -765,6 +837,48 @@ pub mod fallback {
 
         pub fn remove_node(&mut self, _idx: u32) {
             // macOS 上目前不实现就地删除——清理走的是 cleaner 模块
+        }
+
+        /// 全树子串搜索（类似 Everything）。
+        ///
+        /// 大小写不敏感，匹配节点名（不含路径）。命中后沿父链回溯拼完整路径。
+        /// `max_results` 截断结果数，避免命中太多时路径回溯吃 CPU。
+        /// 空查询返回空 Vec。
+        pub fn search(&self, query: &str, max_results: usize) -> Vec<super::SearchHit> {
+            if query.is_empty() || max_results == 0 {
+                return Vec::new();
+            }
+            let q = query.to_ascii_lowercase();
+            let mut cache = HashMap::new();
+            let mut hits = Vec::new();
+            for (i, e) in self.entries.iter().enumerate() {
+                if !e.used {
+                    continue;
+                }
+                let name = self.entry_name_str(i as u32);
+                if !name.to_ascii_lowercase().contains(&q) {
+                    continue;
+                }
+                let path = self.path_of_with(i as u32, &mut cache);
+                let size = if e.is_dir {
+                    self.dir_size[i]
+                } else {
+                    e.size
+                };
+                hits.push(super::SearchHit {
+                    path,
+                    name: name.to_string(),
+                    is_dir: e.is_dir,
+                    size,
+                    mtime: e.mtime,
+                });
+                if hits.len() >= max_results {
+                    break;
+                }
+            }
+            // 按大小降序，让大文件/大目录排前面
+            hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+            hits
         }
 
         // ---- 就地子树替换 API（增量索引更新用） ----
@@ -828,10 +942,13 @@ pub mod fallback {
             let Some(name) = path.file_name() else {
                 return false;
             };
+            let name_str = name.to_string_lossy();
+            let (name_off, name_len) = self.pool_push(&name_str);
 
             self.entries.push(TreeEntry {
                 parent,
-                name: name.to_string_lossy().into_owned(),
+                name_off,
+                name_len,
                 is_dir: false,
                 size,
                 used: true,
@@ -903,10 +1020,11 @@ pub mod fallback {
                     base + entry.parent
                 };
                 let name = if i == 0 {
-                    root_name.to_string()
+                    root_name
                 } else {
-                    entry.name.clone()
+                    subtree.entry_name_str(i as u32)
                 };
+                let (name_off, name_len) = self.pool_push(name);
                 let new_dir_size = if entry.is_dir { subtree.dir_size[i] } else { 0 };
                 let new_dir_files = if entry.is_dir {
                     subtree.dir_files[i]
@@ -915,7 +1033,8 @@ pub mod fallback {
                 };
                 self.entries.push(TreeEntry {
                     parent: new_parent,
-                    name,
+                    name_off,
+                    name_len,
                     is_dir: entry.is_dir,
                     size: entry.size,
                     used: true,

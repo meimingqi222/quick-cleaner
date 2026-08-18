@@ -18,6 +18,7 @@ pub mod donut;
 pub mod icons;
 pub mod progress;
 pub mod scroll;
+pub mod search_box;
 pub mod sidebar;
 pub mod topbar;
 
@@ -31,5 +32,6 @@ pub use dialogs::{
 pub use icons::*;
 pub use progress::{render_progress_bar, render_scan_line, render_uninstall_progress};
 pub use scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
+pub use search_box::{search_box, SearchBoxSpec};
 pub use sidebar::{render_sidebar, View};
 pub use topbar::render_top_bar;

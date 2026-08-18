@@ -826,15 +826,31 @@ extern "system" {
     fn ILCreateFromPathW(pszpath: winapi::um::winnt::LPCWSTR) -> *mut winapi::um::shtypes::ITEMIDLIST;
 }
 
-/// 使用系统默认程序打开文件或目录
+/// 使用系统默认程序打开文件或目录（走 Windows Shell 原生 API，无任何控制台黑框弹出）
 pub fn open_in_default_app(path: &std::path::Path) {
     if !path.exists() {
         return;
     }
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", ""])
-        .arg(path)
-        .spawn();
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_open: Vec<u16> = std::ffi::OsStr::new("open")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        winapi::um::shellapi::ShellExecuteW(
+            std::ptr::null_mut(),
+            wide_open.as_ptr(),
+            wide_path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            winapi::um::winuser::SW_SHOWNORMAL,
+        );
+    }
 }
 
 /// 运行软件官方卸载向导并等待其退出
