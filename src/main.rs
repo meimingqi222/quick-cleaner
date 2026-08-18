@@ -56,9 +56,19 @@ fn main() {
 
                 cx.new(|cx| {
                     let mut root = Root::new(cx);
-                    // 两个扫描互相独立：垃圾扫描每次清理后都会重跑，而软件
-                    // 列表只在启动、用户主动刷新或卸载完成后重扫。
-                    root.start_scan(cx);
+                    // macOS 上若需要显示完全磁盘访问权限引导，先不自动扫描——
+                    // 否则扫描会立刻访问 ~/Library/Caches、Safari 缓存等受保护
+                    // 目录，在用户还没决定是否授权前就弹出一堆 TCC 权限窗口。
+                    // 引导弹窗里的「检查权限」或「稍后」会负责触发首次扫描。
+                    #[cfg(target_os = "macos")]
+                    if !root.show_fda_onboarding {
+                        root.start_scan(cx);
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        root.start_scan(cx);
+                    }
+                    // 软件列表扫描主要读 /Applications，不触发 TCC，可安全启动
                     root.start_apps_scan(cx);
                     root
                 })

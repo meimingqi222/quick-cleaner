@@ -595,9 +595,16 @@ impl Root {
     }
 
     /// 关闭完全磁盘访问权限引导弹窗。
+    ///
+    /// 用户点「稍后」走到这里：选择不带 FDA 继续使用。若此时还没扫过垃圾，
+    /// 就触发首次扫描——启动时为了不触发 TCC 弹窗刻意跳过了，这里补上。
     pub fn close_fda_guide(&mut self, cx: &mut Context<Self>) {
         self.show_fda_onboarding = false;
-        cx.notify();
+        if !self.junk.scanned && !self.junk.scanning && !self.clean.running {
+            self.start_scan(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// 切换「不再自动弹出完全磁盘访问权限引导」，并立刻落盘。
@@ -616,14 +623,16 @@ impl Root {
             if granted {
                 self.show_fda_onboarding = false;
                 self.status = bilingual(|l| tr_fda_check_success(l).to_string());
-                // 若之前已完成垃圾扫描，重新触发一次扫描以扫出刚解锁的 Safari 缓存等
-                if self.junk.scanned && !self.junk.scanning && !self.clean.running {
+                // 无论之前是否扫过，获得 FDA 后都（重新）触发一次扫描：
+                // 首次启动时为了不触发 TCC 弹窗跳过了扫描，这里补上；
+                // 已扫过的话则重新扫以扫出刚解锁的 Safari 缓存等。
+                if !self.junk.scanning && !self.clean.running {
                     self.start_scan(cx);
                 }
             } else {
                 self.status = bilingual(|l| tr_fda_check_failed(l).to_string());
+                cx.notify();
             }
-            cx.notify();
         }
         // 非 macOS 平台没有 FDA 概念，显式消费 cx 以避免 clippy unused_variables
         #[cfg(not(target_os = "macos"))]
