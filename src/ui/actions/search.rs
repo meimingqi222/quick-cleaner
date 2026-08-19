@@ -3,8 +3,6 @@
 use crate::core::i18n::bilingual;
 #[cfg(windows)]
 use crate::platform::is_elevated;
-#[cfg(windows)]
-use crate::platform::scan_volume;
 use crate::ui::i18n::*;
 use crate::ui::text_input::clamp_to_boundary;
 use crate::ui::SearchSortCol;

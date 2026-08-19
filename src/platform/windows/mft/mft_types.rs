@@ -1,10 +1,8 @@
 //! MFT 类型定义：SizeTree / ScanResult / ScanError
 
-use rayon::prelude::*;
+use super::mft_parser::Entry;
+use super::mft_scanner::resolve_path;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-
-use std::os::windows::ffi::OsStrExt;
 
 use crate::core::disk::VolumeId;
 

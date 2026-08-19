@@ -10,10 +10,10 @@ pub use mft_types::{DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD
 #[cfg(test)]
 mod tests {
     use super::mft_parser::{
-        apply_fixup, attr_header, collect_data_fragments, parse_record, parse_runs,
-        read_mft_record, u16_at, u32_at, u64_at, Entry,
+        apply_fixup, attribute_list_data_records, collect_data_fragments, flatten_fragments,
+        parse_record, parse_runs, u16_at, DataFragment, Entry,
     };
-    use super::mft_scanner::{add_to_ancestors, build_tree, resolve_path};
+    use super::mft_scanner::build_tree;
     use super::*;
     use crate::core::disk::VolumeId;
     use rayon::prelude::*;

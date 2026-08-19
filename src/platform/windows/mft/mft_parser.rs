@@ -2,7 +2,6 @@
 
 use super::mft_types::*;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 
 const FSCTL_GET_NTFS_VOLUME_DATA: u32 = 0x0009_0064;
@@ -76,7 +75,7 @@ impl Volume {
         Ok(Volume { handle })
     }
 
-    fn volume_data(&self) -> Result<NtfsVolumeData, ScanError> {
+    pub(super) fn volume_data(&self) -> Result<NtfsVolumeData, ScanError> {
         use winapi::um::ioapiset::DeviceIoControl;
 
         let mut data = NtfsVolumeData::default();
