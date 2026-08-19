@@ -298,8 +298,8 @@ pub(super) fn attr_header(rec: &[u8], pos: usize) -> Option<(u32, usize, bool, u
 
 #[derive(Clone, Debug)]
 pub(super) struct DataFragment {
-    start_vcn: u64,
-    runs: Vec<(i64, u64)>,
+    pub(super) start_vcn: u64,
+    pub(super) runs: Vec<(i64, u64)>,
 }
 
 pub(super) fn collect_data_fragments(rec: &[u8], out: &mut Vec<DataFragment>) {

@@ -36,13 +36,13 @@ pub struct Node {
 /// 6.3M 条目 × ~40 字节 allocator overhead ≈ 250MB。
 #[derive(Clone)]
 pub struct SizeTree {
-    volume: VolumeId,
-    entries: Vec<Entry>,
-    name_pool: Vec<u8>,
-    dir_size: Vec<u64>,
-    dir_files: Vec<u64>,
-    child_start: Vec<u32>,
-    child_at: Vec<u32>,
+    pub(super) volume: VolumeId,
+    pub(super) entries: Vec<Entry>,
+    pub(super) name_pool: Vec<u8>,
+    pub(super) dir_size: Vec<u64>,
+    pub(super) dir_files: Vec<u64>,
+    pub(super) child_start: Vec<u32>,
+    pub(super) child_at: Vec<u32>,
 }
 
 impl std::fmt::Debug for SizeTree {
@@ -353,7 +353,7 @@ impl SizeTree {
             }
         }
         // 按大小降序，让大文件/大目录排前面
-        hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         hits
     }
 
