@@ -1,7 +1,8 @@
 //! 软件管理与深度卸载动作
 
 use crate::core::apps::{
-    app_gone_after_residual_clean, InstalledApp, ResidualItem, ResidualScanResult,
+    app_gone_after_residual_clean, residual_clean_follow_up, InstalledApp, ResidualItem,
+    ResidualScanResult,
 };
 use crate::core::cleaner::CleanProgress;
 use crate::core::i18n::{bilingual, Language};
@@ -281,51 +282,31 @@ impl crate::ui::Root {
                     .collect();
                 this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
 
-                // 未选项必须继续保留；已选但删除失败/仍存在的项目也要放回
-                // 对话框，方便授权后重试，不能因为一次失败就丢掉扫描结果。
+                // 没勾选的项视为这次不处理，不再二次弹出。勾选了却没删掉的
+                // 才留在对话框里方便授权后重试。
                 let failed: HashSet<PathBuf> = report.failed.iter().cloned().collect();
-                let mut retry_selected = HashSet::new();
-                let mut next_index = 0usize;
                 let original_items = res.items;
-                let remaining: Vec<ResidualItem> = original_items
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(old_index, item)| {
-                        let was_selected = selected_before.contains(&old_index);
-                        let remains = if !was_selected {
-                            true
-                        } else {
-                            match &item.kind {
-                                crate::core::apps::ResidualKind::File(path, _)
-                                | crate::core::apps::ResidualKind::Directory(path, _) => {
-                                    path.exists() || failed.contains(path)
-                                }
-                                _ => failed.contains(&PathBuf::from(item.kind.display_label())),
-                            }
-                        };
-                        if remains {
-                            if was_selected {
-                                retry_selected.insert(next_index);
-                            }
-                            next_index += 1;
-                            Some(item.clone())
-                        } else {
-                            None
+                let follow = residual_clean_follow_up(&original_items, &selected_before, |item| {
+                    match &item.kind {
+                        crate::core::apps::ResidualKind::File(path, _)
+                        | crate::core::apps::ResidualKind::Directory(path, _) => {
+                            path.exists() || failed.contains(path)
                         }
-                    })
-                    .collect();
-                this.residual.selected = retry_selected;
-                if app_gone_after_residual_clean(&original_items, &remaining) {
+                        _ => failed.contains(&PathBuf::from(item.kind.display_label())),
+                    }
+                });
+                this.residual.selected = follow.retry_selected;
+                if app_gone_after_residual_clean(&original_items, &follow.leftover_for_app) {
                     this.drop_app_from_list(&res.app_id);
                 }
-                if remaining.is_empty() {
+                if follow.retry_items.is_empty() {
                     this.residual.result = None;
                 } else {
-                    let total_file_size = remaining.iter().map(ResidualItem::size).sum();
+                    let total_file_size = follow.retry_items.iter().map(ResidualItem::size).sum();
                     this.residual.result = Some(ResidualScanResult {
                         app_name: app_name.clone(),
                         app_id: res.app_id.clone(),
-                        items: remaining,
+                        items: follow.retry_items,
                         total_file_size,
                     });
                 }

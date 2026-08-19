@@ -2,6 +2,7 @@
 
 use crate::core::i18n::Language;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// 软件所属注册表根分支
@@ -562,6 +563,45 @@ pub fn app_gone_after_residual_clean(
     gone(ResidualSource::UninstallEntry) || gone(ResidualSource::InstallDir)
 }
 
+/// 「彻底清除所选」之后对话框该怎么收尾。
+///
+/// `retry_items` 才会再弹一次：只有勾选了却没清掉的。用户没勾的项视为
+/// 这次不处理，不能再弹第二次。`leftover_for_app` 仍包含未勾选项，用来
+/// 判断软件是否还该留在已安装列表——没清就不能当成已经卸干净。
+pub struct ResidualCleanFollowUp {
+    pub retry_items: Vec<ResidualItem>,
+    pub retry_selected: HashSet<usize>,
+    pub leftover_for_app: Vec<ResidualItem>,
+}
+
+pub fn residual_clean_follow_up(
+    items: &[ResidualItem],
+    selected: &HashSet<usize>,
+    still_present: impl Fn(&ResidualItem) -> bool,
+) -> ResidualCleanFollowUp {
+    let mut retry_selected = HashSet::new();
+    let mut retry_items = Vec::new();
+    let mut leftover_for_app = Vec::new();
+
+    for (idx, item) in items.iter().enumerate() {
+        if !selected.contains(&idx) {
+            leftover_for_app.push(item.clone());
+            continue;
+        }
+        if still_present(item) {
+            retry_selected.insert(retry_items.len());
+            leftover_for_app.push(item.clone());
+            retry_items.push(item.clone());
+        }
+    }
+
+    ResidualCleanFollowUp {
+        retry_items,
+        retry_selected,
+        leftover_for_app,
+    }
+}
+
 impl ResidualScanResult {
     /// 默认应当勾选的条目下标——只勾「确定」的。
     pub fn default_selection(&self) -> std::collections::HashSet<usize> {
@@ -1109,6 +1149,76 @@ mod command_tests {
             ResidualSource::InstallDir,
         )];
         assert!(app_gone_after_residual_clean(&original, &[]));
+    }
+
+    fn sample_residual_items() -> Vec<ResidualItem> {
+        vec![
+            ResidualItem::certain(
+                ResidualKind::Directory(PathBuf::from(r"C:\Program Files\Foo"), 100),
+                ResidualSource::InstallDir,
+            ),
+            ResidualItem::certain(
+                ResidualKind::RegistryKey(AppRegRoot::Hklm, "Software\\Uninstall\\Foo".into()),
+                ResidualSource::UninstallEntry,
+            ),
+            ResidualItem::possible(
+                ResidualKind::Directory(PathBuf::from(r"C:\Users\me\AppData\Local\Foo"), 12),
+                ResidualSource::AppDataDir,
+            ),
+            ResidualItem::possible(
+                ResidualKind::Directory(PathBuf::from(r"C:\Users\me\AppData\Roaming\Foo"), 8),
+                ResidualSource::AppDataDir,
+            ),
+        ]
+    }
+
+    /// 勾选的 6 项清掉后，默认未勾选的 2 项不能再弹第二次。
+    #[test]
+    fn follow_up_does_not_reopen_dialog_for_unselected_items() {
+        let items = sample_residual_items();
+        let selected: HashSet<usize> = [0, 1].into_iter().collect();
+        let follow = residual_clean_follow_up(&items, &selected, |_| false);
+        assert!(
+            follow.retry_items.is_empty(),
+            "未勾选项不应再次进入残留弹窗"
+        );
+        assert!(follow.retry_selected.is_empty());
+        assert_eq!(follow.leftover_for_app.len(), 2);
+        assert!(app_gone_after_residual_clean(
+            &items,
+            &follow.leftover_for_app
+        ));
+    }
+
+    /// 勾选了却没删掉的，才留在对话框里方便重试；未勾选项仍不进弹窗。
+    #[test]
+    fn follow_up_retries_only_failed_selected_items() {
+        let items = sample_residual_items();
+        let selected: HashSet<usize> = [0].into_iter().collect();
+        let follow = residual_clean_follow_up(&items, &selected, |item| {
+            item.source == ResidualSource::InstallDir
+        });
+        assert_eq!(follow.retry_items.len(), 1);
+        assert_eq!(follow.retry_items[0].source, ResidualSource::InstallDir);
+        assert_eq!(follow.retry_selected.len(), 1);
+        assert_eq!(follow.leftover_for_app.len(), 4);
+        assert!(!app_gone_after_residual_clean(
+            &items,
+            &follow.leftover_for_app
+        ));
+    }
+
+    /// 只清了缓存、安装目录和卸载登记项都没勾，软件仍应留在已安装列表。
+    #[test]
+    fn follow_up_keeps_app_when_install_dir_was_left_unchecked() {
+        let items = sample_residual_items();
+        let selected: HashSet<usize> = [2].into_iter().collect();
+        let follow = residual_clean_follow_up(&items, &selected, |_| false);
+        assert!(follow.retry_items.is_empty());
+        assert!(!app_gone_after_residual_clean(
+            &items,
+            &follow.leftover_for_app
+        ));
     }
 }
 
