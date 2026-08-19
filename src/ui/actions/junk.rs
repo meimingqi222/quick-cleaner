@@ -14,6 +14,8 @@ use crate::core::scanner::scan_discovered_arc;
 use crate::core::scanner::{merge_discovered, scan_fixed, scan_fixed_with_tree};
 #[cfg(windows)]
 use crate::platform::is_elevated;
+#[cfg(windows)]
+use crate::platform::scan_volume;
 use crate::ui::i18n::*;
 use gpui::Context;
 use std::sync::atomic::{AtomicBool, Ordering};

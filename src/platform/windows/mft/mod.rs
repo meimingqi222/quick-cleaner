@@ -15,6 +15,8 @@ mod tests {
     };
     use super::mft_scanner::{add_to_ancestors, build_tree, resolve_path};
     use super::*;
+    use crate::core::disk::VolumeId;
+    use rayon::prelude::*;
 
     fn synthetic_tree() -> SizeTree {
         let mut entries = vec![Entry::default(); 12];
