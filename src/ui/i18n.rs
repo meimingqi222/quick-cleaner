@@ -1082,7 +1082,9 @@ pub fn tr_search_no_index(lang: Language) -> &'static str {
 pub fn tr_search_need_admin(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "文件搜索需要管理员权限才能读取 $MFT，请以管理员身份重新运行",
-        Language::En => "File search requires administrator privileges to read $MFT. Please relaunch as admin",
+        Language::En => {
+            "File search requires administrator privileges to read $MFT. Please relaunch as admin"
+        }
     }
 }
 
@@ -1134,4 +1136,3 @@ pub fn tr_search_sort_kind(lang: Language) -> &'static str {
         Language::En => "By Type",
     }
 }
-

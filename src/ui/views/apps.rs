@@ -179,44 +179,46 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         );
 
     // 快速分类过滤预设标签
-    let preset_buttons: Vec<AnyElement> = AppFilterPreset::ALL.iter().map(|&p| {
-        let active = root.apps.preset == p;
-        let p_label = p.label_lang(lang);
-        div()
-            .id(SharedString::from(format!(
-                "preset-app-{}",
-                p.label_lang(Language::En)
-            )))
-            .px_3()
-            .py(px(4.))
-            .rounded_full()
-            .text_xs()
-            .font_weight(if active {
-                gpui::FontWeight::SEMIBOLD
-            } else {
-                gpui::FontWeight::NORMAL
-            })
-            .cursor_pointer()
-            .border_1()
-            .when(active, |d| {
-                d.bg(rgb(PRIMARY_FIXED))
-                    .border_color(rgb(PRIMARY))
-                    .text_color(rgb(PRIMARY))
-            })
-            .when(!active, |d| {
-                d.bg(rgb(CARD))
-                    .border_color(rgba(OUTLINE_VAR, 0.8))
-                    .text_color(rgb(MUTED))
-                    .hover(|h| h.bg(rgb(SURF_LOW)))
-            })
-            .child(p_label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.apps.preset = p;
-                cx.notify();
-            }))
-            .into_any_element()
-    })
-    .collect();
+    let preset_buttons: Vec<AnyElement> = AppFilterPreset::ALL
+        .iter()
+        .map(|&p| {
+            let active = root.apps.preset == p;
+            let p_label = p.label_lang(lang);
+            div()
+                .id(SharedString::from(format!(
+                    "preset-app-{}",
+                    p.label_lang(Language::En)
+                )))
+                .px_3()
+                .py(px(4.))
+                .rounded_full()
+                .text_xs()
+                .font_weight(if active {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::NORMAL
+                })
+                .cursor_pointer()
+                .border_1()
+                .when(active, |d| {
+                    d.bg(rgb(PRIMARY_FIXED))
+                        .border_color(rgb(PRIMARY))
+                        .text_color(rgb(PRIMARY))
+                })
+                .when(!active, |d| {
+                    d.bg(rgb(CARD))
+                        .border_color(rgba(OUTLINE_VAR, 0.8))
+                        .text_color(rgb(MUTED))
+                        .hover(|h| h.bg(rgb(SURF_LOW)))
+                })
+                .child(p_label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.apps.preset = p;
+                    cx.notify();
+                }))
+                .into_any_element()
+        })
+        .collect();
 
     let search_focused = root.apps.focus_handle.is_focused(window);
     let search_text = root.apps.search.clone();

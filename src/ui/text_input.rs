@@ -25,7 +25,7 @@
 //! 非字符边界上，所以下面每处转换都要显式做。
 
 use gpui::{
-    font, Bounds, Context, EntityInputHandler, LineLayout, Pixels, px, TextRun, UTF16Selection,
+    font, px, Bounds, Context, EntityInputHandler, LineLayout, Pixels, TextRun, UTF16Selection,
     Window,
 };
 use std::ops::Range;
@@ -51,7 +51,9 @@ pub fn layout_single_line_window(
             strikethrough: None,
         }]
     };
-    window.text_system().layout_line(text, px(font_size), &runs, None)
+    window
+        .text_system()
+        .layout_line(text, px(font_size), &runs, None)
 }
 
 /// 根据相对文本起点的 x 像素坐标，通过底层 DirectWrite/CoreText 真实排版精确计算对应的字符字节索引。
@@ -70,12 +72,7 @@ pub fn closest_index_for_x_layout(
 }
 
 /// 计算指定字符字节索引在排版中的精确 X 坐标（像素）。
-pub fn x_for_index_layout(
-    text: &str,
-    index: usize,
-    font_size: f32,
-    window: &mut Window,
-) -> f32 {
+pub fn x_for_index_layout(text: &str, index: usize, font_size: f32, window: &mut Window) -> f32 {
     if text.is_empty() || index == 0 {
         return 0.0;
     }
@@ -127,16 +124,11 @@ pub fn clamp_to_boundary(s: &str, r: Range<usize>) -> Range<usize> {
     start.min(end)..start.max(end)
 }
 
-/// 文件搜索框的选区钳位（公开给 mod.rs 调用）。
-pub fn clamp_search_sel(s: &str, r: Range<usize>) -> Range<usize> {
-    clamp_to_boundary(s, r)
-}
-
 /// 光标向左移动。
 /// - 没有 shift 且有选区：光标跳到选区起点
 /// - 没有 shift 且无选区：向左退一个字符
 /// - 有 shift：选区向左扩展
-pub fn move_left(text: &str, sel: Range<usize>, shift: bool, _ctrl: bool) -> Range<usize> {
+pub fn move_left(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
     let sel = clamp_to_boundary(text, sel);
     if !shift {
         if sel.start != sel.end {
@@ -169,7 +161,7 @@ pub fn move_left(text: &str, sel: Range<usize>, shift: bool, _ctrl: bool) -> Ran
 /// - 没有 shift 且有选区：光标跳到选区终点
 /// - 没有 shift 且无选区：向右进一个字符
 /// - 有 shift：选区向右扩展
-pub fn move_right(text: &str, sel: Range<usize>, shift: bool, _ctrl: bool) -> Range<usize> {
+pub fn move_right(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
     let sel = clamp_to_boundary(text, sel);
     if !shift {
         if sel.start != sel.end {
@@ -284,13 +276,13 @@ impl Root {
         self.apps.search_marked = None;
     }
 
-    pub fn apps_search_move_left(&mut self, shift: bool, ctrl: bool) {
-        self.apps.search_sel = move_left(&self.apps.search, self.apps.search_sel.clone(), shift, ctrl);
+    pub fn apps_search_move_left(&mut self, shift: bool) {
+        self.apps.search_sel = move_left(&self.apps.search, self.apps.search_sel.clone(), shift);
         self.apps.search_marked = None;
     }
 
-    pub fn apps_search_move_right(&mut self, shift: bool, ctrl: bool) {
-        self.apps.search_sel = move_right(&self.apps.search, self.apps.search_sel.clone(), shift, ctrl);
+    pub fn apps_search_move_right(&mut self, shift: bool) {
+        self.apps.search_sel = move_right(&self.apps.search, self.apps.search_sel.clone(), shift);
         self.apps.search_marked = None;
     }
 
@@ -304,14 +296,14 @@ impl Root {
         self.apps.search_marked = None;
     }
 
-    pub fn file_search_move_left(&mut self, shift: bool, ctrl: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_left(&self.search.query, self.search.sel.clone(), shift, ctrl);
+    pub fn file_search_move_left(&mut self, shift: bool, cx: &mut Context<Self>) {
+        self.search.sel = move_left(&self.search.query, self.search.sel.clone(), shift);
         self.search.marked = None;
         cx.notify();
     }
 
-    pub fn file_search_move_right(&mut self, shift: bool, ctrl: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_right(&self.search.query, self.search.sel.clone(), shift, ctrl);
+    pub fn file_search_move_right(&mut self, shift: bool, cx: &mut Context<Self>) {
+        self.search.sel = move_right(&self.search.query, self.search.sel.clone(), shift);
         self.search.marked = None;
         cx.notify();
     }
@@ -545,9 +537,11 @@ impl EntityInputHandler for Root {
         if self.file_search_focused(window) {
             let bounds = self.search.bounds?;
             let text = &self.search.query;
-            let text_start_x: f32 = f32::from(bounds.origin.x) + 34.0;
+            // 文本起点偏移与 search_box.rs 里的鼠标点击保持一致（+33.0），
+            // 字号与 search.rs 里 render_search_box 的 font_size 一致（13.0）。
+            let text_start_x: f32 = f32::from(bounds.origin.x) + 33.0;
             let rel_x: f32 = f32::from(point.x) - text_start_x;
-            let byte_idx = char_index_from_x(text, rel_x, 14.0);
+            let byte_idx = closest_index_for_x_layout(text, rel_x, 13.0, window);
             // EntityInputHandler 要求 UTF-16 索引
             Some(offset_to_utf16(text, byte_idx))
         } else {
@@ -555,72 +549,10 @@ impl EntityInputHandler for Root {
             let text = &self.apps.search;
             let text_start_x: f32 = f32::from(bounds.origin.x) + 33.0;
             let rel_x: f32 = f32::from(point.x) - text_start_x;
-            let byte_idx = char_index_from_x(text, rel_x, 12.0);
+            let byte_idx = closest_index_for_x_layout(text, rel_x, 12.0, window);
             Some(offset_to_utf16(text, byte_idx))
         }
     }
-}
-
-/// 精确估算单个字符在 UI 渲染时的宽度（基于常见系统无衬线字体比例）
-pub fn char_width(ch: char, font_size: f32) -> f32 {
-    if ch.is_ascii() {
-        match ch {
-            'i' | 'l' | '|' | '!' | ':' | ';' | '.' | ',' | '\'' | '`' => font_size * 0.28,
-            ' ' | 'j' | 't' | 'I' | '[' | ']' | '(' | ')' | '{' | '}' => font_size * 0.35,
-            'f' | 'r' | '-' | '"' => font_size * 0.40,
-            's' | 'z' | 'x' | 'c' | 'k' | 'v' | 'y' => font_size * 0.48,
-            'a' | 'b' | 'd' | 'e' | 'g' | 'h' | 'n' | 'o' | 'p' | 'q' | 'u' => font_size * 0.53,
-            '0'..='9' => font_size * 0.54,
-            'M' | 'W' => font_size * 0.84,
-            'C' | 'D' | 'G' | 'O' | 'Q' | 'U' => font_size * 0.70,
-            'A'..='Z' => font_size * 0.65,
-            'm' | 'w' => font_size * 0.78,
-            '@' | '%' | '&' | '#' => font_size * 0.85,
-            _ => font_size * 0.55,
-        }
-    } else if (ch >= '\u{4E00}' && ch <= '\u{9FFF}')
-        || (ch >= '\u{3400}' && ch <= '\u{4DBF}')
-        || (ch >= '\u{F900}' && ch <= '\u{FAFF}')
-        || (ch >= '\u{3000}' && ch <= '\u{303F}')
-        || (ch >= '\u{FF00}' && ch <= '\u{FFEF}')
-    {
-        // CJK 汉字与全角标点
-        font_size * 1.0
-    } else {
-        font_size * 0.8
-    }
-}
-
-/// 根据点击位置相对于文本起点的 X 偏移，估算对应的字节偏移。
-pub fn char_index_from_x_with_cursor(
-    text: &str,
-    rel_x: f32,
-    font_size: f32,
-    existing_cursor: Option<usize>,
-) -> usize {
-    if rel_x <= 0.0 {
-        return 0;
-    }
-    let mut acc_x = 0.0f32;
-    let mut last_idx = 0;
-    for (i, ch) in text.char_indices() {
-        if let Some(cursor_pos) = existing_cursor {
-            if i == cursor_pos {
-                acc_x += 1.5;
-            }
-        }
-        let char_w = char_width(ch, font_size);
-        if acc_x + char_w * 0.5 >= rel_x {
-            return i;
-        }
-        acc_x += char_w;
-        last_idx = i + ch.len_utf8();
-    }
-    last_idx
-}
-
-pub fn char_index_from_x(text: &str, rel_x: f32, font_size: f32) -> usize {
-    char_index_from_x_with_cursor(text, rel_x, font_size, None)
 }
 
 #[cfg(test)]
@@ -682,17 +614,17 @@ mod tests {
         let s = "abc中文def";
         // 从末尾向左移动
         let len = s.len();
-        let r1 = move_left(s, len..len, false, false);
+        let r1 = move_left(s, len..len, false);
         assert_eq!(&s[r1.start..], "f");
-        
+
         // 跨越中文字符向左
         let idx_zhong = s.find("中").unwrap();
         let idx_wen = s.find("文").unwrap();
-        let r2 = move_left(s, idx_wen..idx_wen, false, false);
+        let r2 = move_left(s, idx_wen..idx_wen, false);
         assert_eq!(r2, idx_zhong..idx_zhong);
 
         // 向右移动
-        let r3 = move_right(s, idx_zhong..idx_zhong, false, false);
+        let r3 = move_right(s, idx_zhong..idx_zhong, false);
         assert_eq!(r3, idx_wen..idx_wen);
 
         // Home / End
@@ -723,25 +655,5 @@ mod tests {
         let next_sel3 = delete_backward(&mut s2, 5..11);
         assert_eq!(s2, "hello");
         assert_eq!(next_sel3, 5..5);
-    }
-
-    #[test]
-    fn test_char_index_from_x_numbers() {
-        let text = "4444";
-        let font_size = 14.0;
-
-        // 点击在第 2 个 '4' 和第 3 个 '4' 之间（约 15.12px 左右）
-        // 缝隙前后宽容度：12.0px ~ 18.0px 均应准确判定为 index 2
-        assert_eq!(char_index_from_x_with_cursor(text, 14.0, font_size, None), 2);
-        assert_eq!(char_index_from_x_with_cursor(text, 15.12, font_size, None), 2);
-        assert_eq!(char_index_from_x_with_cursor(text, 16.0, font_size, None), 2);
-
-        // 如果之前光标在末尾（index 4），再次点击第 2 和第 3 个 '4' 之间
-        assert_eq!(char_index_from_x_with_cursor(text, 15.12, font_size, Some(4)), 2);
-
-        // 点击在最前面
-        assert_eq!(char_index_from_x_with_cursor(text, 1.0, font_size, None), 0);
-        // 点击在最后面
-        assert_eq!(char_index_from_x_with_cursor(text, 40.0, font_size, None), 4);
     }
 }

@@ -5,7 +5,7 @@
 //! 采用 GPUI 底层平台字体引擎（DirectWrite / CoreText）进行真实排版与精确命中测试。
 
 use crate::ui::components::icons::icon_search;
-use crate::ui::text_input::{clamp_search_sel, clamp_to_boundary, closest_index_for_x_layout};
+use crate::ui::text_input::{clamp_to_boundary, closest_index_for_x_layout};
 use crate::ui::theme::*;
 use gpui::{
     div, prelude::*, px, rgb, Bounds, Context, DispatchPhase, Div, FocusHandle, KeyDownEvent,
@@ -229,7 +229,7 @@ pub fn search_box(
                             font_size,
                             window,
                         );
-                        let idx = clamp_search_sel(&this.search.query, idx..idx).start;
+                        let idx = clamp_to_boundary(&this.search.query, idx..idx).start;
                         this.search.sel = idx..idx;
                         this.search.text_drag = Some(idx);
                         this.search.marked = None;
@@ -238,12 +238,8 @@ pub fn search_box(
                     if let Some(b) = this.apps.search_bounds {
                         let text_start_x: f32 = f32::from(b.origin.x) + 33.0;
                         let rel_x = mouse_x - text_start_x;
-                        let idx = closest_index_for_x_layout(
-                            &this.apps.search,
-                            rel_x,
-                            font_size,
-                            window,
-                        );
+                        let idx =
+                            closest_index_for_x_layout(&this.apps.search, rel_x, font_size, window);
                         let idx = clamp_to_boundary(&this.apps.search, idx..idx).start;
                         this.apps.search_sel = idx..idx;
                         this.apps.text_drag = Some(idx);
@@ -254,8 +250,7 @@ pub fn search_box(
             })
         })
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _window, cx| {
-            let ctrl = event.keystroke.modifiers.control
-                || event.keystroke.modifiers.platform;
+            let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
             let shift = event.keystroke.modifiers.shift;
             match event.keystroke.key.as_str() {
                 "backspace" => on_backspace(this, cx),
@@ -270,17 +265,17 @@ pub fn search_box(
                 "escape" => on_escape(this, cx),
                 "left" => {
                     if is_file_search {
-                        this.file_search_move_left(shift, ctrl, cx);
+                        this.file_search_move_left(shift, cx);
                     } else {
-                        this.apps_search_move_left(shift, ctrl);
+                        this.apps_search_move_left(shift);
                         cx.notify();
                     }
                 }
                 "right" => {
                     if is_file_search {
-                        this.file_search_move_right(shift, ctrl, cx);
+                        this.file_search_move_right(shift, cx);
                     } else {
-                        this.apps_search_move_right(shift, ctrl);
+                        this.apps_search_move_right(shift);
                         cx.notify();
                     }
                 }
@@ -314,13 +309,11 @@ pub fn search_box(
                 // Ctrl+C：复制选中文本
                 "c" if ctrl => {
                     let text = if is_file_search {
-                        let sel = clamp_search_sel(&this.search.query, this.search.sel.clone());
+                        let sel = clamp_to_boundary(&this.search.query, this.search.sel.clone());
                         this.search.query[sel].to_string()
                     } else {
-                        let sel = clamp_to_boundary(
-                            &this.apps.search,
-                            this.apps.search_sel.clone(),
-                        );
+                        let sel =
+                            clamp_to_boundary(&this.apps.search, this.apps.search_sel.clone());
                         this.apps.search[sel].to_string()
                     };
                     if !text.is_empty() {
@@ -330,7 +323,7 @@ pub fn search_box(
                 // Ctrl+X：剪切选中文本
                 "x" if ctrl => {
                     if is_file_search {
-                        let sel = clamp_search_sel(&this.search.query, this.search.sel.clone());
+                        let sel = clamp_to_boundary(&this.search.query, this.search.sel.clone());
                         let cut = this.search.query[sel.clone()].to_string();
                         if !cut.is_empty() {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
@@ -340,10 +333,8 @@ pub fn search_box(
                             this.search_input_changed(cx);
                         }
                     } else {
-                        let sel = clamp_to_boundary(
-                            &this.apps.search,
-                            this.apps.search_sel.clone(),
-                        );
+                        let sel =
+                            clamp_to_boundary(&this.apps.search, this.apps.search_sel.clone());
                         let cut = this.apps.search[sel.clone()].to_string();
                         if !cut.is_empty() {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
@@ -360,7 +351,7 @@ pub fn search_box(
                         if let Some(pasted) = item.text() {
                             if is_file_search {
                                 let sel =
-                                    clamp_search_sel(&this.search.query, this.search.sel.clone());
+                                    clamp_to_boundary(&this.search.query, this.search.sel.clone());
                                 this.search.query.replace_range(sel.clone(), &pasted);
                                 let caret = sel.start + pasted.len();
                                 this.search.sel = caret..caret;
@@ -425,7 +416,7 @@ pub fn search_box(
                                             window,
                                         );
                                         let cur =
-                                            clamp_search_sel(&this.search.query, cur..cur).start;
+                                            clamp_to_boundary(&this.search.query, cur..cur).start;
                                         this.search.sel = cur.min(anchor)..cur.max(anchor);
                                         this.poke_cursor_blink(cx);
                                     }
@@ -480,4 +471,3 @@ pub fn search_box(
             .size_full(),
         )
 }
-

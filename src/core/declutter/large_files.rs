@@ -73,7 +73,7 @@ pub fn scan_large_old_files(
         })
         .collect();
 
-    all_files.sort_by(|a, b| b.size.cmp(&a.size));
+    all_files.sort_by_key(|b| std::cmp::Reverse(b.size));
     crate::log!(
         "[Declutter::LargeFiles] 大文件扫描完成: 筛选出 {} 个大文件/旧文件",
         all_files.len()

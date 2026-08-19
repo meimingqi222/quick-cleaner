@@ -6,6 +6,7 @@
 pub mod apps;
 pub mod cache;
 pub mod disk;
+pub mod disk_tree;
 pub mod dock;
 pub mod fsevents;
 pub mod residuals;

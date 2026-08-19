@@ -21,7 +21,10 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         View::Apps => (is_apps_busy, tr_btn_refresh_apps(lang, is_apps_busy)),
         View::Disk => (is_mft_busy, tr_btn_reanalyze_disk(lang, is_mft_busy)),
         View::Declutter => (is_declutter_busy, tr_btn_rescan(lang, is_declutter_busy)),
-        View::Search => (root.search.indexing, tr_btn_rescan(lang, root.search.indexing)),
+        View::Search => (
+            root.search.indexing,
+            tr_btn_rescan(lang, root.search.indexing),
+        ),
     };
 
     let title_area = div().flex().items_center().gap_3().child(

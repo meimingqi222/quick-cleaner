@@ -112,6 +112,7 @@ pub trait FileIndexQuery: Send + Sync {
     ) -> Vec<IndexedFile>;
 
     /// 4. 重复文件候选分桶（自动按 size 归类，筛选 count >= 2 的体积桶）
+    ///
     /// 每个桶值是 `(路径, 修改时间)`，调用方无需再调 `std::fs::metadata` 取 mtime。
     fn query_duplicate_buckets(
         &self,
@@ -409,7 +410,7 @@ mod tests {
         assert!(count >= 2);
         assert!(newest > 0, "应有最新 mtime");
 
-        let buckets = engine.query_duplicate_buckets(&[temp_dir.clone()], 1, &live);
+        let buckets = engine.query_duplicate_buckets(std::slice::from_ref(&temp_dir), 1, &live);
         assert!(!buckets.is_empty());
 
         let _ = std::fs::remove_dir_all(&temp_dir);

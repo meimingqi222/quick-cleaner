@@ -122,7 +122,10 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
             }
 
             let (dims, dual_hash) = match image::open(&path) {
-                Ok(img) => ((img.width(), img.height()), compute_dual_hash_from_image(&img)),
+                Ok(img) => (
+                    (img.width(), img.height()),
+                    compute_dual_hash_from_image(&img),
+                ),
                 Err(_) => (estimate_dimensions(size), None),
             };
 

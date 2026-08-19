@@ -990,14 +990,14 @@ impl FileVisualKind {
     /// 返回该类型对应的精致原生矢量图标（无厚重背景底板，极简克制）
     pub fn badge(&self, size: f32) -> AnyElement {
         let fg = match self {
-            Self::Directory => 0xD97706,   // 琥珀暖金
-            Self::Executable => 0x7C3AED,  // 科技深紫
-            Self::Database => 0x0891B2,    // 沉稳青碧
-            Self::Code => 0x059669,        // 翠绿源码
-            Self::Document => 0x2563EB,    // 经典文档蓝
-            Self::Archive => 0xC2410C,     // 暖橙归档
-            Self::Media => 0xDB2777,       // 玫红媒体
-            Self::Generic => 0x64748B,     // 优雅中性灰
+            Self::Directory => 0xD97706,  // 琥珀暖金
+            Self::Executable => 0x7C3AED, // 科技深紫
+            Self::Database => 0x0891B2,   // 沉稳青碧
+            Self::Code => 0x059669,       // 翠绿源码
+            Self::Document => 0x2563EB,   // 经典文档蓝
+            Self::Archive => 0xC2410C,    // 暖橙归档
+            Self::Media => 0xDB2777,      // 玫红媒体
+            Self::Generic => 0x64748B,    // 优雅中性灰
         };
         let icon = match self {
             Self::Directory => icon_folder_file(fg, size),
@@ -1020,4 +1020,3 @@ impl FileVisualKind {
             .into_any_element()
     }
 }
-

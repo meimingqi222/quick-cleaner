@@ -104,7 +104,10 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .hover(|h| h.bg(rgb(SURF_HIGH)).text_color(rgb(TEXT)))
         })
-        .child(icon_folder_file(if is_group_kind { PRIMARY } else { MUTED }, 12.))
+        .child(icon_folder_file(
+            if is_group_kind { PRIMARY } else { MUTED },
+            12.,
+        ))
         .child(tr_search_sort_kind(lang))
         .on_click(cx.listener(|this, _, _, cx| {
             this.search_toggle_group_by_kind(cx);
@@ -125,25 +128,32 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .child(search_box)
                 .child(status_tag),
         )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .child(kind_sort_btn),
-        );
+        .child(div().flex().items_center().child(kind_sort_btn));
 
     let name_arrow = if sort_col == crate::ui::SearchSortCol::Name {
-        if sort_asc { " ▲" } else { " ▼" }
+        if sort_asc {
+            " ▲"
+        } else {
+            " ▼"
+        }
     } else {
         ""
     };
     let path_arrow = if sort_col == crate::ui::SearchSortCol::Path {
-        if sort_asc { " ▲" } else { " ▼" }
+        if sort_asc {
+            " ▲"
+        } else {
+            " ▼"
+        }
     } else {
         ""
     };
     let size_arrow = if sort_col == crate::ui::SearchSortCol::Size {
-        if sort_asc { " ▲" } else { " ▼" }
+        if sort_asc {
+            " ▲"
+        } else {
+            " ▼"
+        }
     } else {
         ""
     };
@@ -242,7 +252,11 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(MUTED))
-                .child(if lang == Language::Zh { "操作" } else { "Action" }),
+                .child(if lang == Language::Zh {
+                    "操作"
+                } else {
+                    "Action"
+                }),
         );
 
     // 列表底部信息条
@@ -281,15 +295,11 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .flex()
                 .items_center()
                 .gap_4()
-                .child(
-                    div()
-                        .text_color(rgb(MUTED))
-                        .child(if lang == Language::Zh {
-                            "双击条目直接打开 · 点击表头自定义排序"
-                        } else {
-                            "Double-click to open · Click header to sort"
-                        }),
-                )
+                .child(div().text_color(rgb(MUTED)).child(if lang == Language::Zh {
+                    "双击条目直接打开 · 点击表头自定义排序"
+                } else {
+                    "Double-click to open · Click header to sort"
+                }))
                 .child(
                     div()
                         .font_weight(gpui::FontWeight::MEDIUM)
@@ -373,7 +383,7 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
     let marked = root.search.marked.clone();
     let font_size = 13.0;
 
-    let sel = crate::ui::text_input::clamp_search_sel(&query, selection);
+    let sel = crate::ui::text_input::clamp_to_boundary(&query, selection);
     let cursor_x = crate::ui::text_input::x_for_index_layout(&query, sel.start, font_size, window);
     let sel_x1 = crate::ui::text_input::x_for_index_layout(&query, sel.start, font_size, window);
     let sel_x2 = crate::ui::text_input::x_for_index_layout(&query, sel.end, font_size, window);
@@ -596,7 +606,11 @@ fn render_result_row(
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(PRIMARY))
                         .cursor_pointer()
-                        .child(if lang == Language::Zh { "打开" } else { "Open" })
+                        .child(if lang == Language::Zh {
+                            "打开"
+                        } else {
+                            "Open"
+                        })
                         .on_click(cx.listener({
                             let path = path_for_click.clone();
                             move |_this, _, _, cx| {
@@ -629,7 +643,11 @@ fn render_result_row(
                         .items_center()
                         .gap_1()
                         .child(icon_locate(PRIMARY, 9.))
-                        .child(if lang == Language::Zh { "定位" } else { "Reveal" })
+                        .child(if lang == Language::Zh {
+                            "定位"
+                        } else {
+                            "Reveal"
+                        })
                         .on_click(cx.listener({
                             let path = path_for_click.clone();
                             move |_this, _, _, cx| {
@@ -641,15 +659,18 @@ fn render_result_row(
                 ),
         )
         // 双击整行也可以直接使用默认应用打开
-        .on_mouse_down(MouseButton::Left, cx.listener({
-            let path = path_for_click.clone();
-            move |_this, event: &MouseDownEvent, _window, cx| {
-                if event.click_count >= 2 {
-                    let p = std::path::PathBuf::from(&path);
-                    crate::platform::open_in_default_app(&p);
-                    cx.notify();
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener({
+                let path = path_for_click.clone();
+                move |_this, event: &MouseDownEvent, _window, cx| {
+                    if event.click_count >= 2 {
+                        let p = std::path::PathBuf::from(&path);
+                        crate::platform::open_in_default_app(&p);
+                        cx.notify();
+                    }
                 }
-            }
-        }))
+            }),
+        )
         .into_any_element()
 }

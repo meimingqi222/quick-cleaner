@@ -80,7 +80,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
 
                 let redundant_total_count = redundant_photos.len();
                 let display_redundant: Vec<_> = if is_expanded || redundant_total_count <= 4 {
-                    redundant_photos.iter().copied().collect()
+                    redundant_photos.clone()
                 } else {
                     redundant_photos.iter().take(4).copied().collect()
                 };
