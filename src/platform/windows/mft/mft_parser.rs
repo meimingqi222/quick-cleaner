@@ -1,7 +1,6 @@
 //! MFT 字节解析与记录解析
 
 use super::mft_types::*;
-use rayon::prelude::*;
 use std::os::windows::ffi::OsStrExt;
 
 const FSCTL_GET_NTFS_VOLUME_DATA: u32 = 0x0009_0064;
@@ -18,7 +17,7 @@ pub(super) struct NtfsVolumeData {
     pub(super) bytes_per_cluster: u32,
     pub(super) bytes_per_file_record_segment: u32,
     clusters_per_file_record_segment: u32,
-    mft_valid_data_length: i64,
+    pub(super) mft_valid_data_length: i64,
     pub(super) mft_start_lcn: i64,
     mft2_start_lcn: i64,
     mft_zone_start: i64,
