@@ -10,6 +10,8 @@ use std::path::PathBuf;
 /// 系统临时文件、用户临时文件、日志、崩溃转储、回收站/废纸篓
 pub(super) fn push_system_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     #[cfg(windows)]
+    let _ = home;
+    #[cfg(windows)]
     {
         let local = crate::platform::windows::real_user_local_appdata();
         let windows =

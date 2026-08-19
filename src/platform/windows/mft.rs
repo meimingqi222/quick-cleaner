@@ -8,15 +8,12 @@ pub use mft_scanner::scan_volume;
 pub use mft_types::{DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD};
 
 #[cfg(test)]
-use mft_parser::{
-    apply_fixup, attr_header, collect_data_fragments, parse_record, parse_runs, read_mft_record,
-    u16_at, u32_at, u64_at, Entry,
-};
-#[cfg(test)]
-use mft_scanner::{add_to_ancestors, build_tree, resolve_path};
-
-#[cfg(test)]
 mod tests {
+    use super::mft_parser::{
+        apply_fixup, attr_header, collect_data_fragments, parse_record, parse_runs,
+        read_mft_record, u16_at, u32_at, u64_at, Entry,
+    };
+    use super::mft_scanner::{add_to_ancestors, build_tree, resolve_path};
     use super::*;
 
     fn synthetic_tree() -> SizeTree {

@@ -8,6 +8,8 @@ use std::path::Path;
 /// 所有浏览器缓存目标
 pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     #[cfg(windows)]
+    let _ = home;
+    #[cfg(windows)]
     {
         let local = crate::platform::windows::real_user_local_appdata();
 

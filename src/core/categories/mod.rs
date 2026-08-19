@@ -4,6 +4,7 @@ mod browser;
 mod cache;
 mod dev;
 mod helpers;
+#[cfg(target_os = "macos")]
 mod macos;
 mod system;
 

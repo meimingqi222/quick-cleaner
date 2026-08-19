@@ -17,10 +17,6 @@ use crate::core::disk::{DiskSelectionState, VolumeId};
 use crate::core::i18n::{bilingual, Language, Text};
 use crate::core::model::Check;
 use crate::core::safety::is_protected;
-#[cfg(windows)]
-use crate::core::scanner::dominant_volume;
-#[cfg(windows)]
-use crate::core::scanner::scan_discovered;
 use crate::core::scanner::{CategorySummary, ScanItem};
 use crate::core::settings::Settings;
 use crate::platform::{get_volume_space, is_elevated, list_volumes};

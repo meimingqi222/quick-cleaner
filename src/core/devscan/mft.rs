@@ -1,12 +1,9 @@
 //! MFT 通道：在 NTFS 内存树上做 DFS，识别与称重一次完成
 
-use super::{Hit, MARKERS, NAMED_ROOT_DEPTH, SKIP_DIRS};
-use crate::core::categories::CategoryId;
-use crate::core::i18n::Text;
+use super::{has_sibling, item_label, MARKERS, SKIP_DIRS};
 use crate::core::scanner::ScanItem;
-use crate::platform::scan_volume;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(windows)]
 pub(super) fn discover_via_mft(

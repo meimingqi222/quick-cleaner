@@ -1,6 +1,7 @@
 //! 垃圾扫描相关动作：start_scan / start_discovery / start_discovery_arc
 
 use crate::core::categories::all_targets;
+#[cfg(not(windows))]
 use crate::core::disk::VolumeId;
 use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;

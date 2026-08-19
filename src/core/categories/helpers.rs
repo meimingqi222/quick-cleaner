@@ -1,5 +1,6 @@
 //! 扫描目标辅助函数：文件年龄判断、损坏 LaunchAgent 检测、敏感 Apple 缓存识别
 
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 #[cfg(target_os = "macos")]

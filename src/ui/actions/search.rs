@@ -2,6 +2,8 @@
 
 use crate::core::i18n::bilingual;
 #[cfg(windows)]
+use crate::platform::is_elevated;
+#[cfg(windows)]
 use crate::platform::scan_volume;
 use crate::ui::i18n::*;
 use crate::ui::text_input::clamp_to_boundary;
@@ -175,7 +177,7 @@ impl crate::ui::Root {
         }
 
         // 合并后按大小降序，截断
-        all_hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        all_hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
         all_hits.truncate(max_results);
         self.search.results = all_hits;
         self.search.gen += 1;
@@ -227,7 +229,7 @@ impl crate::ui::Root {
                             all_hits.extend(idx.tree.search(&query, max_results));
                         }
                     }
-                    all_hits.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+                    all_hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
                     all_hits.truncate(max_results);
                     all_hits
                 })
@@ -311,10 +313,7 @@ impl crate::ui::Root {
         } else {
             self.search.sort_col = col;
             // 切换到新列时的自然默认方向：大小默认降序（大文件优先），其他列默认升序
-            self.search.sort_asc = match col {
-                SearchSortCol::Size => false,
-                _ => true,
-            };
+            self.search.sort_asc = !matches!(col, SearchSortCol::Size);
         }
         self.apply_search_sort();
         cx.notify();

@@ -470,8 +470,6 @@ mod tests {
     use crate::core::i18n::Language;
     #[cfg(not(windows))]
     use macos::{collect_tree, refresh_macos_index};
-    #[cfg(windows)]
-    use mft::discover_via_mft;
     use walk::collect;
 
     /// 列表标签两种语言都要拼全：规则名跟着语言走，路径两边一样。

@@ -154,6 +154,8 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 /// 用户缓存（`~/Library/Caches` 展开等）
 fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     #[cfg(windows)]
+    let _ = home;
+    #[cfg(windows)]
     {
         let local = crate::platform::windows::real_user_local_appdata();
         // 缩略图
@@ -180,6 +182,10 @@ fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 
 /// 缩略图缓存
 fn push_thumbnail_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (t, home);
+    }
     #[cfg(target_os = "macos")]
     {
         // QuickLook 缩略图缓存。

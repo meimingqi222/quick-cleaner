@@ -802,12 +802,7 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
         // SAFETY: pidl 指向文件本身的 PIDL。传 cidl=0 表示在父文件夹中选中
         // pidl 指向的项——传 1 + null apidl 是 UB（原实现的 bug）。
         unsafe {
-            winapi::um::shlobj::SHOpenFolderAndSelectItems(
-                pidl,
-                0,
-                std::ptr::null(),
-                0,
-            );
+            winapi::um::shlobj::SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
             winapi::um::combaseapi::CoTaskMemFree(pidl as *mut _);
         }
         return;
@@ -823,7 +818,9 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
 //   PIDLIST_ABSOLUTE ILCreateFromPathW(LPCWSTR pszPath);
 // 返回值是 COM 分配的 ITEMIDLIST 指针，失败返回 NULL。
 extern "system" {
-    fn ILCreateFromPathW(pszpath: winapi::um::winnt::LPCWSTR) -> *mut winapi::um::shtypes::ITEMIDLIST;
+    fn ILCreateFromPathW(
+        pszpath: winapi::um::winnt::LPCWSTR,
+    ) -> *mut winapi::um::shtypes::ITEMIDLIST;
 }
 
 /// 使用系统默认程序打开文件或目录（走 Windows Shell 原生 API，无任何控制台黑框弹出）

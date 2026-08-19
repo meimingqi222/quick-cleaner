@@ -251,20 +251,15 @@ pub enum UninstallPhase {
 }
 
 /// 文件搜索结果排序列（表头配置）
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SearchSortCol {
     /// 按名称字母序
     Name,
     /// 按路径字母序
     Path,
     /// 按体积大小
+    #[default]
     Size,
-}
-
-impl Default for SearchSortCol {
-    fn default() -> Self {
-        Self::Size
-    }
 }
 
 /// 文件快速检索状态。
