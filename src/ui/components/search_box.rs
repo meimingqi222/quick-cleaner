@@ -5,7 +5,9 @@
 //! 采用 GPUI 底层平台字体引擎（DirectWrite / CoreText）进行真实排版与精确命中测试。
 
 use crate::ui::components::icons::icon_search;
-use crate::ui::text_input::{clamp_to_boundary, closest_index_for_x_layout};
+use crate::ui::text_input::{
+    clamp_to_boundary, index_for_mouse_x, paint_search_text, SearchTextPaint,
+};
 use crate::ui::theme::*;
 use gpui::{
     div, prelude::*, px, rgb, Bounds, Context, DispatchPhase, Div, FocusHandle, KeyDownEvent,
@@ -38,12 +40,6 @@ pub struct SearchBoxSpec<'a> {
     pub focused: bool,
     /// 光标是否在闪烁可见相位
     pub cursor_visible: bool,
-    /// 光标在当前排版中的真实 X 坐标（px）
-    pub cursor_x: f32,
-    /// 选区起点在当前排版中的真实 X 坐标（px）
-    pub sel_x1: f32,
-    /// 选区终点在当前排版中的真实 X 坐标（px）
-    pub sel_x2: f32,
     /// true = 文件搜索框，false = Apps 搜索框
     pub is_file_search: bool,
 }
@@ -66,94 +62,61 @@ pub fn search_box(
         text,
         placeholder,
         selection,
-        marked: _marked,
+        marked,
         width,
         height,
         font_size,
         cursor_h,
         focused,
         cursor_visible,
-        cursor_x,
-        sel_x1,
-        sel_x2,
         is_file_search,
     } = spec;
 
     let sel = clamp_to_boundary(text, selection);
 
-    let text_content = if text.is_empty() {
-        let mut c = div()
-            .relative()
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .flex()
-            .items_center();
-        if focused && cursor_visible {
-            c = c.child(
-                div()
-                    .absolute()
-                    .left(px(0.))
-                    .w(px(1.5))
-                    .h(px(cursor_h))
-                    .rounded_full()
-                    .bg(rgb(PRIMARY)),
-            );
-        }
-        c.child(
-            div()
-                .text_size(px(font_size))
-                .text_color(rgb(OUTLINE))
-                .child(placeholder),
-        )
-    } else {
-        let mut c = div()
-            .relative()
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .flex()
-            .items_center();
-
-        // 选区高亮色块（绝对定位，置于底层）
-        if focused && sel.start < sel.end {
-            let width = (sel_x2 - sel_x1).max(2.0);
-            c = c.child(
-                div()
-                    .absolute()
-                    .left(px(sel_x1))
-                    .w(px(width))
-                    .h(px(font_size + 4.))
-                    .rounded_xs()
-                    .bg(rgba(PRIMARY, 0.28)),
-            );
-        }
-
-        // 完整的原生文本渲染（绝不拆分成碎片，保持 100% 原始字间距与 Kerning）
-        c = c.child(
-            div()
-                .relative()
-                .text_size(px(font_size))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(TEXT))
-                .child(text.to_string()),
+    // 文字、光标、选区全部由同一份 ShapedLine 画出来，点击命中也用这份排版。
+    // 绝不能再用「整框 bounds + 33px」去猜文本起点——padding/图标/字号一变就偏一格。
+    let paint_text = text.to_string();
+    let paint_placeholder = placeholder.clone();
+    let paint_sel = sel.clone();
+    let paint_marked = marked.clone();
+    let text_entity = cx.entity();
+    let text_content = div()
+        .relative()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
+        .overflow_hidden()
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, cx| {
+                    let hit = paint_search_text(
+                        window,
+                        cx,
+                        bounds,
+                        SearchTextPaint {
+                            text: &paint_text,
+                            placeholder: paint_placeholder.as_ref(),
+                            sel: &paint_sel,
+                            marked: paint_marked.as_ref(),
+                            font_size,
+                            cursor_h,
+                            focused,
+                            cursor_visible,
+                        },
+                    );
+                    text_entity.update(cx, |this, _| {
+                        if is_file_search {
+                            this.search.text_hit = Some(hit);
+                        } else {
+                            this.apps.text_hit = Some(hit);
+                        }
+                    });
+                },
+            )
+            .size_full(),
         );
-
-        // 单光标竖条（绝对定位，置于顶层，受 cursor_visible 闪烁控制）
-        if focused && sel.start == sel.end && cursor_visible {
-            c = c.child(
-                div()
-                    .absolute()
-                    .left(px(cursor_x))
-                    .w(px(1.5))
-                    .h(px(cursor_h))
-                    .rounded_full()
-                    .bg(rgb(PRIMARY)),
-            );
-        }
-
-        c
-    };
 
     div()
         .id(id)
@@ -219,32 +182,27 @@ pub fn search_box(
                 }
                 let mouse_x: f32 = event.position.x.into();
                 if is_file_search {
-                    let bounds = this.search.bounds;
-                    if let Some(b) = bounds {
-                        let text_start_x: f32 = f32::from(b.origin.x) + 33.0;
-                        let rel_x = mouse_x - text_start_x;
-                        let idx = closest_index_for_x_layout(
-                            &this.search.query,
-                            rel_x,
-                            font_size,
-                            window,
-                        );
-                        let idx = clamp_to_boundary(&this.search.query, idx..idx).start;
-                        this.search.sel = idx..idx;
-                        this.search.text_drag = Some(idx);
-                        this.search.marked = None;
-                    }
+                    let idx = index_for_mouse_x(
+                        &this.search.query,
+                        mouse_x,
+                        this.search.text_hit.as_ref(),
+                        font_size,
+                        window,
+                    );
+                    this.search.sel = idx..idx;
+                    this.search.text_drag = Some(idx);
+                    this.search.marked = None;
                 } else {
-                    if let Some(b) = this.apps.search_bounds {
-                        let text_start_x: f32 = f32::from(b.origin.x) + 33.0;
-                        let rel_x = mouse_x - text_start_x;
-                        let idx =
-                            closest_index_for_x_layout(&this.apps.search, rel_x, font_size, window);
-                        let idx = clamp_to_boundary(&this.apps.search, idx..idx).start;
-                        this.apps.search_sel = idx..idx;
-                        this.apps.text_drag = Some(idx);
-                        this.apps.search_marked = None;
-                    }
+                    let idx = index_for_mouse_x(
+                        &this.apps.search,
+                        mouse_x,
+                        this.apps.text_hit.as_ref(),
+                        font_size,
+                        window,
+                    );
+                    this.apps.search_sel = idx..idx;
+                    this.apps.text_drag = Some(idx);
+                    this.apps.search_marked = None;
                 }
                 this.poke_cursor_blink(cx);
             })
@@ -406,38 +364,26 @@ pub fn search_box(
                         ent.update(cx, |this, cx| {
                             if fs {
                                 if let Some(anchor) = this.search.text_drag {
-                                    if let Some(b) = this.search.bounds {
-                                        let text_start_x: f32 = f32::from(b.origin.x) + 33.0;
-                                        let rel_x = mouse_x - text_start_x;
-                                        let cur = closest_index_for_x_layout(
-                                            &this.search.query,
-                                            rel_x,
-                                            fsize,
-                                            window,
-                                        );
-                                        let cur =
-                                            clamp_to_boundary(&this.search.query, cur..cur).start;
-                                        this.search.sel = cur.min(anchor)..cur.max(anchor);
-                                        this.poke_cursor_blink(cx);
-                                    }
+                                    let cur = index_for_mouse_x(
+                                        &this.search.query,
+                                        mouse_x,
+                                        this.search.text_hit.as_ref(),
+                                        fsize,
+                                        window,
+                                    );
+                                    this.search.sel = cur.min(anchor)..cur.max(anchor);
+                                    this.poke_cursor_blink(cx);
                                 }
-                            } else {
-                                if let Some(anchor) = this.apps.text_drag {
-                                    if let Some(b) = this.apps.search_bounds {
-                                        let text_start_x: f32 = f32::from(b.origin.x) + 33.0;
-                                        let rel_x = mouse_x - text_start_x;
-                                        let cur = closest_index_for_x_layout(
-                                            &this.apps.search,
-                                            rel_x,
-                                            fsize,
-                                            window,
-                                        );
-                                        let cur =
-                                            clamp_to_boundary(&this.apps.search, cur..cur).start;
-                                        this.apps.search_sel = cur.min(anchor)..cur.max(anchor);
-                                        this.poke_cursor_blink(cx);
-                                    }
-                                }
+                            } else if let Some(anchor) = this.apps.text_drag {
+                                let cur = index_for_mouse_x(
+                                    &this.apps.search,
+                                    mouse_x,
+                                    this.apps.text_hit.as_ref(),
+                                    fsize,
+                                    window,
+                                );
+                                this.apps.search_sel = cur.min(anchor)..cur.max(anchor);
+                                this.poke_cursor_blink(cx);
                             }
                         });
                     });
@@ -457,11 +403,9 @@ pub fn search_box(
                                     this.search.text_drag = None;
                                     cx.notify();
                                 }
-                            } else {
-                                if this.apps.text_drag.is_some() {
-                                    this.apps.text_drag = None;
-                                    cx.notify();
-                                }
+                            } else if this.apps.text_drag.is_some() {
+                                this.apps.text_drag = None;
+                                cx.notify();
                             }
                         });
                     });

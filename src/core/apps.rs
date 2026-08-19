@@ -304,13 +304,20 @@ pub enum ResidualKind {
     /// 启动项、防火墙规则、App Paths 这些是以「值」的形式存在的，
     /// 删掉整个键会波及其它软件。
     RegistryValue(AppRegRoot, String, String),
+    /// 计划任务。字符串是 Task Scheduler 路径，例如 `\Vendor\AppUpdate`。
+    ///
+    /// 任务文件在 `System32\Tasks` 下，整棵 System32 是保护目录，不能当
+    /// 普通文件删，必须走 `schtasks /Delete`。
+    ScheduledTask(String),
 }
 
 impl ResidualKind {
     pub fn size(&self) -> u64 {
         match self {
             ResidualKind::File(_, s) | ResidualKind::Directory(_, s) => *s,
-            ResidualKind::RegistryKey(..) | ResidualKind::RegistryValue(..) => 0,
+            ResidualKind::RegistryKey(..)
+            | ResidualKind::RegistryValue(..)
+            | ResidualKind::ScheduledTask(..) => 0,
         }
     }
 
@@ -326,12 +333,14 @@ impl ResidualKind {
                 ResidualKind::Directory(..) => "目录",
                 ResidualKind::RegistryKey(..) => "注册表项",
                 ResidualKind::RegistryValue(..) => "注册表值",
+                ResidualKind::ScheduledTask(..) => "计划任务",
             },
             Language::En => match self {
                 ResidualKind::File(..) => "File",
                 ResidualKind::Directory(..) => "Directory",
                 ResidualKind::RegistryKey(..) => "Registry Key",
                 ResidualKind::RegistryValue(..) => "Registry Value",
+                ResidualKind::ScheduledTask(..) => "Scheduled task",
             },
         }
     }
@@ -347,6 +356,7 @@ impl ResidualKind {
             ResidualKind::RegistryValue(root, sub, name) => {
                 format!("{}\\{} → {}", root.label(), sub, name)
             }
+            ResidualKind::ScheduledTask(name) => name.clone(),
         }
     }
 }
@@ -380,6 +390,12 @@ pub enum ResidualSource {
     InstallerFolderEntry,
     ProgramNameCache,
     DefaultProgramsEntry,
+    ComClass,
+    ShellExtension,
+    ScheduledTask,
+    PrefetchFile,
+    CrashDump,
+    UninstallerLeftover,
     // macOS 专用
     CacheDir,
     LogDir,
@@ -421,6 +437,12 @@ impl ResidualSource {
                 ResidualSource::InstallerFolderEntry => "安装器目录登记",
                 ResidualSource::ProgramNameCache => "程序名缓存",
                 ResidualSource::DefaultProgramsEntry => "默认程序登记",
+                ResidualSource::ComClass => "COM 组件",
+                ResidualSource::ShellExtension => "右键菜单/外壳扩展",
+                ResidualSource::ScheduledTask => "计划任务",
+                ResidualSource::PrefetchFile => "Prefetch 预读取",
+                ResidualSource::CrashDump => "崩溃转储",
+                ResidualSource::UninstallerLeftover => "卸载器残骸",
                 ResidualSource::CacheDir => "缓存目录",
                 ResidualSource::LogDir => "日志目录",
                 ResidualSource::PreferenceFile => "偏好设置文件",
@@ -453,6 +475,12 @@ impl ResidualSource {
                 ResidualSource::InstallerFolderEntry => "Installer folder entry",
                 ResidualSource::ProgramNameCache => "Program name cache",
                 ResidualSource::DefaultProgramsEntry => "Default programs entry",
+                ResidualSource::ComClass => "COM class",
+                ResidualSource::ShellExtension => "Shell extension",
+                ResidualSource::ScheduledTask => "Scheduled task",
+                ResidualSource::PrefetchFile => "Prefetch file",
+                ResidualSource::CrashDump => "Crash dump",
+                ResidualSource::UninstallerLeftover => "Uninstaller leftover",
                 ResidualSource::CacheDir => "Cache directory",
                 ResidualSource::LogDir => "Log directory",
                 ResidualSource::PreferenceFile => "Preference file",
@@ -514,8 +542,24 @@ impl ResidualItem {
 #[derive(Clone, Debug, Default)]
 pub struct ResidualScanResult {
     pub app_name: String,
+    /// 对应 [`InstalledApp::id`]，清理完残留后用来从内存列表里拿掉这款软件。
+    pub app_id: String,
     pub items: Vec<ResidualItem>,
     pub total_file_size: u64,
+}
+
+/// 清理残留之后，这款软件还该不该留在「已安装」列表里。
+///
+/// 卸载登记项或安装目录已经不在剩余列表里，说明软件本身没了，只是列表
+/// 还没刷新。只清了缓存/配置的，软件还在，要留着。
+pub fn app_gone_after_residual_clean(
+    original: &[ResidualItem],
+    remaining: &[ResidualItem],
+) -> bool {
+    let gone = |src: ResidualSource| {
+        original.iter().any(|i| i.source == src) && remaining.iter().all(|i| i.source != src)
+    };
+    gone(ResidualSource::UninstallEntry) || gone(ResidualSource::InstallDir)
 }
 
 impl ResidualScanResult {
@@ -965,9 +1009,12 @@ mod tests {
         let f = ResidualKind::File(PathBuf::from("test.txt"), 1024);
         let d = ResidualKind::Directory(PathBuf::from("dir"), 2048);
         let rk = ResidualKind::RegistryKey(AppRegRoot::Hkcu, "Software\\App".into());
+        let st = ResidualKind::ScheduledTask(r"\Vendor\AppUpdate".into());
         assert_eq!(f.size(), 1024);
         assert_eq!(d.size(), 2048);
         assert_eq!(rk.size(), 0);
+        assert_eq!(st.size(), 0);
+        assert_eq!(st.kind_label_lang(crate::core::i18n::Language::Zh), "计划任务");
     }
 }
 
@@ -1036,6 +1083,32 @@ mod command_tests {
         let (exe, args) = split_command_with(r"C:\Gone\unins.exe /S", |_| false);
         assert_eq!(exe, r"C:\Gone\unins.exe");
         assert_eq!(args, vec!["/S"]);
+    }
+
+    #[test]
+    fn residual_clean_drops_app_when_uninstall_entry_is_gone() {
+        let original = vec![
+            ResidualItem::certain(
+                ResidualKind::RegistryKey(AppRegRoot::Hklm, "Software\\Uninstall\\Foo".into()),
+                ResidualSource::UninstallEntry,
+            ),
+            ResidualItem::possible(
+                ResidualKind::Directory(PathBuf::from(r"C:\Users\me\AppData\Local\Foo"), 12),
+                ResidualSource::AppDataDir,
+            ),
+        ];
+        assert!(app_gone_after_residual_clean(&original, &original[1..]));
+        assert!(!app_gone_after_residual_clean(&original, &original));
+        assert!(!app_gone_after_residual_clean(&original[1..], &[]));
+    }
+
+    #[test]
+    fn residual_clean_drops_app_when_install_dir_is_gone() {
+        let original = vec![ResidualItem::certain(
+            ResidualKind::Directory(PathBuf::from(r"C:\Program Files\Foo"), 100),
+            ResidualSource::InstallDir,
+        )];
+        assert!(app_gone_after_residual_clean(&original, &[]));
     }
 }
 

@@ -257,6 +257,85 @@ pub fn rot13(s: &str) -> String {
         .collect()
 }
 
+/// FILETIME（100ns，从 1601-01-01 起）转 Unix 秒。解析错位的垃圾值直接丢掉。
+fn filetime_to_unix(ft: u64) -> Option<u64> {
+    const WINDOWS_EPOCH_DIFF: u64 = 116_444_736_000_000_000;
+    if ft <= WINDOWS_EPOCH_DIFF {
+        return None;
+    }
+    let unix = (ft - WINDOWS_EPOCH_DIFF) / 10_000_000;
+    // 2000-01-01 .. 2100-01-01
+    if (946_684_800..4_102_444_800).contains(&unix) {
+        Some(unix)
+    } else {
+        None
+    }
+}
+
+/// UserAssist / BAM 的二进制 blob 里取出最后运行时间。
+///
+/// Win10+ UserAssist Count 是 72 字节、FILETIME 在 offset 60；Win7 是 16
+/// 字节、FILETIME 在 offset 8。BAM 则把 FILETIME 放在最开头。
+fn unix_from_run_blob(data: &[u8], data_len: u32) -> Option<u64> {
+    let len = data_len as usize;
+    let offset = if len >= 68 {
+        60
+    } else if len >= 16 {
+        8
+    } else if len >= 8 {
+        0
+    } else {
+        return None;
+    };
+    let ft: [u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    filetime_to_unix(u64::from_le_bytes(ft))
+}
+
+/// 从 DisplayIcon / UninstallString 抽出真正的 exe 路径。
+///
+/// DisplayIcon 经常写成 `"C:\Program Files\App\app.exe",0`，Path::file_name
+/// 会得到 `app.exe,0`，对不上 UserAssist / Prefetch 里的 `app.exe`。
+fn extract_exe_path(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_matches('"');
+    if s.is_empty() {
+        return None;
+    }
+    let without_index = if let Some(comma) = s.rfind(',') {
+        let suffix = s[comma + 1..].trim();
+        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            s[..comma].trim().trim_matches('"')
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+    let p = without_index.trim();
+    if p.is_empty() {
+        None
+    } else {
+        Some(p.to_string())
+    }
+}
+
+/// Prefetch 文件名 `CHROME.EXE-A8C2E3F1.pf` → `chrome.exe`
+fn prefetch_exe_name(filename: &str) -> Option<String> {
+    let lower = filename.to_lowercase();
+    let stem = lower.strip_suffix(".pf")?;
+    let dash = stem.rfind('-')?;
+    let hash = &stem[dash + 1..];
+    if hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        let name = &stem[..dash];
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    } else {
+        None
+    }
+}
+
 /// UserAssist 记录的反向索引。
 ///
 /// 原始形态是「完整程序路径 -> 最后运行时间」，而匹配时我们手里只有软件名
@@ -317,9 +396,22 @@ impl UserAssistIndex {
     }
 }
 
-/// 扫描 Windows Explorer UserAssist 注册表，构建可按 token 检索的运行时间索引
-fn scan_user_assist_map() -> UserAssistIndex {
+/// 汇总各路「最后运行时间」信号，建成可按路径/文件名/token 检索的索引。
+///
+/// UserAssist 只覆盖从资源管理器/开始菜单启动的程序，很多软件（任务栏固定、
+/// 托盘常驻、自启动、用快捷方式以外的方式打开）根本没有记录。后面几路补上：
+/// BAM（内核级最后执行）、Prefetch（每次启动都会改 .pf 的 mtime）、
+/// RecentApps（开始菜单/搜索的最近使用）。
+fn scan_last_used_index() -> UserAssistIndex {
     let mut map = UserAssistIndex::default();
+    fill_user_assist(&mut map);
+    fill_bam(&mut map);
+    fill_prefetch(&mut map);
+    fill_recent_apps(&mut map);
+    map
+}
+
+fn fill_user_assist(map: &mut UserAssistIndex) {
     let ua_path = to_wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist");
     let mut h_ua: HKEY = std::ptr::null_mut();
 
@@ -335,7 +427,7 @@ fn scan_user_assist_map() -> UserAssistIndex {
         ) as u32
             != ERROR_SUCCESS
         {
-            return map;
+            return;
         }
 
         let mut guid_idx: DWORD = 0;
@@ -411,17 +503,8 @@ fn scan_user_assist_map() -> UserAssistIndex {
                         }
                     }
 
-                    // Windows 7/10/11 结构体通常为 72 字节，FILETIME 在 offset 60..68
-                    if data_len >= 68 {
-                        let ft_bytes: [u8; 8] = data_buf[60..68].try_into().unwrap_or([0; 8]);
-                        let ft = u64::from_le_bytes(ft_bytes);
-                        const WINDOWS_EPOCH_DIFF: u64 = 116_444_736_000_000_000;
-                        if ft > WINDOWS_EPOCH_DIFF {
-                            let unix_secs = (ft - WINDOWS_EPOCH_DIFF) / 10_000_000;
-                            if unix_secs > 0 {
-                                map.index_path(&clean_name, unix_secs);
-                            }
-                        }
+                    if let Some(unix_secs) = unix_from_run_blob(&data_buf, data_len) {
+                        map.index_path(&clean_name, unix_secs);
                     }
 
                     val_idx += 1;
@@ -435,8 +518,200 @@ fn scan_user_assist_map() -> UserAssistIndex {
 
         RegCloseKey(h_ua);
     }
+}
 
+/// `\Device\HarddiskVolumeN` → `c:` 这类 DOS 设备映射，给 BAM 路径用。
+fn dos_device_map() -> std::collections::HashMap<String, String> {
+    use winapi::um::fileapi::QueryDosDeviceW;
+    let mut map = std::collections::HashMap::new();
+    let mut buf = [0u16; 1024];
+    for letter in b'A'..=b'Z' {
+        let name = format!("{}:", letter as char);
+        let wide = to_wide(&name);
+        // SAFETY: wide 以 NUL 结尾；buf 是本地数组，长度如实上报。
+        let n = unsafe { QueryDosDeviceW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        if n > 0 {
+            let target = from_wide(&buf).to_lowercase();
+            if !target.is_empty() {
+                map.insert(target, name.to_lowercase());
+            }
+        }
+    }
     map
+}
+
+fn normalize_nt_path(raw: &str, dos: &std::collections::HashMap<String, String>) -> String {
+    let lower = raw.to_lowercase();
+    let stripped = lower
+        .strip_prefix(r"\??\")
+        .or_else(|| lower.strip_prefix(r"\\?\"))
+        .unwrap_or(&lower);
+    let mut best: Option<(usize, String)> = None;
+    for (dev, drive) in dos {
+        if let Some(rest) = stripped.strip_prefix(dev.as_str()) {
+            if rest.is_empty() || rest.starts_with('\\') {
+                let n = dev.len();
+                if best.as_ref().is_none_or(|(len, _)| n > *len) {
+                    best = Some((n, format!("{drive}{rest}")));
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p).unwrap_or_else(|| stripped.to_string())
+}
+
+/// BAM / DAM：内核记录的最后一次执行时间，比 UserAssist 全得多。
+fn fill_bam(map: &mut UserAssistIndex) {
+    const ROOTS: [&str; 3] = [
+        r"SYSTEM\CurrentControlSet\Services\bam\State\UserSettings",
+        r"SYSTEM\CurrentControlSet\Services\bam\UserSettings",
+        r"SYSTEM\CurrentControlSet\Services\dam\State\UserSettings",
+    ];
+    let dos = dos_device_map();
+    for root in ROOTS {
+        fill_bam_root(map, root, &dos);
+    }
+}
+
+fn fill_bam_root(
+    map: &mut UserAssistIndex,
+    root: &str,
+    dos: &std::collections::HashMap<String, String>,
+) {
+    let sids = crate::platform::windows::registry::enum_subkeys(HKEY_LOCAL_MACHINE, root, KEY_READ);
+    for sid in sids {
+        let subpath = format!("{root}\\{sid}");
+        let wide = to_wide(&subpath);
+        let mut h: HKEY = std::ptr::null_mut();
+        // SAFETY: wide 以 NUL 结尾且活到调用结束。句柄只在打开成功后使用，
+        // 函数出口关闭。
+        unsafe {
+            if RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                wide.as_ptr(),
+                0,
+                KEY_READ | KEY_QUERY_VALUE,
+                &mut h,
+            ) as u32
+                != ERROR_SUCCESS
+            {
+                continue;
+            }
+            let mut val_idx: DWORD = 0;
+            let mut name_buf = [0u16; 1024];
+            let mut data_buf = [0u8; 64];
+            loop {
+                let mut name_len = name_buf.len() as DWORD;
+                let mut data_len = data_buf.len() as DWORD;
+                let mut val_type: DWORD = 0;
+                let enum_res = RegEnumValueW(
+                    h,
+                    val_idx,
+                    name_buf.as_mut_ptr(),
+                    &mut name_len,
+                    std::ptr::null_mut(),
+                    &mut val_type,
+                    data_buf.as_mut_ptr(),
+                    &mut data_len,
+                );
+                if enum_res as u32 != ERROR_SUCCESS {
+                    break;
+                }
+                let raw_name = from_wide(&name_buf[..name_len as usize]);
+                val_idx += 1;
+                if !raw_name.contains('\\') && !raw_name.contains('/') {
+                    continue;
+                }
+                let ft_len = data_len.min(8);
+                if ft_len < 8 {
+                    continue;
+                }
+                let ft: [u8; 8] = data_buf[..8].try_into().unwrap_or([0; 8]);
+                let Some(ts) = filetime_to_unix(u64::from_le_bytes(ft)) else {
+                    continue;
+                };
+                let path = normalize_nt_path(&raw_name, dos);
+                map.index_path(&path, ts);
+            }
+            RegCloseKey(h);
+        }
+    }
+}
+
+/// Prefetch：每次启动都会改 `C:\Windows\Prefetch\APP.EXE-HASH.pf` 的 mtime。
+/// 不解析压缩后的 SCCA 内容，用文件最后写入时间当最后运行时间。
+fn fill_prefetch(map: &mut UserAssistIndex) {
+    let dir = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("Prefetch");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(exe) = prefetch_exe_name(name) else {
+            continue;
+        };
+        let Ok(md) = ent.metadata() else { continue };
+        let Ok(modified) = md.modified() else { continue };
+        let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        map.index_path(&exe, dur.as_secs());
+    }
+}
+
+/// 开始菜单 / 搜索的「最近使用」记录。
+fn fill_recent_apps(map: &mut UserAssistIndex) {
+    const BASE: &str = r"Software\Microsoft\Windows\CurrentVersion\Search\RecentApps";
+    let subs = crate::platform::windows::registry::enum_subkeys(HKEY_CURRENT_USER, BASE, KEY_READ);
+    for sub in subs {
+        let path = format!("{BASE}\\{sub}");
+        let wide = to_wide(&path);
+        let mut h: HKEY = std::ptr::null_mut();
+        // SAFETY: 同 fill_bam_root。
+        unsafe {
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                wide.as_ptr(),
+                0,
+                KEY_READ | KEY_QUERY_VALUE,
+                &mut h,
+            ) as u32
+                != ERROR_SUCCESS
+            {
+                continue;
+            }
+            let app_id = read_reg_string(h, "AppId");
+            let mut data_buf = [0u8; 16];
+            let mut data_len = data_buf.len() as DWORD;
+            let mut val_type: DWORD = 0;
+            let val_name = to_wide("LastAccessedTime");
+            let res = winapi::um::winreg::RegQueryValueExW(
+                h,
+                val_name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut val_type,
+                data_buf.as_mut_ptr(),
+                &mut data_len,
+            );
+            RegCloseKey(h);
+            if res as u32 != ERROR_SUCCESS || data_len < 8 {
+                continue;
+            }
+            let ft: [u8; 8] = data_buf[..8].try_into().unwrap_or([0; 8]);
+            let Some(ts) = filetime_to_unix(u64::from_le_bytes(ft)) else {
+                continue;
+            };
+            if let Some(id) = app_id {
+                map.index_path(&id.to_lowercase(), ts);
+            }
+        }
+    }
 }
 
 /// 提取核心关键词/Token（过滤掉 64-bit, x64, v1.0, setup 等噪声词）
@@ -635,6 +910,59 @@ fn scan_shortcuts_map() -> std::collections::HashMap<String, u64> {
     map
 }
 
+/// 用名称 token、DisplayIcon、卸载器路径去索引里查最后使用时间。
+fn last_used_for_app(
+    app: &InstalledApp,
+    ua: &UserAssistIndex,
+    sc: &std::collections::HashMap<String, u64>,
+) -> u64 {
+    let mut max_ts = 0u64;
+    let tokens = extract_app_tokens(&app.name);
+    for token in &tokens {
+        if let Some(&ts) = sc.get(token) {
+            max_ts = max_ts.max(ts);
+        }
+    }
+    let name_lower = app.name.to_lowercase();
+    if let Some(&ts) = sc.get(&name_lower) {
+        max_ts = max_ts.max(ts);
+    }
+    max_ts = max_ts.max(ua.lookup(&tokens));
+    max_ts = max_ts.max(ua.lookup_one(&name_lower));
+
+    if let Some(icon) = &app.display_icon {
+        if let Some(exe) = extract_exe_path(icon) {
+            max_ts = max_ts.max(lookup_exe(ua, &exe));
+        }
+    }
+    for cmd in app
+        .uninstall_string
+        .iter()
+        .chain(app.quiet_uninstall_string.iter())
+    {
+        if cmd.to_lowercase().contains("msiexec") {
+            continue;
+        }
+        let (exe, _) = split_command(cmd);
+        if !exe.is_empty() {
+            max_ts = max_ts.max(lookup_exe(ua, &exe));
+        }
+    }
+    max_ts
+}
+
+fn lookup_exe(ua: &UserAssistIndex, exe: &str) -> u64 {
+    let lower = exe.to_lowercase();
+    let mut ts = ua.lookup_one(&lower);
+    if let Some(fname) = Path::new(&lower).file_name().and_then(|f| f.to_str()) {
+        ts = ts.max(ua.lookup_one(fname));
+        if let Some(stem) = Path::new(fname).file_stem().and_then(|s| s.to_str()) {
+            ts = ts.max(ua.lookup_one(stem));
+        }
+    }
+    ts
+}
+
 /// 对软件列表进行去重并多线程测算真实磁盘占用与补全安装时间、最后使用时间
 fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
     let mut map: std::collections::HashMap<String, InstalledApp> = std::collections::HashMap::new();
@@ -667,39 +995,21 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
     }
     let mut list: Vec<InstalledApp> = map.into_values().collect();
 
-    let ua_map = scan_user_assist_map();
+    let ua_map = scan_last_used_index();
     let sc_map = scan_shortcuts_map();
 
     // 并行精确测算目录大小与回填安装日期、最后使用时间
     list.par_iter_mut().for_each(|app| {
-        let mut max_used_ts: u64 = 0;
-        let tokens = extract_app_tokens(&app.name);
+        let mut max_used_ts = last_used_for_app(app, &ua_map, &sc_map);
 
-        // 1. 快捷方式命中
-        for token in &tokens {
-            if let Some(&ts) = sc_map.get(token) {
-                max_used_ts = max_used_ts.max(ts);
-            }
-        }
-        let name_lower = app.name.to_lowercase();
-        if let Some(&ts) = sc_map.get(&name_lower) {
-            max_used_ts = max_used_ts.max(ts);
-        }
-
-        // 2. UserAssist 命中：走反向索引做哈希查找，不再整表扫描
-        max_used_ts = max_used_ts.max(ua_map.lookup(&tokens));
-        max_used_ts = max_used_ts.max(ua_map.lookup_one(&name_lower));
-        if let Some(icon) = &app.display_icon {
-            if let Some(fname) = Path::new(icon).file_name().and_then(|f| f.to_str()) {
-                max_used_ts = max_used_ts.max(ua_map.lookup_one(&fname.to_lowercase()));
-            }
-        }
-
-        // 3. 智能推断或使用现有安装目录
+        // 智能推断或使用现有安装目录
         let deduced = deduce_install_location(app);
         if let Some(loc) = deduced {
             let loc_str = loc.to_string_lossy().to_lowercase();
             max_used_ts = max_used_ts.max(ua_map.lookup_one(&loc_str));
+            if let Some(folder) = loc.file_name().and_then(|f| f.to_str()) {
+                max_used_ts = max_used_ts.max(ua_map.lookup_one(&folder.to_lowercase()));
+            }
 
             // 体积测算与「最近访问时间」以前是对同一棵目录树走两趟 walkdir，
             // 这里合并成一趟。
@@ -968,6 +1278,7 @@ fn is_app_registered(app: &InstalledApp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::apps::{AppRegRoot, InstalledApp};
 
     #[test]
     fn test_rot13() {
@@ -983,6 +1294,96 @@ mod tests {
 
         let tokens2 = extract_app_tokens("PowerShell 7.6.3.0-x64");
         assert!(tokens2.contains(&"powershell".to_string()));
+    }
+
+    #[test]
+    fn display_icon_strips_resource_index() {
+        assert_eq!(
+            extract_exe_path(r#""C:\Program Files\App\app.exe",0"#).as_deref(),
+            Some(r"C:\Program Files\App\app.exe")
+        );
+        assert_eq!(
+            extract_exe_path(r"C:\Program Files\App\app.exe,-1").as_deref(),
+            Some(r"C:\Program Files\App\app.exe")
+        );
+        assert_eq!(
+            extract_exe_path(r"C:\Program Files\App\app.exe").as_deref(),
+            Some(r"C:\Program Files\App\app.exe")
+        );
+    }
+
+    #[test]
+    fn prefetch_name_strips_hash() {
+        assert_eq!(
+            prefetch_exe_name("CHROME.EXE-A8C2E3F1.pf").as_deref(),
+            Some("chrome.exe")
+        );
+        assert_eq!(
+            prefetch_exe_name("SETUP-HELPER.EXE-DEADBEEF.pf").as_deref(),
+            Some("setup-helper.exe")
+        );
+        assert_eq!(prefetch_exe_name("readme.txt"), None);
+    }
+
+    #[test]
+    fn filetime_rejects_epoch_and_garbage() {
+        assert_eq!(filetime_to_unix(0), None);
+        // 1601-01-01
+        assert_eq!(filetime_to_unix(116_444_736_000_000_000), None);
+        // 2024-01-01 00:00:00 UTC = 1704067200
+        let ft = 1704067200u64 * 10_000_000 + 116_444_736_000_000_000;
+        assert_eq!(filetime_to_unix(ft), Some(1_704_067_200));
+    }
+
+    #[test]
+    fn nt_device_path_picks_longest_volume_prefix() {
+        let mut dos = std::collections::HashMap::new();
+        dos.insert(r"\device\harddiskvolume3".into(), "c:".into());
+        dos.insert(r"\device\harddiskvolume30".into(), "d:".into());
+        assert_eq!(
+            normalize_nt_path(r"\Device\HarddiskVolume30\Windows\notepad.exe", &dos),
+            r"d:\windows\notepad.exe"
+        );
+        assert_eq!(
+            normalize_nt_path(r"\Device\HarddiskVolume3\Windows\notepad.exe", &dos),
+            r"c:\windows\notepad.exe"
+        );
+        assert_eq!(
+            normalize_nt_path(r"C:\Windows\notepad.exe", &dos),
+            r"c:\windows\notepad.exe"
+        );
+    }
+
+    #[test]
+    fn last_used_matches_display_icon_with_index() {
+        let mut ua = UserAssistIndex::default();
+        ua.index_path(r"c:\program files\google\chrome\application\chrome.exe", 1_700_000_000);
+        let mut app = InstalledApp {
+            id: "Chrome".into(),
+            name: "Google Chrome".into(),
+            version: "1".into(),
+            publisher: "Google".into(),
+            last_used_date: None,
+            last_used_raw: 0,
+            install_date: None,
+            install_date_raw: 0,
+            install_location: None,
+            display_icon: Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe,0".into()),
+            uninstall_string: None,
+            quiet_uninstall_string: None,
+            estimated_size: 0,
+            registry_root: AppRegRoot::Hklm,
+            registry_subpath: String::new(),
+            is_system_component: false,
+            uninstaller_missing: false,
+        };
+        let sc = std::collections::HashMap::new();
+        assert_eq!(last_used_for_app(&app, &ua, &sc), 1_700_000_000);
+
+        // 旧逻辑会拿 file_name = "chrome.exe,0" 去查，命中不了
+        app.display_icon = Some(r"C:\nowhere\missing.exe,0".into());
+        app.name = "Some Unrelated App".into();
+        assert_eq!(last_used_for_app(&app, &ua, &sc), 0);
     }
 
     #[test]

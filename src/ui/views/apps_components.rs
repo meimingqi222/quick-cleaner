@@ -34,7 +34,6 @@ pub(super) fn render_app_row(
     let lang = root.language;
     let is_busy = root.residual.scanning || root.clean.running;
     let uninst_enabled = can_uninstall && !is_busy;
-    let resid_enabled = !is_busy;
 
     div()
         .id(SharedString::from(format!("app-row-{idx}")))
@@ -159,7 +158,7 @@ pub(super) fn render_app_row(
         )
         .child(
             div()
-                .w(px(190.))
+                .w(px(APP_ACTIONS_COL_W))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -180,19 +179,25 @@ pub(super) fn render_app_row(
                             }))
                         }),
                 )
-                .child(
-                    div()
-                        .id(SharedString::from(format!("clean-resid-{idx}")))
-                        .child(small_button(
-                            crate::ui::i18n::tr_btn_force_clean(lang).to_string(),
-                            PRIMARY_FIXED,
-                            PRIMARY,
-                            resid_enabled,
-                        ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.start_residual_scan(app_for_resid.clone(), cx);
-                        })),
-                )
+                // macOS 上卸载已经会扫 Library 残留；强力清理卸不掉 .app，单独入口没有意义。
+                .when(!cfg!(target_os = "macos"), |d| {
+                    let resid_enabled = !is_busy;
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!("clean-resid-{idx}")))
+                            .child(small_button(
+                                crate::ui::i18n::tr_btn_force_clean(lang).to_string(),
+                                PRIMARY_FIXED,
+                                PRIMARY,
+                                resid_enabled,
+                            ))
+                            .when(resid_enabled, |el| {
+                                el.on_click(cx.listener(move |this, _, _, cx| {
+                                    this.start_residual_scan(app_for_resid.clone(), cx);
+                                }))
+                            }),
+                    )
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("more-btn-{idx}")))
@@ -223,6 +228,13 @@ pub(super) fn render_app_row(
 
 /// 软件表的行高。uniform_list 要求等高，因此行内名称强制单行。
 pub(super) const APP_ROW_H: f32 = 73.0;
+
+/// 操作列宽度。macOS 只有「卸载」+ 更多，Windows 还要放下「强力清理」。
+pub(super) const APP_ACTIONS_COL_W: f32 = if cfg!(target_os = "macos") {
+    120.0
+} else {
+    190.0
+};
 
 /// 列表主体：要么是占位提示，要么是虚拟化的行。
 pub(super) enum ListBody {
@@ -267,7 +279,7 @@ pub(super) fn render_apps_list_card(
         ListBody::Placeholder(el) => el,
         // 148 款软件按旧写法是每帧构造上千个元素；uniform_list 只渲染视口内的行
         ListBody::Rows(n) => gpui::uniform_list(
-            "apps-list-rows",
+            SharedString::from(format!("apps-list-rows-{}", root.apps.gen)),
             n,
             cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
                 let picked: Vec<crate::core::apps::InstalledApp> = range

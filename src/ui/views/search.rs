@@ -384,9 +384,6 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
     let font_size = 13.0;
 
     let sel = crate::ui::text_input::clamp_to_boundary(&query, selection);
-    let cursor_x = crate::ui::text_input::x_for_index_layout(&query, sel.start, font_size, window);
-    let sel_x1 = crate::ui::text_input::x_for_index_layout(&query, sel.start, font_size, window);
-    let sel_x2 = crate::ui::text_input::x_for_index_layout(&query, sel.end, font_size, window);
 
     crate::ui::components::search_box::search_box(
         crate::ui::components::search_box::SearchBoxSpec {
@@ -402,9 +399,6 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
             cursor_h: 15.,
             focused,
             cursor_visible: root.cursor_blink_visible,
-            cursor_x,
-            sel_x1,
-            sel_x2,
             is_file_search: true,
         },
         |this, cx| this.file_search_clear(cx),

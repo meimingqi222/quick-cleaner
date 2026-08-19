@@ -205,6 +205,15 @@ impl JunkState {
     }
 }
 
+/// 搜索框文本区最近一次绘制的排版，用于鼠标命中测试。
+///
+/// 必须与屏幕上实际画出的字形是同一份 `ShapedLine`：用另一套字体/字重
+/// 再 layout 一次，或用固定像素去猜文本起点，都会把光标点偏一格。
+pub struct SearchTextHit {
+    pub bounds: gpui::Bounds<gpui::Pixels>,
+    pub line: gpui::ShapedLine,
+}
+
 /// 软件管理页的状态（Geek Uninstaller 风格）。
 pub struct AppsState {
     pub list: Vec<InstalledApp>,
@@ -220,6 +229,8 @@ pub struct AppsState {
     pub search_marked: Option<std::ops::Range<usize>>,
     /// 搜索框最近一次绘制的位置，用来定位输入法候选窗口
     pub search_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    /// 文本区真实排版（绘制与点击命中共用）
+    pub text_hit: Option<SearchTextHit>,
     /// 软件表每次被整体替换就自增，用来判定渲染缓存是否失效
     pub gen: u64,
     /// 过滤 + 排序后的 `list` 下标，渲染直接读这里
@@ -274,6 +285,8 @@ pub struct SearchState {
     pub marked: Option<std::ops::Range<usize>>,
     /// 搜索框最近一次绘制的位置，定位输入法候选窗口
     pub bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    /// 文本区真实排版（绘制与点击命中共用）
+    pub text_hit: Option<SearchTextHit>,
     pub focus_handle: gpui::FocusHandle,
     pub results: Vec<crate::core::disk::SearchHit>,
     /// 是否正在后台构建搜索索引

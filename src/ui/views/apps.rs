@@ -1,6 +1,6 @@
 //! 软件管理与深度卸载视图 (Geek Uninstaller / CleanFlow 质感升级版)
 
-use super::apps_components::{render_apps_list_card, ListBody};
+use super::apps_components::{render_apps_list_card, ListBody, APP_ACTIONS_COL_W};
 use crate::core::apps::{
     is_rarely_used, now_unix_secs, AppFilterPreset, AppSortColumn, InstalledApp,
 };
@@ -228,12 +228,6 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     let font_size = 12.0;
 
     let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
-    let cursor_x =
-        crate::ui::text_input::x_for_index_layout(&search_text, sel.start, font_size, window);
-    let sel_x1 =
-        crate::ui::text_input::x_for_index_layout(&search_text, sel.start, font_size, window);
-    let sel_x2 =
-        crate::ui::text_input::x_for_index_layout(&search_text, sel.end, font_size, window);
 
     let search_box = crate::ui::components::search_box::search_box(
         crate::ui::components::search_box::SearchBoxSpec {
@@ -249,9 +243,6 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             cursor_h: 13.,
             focused: search_focused,
             cursor_visible: root.cursor_blink_visible,
-            cursor_x,
-            sel_x1,
-            sel_x2,
             is_file_search: false,
         },
         |this, cx| {
@@ -422,7 +413,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         ))
         .child(
             div()
-                .w(px(190.))
+                .w(px(APP_ACTIONS_COL_W))
                 .flex_none()
                 .text_center()
                 .text_xs()
@@ -550,7 +541,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .into_any_element()
 }
 
-/// 渲染软件条目悬浮右键上下文菜单（支持打开所在目录、常规卸载、强力深度清理、复制安装路径）
+/// 渲染软件条目悬浮右键上下文菜单（打开目录、卸载、Windows 上还有强力清理、复制路径）
 pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
     let lang = root.language;
     let menu = root.apps.context_menu.as_ref()?;
@@ -702,27 +693,29 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                         .when(!can_uninstall, |d| d.text_color(rgb(OUTLINE)))
                         .child(ctx_uninstall),
                 )
-                // 3. 强力深度清理
-                .child(
-                    div()
-                        .id("ctx-residual-clean")
-                        .px_3()
-                        .py(px(7.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(PRIMARY))
-                        .hover(|h| h.bg(rgba(PRIMARY, 0.08)))
-                        .child(ctx_force_clean)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_context_menu();
-                            this.start_residual_scan(app_for_resid.clone(), cx);
-                        })),
-                )
+                // 3. 强力深度清理（仅 Windows：可删安装目录和卸载登记项）
+                .when(!cfg!(target_os = "macos"), |d| {
+                    d.child(
+                        div()
+                            .id("ctx-residual-clean")
+                            .px_3()
+                            .py(px(7.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(PRIMARY))
+                            .hover(|h| h.bg(rgba(PRIMARY, 0.08)))
+                            .child(ctx_force_clean)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.close_context_menu();
+                                this.start_residual_scan(app_for_resid.clone(), cx);
+                            })),
+                    )
+                })
                 // 4. 复制安装路径
                 .child(
                     div()

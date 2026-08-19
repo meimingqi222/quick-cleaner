@@ -15,12 +15,12 @@ use std::time::{Duration, Instant};
 
 use winapi::shared::minwindef::{DWORD, FALSE, MAX_PATH};
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::processthreadsapi::OpenProcess;
+use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
 use winapi::um::tlhelp32::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use winapi::um::winbase::QueryFullProcessImageNameW;
-use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+use winapi::um::winnt::{PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
 
 /// 一个正在运行的进程。
 pub struct RunningProcess {
@@ -165,9 +165,68 @@ pub fn wait_until_finished(
     false
 }
 
+/// 结束映像路径落在 `dirs` 任意一棵目录下的进程。
+///
+/// 强力清理要删安装目录时，文件被占用会整批失败。只按路径前缀杀，
+/// 不按 exe 名全局匹配——`chrome.exe` 这种重名不能误伤。
+///
+/// 返回成功发出终止请求的个数（进程真正退出可能还要几十毫秒）。
+pub fn terminate_processes_under(dirs: &[String]) -> usize {
+    let my_pid = std::process::id();
+    let prefixes: Vec<String> = dirs
+        .iter()
+        .filter(|d| d.len() > 3)
+        .map(|d| {
+            let d = d.trim_end_matches('\\');
+            format!("{d}\\")
+        })
+        .collect();
+    if prefixes.is_empty() {
+        return 0;
+    }
+
+    let mut n = 0usize;
+    for p in list_processes() {
+        if p.pid == 0 || p.pid == 4 || p.pid == my_pid || p.image_path.is_empty() {
+            continue;
+        }
+        let hit = prefixes.iter().any(|pre| {
+            let dir = pre.trim_end_matches('\\');
+            p.image_path == dir || p.image_path.starts_with(pre.as_str())
+        });
+        if !hit {
+            continue;
+        }
+        if terminate_pid(p.pid) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn terminate_pid(pid: DWORD) -> bool {
+    // SAFETY: 句柄只在 OpenProcess 成功时使用，用完关闭。TerminateProcess
+    // 的退出码 1 只是标记，没有约定含义。
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if h.is_null() {
+            return false;
+        }
+        let ok = TerminateProcess(h, 1) != 0;
+        CloseHandle(h);
+        ok
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminate_under_empty_dirs_is_noop() {
+        assert_eq!(terminate_processes_under(&[]), 0);
+        assert_eq!(terminate_processes_under(&[String::new(), "c:".into()]), 0);
+    }
 
     #[test]
     fn enumerates_at_least_this_process() {

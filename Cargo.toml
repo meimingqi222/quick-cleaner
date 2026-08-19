@@ -1,6 +1,6 @@
 [package]
 name = "quick-cleaner"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 default-run = "quick-cleaner"
 
@@ -35,7 +35,7 @@ libc = "0.2"
 objc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "winnls", "impl-default"] }
+winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "winnls", "winsvc", "processenv", "impl-default"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"

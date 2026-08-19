@@ -25,15 +25,84 @@
 //! 非字符边界上，所以下面每处转换都要显式做。
 
 use gpui::{
-    font, px, Bounds, Context, EntityInputHandler, LineLayout, Pixels, TextRun, UTF16Selection,
-    Window,
+    fill, point, px, rgb, size, App, Bounds, Context, EntityInputHandler, FontWeight, Hsla,
+    LineLayout, Pixels, ShapedLine, SharedString, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::ui::Root;
+use crate::ui::theme::{rgba, OUTLINE, PRIMARY, TEXT};
+use crate::ui::{Root, SearchTextHit};
 
-/// 使用 GPUI 真实字体排版系统测量单行文本（支持系统任意字体、DPI 与字符集）。
+/// 搜索框绘制与命中测试共用的字体：系统 UI 字体 + Medium。
+///
+/// 不能用 `.ZedSans`（IBM Plex Sans）：界面 div 默认走 `.SystemUIFont`
+/// （Windows 上是 Segoe UI），两套字宽不一致，点在 `cd` 之间会落到 `b` 后面。
+pub fn search_box_font(window: &Window) -> gpui::Font {
+    let mut font = window.text_style().font();
+    font.weight = FontWeight::MEDIUM;
+    font
+}
+
+fn search_text_run(len: usize, font: gpui::Font, color: Hsla, underline: bool) -> TextRun {
+    TextRun {
+        len,
+        font,
+        color,
+        background_color: None,
+        underline: underline.then_some(UnderlineStyle {
+            color: Some(color),
+            thickness: px(1.0),
+            wavy: false,
+        }),
+        strikethrough: None,
+    }
+}
+
+/// 把搜索框文本排成可绘制、可命中的单行。换行会让 `shape_line` panic，先压成空格。
+pub fn shape_search_line(
+    text: &str,
+    font_size: f32,
+    color: Hsla,
+    marked: Option<&Range<usize>>,
+    window: &Window,
+) -> ShapedLine {
+    let display = SharedString::from(text.replace('\n', " "));
+    let font = search_box_font(window);
+    let runs = if display.is_empty() {
+        Vec::new()
+    } else if let Some(marked) = marked {
+        let marked = clamp_to_boundary(display.as_ref(), marked.clone());
+        let mut runs = Vec::new();
+        if marked.start > 0 {
+            runs.push(search_text_run(marked.start, font.clone(), color, false));
+        }
+        if marked.end > marked.start {
+            runs.push(search_text_run(
+                marked.end - marked.start,
+                font.clone(),
+                color,
+                true,
+            ));
+        }
+        if marked.end < display.len() {
+            runs.push(search_text_run(
+                display.len() - marked.end,
+                font,
+                color,
+                false,
+            ));
+        }
+        runs
+    } else {
+        vec![search_text_run(display.len(), font, color, false)]
+    };
+    window
+        .text_system()
+        .shape_line(display, px(font_size), &runs, None)
+}
+
+/// 使用 GPUI 真实字体排版系统测量单行文本（字体/字重与屏幕绘制一致）。
 pub fn layout_single_line_window(
     text: &str,
     font_size: f32,
@@ -44,7 +113,7 @@ pub fn layout_single_line_window(
     } else {
         vec![TextRun {
             len: text.len(),
-            font: font(".ZedSans"),
+            font: search_box_font(window),
             color: gpui::black(),
             background_color: None,
             underline: None,
@@ -56,7 +125,36 @@ pub fn layout_single_line_window(
         .layout_line(text, px(font_size), &runs, None)
 }
 
-/// 根据相对文本起点的 x 像素坐标，通过底层 DirectWrite/CoreText 真实排版精确计算对应的字符字节索引。
+/// 在字符边界里找距离 `rel_x` 最近的那一处（含行尾）。
+///
+/// GPUI 的 `closest_index_for_x` 拿的是各字形左边缘，行尾不参与比较；
+/// 这里按「字符左半边点到前、右半边点到后」走完整边界。
+pub fn closest_boundary_for_x(
+    text: &str,
+    rel_x: f32,
+    x_for_index: impl Fn(usize) -> f32,
+    line_width: f32,
+) -> usize {
+    if text.is_empty() || rel_x <= 0.0 {
+        return 0;
+    }
+    let mut best_idx = 0;
+    let mut best_dist = rel_x.abs();
+    for (idx, _) in text.char_indices().skip(1) {
+        let dist = (x_for_index(idx) - rel_x).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_idx = idx;
+        }
+    }
+    if (line_width - rel_x).abs() < best_dist {
+        text.len()
+    } else {
+        clamp_to_boundary(text, best_idx..best_idx).start
+    }
+}
+
+/// 根据相对文本起点的 x 像素坐标，计算对应的字符字节索引。
 pub fn closest_index_for_x_layout(
     text: &str,
     rel_x: f32,
@@ -67,17 +165,121 @@ pub fn closest_index_for_x_layout(
         return 0;
     }
     let layout = layout_single_line_window(text, font_size, window);
-    let idx = layout.closest_index_for_x(px(rel_x));
-    clamp_to_boundary(text, idx..idx).start
+    closest_boundary_for_x(
+        text,
+        rel_x,
+        |idx| f32::from(layout.x_for_index(idx)),
+        f32::from(layout.width),
+    )
 }
 
-/// 计算指定字符字节索引在排版中的精确 X 坐标（像素）。
-pub fn x_for_index_layout(text: &str, index: usize, font_size: f32, window: &mut Window) -> f32 {
-    if text.is_empty() || index == 0 {
-        return 0.0;
+/// 用上一帧画出来的文本区 bounds + ShapedLine 做命中；文本变了再现场 layout。
+pub fn index_for_mouse_x(
+    text: &str,
+    mouse_x: f32,
+    hit: Option<&SearchTextHit>,
+    font_size: f32,
+    window: &mut Window,
+) -> usize {
+    if text.is_empty() {
+        return 0;
     }
-    let layout = layout_single_line_window(text, font_size, window);
-    f32::from(layout.x_for_index(index.min(text.len())))
+    let Some(hit) = hit else {
+        return text.len();
+    };
+    let rel_x = mouse_x - f32::from(hit.bounds.origin.x);
+    if rel_x <= 0.0 {
+        return 0;
+    }
+    if hit.line.text.as_ref() == text {
+        closest_boundary_for_x(
+            text,
+            rel_x,
+            |idx| f32::from(hit.line.x_for_index(idx)),
+            f32::from(hit.line.width),
+        )
+    } else {
+        closest_index_for_x_layout(text, rel_x, font_size, window)
+    }
+}
+
+/// `paint_search_text` 的绘制参数。
+pub struct SearchTextPaint<'a> {
+    pub text: &'a str,
+    pub placeholder: &'a str,
+    pub sel: &'a Range<usize>,
+    pub marked: Option<&'a Range<usize>>,
+    pub font_size: f32,
+    pub cursor_h: f32,
+    pub focused: bool,
+    pub cursor_visible: bool,
+}
+
+/// 在文本区 canvas 上画出文字、选区、光标，并返回这份排版供下一帧点击使用。
+pub fn paint_search_text(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    spec: SearchTextPaint<'_>,
+) -> SearchTextHit {
+    let SearchTextPaint {
+        text,
+        placeholder,
+        sel,
+        marked,
+        font_size,
+        cursor_h,
+        focused,
+        cursor_visible,
+    } = spec;
+    let line_height = bounds.size.height;
+    let is_empty = text.is_empty();
+    let color = Hsla::from(rgb(if is_empty { OUTLINE } else { TEXT }));
+    let paint_src = if is_empty { placeholder } else { text };
+    let marked = if is_empty { None } else { marked };
+    let line = shape_search_line(paint_src, font_size, color, marked, window);
+
+    if focused && !is_empty && sel.start < sel.end {
+        let x1 = f32::from(line.x_for_index(sel.start.min(line.len())));
+        let x2 = f32::from(line.x_for_index(sel.end.min(line.len())));
+        let sel_h = font_size + 4.0;
+        let y_off = ((f32::from(line_height) - sel_h) / 2.0).max(0.0);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(bounds.origin.x + px(x1), bounds.origin.y + px(y_off)),
+                size(px((x2 - x1).max(2.0)), px(sel_h)),
+            ),
+            rgba(PRIMARY, 0.28),
+        ));
+    }
+
+    let _ = line.paint(bounds.origin, line_height, window, cx);
+
+    if focused && sel.start == sel.end && cursor_visible {
+        let caret_x = if is_empty {
+            0.0
+        } else {
+            f32::from(line.x_for_index(sel.start.min(line.len())))
+        };
+        let y_off = ((f32::from(line_height) - cursor_h) / 2.0).max(0.0);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(bounds.origin.x + px(caret_x), bounds.origin.y + px(y_off)),
+                size(px(1.5), px(cursor_h)),
+            ),
+            rgb(PRIMARY),
+        ));
+    }
+
+    let stored = if is_empty {
+        shape_search_line("", font_size, color, None, window)
+    } else {
+        line
+    };
+    SearchTextHit {
+        bounds,
+        line: stored,
+    }
 }
 
 /// 把 UTF-16 偏移换算成字节偏移。
@@ -516,16 +718,37 @@ impl EntityInputHandler for Root {
     /// 输入法候选窗口的定位锚点。
     fn bounds_for_range(
         &mut self,
-        _range_utf16: Range<usize>,
+        range_utf16: Range<usize>,
         element_bounds: Bounds<Pixels>,
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        if self.file_search_focused(window) {
-            Some(self.search.bounds.unwrap_or(element_bounds))
+        let (text, hit, box_bounds) = if self.file_search_focused(window) {
+            (
+                self.search.query.as_str(),
+                self.search.text_hit.as_ref(),
+                self.search.bounds,
+            )
         } else {
-            Some(self.apps.search_bounds.unwrap_or(element_bounds))
+            (
+                self.apps.search.as_str(),
+                self.apps.text_hit.as_ref(),
+                self.apps.search_bounds,
+            )
+        };
+        if let Some(hit) = hit {
+            let range = clamp_to_boundary(text, range_from_utf16(text, &range_utf16));
+            let x1 = hit.line.x_for_index(range.start.min(hit.line.len()));
+            let x2 = hit.line.x_for_index(range.end.min(hit.line.len()));
+            return Some(Bounds::from_corners(
+                point(hit.bounds.origin.x + x1, hit.bounds.origin.y),
+                point(
+                    hit.bounds.origin.x + x2.max(x1 + px(1.0)),
+                    hit.bounds.origin.y + hit.bounds.size.height,
+                ),
+            ));
         }
+        Some(box_bounds.unwrap_or(element_bounds))
     }
 
     fn character_index_for_point(
@@ -534,30 +757,47 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.file_search_focused(window) {
-            let bounds = self.search.bounds?;
-            let text = &self.search.query;
-            // 文本起点偏移与 search_box.rs 里的鼠标点击保持一致（+33.0），
-            // 字号与 search.rs 里 render_search_box 的 font_size 一致（13.0）。
-            let text_start_x: f32 = f32::from(bounds.origin.x) + 33.0;
-            let rel_x: f32 = f32::from(point.x) - text_start_x;
-            let byte_idx = closest_index_for_x_layout(text, rel_x, 13.0, window);
-            // EntityInputHandler 要求 UTF-16 索引
-            Some(offset_to_utf16(text, byte_idx))
+        let (text, hit, font_size) = if self.file_search_focused(window) {
+            (
+                self.search.query.as_str(),
+                self.search.text_hit.as_ref(),
+                13.0,
+            )
         } else {
-            let bounds = self.apps.search_bounds?;
-            let text = &self.apps.search;
-            let text_start_x: f32 = f32::from(bounds.origin.x) + 33.0;
-            let rel_x: f32 = f32::from(point.x) - text_start_x;
-            let byte_idx = closest_index_for_x_layout(text, rel_x, 12.0, window);
-            Some(offset_to_utf16(text, byte_idx))
-        }
+            (
+                self.apps.search.as_str(),
+                self.apps.text_hit.as_ref(),
+                12.0,
+            )
+        };
+        let byte_idx = index_for_mouse_x(text, f32::from(point.x), hit, font_size, window);
+        Some(offset_to_utf16(text, byte_idx))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closest_boundary_picks_nearest_char_edge() {
+        // 模拟 "abcd"，每字 8px：a=0-8, b=8-16, c=16-24, d=24-32
+        let text = "abcd";
+        let x_of = |idx: usize| idx as f32 * 8.0;
+        let width = 32.0;
+        // 点在 cd 之间（x=24）→ c 后面（index 3）
+        assert_eq!(closest_boundary_for_x(text, 24.0, x_of, width), 3);
+        // 点在 c 的右半（x=21）→ c 后面
+        assert_eq!(closest_boundary_for_x(text, 21.0, x_of, width), 3);
+        // 点在 c 的左半（x=18）→ b 后面
+        assert_eq!(closest_boundary_for_x(text, 18.0, x_of, width), 2);
+        // 点在 b 与 c 交界（x=16）→ b 后面
+        assert_eq!(closest_boundary_for_x(text, 16.0, x_of, width), 2);
+        // 点在 d 的右半 → 行尾
+        assert_eq!(closest_boundary_for_x(text, 29.0, x_of, width), 4);
+        // 点在起点左侧
+        assert_eq!(closest_boundary_for_x(text, -3.0, x_of, width), 0);
+    }
 
     #[test]
     fn utf16_and_byte_offsets_agree_on_ascii() {

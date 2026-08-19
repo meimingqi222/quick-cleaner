@@ -1,10 +1,9 @@
 //! Windows 软件残留（文件与注册表）深度探测与清理
 //!
 //! 扫描位置参照开源的 Bulk Crap Uninstaller 的 junk finder 清单整理而来
-//! （`Junk/Finders/Registry` 与 `Junk/Finders/Misc`），关键注册表路径逐个
-//! 核对过。旧实现只查了三处（安装目录、AppData 同名目录、
-//! `Software\<厂商>\<名字>`），所以经常报「非常干净」——**连该软件自己
-//! 的卸载登记项都没算进去**，于是清完之后它照样出现在软件列表里。
+//! （`Junk/Finders/Registry`、`Misc`、`Drive`），关键注册表路径逐个核对过。
+//! 在 BCU 那一套之上补了 COM/右键菜单、计划任务、Prefetch、崩溃转储，
+//! 清理前会结束占用安装目录的进程并尝试停止对应服务。
 //!
 //! # 匹配的把握程度
 //!
@@ -18,14 +17,15 @@
 //! 软件的配置。
 
 use crate::core::apps::{
-    is_safe_app_token, AppRegRoot, Confidence, InstalledApp, ResidualItem, ResidualKind,
-    ResidualScanResult, ResidualSource,
+    is_safe_app_token, split_command, AppRegRoot, Confidence, InstalledApp, ResidualItem,
+    ResidualKind, ResidualScanResult, ResidualSource,
 };
 use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
 use crate::platform::windows::apps::dir_or_file_size;
 use crate::platform::windows::registry::{
-    delete_reg_tree, delete_reg_value, enum_string_values, enum_subkeys, read_reg_string, to_wide,
+    delete_reg_tree, delete_reg_value, enum_string_values, enum_subkeys, from_wide, read_reg_string,
+    to_wide,
 };
 use std::path::{Path, PathBuf};
 
@@ -277,6 +277,11 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     scan_installer_folders(&ctx, &mut items);
     scan_mui_cache(&ctx, &mut items);
     scan_registered_apps(&ctx, &mut items);
+    scan_com(&ctx, &mut items);
+    scan_scheduled_tasks(&ctx, &mut items);
+    scan_prefetch(&ctx, &mut items);
+    scan_crash_dumps(&ctx, &mut items);
+    scan_uninstaller_leftover(app, &ctx, &mut items);
 
     dedup_items(&mut items);
     // 「确定」的排在前面，用户先看到的就是可以放心删的
@@ -285,6 +290,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     let total_file_size = items.iter().map(|i| i.size()).sum();
     ResidualScanResult {
         app_name: app.name.clone(),
+        app_id: app.id.clone(),
         items,
         total_file_size,
     }
@@ -478,7 +484,9 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 }
 
-/// 开始菜单与桌面的快捷方式。
+/// 开始菜单、桌面、启动文件夹里的快捷方式。
+///
+/// 厂商常把快捷方式放在「开始菜单\厂商名\产品.lnk」，只扫一层会漏。
 fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     if !ctx.name_is_matchable() {
         return;
@@ -486,22 +494,37 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join("Desktop"));
+        roots.push(
+            home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs"),
+        );
+        roots.push(
+            home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"),
+        );
     }
     if let Some(roaming) = dirs::data_dir() {
         roots.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs"));
+        roots.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs\Startup"));
     }
     if let Ok(pd) = std::env::var("ProgramData") {
-        roots.push(PathBuf::from(pd).join(r"Microsoft\Windows\Start Menu\Programs"));
+        let pd = PathBuf::from(pd);
+        roots.push(pd.join(r"Microsoft\Windows\Start Menu\Programs"));
+        roots.push(pd.join(r"Microsoft\Windows\Start Menu\Programs\Startup"));
     }
     if let Ok(public) = std::env::var("PUBLIC") {
         roots.push(PathBuf::from(public).join("Desktop"));
     }
 
+    let mut seen = std::collections::HashSet::new();
     for root in roots {
-        let Ok(rd) = std::fs::read_dir(&root) else {
+        if !seen.insert(crate::core::safety::norm(&root)) {
             continue;
-        };
-        for entry in rd.flatten().take(2000) {
+        }
+        for entry in walkdir::WalkDir::new(&root)
+            .max_depth(4)
+            .into_iter()
+            .flatten()
+            .take(4000)
+        {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
             let stem = name.trim_end_matches(".lnk");
@@ -509,17 +532,20 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 continue;
             }
             let p = entry.path();
+            if is_protected_residual_path(p) {
+                continue;
+            }
             let conf = if norm(stem) == ctx.name_norm {
                 Confidence::Certain
             } else {
                 Confidence::Possible
             };
-            if p.is_dir() {
-                push_dir(out, p, conf, ResidualSource::StartMenuDir);
-            } else {
-                let size = dir_or_file_size(&p);
+            if entry.file_type().is_dir() {
+                push_dir(out, p.to_path_buf(), conf, ResidualSource::StartMenuDir);
+            } else if name.to_ascii_lowercase().ends_with(".lnk") {
+                let size = dir_or_file_size(p);
                 out.push(ResidualItem {
-                    kind: ResidualKind::File(p, size),
+                    kind: ResidualKind::File(p.to_path_buf(), size),
                     confidence: conf,
                     source: ResidualSource::Shortcut,
                 });
@@ -781,6 +807,407 @@ fn scan_registered_apps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 }
 
+/// COM 类、TypeLib、以及指向这些 CLSID 的右键菜单 / 外壳扩展。
+///
+/// 对齐 BCU 的 `ComScanner`：只认 InprocServer32 / LocalServer32 / TypeLib
+/// 文件路径落在安装目录里的条目，不靠名字模糊匹配一整棵 HKCR。
+fn scan_com(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    if ctx.install_dir.is_empty() {
+        return;
+    }
+    let mut guids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let classes = [
+        (AppRegRoot::Hklm, r"SOFTWARE\Classes", KEY_READ | KEY_WOW64_64KEY),
+        (
+            AppRegRoot::Hklm,
+            r"SOFTWARE\Classes\WOW6432Node",
+            KEY_READ | KEY_WOW64_64KEY,
+        ),
+        (AppRegRoot::Hkcu, r"Software\Classes", KEY_READ),
+    ];
+    for (root, base, sam) in classes {
+        scan_clsid_key(root, &format!(r"{base}\CLSID"), sam, ctx, out, &mut guids);
+        scan_typelib_key(root, &format!(r"{base}\TypeLib"), sam, ctx, out, &mut guids);
+    }
+    if guids.is_empty() {
+        return;
+    }
+    scan_shell_extensions(&guids, out);
+}
+
+fn is_system_clsid(guid: &str) -> bool {
+    let g = guid.trim();
+    g.is_empty() || !g.starts_with('{') || g.contains("-0000-")
+}
+
+fn expand_env_path(raw: &str) -> String {
+    use winapi::um::processenv::ExpandEnvironmentStringsW;
+    let trimmed = raw.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let wide = to_wide(trimmed);
+    let mut buf = [0u16; 1024];
+    // SAFETY: wide / buf 都是本地缓冲，长度如实上报。
+    let n = unsafe { ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    if n == 0 || (n as usize) > buf.len() {
+        return trimmed.to_ascii_lowercase().replace('/', "\\");
+    }
+    from_wide(&buf[..n as usize])
+        .to_ascii_lowercase()
+        .replace('/', "\\")
+}
+
+fn is_windows_system_file(path: &str) -> bool {
+    path.contains(r"\windows\system32\")
+        || path.contains(r"\windows\syswow64\")
+        || path.contains(r"\windows\winsxs\")
+}
+
+fn scan_clsid_key(
+    root: AppRegRoot,
+    clsid_path: &str,
+    sam: DWORD,
+    ctx: &Ctx,
+    out: &mut Vec<ResidualItem>,
+    guids: &mut std::collections::HashSet<String>,
+) {
+    let h = hkey_of(root);
+    for guid in enum_subkeys(h, clsid_path, sam).into_iter().take(8000) {
+        if is_system_clsid(&guid) {
+            continue;
+        }
+        let guid_key = format!(r"{clsid_path}\{guid}");
+        let mut server = open_and_read(h, &format!(r"{guid_key}\InprocServer32"), "", sam)
+            .unwrap_or_default();
+        if server.is_empty() {
+            server = open_and_read(h, &format!(r"{guid_key}\LocalServer32"), "", sam)
+                .unwrap_or_default();
+        }
+        if server.is_empty() {
+            continue;
+        }
+        let path = expand_env_path(&server);
+        if path.is_empty() || is_windows_system_file(&path) || !ctx.mentions_install_dir(&path) {
+            continue;
+        }
+        guids.insert(guid.to_ascii_lowercase());
+        out.push(ResidualItem::certain(
+            ResidualKind::RegistryKey(root, guid_key.clone()),
+            ResidualSource::ComClass,
+        ));
+        if let Some(progid) = open_and_read(h, &format!(r"{guid_key}\ProgID"), "", sam) {
+            let progid = progid.trim().to_string();
+            if progid.len() >= 4 && progid.contains('.') {
+                let classes = clsid_path.trim_end_matches("\\CLSID");
+                let prog_path = format!(r"{classes}\{progid}");
+                if reg_key_exists(h, &prog_path, sam) {
+                    out.push(ResidualItem::certain(
+                        ResidualKind::RegistryKey(root, prog_path),
+                        ResidualSource::ComClass,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn scan_typelib_key(
+    root: AppRegRoot,
+    typelib_path: &str,
+    sam: DWORD,
+    ctx: &Ctx,
+    out: &mut Vec<ResidualItem>,
+    guids: &mut std::collections::HashSet<String>,
+) {
+    let h = hkey_of(root);
+    for guid in enum_subkeys(h, typelib_path, sam).into_iter().take(4000) {
+        if is_system_clsid(&guid) {
+            continue;
+        }
+        let guid_key = format!(r"{typelib_path}\{guid}");
+        for ver in enum_subkeys(h, &guid_key, sam).into_iter().take(8) {
+            for platform in ["win32", "win64"] {
+                let file_key = format!(r"{guid_key}\{ver}\0\{platform}");
+                let server = open_and_read(h, &file_key, "", sam).unwrap_or_default();
+                if server.is_empty() {
+                    continue;
+                }
+                let path = expand_env_path(&server);
+                if path.is_empty() || is_windows_system_file(&path) || !ctx.mentions_install_dir(&path)
+                {
+                    continue;
+                }
+                guids.insert(guid.to_ascii_lowercase());
+                out.push(ResidualItem::certain(
+                    ResidualKind::RegistryKey(root, guid_key.clone()),
+                    ResidualSource::ComClass,
+                ));
+                break;
+            }
+        }
+    }
+}
+
+const SHELLEX_PARENTS: &[&str] = &[
+    r"SOFTWARE\Classes\*\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\*\shellex\PropertySheetHandlers",
+    r"SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\Directory\Background\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\Folder\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\AllFilesystemObjects\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Classes\lnkfile\shellex\ContextMenuHandlers",
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers",
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects",
+];
+
+fn scan_shell_extensions(guids: &std::collections::HashSet<String>, out: &mut Vec<ResidualItem>) {
+    let views = [
+        (AppRegRoot::Hklm, KEY_READ | KEY_WOW64_64KEY),
+        (AppRegRoot::Hklm32, KEY_READ | KEY_WOW64_32KEY),
+        (AppRegRoot::Hkcu, KEY_READ),
+    ];
+    for (root, sam) in views {
+        let h = hkey_of(root);
+        for parent in SHELLEX_PARENTS {
+            let parent_path = if root == AppRegRoot::Hkcu {
+                parent.replacen("SOFTWARE", "Software", 1)
+            } else {
+                (*parent).to_string()
+            };
+            for sub in enum_subkeys(h, &parent_path, sam) {
+                let full = format!(r"{parent_path}\{sub}");
+                let def = open_and_read(h, &full, "", sam).unwrap_or_default();
+                let hit = guid_in_set(guids, &sub) || guid_in_set(guids, &def);
+                if hit {
+                    out.push(ResidualItem::certain(
+                        ResidualKind::RegistryKey(root, full),
+                        ResidualSource::ShellExtension,
+                    ));
+                }
+            }
+        }
+        let approved = if root == AppRegRoot::Hkcu {
+            r"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
+        } else {
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
+        };
+        for (name, _) in enum_string_values(h, approved, sam) {
+            if guid_in_set(guids, &name) {
+                out.push(ResidualItem::certain(
+                    ResidualKind::RegistryValue(root, approved.to_string(), name),
+                    ResidualSource::ShellExtension,
+                ));
+            }
+        }
+    }
+}
+
+fn guid_in_set(guids: &std::collections::HashSet<String>, raw: &str) -> bool {
+    let t = raw.trim();
+    if t.is_empty() {
+        return false;
+    }
+    guids.contains(&t.to_ascii_lowercase())
+}
+
+/// 计划任务：读 `System32\Tasks` 下的 XML，看 Command 是否指向安装目录。
+fn scan_scheduled_tasks(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    if ctx.install_dir.is_empty() && ctx.exe_names.is_empty() {
+        return;
+    }
+    let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let tasks_root = PathBuf::from(sysroot).join(r"System32\Tasks");
+    if !tasks_root.exists() {
+        return;
+    }
+    for entry in walkdir::WalkDir::new(&tasks_root)
+        .max_depth(6)
+        .into_iter()
+        .flatten()
+        .take(4000)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = match entry.path().strip_prefix(&tasks_root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let rel_str = rel.to_string_lossy().replace('/', "\\");
+        if rel_str
+            .to_ascii_lowercase()
+            .starts_with(r"microsoft\windows\")
+        {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        let blob = task_xml_text(&bytes);
+        let hit_dir = ctx.mentions_install_dir(&blob);
+        let hit_exe = ctx.mentions_exe(&blob);
+        if !hit_dir && !hit_exe {
+            continue;
+        }
+        if !hit_dir && is_windows_system_file(&blob.to_ascii_lowercase()) {
+            continue;
+        }
+        let name = format!(r"\{rel_str}");
+        out.push(ResidualItem {
+            kind: ResidualKind::ScheduledTask(name),
+            confidence: if hit_dir {
+                Confidence::Certain
+            } else {
+                Confidence::Possible
+            },
+            source: ResidualSource::ScheduledTask,
+        });
+    }
+}
+
+fn task_xml_text(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// Prefetch：每次启动都会留下 `APP.EXE-HASH.pf`。
+fn scan_prefetch(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    if ctx.exe_names.is_empty() {
+        return;
+    }
+    let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let dir = PathBuf::from(sysroot).join("Prefetch");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let name = ent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(exe) = prefetch_file_exe(name) else {
+            continue;
+        };
+        if !ctx.exe_names.iter().any(|e| e.eq_ignore_ascii_case(&exe)) {
+            continue;
+        }
+        let p = ent.path();
+        if is_protected_residual_path(&p) {
+            continue;
+        }
+        let size = dir_or_file_size(&p);
+        out.push(ResidualItem::certain(
+            ResidualKind::File(p, size),
+            ResidualSource::PrefetchFile,
+        ));
+    }
+}
+
+fn prefetch_file_exe(filename: &str) -> Option<String> {
+    let lower = filename.to_lowercase();
+    let stem = lower.strip_suffix(".pf")?;
+    let dash = stem.rfind('-')?;
+    let hash = &stem[dash + 1..];
+    if hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        let name = &stem[..dash];
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    } else {
+        None
+    }
+}
+
+/// `%LOCALAPPDATA%\CrashDumps\<exe>.*.dmp`
+fn scan_crash_dumps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    if ctx.exe_names.is_empty() {
+        return;
+    }
+    let Some(local) = dirs::data_local_dir() else {
+        return;
+    };
+    let dir = local.join("CrashDumps");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let name = ent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(".dmp") {
+            continue;
+        }
+        if !ctx.exe_names.iter().any(|e| lower.starts_with(e.as_str())) {
+            continue;
+        }
+        let p = ent.path();
+        let size = dir_or_file_size(&p);
+        out.push(ResidualItem::certain(
+            ResidualKind::File(p, size),
+            ResidualSource::CrashDump,
+        ));
+    }
+}
+
+/// Inno/NSIS 把卸载器放在安装目录以外时，安装目录清掉后这块还在。
+fn scan_uninstaller_leftover(app: &InstalledApp, ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let Some(cmd) = app
+        .quiet_uninstall_string
+        .as_ref()
+        .or(app.uninstall_string.as_ref())
+    else {
+        return;
+    };
+    if cmd.to_ascii_lowercase().contains("msiexec") {
+        return;
+    }
+    let (exe, _) = split_command(cmd);
+    if exe.is_empty() {
+        return;
+    }
+    let p = Path::new(&exe);
+    let Some(parent) = p.parent() else { return };
+    if !parent.exists() || is_protected_residual_path(parent) || is_system_root_dir(parent) {
+        return;
+    }
+    let parent_norm = crate::core::safety::norm(parent);
+    if !ctx.install_dir.is_empty() && parent_norm == ctx.install_dir {
+        return;
+    }
+    let fname = p
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let looks = fname.starts_with("unins")
+        || fname.contains("uninstall")
+        || fname.contains("uninst");
+    if !looks {
+        return;
+    }
+    push_dir(
+        out,
+        parent.to_path_buf(),
+        Confidence::Certain,
+        ResidualSource::UninstallerLeftover,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
@@ -830,6 +1257,7 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
                     .iter()
                     .any(|(n, _)| n.eq_ignore_ascii_case(name))
             }
+            ResidualKind::ScheduledTask(name) => scheduled_task_exists(name),
         })
         // 体积在卸载后会变（安装目录可能只剩残渣），重新算一遍
         .map(|mut it| {
@@ -848,6 +1276,32 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
 /// 执行残留清理
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
+
+    // 先结束占用安装目录的进程、停掉即将删除的服务，否则删文件/服务键会失败。
+    let lock_dirs: Vec<String> = items
+        .iter()
+        .filter_map(|it| match &it.kind {
+            ResidualKind::Directory(p, _) => Some(crate::core::safety::norm(p)),
+            ResidualKind::File(p, _) => p.parent().map(crate::core::safety::norm),
+            _ => None,
+        })
+        .filter(|s| s.len() > 3)
+        .collect();
+    if !lock_dirs.is_empty() {
+        let _ = crate::platform::windows::process::terminate_processes_under(&lock_dirs);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    for item in items {
+        if let ResidualKind::RegistryKey(_, subpath) = &item.kind {
+            if item.source == ResidualSource::Service
+                || item.source == ResidualSource::LikelyService
+            {
+                if let Some(name) = subpath.rsplit('\\').next() {
+                    let _ = stop_windows_service(name);
+                }
+            }
+        }
+    }
 
     for item in items {
         if prog.cancelled() {
@@ -886,10 +1340,71 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                     )));
                 }
             }
+            ResidualKind::ScheduledTask(name) => {
+                if delete_scheduled_task(name) {
+                    report.ok += 1;
+                } else {
+                    report.failed.push(PathBuf::from(name));
+                }
+            }
         }
     }
 
     report
+}
+
+fn scheduled_task_exists(name: &str) -> bool {
+    let rel = name.trim_start_matches('\\').replace('/', "\\");
+    if rel.is_empty() {
+        return false;
+    }
+    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    PathBuf::from(sys)
+        .join(r"System32\Tasks")
+        .join(rel)
+        .exists()
+}
+
+fn delete_scheduled_task(name: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    let status = std::process::Command::new("schtasks.exe")
+        .args(["/Delete", "/TN", name, "/F"])
+        .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+        .status();
+    matches!(status, Ok(s) if s.success()) || !scheduled_task_exists(name)
+}
+
+fn stop_windows_service(name: &str) -> bool {
+    use winapi::um::winsvc::{
+        CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
+        SC_MANAGER_CONNECT, SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_STATUS,
+        SERVICE_STOP, SERVICE_STOPPED,
+    };
+    let wide = to_wide(name);
+    // SAFETY: SCM / 服务句柄只在非空时使用，函数出口关闭。
+    unsafe {
+        let scm = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+        if scm.is_null() {
+            return false;
+        }
+        let svc = OpenServiceW(scm, wide.as_ptr(), SERVICE_STOP | SERVICE_QUERY_STATUS);
+        if svc.is_null() {
+            CloseServiceHandle(scm);
+            return false;
+        }
+        let mut status: SERVICE_STATUS = std::mem::zeroed();
+        let _ = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
+        for _ in 0..20 {
+            if QueryServiceStatus(svc, &mut status) != 0 && status.dwCurrentState == SERVICE_STOPPED
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -984,6 +1499,33 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].confidence, Confidence::Certain);
         assert_eq!(items[0].source, ResidualSource::ConfigRegKey);
+    }
+
+    #[test]
+    fn system_clsid_filter() {
+        assert!(is_system_clsid(""));
+        assert!(is_system_clsid("NotAGuid"));
+        assert!(is_system_clsid("{00000000-0000-0000-0000-000000000000}"));
+        assert!(!is_system_clsid("{12345678-1234-1234-1234-1234567890AB}"));
+    }
+
+    #[test]
+    fn prefetch_filename_roundtrip() {
+        assert_eq!(
+            prefetch_file_exe("CHROME.EXE-A8C2E3F1.pf").as_deref(),
+            Some("chrome.exe")
+        );
+        assert_eq!(prefetch_file_exe("readme.txt"), None);
+    }
+
+    #[test]
+    fn task_xml_reads_utf16_le() {
+        let mut bytes = vec![0xFF, 0xFE];
+        for c in "<Command>C:\\App\\foo.exe</Command>".encode_utf16() {
+            bytes.extend_from_slice(&c.to_le_bytes());
+        }
+        let text = task_xml_text(&bytes);
+        assert!(text.contains(r"C:\App\foo.exe"));
     }
 
     #[test]

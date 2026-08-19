@@ -125,6 +125,7 @@ pub mod fallback {
     pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
         ResidualScanResult {
             app_name: app.name.clone(),
+            app_id: app.id.clone(),
             items: Vec::new(),
             total_file_size: 0,
         }

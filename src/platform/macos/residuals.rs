@@ -20,6 +20,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     let Some(home) = dirs::home_dir() else {
         return ResidualScanResult {
             app_name: app.name.clone(),
+            app_id: app.id.clone(),
             items: Vec::new(),
             total_file_size: 0,
         };
@@ -265,6 +266,7 @@ fn scan_residuals_in(
 
     ResidualScanResult {
         app_name: app.name.clone(),
+        app_id: app.id.clone(),
         items,
         total_file_size,
     }

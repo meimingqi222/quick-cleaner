@@ -1,6 +1,8 @@
 //! 软件管理与深度卸载动作
 
-use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
+use crate::core::apps::{
+    app_gone_after_residual_clean, InstalledApp, ResidualItem, ResidualScanResult,
+};
 use crate::core::cleaner::CleanProgress;
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
@@ -19,6 +21,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 impl crate::ui::Root {
+    /// 从内存里的已安装列表拿掉一款软件，并让虚拟列表失效重绘。
+    fn drop_app_from_list(&mut self, app_id: &str) {
+        let before = self.apps.list.len();
+        self.apps.list.retain(|installed| installed.id != app_id);
+        if self.apps.list.len() != before {
+            self.apps.gen += 1;
+        }
+    }
+
     pub fn start_apps_scan(&mut self, cx: &mut Context<Self>) {
         if self.apps.scanning {
             return;
@@ -150,6 +161,7 @@ impl crate::ui::Root {
                 let total: u64 = remaining.iter().map(|i| i.size()).sum();
                 let res = ResidualScanResult {
                     app_name: name.clone(),
+                    app_id: app_id.clone(),
                     items: remaining,
                     total_file_size: total,
                 };
@@ -164,8 +176,7 @@ impl crate::ui::Root {
                 // 卸载由外部卸载器执行，我们不知道确切删了哪些路径，
                 // 无法局部更新 SizeTree。失效磁盘透镜缓存，下次打开时
                 // 走 FSEvents 增量更新。
-                this.apps.list.retain(|installed| installed.id != app_id);
-                this.apps.gen += 1;
+                this.drop_app_from_list(&app_id);
                 this.disk.mft = None;
                 #[cfg(not(windows))]
                 {
@@ -275,9 +286,9 @@ impl crate::ui::Root {
                 let failed: HashSet<PathBuf> = report.failed.iter().cloned().collect();
                 let mut retry_selected = HashSet::new();
                 let mut next_index = 0usize;
-                let remaining: Vec<ResidualItem> = res
-                    .items
-                    .into_iter()
+                let original_items = res.items;
+                let remaining: Vec<ResidualItem> = original_items
+                    .iter()
                     .enumerate()
                     .filter_map(|(old_index, item)| {
                         let was_selected = selected_before.contains(&old_index);
@@ -297,19 +308,23 @@ impl crate::ui::Root {
                                 retry_selected.insert(next_index);
                             }
                             next_index += 1;
-                            Some(item)
+                            Some(item.clone())
                         } else {
                             None
                         }
                     })
                     .collect();
                 this.residual.selected = retry_selected;
+                if app_gone_after_residual_clean(&original_items, &remaining) {
+                    this.drop_app_from_list(&res.app_id);
+                }
                 if remaining.is_empty() {
                     this.residual.result = None;
                 } else {
                     let total_file_size = remaining.iter().map(ResidualItem::size).sum();
                     this.residual.result = Some(ResidualScanResult {
                         app_name: app_name.clone(),
+                        app_id: res.app_id.clone(),
                         items: remaining,
                         total_file_size,
                     });
