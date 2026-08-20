@@ -121,6 +121,134 @@ pub struct SearchHit {
     pub mtime: u64,
 }
 
+/// 文件名匹配模式（搜索框输入解析后得到）。
+///
+/// 三种模式按用户输入自动选择，无需 UI 切换：
+/// - `Substring`：不含通配符 → 大小写不敏感子串匹配（向后兼容）
+/// - `Wildcard`：含 `*` 或 `?` → 通配符匹配
+/// - `Empty`：空查询 → 由调用方走 top-N 路径
+///
+/// `Wildcard` 内部预提取所有「字面子串片段」（连续的非通配符字符），
+/// 匹配时先用 `contains` 快速过滤——`contains` 走 SIMD 优化，比 DP
+/// 快一两个量级。只有通过全部字面片段过滤的文件名才走 DP 精确验证。
+/// 这样 `*.mp4` 实际只走一次 `contains(".mp4")`，DP 几乎不会被触发。
+#[derive(Clone, Debug)]
+pub enum NamePattern {
+    Substring(String),
+    Wildcard {
+        chars: Vec<char>,
+        /// 字面子串片段（按出现顺序）。空片段被丢弃。
+        /// 例如 `*report*.pdf` → ["report", ".pdf"]
+        literals: Vec<String>,
+    },
+    Empty,
+}
+
+impl NamePattern {
+    /// 解析搜索框输入。调用方已 `trim`，这里只做大小写归一化。
+    pub fn parse(query: &str) -> Self {
+        if query.is_empty() {
+            return NamePattern::Empty;
+        }
+        if query.contains('*') || query.contains('?') {
+            let lower: Vec<char> = query.to_ascii_lowercase().chars().collect();
+            // 提取所有连续的非通配符字符作为字面片段，用于快路径过滤
+            let literals = extract_literals(&lower);
+            NamePattern::Wildcard {
+                chars: lower,
+                literals,
+            }
+        } else {
+            NamePattern::Substring(query.to_ascii_lowercase())
+        }
+    }
+
+    /// 判断文件名（**已小写化**）是否匹配当前模式。
+    /// 调用方负责把文件名转成小写，避免每个文件重复 to_lowercase。
+    pub fn matches(&self, name_lower: &str) -> bool {
+        match self {
+            NamePattern::Empty => false,
+            NamePattern::Substring(s) => name_lower.contains(s),
+            NamePattern::Wildcard { chars, literals } => {
+                // 快路径：所有字面片段都必须作为子串出现。
+                // contains 走 SIMD 优化，比 DP 快一两个量级。
+                // 大部分不匹配的文件名会在这里被快速淘汰。
+                for lit in literals {
+                    if !name_lower.contains(lit.as_str()) {
+                        return false;
+                    }
+                }
+                // 慢路径：通过字面过滤的候选者走 DP 精确验证
+                wildcard_match(name_lower, chars)
+            }
+        }
+    }
+}
+
+/// 从通配符 pattern 中提取所有连续的非通配符字符片段。
+///
+/// `*` 和 `?` 是分隔符。空片段被丢弃。例如：
+/// - `*.mp4` → ["mp4"]... 实际是 [".mp4"]（`.` 不是通配符）
+/// - `*report*.pdf` → ["report", ".pdf"]
+/// - `a?c` → ["a", "c"]
+fn extract_literals(pattern: &[char]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for &c in pattern {
+        if c == '*' || c == '?' {
+            if !buf.is_empty() {
+                out.push(std::mem::take(&mut buf));
+            }
+        } else {
+            buf.push(c);
+        }
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
+/// 通配符匹配：`*` 匹配任意数量字符，`?` 匹配单个字符。
+///
+/// 输入的 `text` 和 `pattern` 都应是**已小写化**的字符序列。
+/// 用滚动数组 DP，O(n*m) 时间、O(m) 空间。文件名和 pattern 通常都很短
+/// （各几十字符以内），单次匹配开销可忽略。
+fn wildcard_match(text: &str, pattern: &[char]) -> bool {
+    let text: Vec<char> = text.chars().collect();
+    let n = text.len();
+    let m = pattern.len();
+    // dp[j] = 当前 text 行的 pat[..j] 匹配结果
+    let mut prev = vec![false; m + 1];
+    prev[0] = true;
+    // 前导连续 '*' 可以匹配空串
+    for j in 1..=m {
+        if pattern[j - 1] == '*' {
+            prev[j] = prev[j - 1];
+        } else {
+            break;
+        }
+    }
+    for i in 1..=n {
+        let mut curr = vec![false; m + 1];
+        // curr[0] 永远是 false（非空 text 匹配空 pattern）
+        for j in 1..=m {
+            let p = pattern[j - 1];
+            if p == '*' {
+                // '*' 匹配空 (prev[j]) 或匹配至少一个字符 (curr[j-1])
+                curr[j] = prev[j] || curr[j - 1];
+            } else if p == '?' || p == text[i - 1] {
+                curr[j] = prev[j - 1];
+            }
+            // 其他情况 curr[j] 保持 false
+        }
+        // 提前剪枝：如果整行全 false 且没有 '*' 能恢复，可以提前结束
+        // 但 '*' 的传播依赖 curr[j-1]，简单起见不做剪枝
+        prev = curr;
+    }
+    prev[m]
+}
+
 #[cfg(windows)]
 pub use crate::platform::windows::mft::{
     DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD as ROOT_NODE,
@@ -137,6 +265,131 @@ pub use super::disk_selection::DiskSelectionState;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wildcard_match_basic() {
+        // 基础通配符语义
+        assert!(wildcard_match("abc", &['a', '*', 'c']));
+        assert!(wildcard_match("ac", &['a', '*', 'c']));
+        assert!(wildcard_match("abxyzc", &['a', '*', 'c']));
+        assert!(!wildcard_match("ab", &['a', '*', 'c']));
+        assert!(!wildcard_match("bcd", &['a', '*', 'c']));
+
+        // ? 单字符
+        assert!(wildcard_match("abc", &['a', '?', 'c']));
+        assert!(!wildcard_match("ac", &['a', '?', 'c']));
+        assert!(!wildcard_match("abbc", &['a', '?', 'c']));
+
+        // 全 * 匹配任意
+        assert!(wildcard_match("anything", &['*']));
+        assert!(wildcard_match("", &['*']));
+
+        // 纯字面（无通配符）等价于完全相等
+        assert!(wildcard_match("abc", &['a', 'b', 'c']));
+        assert!(!wildcard_match("abcd", &['a', 'b', 'c']));
+    }
+
+    #[test]
+    fn wildcard_match_edge_cases() {
+        // 前导连续 *
+        assert!(wildcard_match("xyzabc", &['*', '*', 'a', 'b', 'c']));
+        // 末尾连续 *
+        assert!(wildcard_match("abcxyz", &['a', 'b', 'c', '*', '*']));
+        // 中间多个 *
+        assert!(wildcard_match("aXXbYYc", &['a', '*', '*', 'b', '*', '*', 'c']));
+        // 空 pattern 只匹配空串
+        assert!(wildcard_match("", &[]));
+        assert!(!wildcard_match("a", &[]));
+        // 空 text 匹配纯 * pattern
+        assert!(wildcard_match("", &['*', '*']));
+        assert!(!wildcard_match("", &['*', 'a']));
+    }
+
+    #[test]
+    fn name_pattern_dispatches_correctly() {
+        // 空查询
+        assert!(matches!(NamePattern::parse(""), NamePattern::Empty));
+        assert!(!NamePattern::parse("").matches("anything"));
+
+        // 子串模式（无通配符）。注意 matches 期望已小写化的文件名——
+        // 真实调用方（search 函数）会先 to_ascii_lowercase。
+        let p = NamePattern::parse("report");
+        assert!(matches!(p, NamePattern::Substring(_)));
+        assert!(p.matches("annual_report_final.pdf"));
+        assert!(p.matches("report")); // 大小写不敏感：pattern 已小写化
+        assert!(!p.matches("summary.docx"));
+
+        // 通配符模式
+        let p = NamePattern::parse("*.txt");
+        assert!(matches!(p, NamePattern::Wildcard { .. }));
+        assert!(p.matches("notes.txt"));
+        assert!(p.matches("readme.txt"));
+        assert!(!p.matches("notes.txt.bak"));
+
+        // ? 通配符
+        let p = NamePattern::parse("a?c");
+        assert!(p.matches("abc"));
+        assert!(!p.matches("ac"));
+        assert!(!p.matches("abbc"));
+
+        // *report* 等价于子串 report
+        let p = NamePattern::parse("*report*");
+        assert!(p.matches("annual_report_final.pdf"));
+        assert!(p.matches("report.log"));
+        assert!(!p.matches("summary.docx"));
+
+        // 大小写不敏感：pattern 大写输入也会被小写化
+        let p = NamePattern::parse("*.TXT");
+        assert!(matches!(p, NamePattern::Wildcard { .. }));
+        assert!(p.matches("notes.txt"));
+    }
+
+    #[test]
+    fn wildcard_literal_fast_path_filters_correctly() {
+        // *.mp4 的字面片段是 [".mp4"]，不含 .mp4 的文件名应被快速淘汰
+        let p = NamePattern::parse("*.mp4");
+        assert!(p.matches("video.mp4"));
+        assert!(p.matches("movie.MP4".to_ascii_lowercase().as_str())); // "movie.mp4"
+        assert!(!p.matches("video.mkv"));
+        assert!(!p.matches("mp4_readme.txt")); // "mp4" 不是 ".mp4"
+        assert!(!p.matches("trailer.avi"));
+
+        // *report*.pdf 的字面片段是 ["report", ".pdf"]
+        let p = NamePattern::parse("*report*.pdf");
+        assert!(p.matches("annual_report_final.pdf"));
+        assert!(p.matches("report.pdf"));
+        assert!(!p.matches("annual_summary.pdf")); // 缺 "report"
+        assert!(!p.matches("annual_report_final.docx")); // 缺 ".pdf"
+
+        // 纯 ? 通配符没有字面片段，走纯 DP
+        let p = NamePattern::parse("???");
+        assert!(p.matches("abc"));
+        assert!(!p.matches("ab"));
+        assert!(!p.matches("abcd"));
+    }
+
+    #[test]
+    fn extract_literals_splits_on_wildcards() {
+        assert_eq!(
+            extract_literals(&['*', '.', 'm', 'p', '4']),
+            vec![".mp4".to_string()]
+        );
+        assert_eq!(
+            extract_literals(&['*', 'r', 'e', 'p', '*', '.', 'p', 'd', 'f']),
+            vec!["rep".to_string(), ".pdf".to_string()]
+        );
+        assert_eq!(
+            extract_literals(&['a', '?', 'c']),
+            vec!["a".to_string(), "c".to_string()]
+        );
+        // 纯通配符 → 空字面列表
+        assert!(extract_literals(&['*', '?', '*']).is_empty());
+        // 无通配符 → 整体作为一个字面
+        assert_eq!(
+            extract_literals(&['a', 'b', 'c']),
+            vec!["abc".to_string()]
+        );
+    }
 
     /// 构造一个平台合适的绝对路径，`rel` 用 `/` 分段。
     ///

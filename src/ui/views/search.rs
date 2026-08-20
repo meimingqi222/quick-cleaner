@@ -42,15 +42,6 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
         (tr_search_building_index(lang).to_string(), PRIMARY)
     } else if !ready {
         (tr_search_no_index(lang).to_string(), CAUTION)
-    } else if query.trim().is_empty() {
-        (
-            if lang == Language::Zh {
-                "全盘索引就绪，输入关键字秒级检索".to_string()
-            } else {
-                "Index ready. Type to search instantly across all drives".to_string()
-            },
-            MUTED,
-        )
     } else if root.search.is_searching {
         (
             if lang == Language::Zh {
@@ -59,6 +50,15 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 "Searching…".to_string()
             },
             PRIMARY,
+        )
+    } else if query.trim().is_empty() {
+        (
+            if lang == Language::Zh {
+                format!("全盘最大的 {} 项 · 输入关键字精确检索", results_len)
+            } else {
+                format!("Top {} largest items · type to filter", results_len)
+            },
+            MUTED,
         )
     } else if results_empty {
         (tr_search_no_results(lang).to_string(), OUTLINE)
@@ -261,10 +261,9 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
 
     // 列表底部信息条
     let footer_text = if query.trim().is_empty() {
-        if lang == Language::Zh {
-            "全盘 NTFS MFT 秒级索引支持".to_string()
-        } else {
-            "Powered by NTFS MFT Instant Index Engine".to_string()
+        match lang {
+            Language::Zh => format!("全盘最大的 {} 项 · 输入关键字精确检索", results_len),
+            Language::En => format!("Top {} largest items · type to filter", results_len),
         }
     } else {
         match lang {
@@ -325,12 +324,20 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 tr_search_building_index(lang),
                 anim_phase,
             ))
+    } else if results_empty && root.search.is_searching {
+        // 后台搜索进行中（含空查询加载 top N 的瞬间），显示 loading
+        card()
+            .flex_1()
+            .min_h(px(320.))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(loading_state_view(
+                tr_search_indexing(lang),
+                tr_search_building_index(lang),
+                anim_phase,
+            ))
     } else if results_empty {
-        let empty_msg = if query.trim().is_empty() {
-            tr_search_empty(lang)
-        } else {
-            tr_search_no_results(lang)
-        };
         card()
             .flex_1()
             .min_h(px(320.))
@@ -352,7 +359,7 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                             .text_base()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(MUTED))
-                            .child(empty_msg),
+                            .child(tr_search_no_results(lang)),
                     ),
             )
             .child(list_footer)

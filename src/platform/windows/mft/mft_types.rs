@@ -315,16 +315,27 @@ impl SizeTree {
         }
     }
 
-    /// 全树子串搜索（类似 Everything）。
+    /// 全树子串/通配符搜索（类似 Everything）。
     ///
     /// 大小写不敏感，匹配节点名（不含路径）。命中后沿父链回溯拼完整路径。
     /// `max_results` 截断结果数。跳过 NTFS 系统元数据节点。
-    /// 空查询返回空 Vec。
+    ///
+    /// 查询语义：
+    /// - 空查询 → 返回全树按大小降序的前 `max_results` 项
+    /// - 含 `*` / `?` → 通配符匹配（`*` 任意长度，`?` 单字符）
+    /// - 其他 → 大小写不敏感子串匹配
+    ///
+    /// 通配符路径用 `NamePattern` 一次性解析 pattern，避免每个文件重复
+    /// 解析；子串路径保留 `contains` 快路径。
     pub fn search(&self, query: &str, max_results: usize) -> Vec<crate::core::disk::SearchHit> {
-        if query.is_empty() || max_results == 0 {
+        if max_results == 0 {
             return Vec::new();
         }
-        let q = query.to_ascii_lowercase();
+        use crate::core::disk::NamePattern;
+        let pattern = NamePattern::parse(query);
+        if matches!(pattern, NamePattern::Empty) {
+            return self.search_top_by_size(max_results);
+        }
         let mut cache = std::collections::HashMap::new();
         let mut hits = Vec::new();
         for (i, e) in self.entries.iter().enumerate() {
@@ -336,7 +347,9 @@ impl SizeTree {
                 continue;
             }
             let name = self.entry_name_str(i as u32);
-            if !name.to_ascii_lowercase().contains(&q) {
+            // 大小写不敏感：文件名小写化后与 pattern 比较
+            let name_lower = name.to_ascii_lowercase();
+            if !pattern.matches(&name_lower) {
                 continue;
             }
             let path = self.path_of_with(i as u32, &mut cache);
@@ -354,6 +367,58 @@ impl SizeTree {
         }
         // 按大小降序，让大文件/大目录排前面
         hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
+        hits
+    }
+
+    /// 空查询时返回全树按大小降序的前 `max_results` 项。
+    ///
+    /// 跳过 NTFS 系统元数据节点。只对最终选出的 N 条做路径回溯，
+    /// 避免对百万级条目逐条回溯路径的 CPU 开销。
+    fn search_top_by_size(&self, max_results: usize) -> Vec<crate::core::disk::SearchHit> {
+        // 收集所有有效条目的 (size, idx)
+        let mut sized: Vec<(u64, u32)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                e.used && !Self::is_ntfs_system_meta(*i as u32, self.entry_name_str(*i as u32))
+            })
+            .map(|(i, e)| {
+                let size = if e.is_dir {
+                    self.dir_size[i]
+                } else {
+                    e.size
+                };
+                (size, i as u32)
+            })
+            .collect();
+
+        if sized.is_empty() {
+            return Vec::new();
+        }
+
+        // 用 select_nth_unstable_by 在 O(n) 内切出最大的 max_results 个，
+        // 再只对这 N 个排序。比全量 sort 快一个量级。
+        if sized.len() > max_results {
+            sized.select_nth_unstable_by(max_results - 1, |a, b| b.0.cmp(&a.0));
+            sized.truncate(max_results);
+        }
+        sized.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+
+        let mut cache = std::collections::HashMap::new();
+        let mut hits = Vec::with_capacity(sized.len());
+        for (size, idx) in sized {
+            let e = &self.entries[idx as usize];
+            let name = self.entry_name_str(idx).to_string();
+            let path = self.path_of_with(idx, &mut cache);
+            hits.push(crate::core::disk::SearchHit {
+                path,
+                name,
+                is_dir: e.is_dir,
+                size,
+                mtime: e.mtime,
+            });
+        }
         hits
     }
 

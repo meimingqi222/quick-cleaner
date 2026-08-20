@@ -2,6 +2,8 @@
 
 use crate::core::i18n::bilingual;
 #[cfg(windows)]
+use crate::core::disk::VolumeId;
+#[cfg(windows)]
 use crate::platform::is_elevated;
 use crate::ui::i18n::*;
 use crate::ui::text_input::clamp_to_boundary;
@@ -22,20 +24,16 @@ impl crate::ui::Root {
     }
 
     /// 启动后台构建搜索索引。Windows 逐卷解析 $MFT；macOS 加载整盘索引。
+    ///
+    /// Windows 上的关键约束：垃圾扫描的预扫描和磁盘透镜都只会解析**当前卷**
+    /// 的 $MFT，并把那一份索引塞进 `search.indices`。早期实现看到
+    /// `indices` 非空就直接复用返回，导致多盘机器上 D:/E: 等其他盘的文件
+    /// 永远搜不到——必须点「重新扫描」清空索引后才会重扫所有卷。
+    /// 现在改为：先吸收已有的单卷索引（预扫描 / 磁盘透镜），再对照
+    /// `list_volumes()` 补扫缺失的卷，追加进 `indices`。
     pub fn start_search_index(&mut self, cx: &mut Context<Self>) {
         if self.search.indexing {
             return;
-        }
-
-        // Windows：如果搜索索引已经构建过，直接复用
-        #[cfg(windows)]
-        {
-            if !self.search.indices.is_empty() {
-                self.status = bilingual(|l| tr_search_ready(l).to_string());
-                self.run_search();
-                cx.notify();
-                return;
-            }
         }
 
         // macOS：如果已经有整盘索引，直接复用
@@ -48,50 +46,66 @@ impl crate::ui::Root {
             }
         }
 
-        // Windows：如果磁盘透镜已有 MFT 结果，直接复用，避免重复扫描
+        // Windows：先把磁盘透镜已扫的 MFT 吸收进搜索索引（去重），
+        // 再对照全卷列表计算还需要补扫哪些卷。预扫描留下的单卷索引
+        // 也已经在 `indices` 里，会一并被覆盖检查命中。
         #[cfg(windows)]
         {
             if let Some(mft) = &self.disk.mft {
-                crate::log!(
-                    "文件搜索：复用磁盘透镜已扫描的 MFT 索引（{} 条记录）",
-                    mft.records_read
-                );
-                self.search.indices.clear();
-                self.search.indices.push(mft.clone());
+                if !self
+                    .search
+                    .indices
+                    .iter()
+                    .any(|existing| existing.volume == mft.volume)
+                {
+                    crate::log!(
+                        "文件搜索：复用磁盘透镜已扫描的 MFT 索引（{} 条记录）",
+                        mft.records_read
+                    );
+                    self.search.indices.push(mft.clone());
+                }
+            }
+
+            let all_vols = crate::platform::list_volumes();
+            let missing: Vec<VolumeId> = all_vols
+                .into_iter()
+                .filter(|v| !self.search.indices.iter().any(|idx| idx.volume == *v))
+                .collect();
+
+            if missing.is_empty() {
+                // 所有卷都已索引，无需再扫
                 self.status = bilingual(|l| tr_search_ready(l).to_string());
                 self.run_search();
                 cx.notify();
                 return;
             }
-        }
 
-        // Windows 未提权时无法读 $MFT
-        #[cfg(windows)]
-        if !is_elevated() {
-            crate::log!("文件搜索：未提权，无法读取 $MFT");
-            self.status = bilingual(|l| tr_search_need_admin(l).to_string());
+            // 未提权时无法读 $MFT。如果至少已经有一些索引（来自预扫描），
+            // 仍然让用户搜索已有部分；否则提示需要管理员权限。
+            if !is_elevated() {
+                crate::log!("文件搜索：未提权，无法读取 $MFT");
+                if !self.search.indices.is_empty() {
+                    self.status = bilingual(|l| tr_search_ready(l).to_string());
+                    self.run_search();
+                    cx.notify();
+                    return;
+                }
+                self.status = bilingual(|l| tr_search_need_admin(l).to_string());
+                cx.notify();
+                return;
+            }
+
+            self.search.indexing = true;
+            self.status = bilingual(|l| tr_search_indexing(l).to_string());
+            self.start_tick(cx);
             cx.notify();
-            return;
-        }
 
-        self.search.indexing = true;
-        self.status = bilingual(|l| tr_search_indexing(l).to_string());
-        self.start_tick(cx);
-        cx.notify();
-
-        let live = self.live.clone();
-        #[cfg(not(windows))]
-        let cached = self.macos_root_index.clone();
-
-        let scan = cx.background_executor().spawn(async move {
-            #[cfg(windows)]
-            {
-                use crate::platform::windows::mft::scan_volume;
-                use crate::platform::windows::volume::list_volumes;
-                let vols = list_volumes();
-                crate::log!("文件搜索：开始扫描 {} 个卷的 $MFT", vols.len());
+            let live = self.live.clone();
+            let scan = cx.background_executor().spawn(async move {
+                use crate::platform::scan_volume;
+                crate::log!("文件搜索：开始补扫 {} 个卷的 $MFT", missing.len());
                 let mut indices = Vec::new();
-                for vol in &vols {
+                for vol in &missing {
                     if !live.load(std::sync::atomic::Ordering::Relaxed) {
                         crate::log!("文件搜索：扫描被取消");
                         break;
@@ -99,7 +113,10 @@ impl crate::ui::Root {
                     crate::log!("文件搜索：扫描卷 {vol}");
                     match scan_volume(vol, 0) {
                         Ok(s) => {
-                            crate::log!("文件搜索：卷 {vol} 扫描完成，{} 条记录", s.records_read);
+                            crate::log!(
+                                "文件搜索：卷 {vol} 扫描完成，{} 条记录",
+                                s.records_read
+                            );
                             indices.push(std::sync::Arc::new(s));
                         }
                         Err(e) => {
@@ -107,11 +124,39 @@ impl crate::ui::Root {
                         }
                     }
                 }
-                crate::log!("文件搜索：全部卷扫描完成，{} 个索引", indices.len());
+                crate::log!("文件搜索：补扫完成，新增 {} 个索引", indices.len());
                 indices
-            }
-            #[cfg(not(windows))]
-            {
+            });
+
+            self.search.index_task = Some(cx.spawn(async move |this, cx| {
+                let result = scan.await;
+                this.update(cx, |this, cx| {
+                    this.search.indexing = false;
+                    this.search.indices.extend(result);
+                    if this.search_index_ready() {
+                        this.status = bilingual(|l| tr_search_ready(l).to_string());
+                        this.run_search();
+                    } else {
+                        this.status = bilingual(|l| tr_search_no_index(l).to_string());
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+
+        // macOS：走到这里说明还没有整盘索引，需要后台构建
+        #[cfg(not(windows))]
+        {
+            self.search.indexing = true;
+            self.status = bilingual(|l| tr_search_indexing(l).to_string());
+            self.start_tick(cx);
+            cx.notify();
+
+            let live = self.live.clone();
+            let cached = self.macos_root_index.clone();
+
+            let scan = cx.background_executor().spawn(async move {
                 if let Some(s) = cached {
                     vec![s]
                 } else {
@@ -120,43 +165,35 @@ impl crate::ui::Root {
                         None => vec![],
                     }
                 }
-            }
-        });
+            });
 
-        self.search.index_task = Some(cx.spawn(async move |this, cx| {
-            let result = scan.await;
-            this.update(cx, |this, cx| {
-                this.search.indexing = false;
-                #[cfg(windows)]
-                {
-                    this.search.indices = result;
-                }
-                #[cfg(not(windows))]
-                {
+            self.search.index_task = Some(cx.spawn(async move |this, cx| {
+                let result = scan.await;
+                this.update(cx, |this, cx| {
+                    this.search.indexing = false;
                     if let Some(s) = result.first() {
                         this.macos_root_index = Some(s.clone());
                     }
-                }
-                if this.search_index_ready() {
-                    this.status = bilingual(|l| tr_search_ready(l).to_string());
-                    this.run_search();
-                } else {
-                    this.status = bilingual(|l| tr_search_no_index(l).to_string());
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
+                    if this.search_index_ready() {
+                        this.status = bilingual(|l| tr_search_ready(l).to_string());
+                        this.run_search();
+                    } else {
+                        this.status = bilingual(|l| tr_search_no_index(l).to_string());
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
     }
 
     /// 执行搜索（在主线程，索引已就绪时调用）。
+    ///
+    /// 空查询不再清空结果——而是返回全树按大小降序的前 `max_results` 项
+    /// （类似 Everything 不输关键字时列出全部）。搜索树内部已对空查询
+    /// 做了优化，只回溯最终选出的 N 条路径。
     pub fn run_search(&mut self) {
         let query = self.search.query.trim();
-        if query.is_empty() {
-            self.search.results.clear();
-            self.search.gen += 1;
-            return;
-        }
 
         let max_results = 500;
         let mut all_hits = Vec::new();
@@ -182,19 +219,13 @@ impl crate::ui::Root {
     }
 
     /// 搜索框文本变化时触发搜索（带 120ms 防抖与后台异步检索，避免主线程打字卡顿）。
+    ///
+    /// 空查询也走搜索路径——返回全树最大的 N 项，不再清空结果列表。
     pub fn search_input_changed(&mut self, cx: &mut Context<Self>) {
         if !self.search_index_ready() {
             return;
         }
         let query = self.search.query.trim().to_string();
-        if query.is_empty() {
-            self.search.search_task = None;
-            self.search.results.clear();
-            self.search.is_searching = false;
-            self.search.gen += 1;
-            cx.notify();
-            return;
-        }
 
         self.search.is_searching = true;
         cx.notify();
@@ -337,15 +368,16 @@ impl crate::ui::Root {
     }
 
     /// 清空搜索框
+    ///
+    /// 清空后不再让结果列表空白——空查询会返回全树最大的 N 项，
+    /// 与刚进入搜索页时的状态一致。
     pub fn file_search_clear(&mut self, cx: &mut Context<Self>) {
         self.search.search_task = None;
         self.search.query.clear();
         self.search.sel = 0..0;
         self.search.marked = None;
-        self.search.results.clear();
-        self.search.is_searching = false;
-        self.search.gen += 1;
-        cx.notify();
+        // 不再 clear results，而是走空查询搜索（top N）
+        self.search_input_changed(cx);
     }
 
     /// 用户主动点击“重新分析”时不能直接复用进程内索引；清空它后让加载器

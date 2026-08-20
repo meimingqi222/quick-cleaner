@@ -1032,8 +1032,8 @@ pub fn tr_search_subheading(lang: Language) -> &'static str {
 
 pub fn tr_file_search_placeholder(lang: Language) -> &'static str {
     match lang {
-        Language::Zh => "输入文件名关键词…",
-        Language::En => "Type a filename keyword…",
+        Language::Zh => "输入文件名关键词，支持 * 和 ? 通配符…",
+        Language::En => "Type a filename (supports * and ? wildcards)…",
     }
 }
 
