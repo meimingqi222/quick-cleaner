@@ -1091,6 +1091,12 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
 /// 加引号（`"/select,C:\my files\x.jpg"`），explorer 把整个 token 当成一个
 /// 不存在的文件夹，回退打开默认位置（文档）——表现为「定位总是打开文档目录」。
 /// PIDL 走 COM 接口，没有命令行解析，天然免疫。
+///
+/// **COM apartment**：`SHOpenFolderAndSelectItems` 和 `ILCreateFromPathW`
+/// 都是 Shell COM API，要求调用线程已初始化 COM apartment（STA）。
+/// gpui 的渲染管线（Direct2D/DirectWrite）可能在主线程初始化了 MTA，
+/// 在 MTA 线程上调用 STA Shell API 会导致未定义行为甚至闪退。
+/// 因此在独立线程中初始化 STA 再调用，完全隔离 apartment 冲突。
 pub fn reveal_in_explorer(path: &std::path::Path) {
     if !path.exists() {
         return;
@@ -1099,28 +1105,50 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
         let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
         return;
     }
-    // 直接编码原始 UTF-16，不走 to_string_lossy（非 UTF-8 文件名会丢字节）
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: wide 以 NUL 结尾且活到调用结束。ILCreateFromPathW 返回的 PIDL
-    // 由 COM 任务分配器分配，用完必须 CoTaskMemFree 释放。
-    let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
-    if !pidl.is_null() {
-        // SAFETY: pidl 指向文件本身的 PIDL。传 cidl=0 表示在父文件夹中选中
-        // pidl 指向的项——传 1 + null apidl 是 UB（原实现的 bug）。
+    let path = path.to_path_buf();
+    // 在独立线程中初始化 STA COM apartment，调用 Shell API。
+    // SHOpenFolderAndSelectItems 是阻塞调用（等用户关闭资源管理器窗口），
+    // 放在独立线程也避免卡住 UI 线程。
+    std::thread::spawn(move || {
+        // SAFETY: CoInitializeEx 在当前线程初始化 COM apartment。
+        // COINIT_APARTMENTTHREADED = STA，Shell API 要求 STA。
+        // 如果当前线程已初始化过 COM，返回 RPC_E_CHANGED_MODE 或 S_FALSE，
+        // 都不影响——Shell API 仍可在已初始化的 apartment 中调用。
         unsafe {
-            winapi::um::shlobj::SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
-            winapi::um::combaseapi::CoTaskMemFree(pidl as *mut _);
+            winapi::um::combaseapi::CoInitializeEx(
+                std::ptr::null_mut(),
+                winapi::um::objbase::COINIT_APARTMENTTHREADED,
+            );
         }
-        return;
-    }
-    // PIDL 创建失败（典型：路径超 MAX_PATH）退回命令行方案
-    let _ = std::process::Command::new("explorer.exe")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
+
+        // 直接编码原始 UTF-16，不走 to_string_lossy（非 UTF-8 文件名会丢字节）
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: wide 以 NUL 结尾且活到调用结束。ILCreateFromPathW 返回的 PIDL
+        // 由 COM 任务分配器分配，用完必须 CoTaskMemFree 释放。
+        let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
+        if !pidl.is_null() {
+            // SAFETY: pidl 指向文件本身的 PIDL。传 cidl=0 表示在父文件夹中选中
+            // pidl 指向的项——传 1 + null apidl 是 UB（原实现的 bug）。
+            unsafe {
+                winapi::um::shlobj::SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
+                winapi::um::combaseapi::CoTaskMemFree(pidl as *mut _);
+            }
+        } else {
+            // PIDL 创建失败（典型：路径超 MAX_PATH）退回命令行方案
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(format!("/select,{}", path.display()))
+                .spawn();
+        }
+
+        // 配对的 CoUninitialize，释放 COM 资源
+        unsafe {
+            winapi::um::combaseapi::CoUninitialize();
+        }
+    });
 }
 
 // winapi 0.3 没绑定 ILCreateFromPathW（它在 shlobj_core.h，winapi 的 shlobj
