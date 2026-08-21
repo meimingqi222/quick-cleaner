@@ -8,6 +8,7 @@ use crate::ui::components::icons::*;
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
+use crate::ui::components::{path_tooltip, text_tooltip};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -511,6 +512,8 @@ fn render_result_row(
     let name_display = truncate(&hit.name, 35);
     let path_display = truncate(&hit.path, 110);
     let size_str = fmt_size(hit.size);
+    let name_full = hit.name.clone();
+    let path_full = hit.path.clone();
 
     let path_for_click = hit.path.clone();
 
@@ -529,11 +532,13 @@ fn render_result_row(
         .child(
             // 名称与文件类型原生矢量图标
             div()
+                .id(SharedString::from(format!("search-name-{i}")))
                 .w(px(260.))
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap_2()
+                .tooltip(text_tooltip(name_full))
                 .child(icon_badge)
                 .child(
                     div()
@@ -548,14 +553,16 @@ fn render_result_row(
                 ),
         )
         .child(
-            // 完整路径展示（截断）
+            // 完整路径展示（截断）；悬停弹出全文
             div()
+                .id(SharedString::from(format!("search-path-{i}")))
                 .flex_1()
                 .min_w(px(0.))
                 .text_xs()
                 .text_color(rgb(MUTED))
                 .whitespace_nowrap()
                 .overflow_hidden()
+                .tooltip(path_tooltip(&path_full))
                 .child(path_display),
         )
         .child(

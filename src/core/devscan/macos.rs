@@ -91,6 +91,17 @@ pub fn load_or_build_macos_root_index(
     load_or_build_macos_index_for(&root, "整盘", live)
 }
 
+/// 进程内整盘索引只加载一次。垃圾扫描、文件搜索、磁盘透镜会同时
+/// 调进来，以前各自 deserialize 1600 万节点，峰值直接 ×3。
+static INDEX_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+struct CachedRootIndex {
+    mount: std::path::PathBuf,
+    scan: std::sync::Arc<crate::core::disk::ScanResult>,
+    last_event_id: u64,
+}
+
+static CACHED_ROOT_INDEX: std::sync::Mutex<Option<CachedRootIndex>> = std::sync::Mutex::new(None);
+
 /// 通用 macOS 索引加载/构建。
 ///
 /// 流程：
@@ -105,17 +116,65 @@ pub(super) fn load_or_build_macos_index_for(
     label: &str,
     live: &AtomicBool,
 ) -> Option<std::sync::Arc<crate::core::disk::ScanResult>> {
-    use crate::platform::macos::walk;
+    let _build_guard = INDEX_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cached = CACHED_ROOT_INDEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|cached| cached.mount == root)
+        .map(|cached| (cached.scan.clone(), cached.last_event_id));
+    let (scan, last_event_id) = match cached {
+        Some((scan, last_event_id)) => {
+            crate::log!(
+                "校验进程内 {} 索引缓存：{} 条记录，事件水位 {}",
+                label,
+                scan.records_read,
+                last_event_id
+            );
+            refresh_cached_macos_index(root, label, scan, last_event_id, live)?
+        }
+        None => load_or_build_macos_index_for_uncached(root, label, live)?,
+    };
+    if live.load(Ordering::Relaxed) {
+        *CACHED_ROOT_INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedRootIndex {
+            mount: root.to_path_buf(),
+            scan: scan.clone(),
+            last_event_id,
+        });
+    }
+    Some(scan)
+}
 
+/// 树被就地修改（删除、增量更新）后，刷新进程内缓存。
+#[cfg(not(windows))]
+pub fn remember_macos_root_index(scan: std::sync::Arc<crate::core::disk::ScanResult>) {
+    let mount = scan.volume.mount_point().to_path_buf();
+    let mut cached = CACHED_ROOT_INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    let last_event_id = cached
+        .as_ref()
+        .filter(|entry| entry.mount == mount)
+        .map(|entry| entry.last_event_id)
+        .unwrap_or(0);
+    *cached = Some(CachedRootIndex {
+        mount,
+        scan,
+        last_event_id,
+    });
+}
+
+#[cfg(not(windows))]
+fn load_or_build_macos_index_for_uncached(
+    root: &std::path::Path,
+    label: &str,
+    live: &AtomicBool,
+) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
     if !live.load(Ordering::Relaxed) {
         return None;
     }
 
     let t0 = std::time::Instant::now();
     let volume = crate::core::disk::VolumeId::from_mount_point(root.to_path_buf());
-    let scan: std::sync::Arc<crate::core::disk::ScanResult> = if let Some(loaded) =
-        crate::platform::macos::cache::load_index(&volume)
-    {
+    if let Some(loaded) = crate::platform::macos::cache::load_index(&volume) {
         crate::log!(
             "加载 {} 索引：{} 条记录，上次事件 ID {}，耗时 {:?}",
             label,
@@ -123,106 +182,79 @@ pub(super) fn load_or_build_macos_index_for(
             loaded.last_event_id,
             t0.elapsed()
         );
-        let t_fse = std::time::Instant::now();
-        match crate::platform::macos::fsevents::changes_since(root, loaded.last_event_id) {
-            Some(changes) if changes.paths.is_empty() && !changes.requires_full_scan => {
-                crate::log!(
-                    "复用 {} 索引：{} 条记录，FSEvents 无变化（回放耗时 {:?}）",
-                    label,
-                    loaded.scan.records_read,
-                    t_fse.elapsed()
-                );
-                std::sync::Arc::new(loaded.scan)
+        return refresh_cached_macos_index(
+            root,
+            label,
+            std::sync::Arc::new(loaded.scan),
+            loaded.last_event_id,
+            live,
+        );
+    }
+
+    crate::log!("未找到 {} 索引，执行首次全量扫描", label);
+    let (scan, checkpoint) = match full_macos_scan(root, &volume, live) {
+        Ok(result) => result,
+        Err(error) => {
+            crate::log!("{} {} 扫描失败: {error}", label, root.display());
+            return None;
+        }
+    };
+    crate::log!(
+        "{} 首次全量扫描完成：{} 条记录，耗时 {:?}",
+        label,
+        scan.records_read,
+        t0.elapsed()
+    );
+    Some((std::sync::Arc::new(scan), checkpoint))
+}
+
+/// 校验并刷新一份进程内缓存。即使没有路径变化，也要持久化推进后的水位。
+#[cfg(not(windows))]
+fn refresh_cached_macos_index(
+    root: &Path,
+    label: &str,
+    scan: std::sync::Arc<crate::core::disk::ScanResult>,
+    last_event_id: u64,
+    live: &AtomicBool,
+) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
+    let volume = scan.volume.clone();
+    match crate::platform::macos::fsevents::changes_since(root, last_event_id) {
+        Some(changes) if !changes.requires_full_scan && changes.paths.is_empty() => {
+            if changes.last_event_id > last_event_id {
+                spawn_save_index(volume, scan.clone(), changes.last_event_id);
             }
-            Some(changes) => {
-                if !changes.requires_full_scan {
-                    let t_refresh = std::time::Instant::now();
-                    match refresh_macos_index(&volume, loaded.scan, &changes, live) {
-                        Some(scan) => {
-                            crate::log!(
-                                "增量更新 {} 索引：{} 个事件路径，{} 条记录，耗时 {:?}",
-                                label,
-                                changes.paths.len(),
-                                scan.records_read,
-                                t_refresh.elapsed()
-                            );
-                            // 异步保存：后台线程序列化+压缩+写盘，
-                            // 不阻塞 scan_fixed 和 scan_discovered
-                            let arc = std::sync::Arc::new(scan);
-                            spawn_save_index(volume.clone(), arc.clone(), changes.last_event_id);
-                            arc
-                        }
-                        None => {
-                            crate::log!(
-                                "增量更新返回 None（变更根目录 >512 或父节点缺失），回退全量扫描"
-                            );
-                            // 注：metadata_failed 的情况已在上面跳过，
-                            // 走到这里说明是变更根 >512 或父节点缺失
-                            match full_macos_scan(root, &volume, live) {
-                                Ok(scan) => std::sync::Arc::new(scan),
-                                Err(error) => {
-                                    crate::log!("{} {} 扫描失败: {error}", label, root.display());
-                                    return None;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    crate::log!(
-                        "{} 索引需要全量重建：{} 个事件路径，原因={:?}，原始 {} 事件，过滤缓存 {}",
-                        label,
-                        changes.paths.len(),
-                        changes.full_scan_reason,
-                        changes.raw_event_count,
-                        changes.filtered_cache_events
-                    );
-                    match full_macos_scan(root, &volume, live) {
-                        Ok(scan) => std::sync::Arc::new(scan),
-                        Err(error) => {
-                            crate::log!("{} {} 扫描失败: {error}", label, root.display());
-                            return None;
-                        }
-                    }
+            Some((scan, changes.last_event_id))
+        }
+        Some(changes) if !changes.requires_full_scan => {
+            let owned = scan.as_ref().clone();
+            match refresh_macos_index(&volume, owned, &changes, live) {
+                Some(refreshed) => {
+                    let refreshed = std::sync::Arc::new(refreshed);
+                    spawn_save_index(volume, refreshed.clone(), changes.last_event_id);
+                    Some((refreshed, changes.last_event_id))
+                }
+                None => {
+                    crate::log!("{} 索引增量更新失败，回退全量扫描", label);
+                    let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
+                    Some((std::sync::Arc::new(scan), checkpoint))
                 }
             }
-            None => {
-                crate::log!(
-                        "{} 索引的 FSEvents 水位不可回放（since={}），执行一致性重扫，FSEvents 耗时 {:?}",
-                        label,
-                        loaded.last_event_id,
-                        t_fse.elapsed()
-                    );
-                let checkpoint = crate::platform::macos::fsevents::current_event_id();
-                let scan = match walk::scan_root(root, volume.clone(), live) {
-                    Ok(scan) => scan,
-                    Err(error) => {
-                        crate::log!("{} {} 扫描失败: {error}", label, root.display());
-                        return None;
-                    }
-                };
-                let arc = std::sync::Arc::new(scan);
-                spawn_save_index(volume.clone(), arc.clone(), checkpoint);
-                arc
-            }
         }
-    } else {
-        crate::log!("未找到 {} 索引，执行首次全量扫描", label);
-        let scan = match full_macos_scan(root, &volume, live) {
-            Ok(scan) => scan,
-            Err(error) => {
-                crate::log!("{} {} 扫描失败: {error}", label, root.display());
-                return None;
-            }
-        };
-        crate::log!(
-            "{} 首次全量扫描完成：{} 条记录，耗时 {:?}",
-            label,
-            scan.records_read,
-            t0.elapsed()
-        );
-        std::sync::Arc::new(scan)
-    };
-    Some(scan)
+        Some(changes) => {
+            crate::log!(
+                "进程内 {} 索引需要全量重建：原因={:?}",
+                label,
+                changes.full_scan_reason
+            );
+            let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
+            Some((std::sync::Arc::new(scan), checkpoint))
+        }
+        None => {
+            crate::log!("进程内 {} 索引水位不可回放，执行一致性重扫", label);
+            let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
+            Some((std::sync::Arc::new(scan), checkpoint))
+        }
+    }
 }
 
 /// 后台线程异步保存索引，不阻塞扫描流程。
@@ -240,16 +272,53 @@ pub(super) fn spawn_save_index(
 }
 
 /// 全量重建索引，并在扫描开始前保存 FSEvents 检查点。
+///
+/// 大扫描（根卷整盘）走 [`walk::scan_root_persisted`]：原始条目溢写
+/// 临时文件、构建阶段直接产出 v7 映射并落盘——扫描期间不再同时保留
+/// RawEntry 数组和最终完整树。小扫描或流式构建失败时回退到
+/// `save_index` 的常规路径。
 #[cfg(not(windows))]
 pub(super) fn full_macos_scan(
     root: &Path,
     volume: &crate::core::disk::VolumeId,
     live: &AtomicBool,
-) -> Result<crate::core::disk::ScanResult, crate::core::disk::ScanError> {
+) -> Result<(crate::core::disk::ScanResult, u64), crate::core::disk::ScanError> {
+    use crate::platform::macos::cache;
+    use crate::platform::macos::walk;
     let checkpoint = crate::platform::macos::fsevents::current_event_id();
-    let scan = crate::platform::macos::walk::scan_root(root, volume.clone(), live)?;
-    crate::platform::macos::cache::save_index(volume, &scan, checkpoint);
-    Ok(scan)
+    let persisted = cache::index_path_for(volume)
+        .map(|index_path| {
+            walk::scan_root_persisted(root, volume.clone(), live, &index_path, checkpoint)
+        })
+        .transpose();
+    match persisted {
+        Ok(Some((mut scan, true))) => {
+            cache::note_saved_index(volume, checkpoint);
+            cache::remove_stale_delta(volume);
+            // delta 已随全量重写作废；totals 以树为准再校一遍
+            refresh_scan_totals(&mut scan);
+            return Ok((scan, checkpoint));
+        }
+        Ok(Some((scan, false))) => {
+            // 流式构建回退成堆树：照常 save_index + 换 mmap 主体
+            cache::save_index(volume, &scan, checkpoint);
+            let mut scan = scan;
+            if let Some(tree) = cache::mapped_tree(volume) {
+                scan.tree = tree;
+                refresh_scan_totals(&mut scan);
+            }
+            return Ok((scan, checkpoint));
+        }
+        Ok(None) => {}
+        Err(e) => return Err(e),
+    }
+    let mut scan = walk::scan_root(root, volume.clone(), live)?;
+    cache::save_index(volume, &scan, checkpoint);
+    if let Some(tree) = cache::mapped_tree(volume) {
+        scan.tree = tree;
+        refresh_scan_totals(&mut scan);
+    }
+    Ok((scan, checkpoint))
 }
 
 /// 用 FSEvents 变更路径重扫局部子树，避免每次小改动都重扫整个用户目录。
@@ -364,6 +433,7 @@ pub(super) fn refresh_macos_index(
         changes.paths.len(),
         roots.len()
     );
+
     // 太多彼此独立的变化目录时，重扫局部区域反而比一次完整扫描更慢。
     if roots.len() > 512 {
         crate::log!(
@@ -530,7 +600,7 @@ pub(super) fn refresh_macos_index(
 pub(super) fn refresh_scan_totals(scan: &mut crate::core::disk::ScanResult) {
     // 更新扫描元数据
     let total_size = scan.tree.size_of(scan.tree.root());
-    let file_count = scan.tree.count_used_files();
+    let file_count = scan.tree.file_count_of(scan.tree.root());
     let dir_count = scan.tree.count_used_dirs();
     let records = file_count + dir_count;
     scan.total_size = total_size;

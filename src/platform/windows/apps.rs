@@ -657,7 +657,9 @@ fn fill_prefetch(map: &mut UserAssistIndex) {
             continue;
         };
         let Ok(md) = ent.metadata() else { continue };
-        let Ok(modified) = md.modified() else { continue };
+        let Ok(modified) = md.modified() else {
+            continue;
+        };
         let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) else {
             continue;
         };
@@ -1385,7 +1387,10 @@ mod tests {
     #[test]
     fn last_used_matches_display_icon_with_index() {
         let mut ua = UserAssistIndex::default();
-        ua.index_path(r"c:\program files\google\chrome\application\chrome.exe", 1_700_000_000);
+        ua.index_path(
+            r"c:\program files\google\chrome\application\chrome.exe",
+            1_700_000_000,
+        );
         let mut app = InstalledApp {
             id: "Chrome".into(),
             name: "Google Chrome".into(),

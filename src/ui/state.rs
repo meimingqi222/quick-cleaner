@@ -10,7 +10,7 @@ use crate::ui::views::DiskTab;
 use gpui::Task;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// 智能清理页的状态。
@@ -303,6 +303,8 @@ pub struct SearchState {
     pub scroll_drag: Option<(f32, f32)>,
     /// 异步搜索任务句柄（用于防抖）
     pub search_task: Option<Task<()>>,
+    /// 每次输入变化递增；后台遍历定期检查，及时终止已过期查询。
+    pub search_generation: Arc<AtomicU64>,
     /// 是否正在搜索中
     pub is_searching: bool,
     /// 一级排序：是否开启同类型文件聚合（默认开启）

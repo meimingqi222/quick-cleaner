@@ -11,6 +11,11 @@ use gpui::Context;
 use std::path::PathBuf;
 
 impl crate::ui::Root {
+    pub fn enter_disk_node(&mut self, idx: u32, cx: &mut Context<Self>) {
+        self.disk.path.push(idx);
+        cx.notify();
+    }
+
     pub fn switch_disk_volume(&mut self, vol: VolumeId, cx: &mut Context<Self>) {
         self.disk.volume_menu_open = false;
         if self.disk.volume == vol && (self.disk.mft.is_some() || self.disk.scanning) {
@@ -186,8 +191,9 @@ impl crate::ui::Root {
         #[cfg(not(windows))]
         let mut updated_root_index = false;
         if let Some(mft) = &mut self.disk.mft {
-            // 主卷索引同时由 macos_root_index 持有，因此这里通常会写时复制。
-            // 修改完成后必须让缓存也指向这份新数据，不能继续保留旧副本。
+            // 主卷索引同时由 macos_root_index 持有。mmap 主体经 Arc 共享且
+            // 只读，Clone 复制的是显式 delta（追加节点 + 覆盖表），修改
+            // 完成后必须让缓存也指向这份新数据。
             let mft_mut = std::sync::Arc::make_mut(mft);
             for path in deleted {
                 mft_mut.remove_path(path);
@@ -210,6 +216,9 @@ impl crate::ui::Root {
         #[cfg(not(windows))]
         if updated_root_index {
             self.macos_root_index = self.disk.mft.clone();
+            if let Some(scan) = self.macos_root_index.clone() {
+                crate::core::devscan::remember_macos_root_index(scan);
+            }
         }
         if let Some((_, free)) = &mut self.disk.space {
             *free += freed_bytes;

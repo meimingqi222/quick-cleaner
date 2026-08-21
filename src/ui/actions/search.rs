@@ -1,8 +1,8 @@
 //! 文件搜索与索引动作
 
-use crate::core::i18n::bilingual;
 #[cfg(windows)]
 use crate::core::disk::VolumeId;
+use crate::core::i18n::bilingual;
 #[cfg(windows)]
 use crate::platform::is_elevated;
 use crate::ui::i18n::*;
@@ -36,11 +36,13 @@ impl crate::ui::Root {
             return;
         }
 
-        // macOS：如果已经有整盘索引，直接复用
+        // macOS：如果已经有整盘索引，直接复用。
+        // 搜索走后台防抖路径——整盘索引 1600 万条目，同步在主线程
+        // 跑一次全树扫描会明显卡住 UI。
         #[cfg(not(windows))]
         {
             if self.macos_root_index.is_some() {
-                self.run_search();
+                self.search_input_changed(cx);
                 cx.notify();
                 return;
             }
@@ -75,8 +77,7 @@ impl crate::ui::Root {
             if missing.is_empty() {
                 // 所有卷都已索引，无需再扫
                 self.status = bilingual(|l| tr_search_ready(l).to_string());
-                self.run_search();
-                cx.notify();
+                self.search_input_changed(cx);
                 return;
             }
 
@@ -86,8 +87,7 @@ impl crate::ui::Root {
                 crate::log!("文件搜索：未提权，无法读取 $MFT");
                 if !self.search.indices.is_empty() {
                     self.status = bilingual(|l| tr_search_ready(l).to_string());
-                    self.run_search();
-                    cx.notify();
+                    self.search_input_changed(cx);
                     return;
                 }
                 self.status = bilingual(|l| tr_search_need_admin(l).to_string());
@@ -113,10 +113,7 @@ impl crate::ui::Root {
                     crate::log!("文件搜索：扫描卷 {vol}");
                     match scan_volume(vol, 0) {
                         Ok(s) => {
-                            crate::log!(
-                                "文件搜索：卷 {vol} 扫描完成，{} 条记录",
-                                s.records_read
-                            );
+                            crate::log!("文件搜索：卷 {vol} 扫描完成，{} 条记录", s.records_read);
                             indices.push(std::sync::Arc::new(s));
                         }
                         Err(e) => {
@@ -135,7 +132,7 @@ impl crate::ui::Root {
                     this.search.indices.extend(result);
                     if this.search_index_ready() {
                         this.status = bilingual(|l| tr_search_ready(l).to_string());
-                        this.run_search();
+                        this.search_input_changed(cx);
                     } else {
                         this.status = bilingual(|l| tr_search_no_index(l).to_string());
                     }
@@ -176,7 +173,7 @@ impl crate::ui::Root {
                     }
                     if this.search_index_ready() {
                         this.status = bilingual(|l| tr_search_ready(l).to_string());
-                        this.run_search();
+                        this.search_input_changed(cx);
                     } else {
                         this.status = bilingual(|l| tr_search_no_index(l).to_string());
                     }
@@ -187,37 +184,6 @@ impl crate::ui::Root {
         }
     }
 
-    /// 执行搜索（在主线程，索引已就绪时调用）。
-    ///
-    /// 空查询不再清空结果——而是返回全树按大小降序的前 `max_results` 项
-    /// （类似 Everything 不输关键字时列出全部）。搜索树内部已对空查询
-    /// 做了优化，只回溯最终选出的 N 条路径。
-    pub fn run_search(&mut self) {
-        let query = self.search.query.trim();
-
-        let max_results = 500;
-        let mut all_hits = Vec::new();
-
-        #[cfg(windows)]
-        {
-            for idx in &self.search.indices {
-                all_hits.extend(idx.tree.search(query, max_results));
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            if let Some(idx) = &self.macos_root_index {
-                all_hits.extend(idx.tree.search(query, max_results));
-            }
-        }
-
-        // 合并后按大小降序，截断
-        all_hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
-        all_hits.truncate(max_results);
-        self.search.results = all_hits;
-        self.search.gen += 1;
-    }
-
     /// 搜索框文本变化时触发搜索（带 120ms 防抖与后台异步检索，避免主线程打字卡顿）。
     ///
     /// 空查询也走搜索路径——返回全树最大的 N 项，不再清空结果列表。
@@ -226,6 +192,12 @@ impl crate::ui::Root {
             return;
         }
         let query = self.search.query.trim().to_string();
+        let generation = self
+            .search
+            .search_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
+        let search_generation = self.search.search_generation.clone();
 
         self.search.is_searching = true;
         cx.notify();
@@ -249,14 +221,32 @@ impl crate::ui::Root {
                     #[cfg(windows)]
                     {
                         for idx in &indices {
-                            all_hits.extend(idx.tree.search(&query, max_results));
+                            all_hits.extend(idx.tree.search_cancellable(
+                                &query,
+                                max_results,
+                                &search_generation,
+                                generation,
+                            ));
+                            if search_generation.load(std::sync::atomic::Ordering::Relaxed)
+                                != generation
+                            {
+                                return Vec::new();
+                            }
                         }
                     }
                     #[cfg(not(windows))]
                     {
                         if let Some(idx) = &macos_idx {
-                            all_hits.extend(idx.tree.search(&query, max_results));
+                            all_hits.extend(idx.tree.search_cancellable(
+                                &query,
+                                max_results,
+                                &search_generation,
+                                generation,
+                            ));
                         }
+                    }
+                    if search_generation.load(std::sync::atomic::Ordering::Relaxed) != generation {
+                        return Vec::new();
                     }
                     all_hits.sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
                     all_hits.truncate(max_results);
@@ -265,6 +255,14 @@ impl crate::ui::Root {
                 .await;
 
             this.update(cx, |this, cx| {
+                if this
+                    .search
+                    .search_generation
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    != generation
+                {
+                    return;
+                }
                 this.search.results = hits;
                 this.apply_search_sort();
                 this.search.is_searching = false;

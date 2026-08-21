@@ -328,17 +328,33 @@ impl SizeTree {
     /// 通配符路径用 `NamePattern` 一次性解析 pattern，避免每个文件重复
     /// 解析；子串路径保留 `contains` 快路径。
     pub fn search(&self, query: &str, max_results: usize) -> Vec<crate::core::disk::SearchHit> {
+        let generation = std::sync::atomic::AtomicU64::new(0);
+        self.search_cancellable(query, max_results, &generation, 0)
+    }
+
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        max_results: usize,
+        generation: &std::sync::atomic::AtomicU64,
+        expected_generation: u64,
+    ) -> Vec<crate::core::disk::SearchHit> {
         if max_results == 0 {
             return Vec::new();
         }
         use crate::core::disk::NamePattern;
         let pattern = NamePattern::parse(query);
         if matches!(pattern, NamePattern::Empty) {
-            return self.search_top_by_size(max_results);
+            return self.search_top_by_size(max_results, generation, expected_generation);
         }
         let mut cache = std::collections::HashMap::new();
         let mut hits = Vec::new();
         for (i, e) in self.entries.iter().enumerate() {
+            if i % 4096 == 0
+                && generation.load(std::sync::atomic::Ordering::Relaxed) != expected_generation
+            {
+                return Vec::new();
+            }
             if !e.used {
                 continue;
             }
@@ -374,24 +390,25 @@ impl SizeTree {
     ///
     /// 跳过 NTFS 系统元数据节点。只对最终选出的 N 条做路径回溯，
     /// 避免对百万级条目逐条回溯路径的 CPU 开销。
-    fn search_top_by_size(&self, max_results: usize) -> Vec<crate::core::disk::SearchHit> {
-        // 收集所有有效条目的 (size, idx)
-        let mut sized: Vec<(u64, u32)> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(i, e)| {
-                e.used && !Self::is_ntfs_system_meta(*i as u32, self.entry_name_str(*i as u32))
-            })
-            .map(|(i, e)| {
-                let size = if e.is_dir {
-                    self.dir_size[i]
-                } else {
-                    e.size
-                };
-                (size, i as u32)
-            })
-            .collect();
+    fn search_top_by_size(
+        &self,
+        max_results: usize,
+        generation: &std::sync::atomic::AtomicU64,
+        expected_generation: u64,
+    ) -> Vec<crate::core::disk::SearchHit> {
+        let mut sized: Vec<(u64, u32)> = Vec::new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if i % 4096 == 0
+                && generation.load(std::sync::atomic::Ordering::Relaxed) != expected_generation
+            {
+                return Vec::new();
+            }
+            if !e.used || Self::is_ntfs_system_meta(i as u32, self.entry_name_str(i as u32)) {
+                continue;
+            }
+            let size = if e.is_dir { self.dir_size[i] } else { e.size };
+            sized.push((size, i as u32));
+        }
 
         if sized.is_empty() {
             return Vec::new();

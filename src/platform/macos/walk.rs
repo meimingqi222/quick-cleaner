@@ -13,10 +13,10 @@
 //! - **取消**：通过 `AtomicBool` 检查取消标志。
 
 use crate::core::disk::{ScanError, ScanResult, SizeTree, TreeEntry, VolumeId};
-use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 /// 遍历器线程数上限。
@@ -31,6 +31,10 @@ const MAX_THREADS: usize = 8;
 /// 太小会导致 syscall 次数激增；太大则浪费内存且对 cache 不友好。
 /// 256 KB 是实测甜点，与 C 原型验证一致。
 const BULK_BUF_SIZE: usize = 256 * 1024;
+
+/// 超过该条目数后，扫描原始数据转溢写临时文件，构建阶段流式写进
+/// v7 文件映射。400k 条以内内存路径更省事（约 20MB 峰值）。
+const SPILL_THRESHOLD: usize = 400_000;
 
 /// macOS vnode 类型枚举，对应 `<sys/vnode.h>` 里的 `enum vtype`。
 ///
@@ -196,10 +200,7 @@ fn enumerate_dir(dir_fd: libc::c_int) -> Vec<DirEntry> {
 
 /// 工作队列：线程安全的目录路径队列 + 活跃线程计数。
 ///
-/// 每个队列项是 `(目录路径, 该目录在 entries 数组中的下标)`。
-/// 携带下标是为了在扫描时直接设置子条目的 parent，避免后续用
-/// `HashMap<PathBuf, u32>` 做路径→索引反查——6.6M 条目的反查
-/// 需要 ~200 MB HashMap 和 6.6M 次 PathBuf clone。
+/// 每个扫描项携带该目录在 entries 数组中的下标，以便直接设置 parent。
 struct WorkQueue {
     queue: Mutex<Vec<(PathBuf, u32)>>,
     cv: Condvar,
@@ -215,13 +216,13 @@ impl WorkQueue {
         }
     }
 
-    fn push(&self, path: PathBuf, parent_idx: u32) {
+    fn push(&self, path: PathBuf, dir_idx: u32) {
         let mut q = self.queue.lock().unwrap();
-        q.push((path, parent_idx));
+        q.push((path, dir_idx));
         self.cv.notify_one();
     }
 
-    /// 取一个目录。没有目录但有活跃线程时等待；都没有时返回 None。
+    /// 取一个任务。队列空但有活跃线程时等待；都没有时返回 None。
     fn pop(&self) -> Option<(PathBuf, u32)> {
         let mut q = self.queue.lock().unwrap();
         loop {
@@ -251,37 +252,206 @@ impl WorkQueue {
 }
 
 /// 扫描结果收集器：线程安全地收集文件和目录信息。
+///
+/// 小扫描（< [`SPILL_THRESHOLD`] 条）留在内存；超过阈值后整体转溢写：
+/// 原始条目顺序追加进临时文件，构建阶段流式读出、直接写进 v7 文件映射。
+/// 全量构建不再同时保留 RawEntry 数组和最终完整树——16M 条目时那两块
+/// 加上 intern 表和 CSR 就是 1GB+ 的峰值，正是首次全量扫描 footprint
+/// 超标的来源。
 struct Collector {
-    /// 扫描阶段收集的原始条目，聚合阶段构建树。
-    /// parent 在扫描时直接设置，不需要后续路径反查。
-    entries: Mutex<Vec<RawEntry>>,
+    state: Mutex<CollectState>,
     total_size: AtomicU64,
     file_count: AtomicU64,
     dir_count: AtomicU64,
+    /// 溢写一旦写失败（磁盘满等）置位，扫描以错误收场。
+    failed: AtomicBool,
 }
 
-/// 原始条目：扫描阶段收集，聚合阶段构建树。
-///
-/// 不保存完整路径——parent 索引在扫描时直接设置，避免了
-/// `build_size_tree` 中 6.6M 条目的 `HashMap<PathBuf, u32>` 反查。
-#[derive(Clone)]
-struct RawEntry {
-    parent: u32, // 父节点索引，根节点用 0
-    name: String,
-    is_dir: bool,
-    size: u64, // 文件的大小，目录为 0
-    mtime: u64,
+struct CollectState {
+    entries: Vec<RawEntry>,
+    names: Vec<u8>,
+    spill: Option<SpillState>,
+}
+
+/// 内存模式缓冲：条目数组 + 名字池。
+struct ScanBuf {
+    entries: Vec<RawEntry>,
+    names: Vec<u8>,
+}
+
+/// 溢写记录：`[parent u32][is_dir u8][mtime u32][size u64][name_len u16][name]`。
+/// 顺序追加、顺序读回，构建阶段不需要随机访问。
+struct SpillState {
+    writer: std::io::BufWriter<std::fs::File>,
+    path: PathBuf,
+    n_entries: u64,
+    /// 名字字节总量（含长度前缀），供流式构建预留名字池区域。
+    name_bytes: u64,
+}
+
+impl SpillState {
+    fn create() -> std::io::Result<Self> {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "qc-spill-{}-{}.bin",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        Ok(Self {
+            writer: std::io::BufWriter::with_capacity(1 << 20, file),
+            path,
+            n_entries: 0,
+            name_bytes: 0,
+        })
+    }
+
+    fn append(&mut self, r: &RawEntry, names: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        let name = &names[r.name_off as usize..r.name_off as usize + r.name_len as usize];
+        self.writer.write_all(&r.parent.to_le_bytes())?;
+        self.writer.write_all(&[u8::from(r.is_dir)])?;
+        self.writer.write_all(&r.mtime.to_le_bytes())?;
+        self.writer.write_all(&r.size.to_le_bytes())?;
+        self.writer.write_all(&(name.len() as u16).to_le_bytes())?;
+        self.writer.write_all(name)?;
+        self.n_entries += 1;
+        self.name_bytes += 2 + name.len() as u64;
+        Ok(())
+    }
+
+    fn dump(&mut self, entries: &[RawEntry], names: &[u8]) -> std::io::Result<()> {
+        for r in entries {
+            self.append(r, names)?;
+        }
+        Ok(())
+    }
+
+    /// 结束溢写：flush 并交回流式构建所需的定位信息。
+    fn finish(mut self) -> std::io::Result<(PathBuf, u64, u64)> {
+        use std::io::Write;
+        if let Err(error) = self.writer.flush() {
+            let path = self.path.clone();
+            drop(self.writer);
+            let _ = std::fs::remove_file(path);
+            return Err(error);
+        }
+        let n = self.n_entries;
+        let nb = self.name_bytes;
+        drop(self.writer);
+        Ok((self.path, n, nb))
+    }
+}
+
+/// 扫描结束后的原始数据：内存缓冲或溢写文件。
+enum Collected {
+    Mem(ScanBuf),
+    Spill {
+        path: PathBuf,
+        n: u64,
+        name_bytes: u64,
+    },
 }
 
 impl Collector {
     fn new() -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
+            state: Mutex::new(CollectState {
+                entries: Vec::new(),
+                names: Vec::new(),
+                spill: None,
+            }),
             total_size: AtomicU64::new(0),
             file_count: AtomicU64::new(0),
             dir_count: AtomicU64::new(0),
+            failed: AtomicBool::new(false),
         }
     }
+
+    /// 提交一批条目，返回本批首条目的全局下标。
+    ///
+    /// 批内 `raws` 的 name_off 是相对 `names` 的局部偏移；内存模式下这里
+    /// 统一加上池基址，溢写模式下名字随记录一起落盘。
+    fn commit(&self, raws: &mut Vec<RawEntry>, names: &[u8]) -> u32 {
+        let mut st = self.state.lock().unwrap();
+        if st.spill.is_none() && st.entries.len() + raws.len() > SPILL_THRESHOLD {
+            match SpillState::create() {
+                Ok(mut sp) => match sp.dump(&st.entries, &st.names) {
+                    Ok(()) => {
+                        crate::log!(
+                            "扫描超过 {} 条，原始条目转溢写 {}",
+                            SPILL_THRESHOLD,
+                            sp.path.display()
+                        );
+                        st.spill = Some(sp);
+                        st.entries = Vec::new();
+                        st.names = Vec::new();
+                    }
+                    Err(e) => {
+                        crate::log!("扫描溢写初始化失败（{}），继续走内存路径", e);
+                        self.failed.store(true, Ordering::Relaxed);
+                    }
+                },
+                Err(e) => {
+                    crate::log!("创建扫描溢写文件失败（{}），继续走内存路径", e);
+                }
+            }
+        }
+        if let Some(sp) = st.spill.as_mut() {
+            let base = sp.n_entries as u32;
+            for r in raws.iter() {
+                if let Err(e) = sp.append(r, names) {
+                    crate::log!("扫描溢写失败（{}）", e);
+                    self.failed.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+            base
+        } else {
+            let names_base = st.names.len() as u32;
+            st.names.extend_from_slice(names);
+            let entry_base = st.entries.len() as u32;
+            for r in raws.iter_mut() {
+                r.name_off += names_base;
+            }
+            st.entries.append(raws);
+            entry_base
+        }
+    }
+
+    /// 扫描结束：取出溢写信息或内存缓冲。
+    fn finish(self) -> std::io::Result<Collected> {
+        let mut st = self.state.into_inner().unwrap_or_else(|e| e.into_inner());
+        if let Some(sp) = st.spill.take() {
+            let (path, n, name_bytes) = sp.finish()?;
+            return Ok(Collected::Spill {
+                path,
+                n,
+                name_bytes,
+            });
+        }
+        Ok(Collected::Mem(ScanBuf {
+            entries: st.entries,
+            names: st.names,
+        }))
+    }
+}
+
+/// 原始条目：扫描阶段收集，聚合阶段构建树。
+///
+/// 名字写在 `ScanBuf::names` 连续池里，这里只存偏移，避免 1600 万个
+/// `String` 堆分配。
+struct RawEntry {
+    parent: u32,
+    name_off: u32,
+    name_len: u16,
+    is_dir: bool,
+    size: u64,
+    mtime: u32,
 }
 
 /// 并行遍历指定根目录，构建扫描结果。
@@ -312,7 +482,32 @@ pub fn scan_root_few_threads(
     volume: VolumeId,
     live: &AtomicBool,
 ) -> Result<ScanResult, ScanError> {
-    scan_root_nthreads(root, volume, live, 2)
+    scan_root_inner(root, volume, live, 2, None).map(|(scan, _)| scan)
+}
+
+/// 全量扫描并直接流式落盘到 `index_path`（大扫描零中间堆数组）。
+///
+/// 返回 `(scan, persisted)`：`persisted = true` 时索引文件已写好、
+/// 树已挂在该文件的 mmap 上，调用方只需记录事件水位；`false` 时
+/// （小扫描或流式构建失败回退）由调用方照常走 `save_index`。
+pub fn scan_root_persisted(
+    root: &Path,
+    volume: VolumeId,
+    live: &AtomicBool,
+    index_path: &Path,
+    last_event_id: u64,
+) -> Result<(ScanResult, bool), ScanError> {
+    let n_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, MAX_THREADS);
+    scan_root_inner(
+        root,
+        volume,
+        live,
+        n_threads,
+        Some((index_path.to_path_buf(), last_event_id)),
+    )
 }
 
 fn scan_root_nthreads(
@@ -321,6 +516,16 @@ fn scan_root_nthreads(
     live: &AtomicBool,
     n_threads: usize,
 ) -> Result<ScanResult, ScanError> {
+    scan_root_inner(root, volume, live, n_threads, None).map(|(scan, _)| scan)
+}
+
+fn scan_root_inner(
+    root: &Path,
+    volume: VolumeId,
+    live: &AtomicBool,
+    n_threads: usize,
+    persist: Option<(PathBuf, u64)>,
+) -> Result<(ScanResult, bool), ScanError> {
     let started = Instant::now();
 
     // 检查根目录是否可访问
@@ -328,18 +533,19 @@ fn scan_root_nthreads(
         return Err(ScanError::Io(format!("根目录不存在: {}", root.display())));
     }
 
-    let wq = Arc::new(WorkQueue::new());
-    let collector = Arc::new(Collector::new());
-    // 线程需要 'static 的取消标志，把外部 AtomicBool 的值复制一份
-    let live_arc = Arc::new(AtomicBool::new(live.load(Ordering::Relaxed)));
+    let wq = WorkQueue::new();
+    let collector = Collector::new();
 
     // 预分配根节点（索引 0）
     let label = volume.display().to_string();
     {
-        let mut entries = collector.entries.lock().unwrap();
-        entries.push(RawEntry {
+        let mut st = collector.state.lock().unwrap();
+        let name_off = st.names.len() as u32;
+        st.names.extend_from_slice(label.as_bytes());
+        st.entries.push(RawEntry {
             parent: 0,
-            name: label,
+            name_off,
+            name_len: label.len() as u16,
             is_dir: true,
             size: 0,
             mtime: 0,
@@ -350,50 +556,103 @@ fn scan_root_nthreads(
     // 推入根目录，根节点的 entries 下标是 0
     wq.push(root.to_path_buf(), 0);
 
-    let mut handles = Vec::with_capacity(n_threads);
-    for _ in 0..n_threads {
-        let wq = Arc::clone(&wq);
-        let collector = Arc::clone(&collector);
-        let live = Arc::clone(&live_arc);
-        handles.push(std::thread::spawn(move || {
-            worker_loop(&wq, &collector, &live);
-        }));
-    }
-    for h in handles {
-        let _ = h.join();
-    }
+    // scoped threads：工作线程直接借用外部取消标志。之前把初始值复制进
+    // 新的 AtomicBool，扫描开始后外部置 false 工作线程根本看不到，
+    // 全盘扫描无法及时取消。
+    std::thread::scope(|s| {
+        for _ in 0..n_threads {
+            let wq = &wq;
+            let collector = &collector;
+            s.spawn(move || worker_loop(wq, collector, live));
+        }
+    });
 
-    // 外部取消标志可能在扫描过程中被设置，检查一次
-    // live=false 表示取消
-    if !live.load(Ordering::Relaxed) {
-        return Err(ScanError::Io("扫描已取消".into()));
-    }
-
-    // 聚合阶段：构建 SizeTree
-    let entries = collector.entries.lock().unwrap().clone();
+    let failed = collector.failed.load(Ordering::Relaxed);
+    let cancelled = !live.load(Ordering::Relaxed);
     let total_size = collector.total_size.load(Ordering::Relaxed);
     let file_count = collector.file_count.load(Ordering::Relaxed);
     let dir_count = collector.dir_count.load(Ordering::Relaxed);
+    let collected = collector
+        .finish()
+        .map_err(|error| ScanError::Io(format!("扫描溢写收尾失败: {error}")))?;
+    if failed || cancelled {
+        if let Collected::Spill { path, .. } = collected {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(ScanError::Io(if cancelled {
+            "扫描已取消".into()
+        } else {
+            "扫描临时文件写入失败".into()
+        }));
+    }
 
-    let tree = build_size_tree(volume.clone(), entries);
+    let (tree, persisted) = match collected {
+        Collected::Mem(buf) => (build_size_tree(volume.clone(), buf), false),
+        Collected::Spill {
+            path,
+            n,
+            name_bytes,
+        } => {
+            let build = StreamingBuild {
+                spill_path: &path,
+                n,
+                name_bytes,
+                persist: persist.as_ref().map(|(p, _)| p.as_path()),
+                last_event_id: persist.as_ref().map(|(_, id)| *id).unwrap_or(0),
+                live,
+            };
+            match build_size_tree_streaming(volume.clone(), build) {
+                Ok(tree) => {
+                    let _ = std::fs::remove_file(&path);
+                    (tree, persist.is_some())
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(ScanError::Io("扫描已取消".into()));
+                }
+                Err(e) => {
+                    crate::log!("流式构建失败（{}），回退内存构建", e);
+                    match read_spill_to_buf(&path, n, live) {
+                        Ok(buf) => {
+                            let _ = std::fs::remove_file(&path);
+                            (build_size_tree(volume.clone(), buf), false)
+                        }
+                        Err(e2) => {
+                            let _ = std::fs::remove_file(&path);
+                            return Err(ScanError::Io(format!("读取扫描溢写失败: {e2}")));
+                        }
+                    }
+                }
+            }
+        }
+    };
+    let records = tree.entry_count() as u64;
+    crate::log!(
+        "SizeTree 构建完成：{} 条，约 {:.1} MB（entries + names + CSR）",
+        records,
+        tree.memory_bytes() as f64 / (1024.0 * 1024.0)
+    );
 
-    Ok(ScanResult {
-        volume,
-        total_size,
-        file_count,
-        dir_count,
-        dirs: Vec::new(), // macOS 不需要目录排行榜（GUI 走树）
-        tree,
-        elapsed_ms: started.elapsed().as_millis() as u64,
-        records_read: file_count + dir_count,
-        records_expected: file_count + dir_count,
-        mft_run_bytes: 0,
-        ext_records: 0,
-        ext_data_merged: 0,
-        hard_links: 0,
-        unique_size: total_size,
-        unique_files: file_count,
-    })
+    Ok((
+        ScanResult {
+            volume,
+            total_size,
+            file_count,
+            dir_count,
+            dirs: Vec::new(), // macOS 不需要目录排行榜（GUI 走树）
+            tree,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            records_read: records,
+            records_expected: records,
+            mft_run_bytes: 0,
+            ext_records: 0,
+            ext_data_merged: 0,
+            hard_links: 0,
+            unique_size: total_size,
+            unique_files: file_count,
+        },
+        persisted,
+    ))
 }
 
 /// 工作线程主循环：取目录 → 枚举 → 推子目录 → 重复。
@@ -413,7 +672,6 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
 
         wq.inc_active();
 
-        // 打开目录
         let c_path = match std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
             Ok(c) => c,
             Err(_) => {
@@ -421,11 +679,6 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
                 continue;
             }
         };
-
-        // SAFETY: c_path 是合法的 NUL 结尾字符串。
-        // O_NOFOLLOW：不跟随符号链接。macOS Container 目录里常有指向
-        // TCC 保护路径的符号链接，跟随会导致 open() 阻塞数秒。
-        // 符号链接本身不占磁盘空间，目标已在真实位置计数。
         let fd = unsafe {
             libc::open(
                 c_path.as_ptr(),
@@ -436,14 +689,11 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
             wq.dec_active();
             continue;
         }
-
         let entries = enumerate_dir(fd);
         unsafe { libc::close(fd) };
 
-        // 先在本地收集所有条目，最后一次性锁 collector.entries 批量写入。
-        // 之前的实现每条目锁一次，92 万文件就是 92 万次 lock/unlock，
-        // 严重削弱并行遍历的收益。
         let mut new_dirs: Vec<(PathBuf, u32)> = Vec::new();
+        let mut local_names = Vec::new();
         let mut raw_entries: Vec<RawEntry> = Vec::with_capacity(entries.len());
         for entry in &entries {
             if entry.is_dir {
@@ -454,27 +704,23 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
                     .fetch_add(entry.size, Ordering::Relaxed);
                 collector.file_count.fetch_add(1, Ordering::Relaxed);
             }
-
+            let name_off = local_names.len() as u32;
+            local_names.extend_from_slice(entry.name.as_bytes());
             raw_entries.push(RawEntry {
                 parent: dir_idx,
-                name: entry.name.clone(),
+                name_off,
+                name_len: entry.name.len() as u16,
                 is_dir: entry.is_dir,
                 size: if entry.is_dir { 0 } else { entry.size },
-                mtime: entry.mtime,
+                mtime: entry.mtime.min(u32::MAX as u64) as u32,
             });
         }
 
-        // 一次性批量写入，只锁一次。同时获取子目录的 entries 下标，
-        // 用于后续推入工作队列。
-        {
-            let mut shared = collector.entries.lock().unwrap();
-            let base = shared.len() as u32;
-            shared.extend(raw_entries);
-            // 为每个目录条目计算其在 entries 中的下标，推入工作队列
-            for (i, entry) in entries.iter().enumerate() {
-                if entry.is_dir {
-                    new_dirs.push((dir.join(&entry.name), base + i as u32));
-                }
+        // 提交批数据（内存或溢写），拿到本批首条目的全局下标
+        let entry_base = collector.commit(&mut raw_entries, &local_names);
+        for (i, entry) in entries.iter().enumerate() {
+            if entry.is_dir {
+                new_dirs.push((dir.join(&entry.name), entry_base + i as u32));
             }
         }
 
@@ -490,119 +736,521 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
 
 /// 从原始条目列表构建 `SizeTree`。
 ///
-/// parent 索引在扫描阶段已经直接设置，这里只需要：
-/// 1. 计算每个目录的递归 size 和 file_count（并行，用 AtomicU64）
-/// 2. 构建 child_start / child_at 紧凑数组
-///
-/// 之前的实现需要 `HashMap<PathBuf, u32>` 做路径→索引反查，
-/// 6.6M 条目时 HashMap 本身占 ~200 MB，加上 6.6M 次 PathBuf clone
-/// 和 hash 计算，是首次扫描的主要内存瓶颈之一。
-#[allow(clippy::needless_range_loop)]
-fn build_size_tree(volume: VolumeId, entries: Vec<RawEntry>) -> SizeTree {
-    use std::sync::atomic::AtomicU64;
-    let n = entries.len();
+/// parent 索引在扫描阶段已经直接设置，这里 intern 名字、写入聚合、建 CSR。
+fn build_size_tree(volume: VolumeId, buf: ScanBuf) -> SizeTree {
+    let n = buf.entries.len();
     if n == 0 {
         return SizeTree::empty(volume);
     }
 
-    // 1. 计算目录的递归 size 和 file_count
-    //
-    // 用 AtomicU64 并行累加——每个文件沿 parent 链向上走，
-    // 对经过的每个目录原子加 size 和 file_count。
-    // AtomicU64 与 u64 内存布局相同，不额外占空间。
-    // 不同子树的文件通常走不同的祖先链，竞争很少。
-    let atomic_size: Vec<AtomicU64> = (0..n).map(|_| AtomicU64::new(0)).collect();
-    let atomic_files: Vec<AtomicU64> = (0..n).map(|_| AtomicU64::new(0)).collect();
-
-    entries.par_iter().for_each(|entry| {
-        if entry.is_dir {
-            return;
-        }
-        let mut cur = entry.parent;
-        loop {
-            let idx = cur as usize;
-            if idx >= n {
-                break;
-            }
-            atomic_size[idx].fetch_add(entry.size, Ordering::Relaxed);
-            atomic_files[idx].fetch_add(1, Ordering::Relaxed);
-            if cur == 0 || entries[idx].parent == cur {
-                break;
-            }
-            cur = entries[idx].parent;
-        }
-    });
-
-    let dir_size: Vec<u64> = atomic_size
-        .iter()
-        .map(|a| a.load(Ordering::Relaxed))
-        .collect();
-    let dir_files: Vec<u64> = atomic_files
-        .iter()
-        .map(|a| a.load(Ordering::Relaxed))
-        .collect();
-
-    // 2. 构建 child_start / child_at
-    let mut child_counts = vec![0u32; n];
-    for i in 0..n {
-        if i == 0 {
-            continue; // 根节点没有父
-        }
-        let p = entries[i].parent as usize;
-        if p < n {
-            child_counts[p] += 1;
-        }
-    }
-
-    let mut child_start = vec![0u32; n + 1];
-    for i in 0..n {
-        child_start[i + 1] = child_start[i] + child_counts[i];
-    }
-
-    let mut child_at = vec![0u32; child_start[n] as usize];
-    let mut cursor = child_start[..n].to_vec();
-    for i in 0..n {
-        if i == 0 {
-            continue;
-        }
-        let p = entries[i].parent as usize;
-        if p < n {
-            child_at[cursor[p] as usize] = i as u32;
-            cursor[p] += 1;
-        }
-    }
-
-    // 转换成 SizeTree 的内部结构：名字灌入连续 name_pool，entry 只存偏移
+    let mut intern_map: std::collections::HashMap<u64, u32> =
+        std::collections::HashMap::with_capacity(n / 4);
+    let mut name_pool = Vec::with_capacity(buf.names.len().min(n * 12));
     let mut tree_entries = Vec::with_capacity(n);
-    let mut name_pool = Vec::with_capacity(n * 16);
-    for e in &entries {
-        let name_off = name_pool.len() as u32;
-        name_pool.extend_from_slice(e.name.as_bytes());
-        tree_entries.push(TreeEntry {
-            parent: e.parent,
+
+    fn fnv1a64(data: &[u8]) -> u64 {
+        let mut h = 0xcbf29ce484222325u64;
+        for b in data {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        h
+    }
+
+    for e in &buf.entries {
+        let start = e.name_off as usize;
+        let end = start
+            .saturating_add(e.name_len as usize)
+            .min(buf.names.len());
+        let name = &buf.names[start..end];
+        let h = fnv1a64(name);
+        let name_off = if let Some(&off) = intern_map.get(&h) {
+            let i = off as usize;
+            let len = if i + 2 <= name_pool.len() {
+                u16::from_le_bytes([name_pool[i], name_pool[i + 1]]) as usize
+            } else {
+                0
+            };
+            let existing = &name_pool[i + 2..i + 2 + len];
+            if existing == name {
+                off
+            } else {
+                let off = name_pool.len() as u32;
+                let len = name.len() as u16;
+                name_pool.extend_from_slice(&len.to_le_bytes());
+                name_pool.extend_from_slice(name);
+                intern_map.insert(h, off);
+                off
+            }
+        } else {
+            let off = name_pool.len() as u32;
+            let len = name.len() as u16;
+            name_pool.extend_from_slice(&len.to_le_bytes());
+            name_pool.extend_from_slice(name);
+            intern_map.insert(h, off);
+            off
+        };
+        tree_entries.push(TreeEntry::new(
+            e.parent,
             name_off,
-            name_len: e.name.len() as u16,
-            is_dir: e.is_dir,
-            size: e.size,
-            used: true,
-            mtime: e.mtime,
+            e.is_dir,
+            e.size,
+            e.mtime as u64,
+            if e.is_dir { 0 } else { 1 },
+        ));
+    }
+    drop(intern_map);
+    drop(buf);
+
+    SizeTree::from_packed(volume, name_pool, tree_entries)
+}
+
+/// 溢写记录的定长部分：parent + is_dir + mtime + size + name_len。
+struct SpillRec {
+    parent: u32,
+    is_dir: bool,
+    mtime: u32,
+    size: u64,
+}
+
+/// 顺序读一条溢写记录，名字写入 `name_buf`。EOF 返回 None。
+fn read_spill_rec(
+    r: &mut impl std::io::Read,
+    name_buf: &mut Vec<u8>,
+) -> std::io::Result<Option<SpillRec>> {
+    let mut hdr = [0u8; 19];
+    match r.read_exact(&mut hdr) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u16::from_le_bytes([hdr[17], hdr[18]]) as usize;
+    name_buf.clear();
+    name_buf.resize(len, 0);
+    r.read_exact(name_buf)?;
+    Ok(Some(SpillRec {
+        parent: u32::from_le_bytes(hdr[0..4].try_into().unwrap()),
+        is_dir: hdr[4] != 0,
+        mtime: u32::from_le_bytes(hdr[5..9].try_into().unwrap()),
+        size: u64::from_le_bytes(hdr[9..17].try_into().unwrap()),
+    }))
+}
+
+/// 把溢写文件读回内存缓冲（流式构建失败时的回退路径）。
+fn read_spill_to_buf(spill_path: &Path, n: u64, live: &AtomicBool) -> std::io::Result<ScanBuf> {
+    let file = std::fs::File::open(spill_path)?;
+    let mut r = std::io::BufReader::with_capacity(1 << 20, file);
+    let mut buf = ScanBuf {
+        entries: Vec::with_capacity(n as usize),
+        names: Vec::new(),
+    };
+    let mut name_buf = Vec::new();
+    while let Some(rec) = read_spill_rec(&mut r, &mut name_buf)? {
+        if buf.entries.len().is_multiple_of(4096) && !live.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "扫描已取消",
+            ));
+        }
+        let name_off = buf.names.len() as u32;
+        buf.names.extend_from_slice(&name_buf);
+        buf.entries.push(RawEntry {
+            parent: rec.parent,
+            name_off,
+            name_len: name_buf.len() as u16,
+            is_dir: rec.is_dir,
+            size: rec.size,
+            mtime: rec.mtime,
         });
     }
+    Ok(buf)
+}
 
-    SizeTree::from_parts(
-        volume,
-        tree_entries,
-        name_pool,
-        dir_size,
-        dir_files,
-        child_start,
-        child_at,
-    )
+/// 流式构建的输出与统计参数。
+struct StreamingBuild<'a> {
+    spill_path: &'a Path,
+    n: u64,
+    name_bytes: u64,
+    /// 给出时 rename 到该索引路径（全量重建直接落盘）
+    persist: Option<&'a Path>,
+    /// FSEvents 检查点，写进 v7 header。
+    last_event_id: u64,
+    live: &'a AtomicBool,
+}
+
+/// 从溢写文件流式构建 SizeTree，条目 / CSR / 名字池直接写进 v7 文件映射。
+///
+/// 全量构建的内存拐点：扫描阶段原始数据已溢写到磁盘，这里堆上只保留
+/// 名字 intern 表和 CSR 前缀和两块暂存（16M 条目约 160MB），不再同时
+/// 保留 RawEntry 数组和最终完整树。构建完成后：
+/// - `persist` 给出 → rename 到索引路径（全量重建直接落盘）；
+/// - 否则映射独立临时文件后立即删除（映射在 Unix 上继续有效）。
+fn build_size_tree_streaming(
+    volume: VolumeId,
+    p: StreamingBuild<'_>,
+) -> Result<SizeTree, std::io::Error> {
+    use crate::platform::macos::disk_tree::{
+        index_checksum_bytes, INDEX_V7_HEADER, INDEX_V7_MAGIC,
+    };
+    use std::os::unix::io::AsRawFd;
+
+    let StreamingBuild {
+        spill_path,
+        n: n_u64,
+        name_bytes,
+        persist,
+        last_event_id,
+        live,
+    } = p;
+    let n = n_u64 as usize;
+    if n == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "溢写为空",
+        ));
+    }
+    // 每趟读取都独立打开文件：try_clone 复制的 fd 与原句柄共享偏移，
+    // 第一趟读到 EOF 后第二趟会立刻拿到空流。
+    // Pass A0：每个节点的子节点数 → CSR 前缀和。
+    let mut start = vec![0u32; n];
+    {
+        let f = std::fs::File::open(spill_path)?;
+        let mut r = std::io::BufReader::with_capacity(1 << 20, f);
+        let mut name_buf = Vec::new();
+        for i in 0..n {
+            if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "扫描已取消",
+                ));
+            }
+            let rec = read_spill_rec(&mut r, &mut name_buf)?.ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "溢写提前结束")
+            })?;
+            if i > 0 {
+                start[rec.parent as usize] += 1;
+            }
+        }
+    }
+    let mut ca_len = 0usize;
+    for (i, s) in start.iter_mut().enumerate() {
+        if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "扫描已取消",
+            ));
+        }
+        let c = *s;
+        *s = ca_len as u32;
+        ca_len += c as usize;
+    }
+
+    // 布局：header | mount/label | entries | CSR | names
+    let mount = volume.mount_point().to_string_lossy().into_owned();
+    let label = volume.display().to_string();
+    let mount_b = mount.as_bytes();
+    let label_b = label.as_bytes();
+    let ent_off = (INDEX_V7_HEADER + mount_b.len() + label_b.len() + 7) & !7;
+    let cs_off = ent_off + n * 24;
+    let ca_off = cs_off + (n + 1) * 4;
+    let pool_off = ca_off + ca_len * 4;
+    let reserve_len = pool_off + name_bytes as usize;
+
+    // 输出文件：持久化目标走 .tmp 再 rename；否则用独立临时文件
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let out_path = match persist {
+        Some(p) => p.with_extension("bin.tmp"),
+        None => std::env::temp_dir().join(format!(
+            "qc-tree-{}-{}.bin",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )),
+    };
+    struct OutputCleanup(PathBuf);
+    impl Drop for OutputCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _output_cleanup = OutputCleanup(out_path.clone());
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .open(&out_path)?;
+    out.set_len(reserve_len as u64)?;
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            reserve_len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            out.as_raw_fd(),
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        let _ = std::fs::remove_file(&out_path);
+        return Err(std::io::Error::last_os_error());
+    }
+    struct Guard {
+        ptr: *mut u8,
+        len: usize,
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if !self.ptr.is_null() {
+                unsafe {
+                    libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_DONTNEED);
+                    libc::munmap(self.ptr as *mut libc::c_void, self.len);
+                }
+                self.ptr = std::ptr::null_mut();
+            }
+        }
+    }
+    let guard = Guard {
+        ptr: ptr as *mut u8,
+        len: reserve_len,
+    };
+    let buf = unsafe { std::slice::from_raw_parts_mut(guard.ptr, reserve_len) };
+
+    // child_start 先填前缀和，Pass A 里当游标递增，结束后重写
+    for (i, s) in start.iter().enumerate() {
+        let o = cs_off + i * 4;
+        buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
+    }
+    buf[cs_off + n * 4..cs_off + n * 4 + 4].copy_from_slice(&(ca_len as u32).to_le_bytes());
+
+    // Pass A：intern 名字 + 写条目 + 填 child_at
+    fn fnv1a64(data: &[u8]) -> u64 {
+        let mut h = 0xcbf29ce484222325u64;
+        for b in data {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        h
+    }
+    const MSYNC_CHUNK: usize = 32 * 1024 * 1024;
+    let mut intern: HashMap<u64, u32> = HashMap::with_capacity(n / 4);
+    let mut pool_cursor = pool_off;
+    let mut synced = 0usize;
+    {
+        let f = std::fs::File::open(spill_path)?;
+        let mut r = std::io::BufReader::with_capacity(1 << 20, f);
+        let mut name_buf = Vec::new();
+        for i in 0..n {
+            if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "扫描已取消",
+                ));
+            }
+            let rec = read_spill_rec(&mut r, &mut name_buf)?.ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "溢写提前结束")
+            })?;
+            let h = fnv1a64(&name_buf);
+            let name_off = match intern.get(&h) {
+                Some(&off) => {
+                    let p = pool_off + off as usize;
+                    let len = u16::from_le_bytes([buf[p], buf[p + 1]]) as usize;
+                    if len == name_buf.len() && &buf[p + 2..p + 2 + len] == name_buf.as_slice() {
+                        off
+                    } else {
+                        let off = (pool_cursor - pool_off) as u32;
+                        buf[pool_cursor..pool_cursor + 2]
+                            .copy_from_slice(&(name_buf.len() as u16).to_le_bytes());
+                        pool_cursor += 2;
+                        buf[pool_cursor..pool_cursor + name_buf.len()].copy_from_slice(&name_buf);
+                        pool_cursor += name_buf.len();
+                        intern.insert(h, off);
+                        off
+                    }
+                }
+                None => {
+                    let off = (pool_cursor - pool_off) as u32;
+                    buf[pool_cursor..pool_cursor + 2]
+                        .copy_from_slice(&(name_buf.len() as u16).to_le_bytes());
+                    pool_cursor += 2;
+                    buf[pool_cursor..pool_cursor + name_buf.len()].copy_from_slice(&name_buf);
+                    pool_cursor += name_buf.len();
+                    intern.insert(h, off);
+                    off
+                }
+            };
+            let entry = TreeEntry::new(
+                rec.parent,
+                name_off,
+                rec.is_dir,
+                rec.size,
+                rec.mtime as u64,
+                if rec.is_dir { 0 } else { 1 },
+            );
+            entry.write_bytes_to(&mut buf[ent_off + i * 24..ent_off + i * 24 + 24]);
+            if i > 0 {
+                let co4 = cs_off + rec.parent as usize * 4;
+                let cur = u32::from_le_bytes(buf[co4..co4 + 4].try_into().unwrap()) as usize;
+                let co = ca_off + cur * 4;
+                buf[co..co + 4].copy_from_slice(&(i as u32).to_le_bytes());
+                buf[co4..co4 + 4].copy_from_slice(&((cur + 1) as u32).to_le_bytes());
+            }
+            if pool_cursor - synced > MSYNC_CHUNK {
+                unsafe {
+                    libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_ASYNC);
+                }
+                synced = pool_cursor;
+            }
+        }
+    }
+    drop(intern);
+
+    // 重写 child_start（Pass A 里被当成游标改掉了）
+    for (i, s) in start.iter().enumerate() {
+        let o = cs_off + i * 4;
+        buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
+    }
+    drop(start);
+
+    // 聚合传播：目录清零后把文件大小沿父链累加。全部直接操作映射页。
+    for i in 0..n {
+        if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "扫描已取消",
+            ));
+        }
+        let o = ent_off + i * 24;
+        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
+        if e.is_dir() && (e.size != 0 || e.file_count != 0) {
+            e.with_totals(0, 0).write_bytes_to(&mut buf[o..o + 24]);
+        }
+    }
+    for i in 0..n {
+        if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "扫描已取消",
+            ));
+        }
+        let o = ent_off + i * 24;
+        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
+        if e.is_dir() {
+            continue;
+        }
+        let (add_size, add_files) = (e.size, 1u32);
+        let mut cur = e.parent();
+        loop {
+            let po = ent_off + cur as usize * 24;
+            let p = TreeEntry::from_bytes(&buf[po..po + 24]);
+            p.with_totals(
+                p.size.saturating_add(add_size),
+                p.file_count.saturating_add(add_files),
+            )
+            .write_bytes_to(&mut buf[po..po + 24]);
+            if cur == 0 {
+                break;
+            }
+            cur = p.parent();
+        }
+    }
+
+    // header + checksum + 收尾。
+    // 文件/目录数和总大小以映射里的实际条目为准——扫描原子计数只算
+    // 常规文件，而树把 symlink 等非目录节点也算作文件，必须一致才能
+    // 通过加载校验。
+    let mut hdr_files = 0u64;
+    let mut hdr_dirs = 0u64;
+    for i in 0..n {
+        if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "扫描已取消",
+            ));
+        }
+        let o = ent_off + i * 24;
+        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
+        if e.is_dir() {
+            hdr_dirs += 1;
+        } else {
+            hdr_files += 1;
+        }
+    }
+    let root_total = TreeEntry::from_bytes(&buf[ent_off..ent_off + 24]).size;
+    let name_len = pool_cursor - pool_off;
+    buf[0..8].copy_from_slice(INDEX_V7_MAGIC);
+    buf[8..12].copy_from_slice(&7u32.to_le_bytes());
+    buf[12..16].copy_from_slice(&(n as u32).to_le_bytes());
+    buf[16..20].copy_from_slice(&(name_len as u32).to_le_bytes());
+    buf[20..24].copy_from_slice(&(ca_len as u32).to_le_bytes());
+    buf[24..28].copy_from_slice(&(mount_b.len() as u32).to_le_bytes());
+    buf[28..32].copy_from_slice(&(label_b.len() as u32).to_le_bytes());
+    buf[32..40].copy_from_slice(&hdr_files.to_le_bytes());
+    buf[40..48].copy_from_slice(&hdr_dirs.to_le_bytes());
+    buf[48..56].copy_from_slice(&root_total.to_le_bytes());
+    buf[56..64].copy_from_slice(&last_event_id.to_le_bytes());
+    buf[64..72].copy_from_slice(
+        &std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            .to_le_bytes(),
+    );
+    buf[80..84].copy_from_slice(&(pool_off as u32).to_le_bytes());
+    buf[84..88].copy_from_slice(&(ent_off as u32).to_le_bytes());
+    buf[88..92].copy_from_slice(&(cs_off as u32).to_le_bytes());
+    buf[92..96].copy_from_slice(&(ca_off as u32).to_le_bytes());
+    buf[INDEX_V7_HEADER..INDEX_V7_HEADER + mount_b.len()].copy_from_slice(mount_b);
+    buf[INDEX_V7_HEADER + mount_b.len()..INDEX_V7_HEADER + mount_b.len() + label_b.len()]
+        .copy_from_slice(label_b);
+    let sum = index_checksum_bytes(&buf[..pool_cursor]);
+    buf[72..80].copy_from_slice(&sum.to_le_bytes());
+
+    let sync = unsafe { libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_SYNC) };
+    drop(guard);
+    if sync != 0 {
+        let err = std::io::Error::last_os_error();
+        let _ = std::fs::remove_file(&out_path);
+        return Err(err);
+    }
+    // 截掉名字池预留的尾部（用可写句柄；File::open 只读会 EINVAL）
+    out.set_len(pool_cursor as u64)?;
+    drop(out);
+
+    if let Some(target) = persist {
+        std::fs::rename(&out_path, target)?;
+    }
+    let tree = SizeTree::from_mapped(volume, persist.unwrap_or(&out_path))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "构建结果校验失败"))?;
+    if persist.is_none() {
+        // 映射已在树里持有，临时文件可以立即删除
+        let _ = std::fs::remove_file(&out_path);
+    }
+    Ok(tree)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_indexes_nested_files() {
+        let tmp = std::env::temp_dir().join("qc_test_walk_full_index");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let nm = tmp.join("node_modules").join("pkg");
+        std::fs::create_dir_all(&nm).unwrap();
+        std::fs::write(nm.join("index.js"), vec![0u8; 4096]).unwrap();
+        let vol = VolumeId::from_mount_point(tmp.clone());
+        let live = AtomicBool::new(true);
+        let result = scan_root(&tmp, vol, &live).expect("扫描应当成功");
+        assert!(
+            result
+                .tree
+                .find_node_by_path(&nm.join("index.js"))
+                .is_some(),
+            "全量索引必须包含 node_modules 内部文件，搜索才能命中"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn scan_temp_dir() {
@@ -630,6 +1278,42 @@ mod tests {
         let live = AtomicBool::new(false); // 立即取消
         let result = scan_root(&tmp, vol, &live);
         assert!(result.is_err(), "取消的扫描应当返回错误");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 扫描开始后外部取消必须及时生效。
+    ///
+    /// 回归背景：旧实现把外部 AtomicBool 的初始值复制进新的 Arc，
+    /// 工作线程检查的是那份副本，扫描开始后外部置 false 根本看不到，
+    /// 只能等整棵树扫完。现在工作线程通过 scoped threads 直接借用
+    /// 外部标志，中途取消应在远小于完整扫描的时间内返回。
+    #[test]
+    fn scan_cancel_midway_returns_promptly() {
+        let tmp = std::env::temp_dir().join("qc_test_walk_cancel_midway");
+        let _ = std::fs::remove_dir_all(&tmp);
+        // 生成 20000 个目录（各带一个文件），完整扫描明显超过取消时点
+        for i in 0..20000 {
+            let d = tmp.join(format!("d{i}"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("f.txt"), b"x").unwrap();
+        }
+        let vol = VolumeId::from_mount_point(tmp.clone());
+        let live = std::sync::Arc::new(AtomicBool::new(true));
+        let started = Instant::now();
+        {
+            let live_for_scan = std::sync::Arc::clone(&live);
+            let tmp_for_scan = tmp.clone();
+            let handle = std::thread::spawn(move || scan_root(&tmp_for_scan, vol, &live_for_scan));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            live.store(false, Ordering::Relaxed);
+            let result = handle.join().expect("扫描线程不应 panic");
+            assert!(result.is_err(), "中途取消的扫描应当返回错误");
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "取消后应当及时返回，实际耗时 {elapsed:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -806,5 +1490,47 @@ mod tests {
         assert!(tree.valid(tree.root()), "根节点应当有效");
         let children = tree.children(tree.root());
         assert!(!children.is_empty(), "根目录应当有子项");
+    }
+
+    /// 超过溢写阈值的大目录扫描：原始条目落临时文件，构建直接产出
+    /// v7 映射。验证溢写 → 流式构建 → mmap 树整条管线，以及构建后
+    /// 临时文件已清理。需要本机大目录，不进默认 CI：
+    /// `cargo test --release --lib scan_large_dir_spills_to_mmap -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn scan_large_dir_spills_to_mmap() {
+        let home = dirs::home_dir().expect("应当能拿到 home 目录");
+        let root = home.join("Library");
+        assert!(root.exists());
+        let vol = VolumeId::from_mount_point(root.clone());
+        let live = AtomicBool::new(true);
+        let t0 = Instant::now();
+        let result = scan_root(&root, vol, &live).expect("扫描应当成功");
+        eprintln!(
+            "scanned {} entries in {:?}, mapped base: {}, tree {:.1} MB",
+            result.tree.entry_count(),
+            t0.elapsed(),
+            result.tree.has_mapped_base(),
+            result.tree.memory_bytes() as f64 / (1024.0 * 1024.0)
+        );
+        if result.tree.entry_count() as usize >= SPILL_THRESHOLD {
+            assert!(
+                result.tree.has_mapped_base(),
+                "超过溢写阈值的扫描应当产出 mmap 树"
+            );
+        }
+        // 基本完整性：能按路径定位、聚合一致
+        let probe = root.join("Preferences");
+        if probe.exists() {
+            assert!(result.tree.find_node_by_path(&probe).is_some());
+        }
+        assert!(result.tree.size_of(result.tree.root()) > 0);
+        // 溢写临时文件不应残留
+        let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("qc-spill-"))
+            .collect();
+        assert!(leftovers.is_empty(), "溢写临时文件残留: {leftovers:?}");
     }
 }

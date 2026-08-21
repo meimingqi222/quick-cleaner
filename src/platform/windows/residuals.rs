@@ -24,8 +24,8 @@ use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
 use crate::platform::windows::apps::dir_or_file_size;
 use crate::platform::windows::registry::{
-    delete_reg_tree, delete_reg_value, enum_string_values, enum_subkeys, from_wide, read_reg_string,
-    to_wide,
+    delete_reg_tree, delete_reg_value, enum_string_values, enum_subkeys, from_wide,
+    read_reg_string, to_wide,
 };
 use std::path::{Path, PathBuf};
 
@@ -494,12 +494,8 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join("Desktop"));
-        roots.push(
-            home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs"),
-        );
-        roots.push(
-            home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"),
-        );
+        roots.push(home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs"));
+        roots.push(home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"));
     }
     if let Some(roaming) = dirs::data_dir() {
         roots.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs"));
@@ -817,7 +813,11 @@ fn scan_com(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
     let mut guids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let classes = [
-        (AppRegRoot::Hklm, r"SOFTWARE\Classes", KEY_READ | KEY_WOW64_64KEY),
+        (
+            AppRegRoot::Hklm,
+            r"SOFTWARE\Classes",
+            KEY_READ | KEY_WOW64_64KEY,
+        ),
         (
             AppRegRoot::Hklm,
             r"SOFTWARE\Classes\WOW6432Node",
@@ -878,8 +878,8 @@ fn scan_clsid_key(
             continue;
         }
         let guid_key = format!(r"{clsid_path}\{guid}");
-        let mut server = open_and_read(h, &format!(r"{guid_key}\InprocServer32"), "", sam)
-            .unwrap_or_default();
+        let mut server =
+            open_and_read(h, &format!(r"{guid_key}\InprocServer32"), "", sam).unwrap_or_default();
         if server.is_empty() {
             server = open_and_read(h, &format!(r"{guid_key}\LocalServer32"), "", sam)
                 .unwrap_or_default();
@@ -934,7 +934,9 @@ fn scan_typelib_key(
                     continue;
                 }
                 let path = expand_env_path(&server);
-                if path.is_empty() || is_windows_system_file(&path) || !ctx.mentions_install_dir(&path)
+                if path.is_empty()
+                    || is_windows_system_file(&path)
+                    || !ctx.mentions_install_dir(&path)
                 {
                     continue;
                 }
@@ -1194,9 +1196,8 @@ fn scan_uninstaller_leftover(app: &InstalledApp, ctx: &Ctx, out: &mut Vec<Residu
         .and_then(|f| f.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let looks = fname.starts_with("unins")
-        || fname.contains("uninstall")
-        || fname.contains("uninst");
+    let looks =
+        fname.starts_with("unins") || fname.contains("uninstall") || fname.contains("uninst");
     if !looks {
         return;
     }

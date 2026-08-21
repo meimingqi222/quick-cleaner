@@ -163,6 +163,24 @@ impl NamePattern {
         }
     }
 
+    /// 判断原始文件名是否匹配。不分配小写副本；子串走字节窗口的
+    /// `eq_ignore_ascii_case`。通配符在字面片段都命中后才对候选做一次小写。
+    pub fn matches_raw(&self, name: &str) -> bool {
+        match self {
+            NamePattern::Empty => false,
+            NamePattern::Substring(s) => contains_ignore_ascii_case(name, s),
+            NamePattern::Wildcard { chars, literals } => {
+                for lit in literals {
+                    if !contains_ignore_ascii_case(name, lit) {
+                        return false;
+                    }
+                }
+                let lower = name.to_ascii_lowercase();
+                wildcard_match(&lower, chars)
+            }
+        }
+    }
+
     /// 判断文件名（**已小写化**）是否匹配当前模式。
     /// 调用方负责把文件名转成小写，避免每个文件重复 to_lowercase。
     pub fn matches(&self, name_lower: &str) -> bool {
@@ -183,6 +201,19 @@ impl NamePattern {
             }
         }
     }
+}
+
+fn contains_ignore_ascii_case(hay: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    let n = needle_lower.len();
+    let h = hay.as_bytes();
+    if h.len() < n {
+        return false;
+    }
+    h.windows(n)
+        .any(|w| w.eq_ignore_ascii_case(needle_lower.as_bytes()))
 }
 
 /// 从通配符 pattern 中提取所有连续的非通配符字符片段。
@@ -296,7 +327,10 @@ mod tests {
         // 末尾连续 *
         assert!(wildcard_match("abcxyz", &['a', 'b', 'c', '*', '*']));
         // 中间多个 *
-        assert!(wildcard_match("aXXbYYc", &['a', '*', '*', 'b', '*', '*', 'c']));
+        assert!(wildcard_match(
+            "aXXbYYc",
+            &['a', '*', '*', 'b', '*', '*', 'c']
+        ));
         // 空 pattern 只匹配空串
         assert!(wildcard_match("", &[]));
         assert!(!wildcard_match("a", &[]));
@@ -342,6 +376,16 @@ mod tests {
         let p = NamePattern::parse("*.TXT");
         assert!(matches!(p, NamePattern::Wildcard { .. }));
         assert!(p.matches("notes.txt"));
+
+        // matches_raw 直接吃原始文件名，搜索热路径不再为每个节点分配小写副本
+        let p = NamePattern::parse("Report");
+        assert!(p.matches_raw("annual_REPORT_final.pdf"));
+        assert!(p.matches_raw("report"));
+        assert!(!p.matches_raw("summary.docx"));
+        let p = NamePattern::parse("*.TXT");
+        assert!(p.matches_raw("notes.txt"));
+        assert!(p.matches_raw("README.TXT"));
+        assert!(!p.matches_raw("notes.txt.bak"));
     }
 
     #[test]
@@ -385,10 +429,7 @@ mod tests {
         // 纯通配符 → 空字面列表
         assert!(extract_literals(&['*', '?', '*']).is_empty());
         // 无通配符 → 整体作为一个字面
-        assert_eq!(
-            extract_literals(&['a', 'b', 'c']),
-            vec!["abc".to_string()]
-        );
+        assert_eq!(extract_literals(&['a', 'b', 'c']), vec!["abc".to_string()]);
     }
 
     /// 构造一个平台合适的绝对路径，`rel` 用 `/` 分段。
@@ -785,5 +826,72 @@ mod tests {
         assert_eq!(tree.count_used_dirs(), 4);
         // 文件: a.txt, b.txt, c.txt, d.txt, e.txt = 5
         assert_eq!(tree.count_used_files(), 5);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn tree_entry_is_packed_24_bytes() {
+        assert_eq!(std::mem::size_of::<super::TreeEntry>(), 24);
+        assert_eq!(std::mem::align_of::<super::TreeEntry>(), 8);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn packed_round_trip_preserves_aggregates_and_names() {
+        let tree = build_test_tree();
+        let root_size = tree.size_of(tree.root());
+        let root_files = tree.file_count_of(tree.root());
+        let (pool, entries) = tree.compacted_packed();
+        let vol = super::VolumeId::from_mount_point(PathBuf::from("/root"));
+        let restored = super::SizeTree::from_packed(vol, pool, entries);
+        assert_eq!(restored.size_of(restored.root()), root_size);
+        assert_eq!(restored.file_count_of(restored.root()), root_files);
+        assert_eq!(
+            restored.entry_name(
+                restored
+                    .find_node_by_path(&PathBuf::from("/root/proj"))
+                    .unwrap()
+            ),
+            "proj"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn search_finds_nested_and_is_case_insensitive() {
+        let tree = build_test_tree();
+        let hits = tree.search("B.TXT", 16);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].path.ends_with("b.txt"));
+        let hits = tree.search("proj", 16);
+        assert!(hits.iter().any(|h| h.name == "proj" && h.is_dir));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn search_on_synthetic_tree_is_repeatable() {
+        let root = PathBuf::from("/root");
+        let mut snap = vec![TreeSnapshotEntry {
+            path: root.clone(),
+            is_dir: true,
+            size: 0,
+            mtime: 0,
+        }];
+        for i in 0..2000 {
+            snap.push(TreeSnapshotEntry {
+                path: root.join(format!("file_{i}.txt")),
+                is_dir: false,
+                size: 100 + i as u64,
+                mtime: 0,
+            });
+        }
+        let vol = super::VolumeId::from_mount_point(root);
+        let tree = SizeTree::from_snapshot(vol, snap);
+        let first = tree.search("file_1234.txt", 8);
+        let second = tree.search("file_1234.txt", 8);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first.len(), second.len());
+        assert_eq!(first[0].name, second[0].name);
+        assert_eq!(tree.search("file_99999.txt", 8).len(), 0);
     }
 }

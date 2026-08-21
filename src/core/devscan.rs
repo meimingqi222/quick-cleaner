@@ -41,9 +41,9 @@ mod mft;
 mod walk;
 
 #[cfg(not(windows))]
-pub use macos::load_or_build_macos_root_index;
-#[cfg(not(windows))]
 use macos::{discover_via_macos_tree, discover_via_macos_tree_arc};
+#[cfg(not(windows))]
+pub use macos::{load_or_build_macos_root_index, remember_macos_root_index};
 #[cfg(windows)]
 use mft::discover_via_mft;
 use walk::discover_via_walk;

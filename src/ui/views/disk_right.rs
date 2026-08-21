@@ -353,8 +353,7 @@ fn render_lens_row_name(
         )
         .when(drillable && is_dir, |d| {
             d.on_click(cx.listener(move |this, _, _, cx| {
-                this.disk.path.push(idx);
-                cx.notify();
+                this.enter_disk_node(idx, cx);
             }))
         })
         .into_any_element()
@@ -398,8 +397,7 @@ fn render_lens_row_actions(
                     .hover(|h| h.bg(rgb(SURF_HIGH)))
                     .child("›")
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.disk.path.push(idx);
-                        cx.notify();
+                        this.enter_disk_node(idx, cx);
                     })),
             )
         })

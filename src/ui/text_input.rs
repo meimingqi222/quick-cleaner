@@ -764,11 +764,7 @@ impl EntityInputHandler for Root {
                 13.0,
             )
         } else {
-            (
-                self.apps.search.as_str(),
-                self.apps.text_hit.as_ref(),
-                12.0,
-            )
+            (self.apps.search.as_str(), self.apps.text_hit.as_ref(), 12.0)
         };
         let byte_idx = index_for_mouse_x(text, f32::from(point.x), hit, font_size, window);
         Some(offset_to_utf16(text, byte_idx))

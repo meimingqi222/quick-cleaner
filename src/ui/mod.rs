@@ -226,6 +226,7 @@ impl Root {
                 scroll: gpui::UniformListScrollHandle::new(),
                 scroll_drag: None,
                 search_task: None,
+                search_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 is_searching: false,
                 group_by_kind: true,
                 sort_col: SearchSortCol::Size,

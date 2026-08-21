@@ -20,6 +20,7 @@ pub mod progress;
 pub mod scroll;
 pub mod search_box;
 pub mod sidebar;
+pub mod tooltip;
 pub mod topbar;
 
 pub use buttons::{danger_button, ghost_button, primary_button, small_button};
@@ -34,4 +35,5 @@ pub use progress::{render_progress_bar, render_scan_line, render_uninstall_progr
 pub use scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
 pub use search_box::{search_box, SearchBoxSpec};
 pub use sidebar::{render_sidebar, View};
+pub use tooltip::{path_tooltip, text_tooltip};
 pub use topbar::render_top_bar;

@@ -286,15 +286,16 @@ impl crate::ui::Root {
                 // 才留在对话框里方便授权后重试。
                 let failed: HashSet<PathBuf> = report.failed.iter().cloned().collect();
                 let original_items = res.items;
-                let follow = residual_clean_follow_up(&original_items, &selected_before, |item| {
-                    match &item.kind {
+                let follow =
+                    residual_clean_follow_up(&original_items, &selected_before, |item| match &item
+                        .kind
+                    {
                         crate::core::apps::ResidualKind::File(path, _)
                         | crate::core::apps::ResidualKind::Directory(path, _) => {
                             path.exists() || failed.contains(path)
                         }
                         _ => failed.contains(&PathBuf::from(item.kind.display_label())),
-                    }
-                });
+                    });
                 this.residual.selected = follow.retry_selected;
                 if app_gone_after_residual_clean(&original_items, &follow.leftover_for_app) {
                     this.drop_app_from_list(&res.app_id);

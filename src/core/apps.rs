@@ -1054,7 +1054,10 @@ mod tests {
         assert_eq!(d.size(), 2048);
         assert_eq!(rk.size(), 0);
         assert_eq!(st.size(), 0);
-        assert_eq!(st.kind_label_lang(crate::core::i18n::Language::Zh), "计划任务");
+        assert_eq!(
+            st.kind_label_lang(crate::core::i18n::Language::Zh),
+            "计划任务"
+        );
     }
 }
 
