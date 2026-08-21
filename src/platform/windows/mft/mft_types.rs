@@ -420,7 +420,7 @@ impl SizeTree {
             sized.select_nth_unstable_by(max_results - 1, |a, b| b.0.cmp(&a.0));
             sized.truncate(max_results);
         }
-        sized.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        sized.sort_unstable_by_key(|e| std::cmp::Reverse(e.0));
 
         let mut cache = std::collections::HashMap::new();
         let mut hits = Vec::with_capacity(sized.len());

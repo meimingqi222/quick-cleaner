@@ -1410,8 +1410,10 @@ impl SizeTree {
             })?;
             let kb = take(child_bytes)?;
             let kids: Vec<u32> = kb
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
                 .collect();
             let mut unique = std::collections::HashSet::with_capacity(kids.len());
             if kids.iter().any(|&kid| {

@@ -331,8 +331,10 @@ impl BPlist<'_> {
                     .data
                     .get(payload_off..payload_off.checked_add(len.checked_mul(2)?)?)?;
                 let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes(*c))
                     .collect();
                 String::from_utf16(&units).ok()
             }

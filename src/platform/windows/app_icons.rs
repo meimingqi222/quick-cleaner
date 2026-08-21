@@ -308,12 +308,12 @@ unsafe fn hicon_to_png_inner(icon: HICON) -> Option<Vec<u8>> {
 
     let bgra = std::slice::from_raw_parts(bits as *const u8, nbytes);
     let mut rgba = Vec::with_capacity(nbytes);
-    for px in bgra.chunks_exact(4) {
+    for px in bgra.as_chunks::<4>().0 {
         rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
     }
     // DrawIconEx 在部分系统上不写 alpha，全 0 时当成不透明。
-    if rgba.chunks_exact(4).all(|p| p[3] == 0) {
-        for px in rgba.chunks_exact_mut(4) {
+    if rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
     }
