@@ -96,6 +96,43 @@ impl InstalledApp {
                 && !self.uninstaller_missing
         }
     }
+
+    /// 用来取图标的路径。
+    ///
+    /// Windows 注册表 `DisplayIcon` 指向 exe/dll/ico（常带 `,0` 资源下标），
+    /// 比安装目录更准。其它平台用 `.app` 安装路径。
+    pub fn icon_cache_key(&self) -> Option<PathBuf> {
+        if let Some(icon) = self.display_icon.as_deref() {
+            if let Some(path) = display_icon_path(icon) {
+                return Some(path);
+            }
+        }
+        self.install_location.clone()
+    }
+}
+
+/// 去掉 DisplayIcon 末尾的 `,0` / `,-1` 资源下标，并剥掉引号。
+pub fn display_icon_path(raw: &str) -> Option<PathBuf> {
+    let s = raw.trim().trim_matches('"');
+    if s.is_empty() {
+        return None;
+    }
+    let without_index = if let Some(comma) = s.rfind(',') {
+        let suffix = s[comma + 1..].trim();
+        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            s[..comma].trim().trim_matches('"')
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+    let p = without_index.trim();
+    if p.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(p))
+    }
 }
 
 /// 排序字段
@@ -914,6 +951,36 @@ mod tests {
     /// 把索引结果映射回软件名，方便断言。
     fn names(apps: &[InstalledApp], idx: &[usize]) -> Vec<String> {
         idx.iter().map(|&i| apps[i].name.clone()).collect()
+    }
+
+    #[test]
+    fn display_icon_path_strips_resource_index() {
+        assert_eq!(
+            super::display_icon_path(r#""C:\Program Files\App\app.exe",0"#).as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\App\app.exe"))
+        );
+        assert_eq!(
+            super::display_icon_path(r"C:\Program Files\App\app.exe,-1").as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\App\app.exe"))
+        );
+        assert_eq!(
+            super::display_icon_path(r"C:\Program Files\App\app.exe").as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\App\app.exe"))
+        );
+        assert_eq!(super::display_icon_path("").as_deref(), None);
+    }
+
+    #[test]
+    fn icon_cache_key_prefers_display_icon() {
+        let mut app = create_test_app("Chrome", "Google", 1, 0, 0);
+        app.install_location = Some(std::path::PathBuf::from(r"C:\Program Files\Google\Chrome"));
+        app.display_icon = Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe,0".into());
+        assert_eq!(
+            app.icon_cache_key().as_deref(),
+            Some(std::path::Path::new(
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            ))
+        );
     }
 
     #[test]

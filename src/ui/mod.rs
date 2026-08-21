@@ -1,6 +1,7 @@
 //! GPUI 界面根视图与状态管理
 
 mod actions;
+mod app_icons;
 pub mod components;
 pub mod i18n;
 pub mod state;

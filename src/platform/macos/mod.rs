@@ -3,6 +3,7 @@
 //! 导出的函数集合必须与 `platform::mod` 的门面契约完全一致，
 //! 由 `platform_contract!` 在编译期校验。
 
+pub mod app_icons;
 pub mod apps;
 pub mod cache;
 pub mod disk;
@@ -14,6 +15,7 @@ pub mod tcc;
 pub mod trash;
 pub mod walk;
 
+pub use app_icons::{app_icon_from_bundle, app_icon_png};
 pub use apps::{
     list_installed_apps, open_in_default_app, reveal_in_explorer, run_uninstaller_and_wait,
 };

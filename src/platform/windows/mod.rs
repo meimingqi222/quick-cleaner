@@ -1,5 +1,6 @@
 //! Windows 平台专用功能总装
 
+pub mod app_icons;
 pub mod apps;
 pub mod mft;
 pub mod process;
@@ -10,6 +11,7 @@ pub mod security;
 pub mod user_env;
 pub mod volume;
 
+pub use app_icons::{app_icon_from_bundle, app_icon_png};
 pub use apps::{
     dir_or_file_size, list_installed_apps, open_in_default_app, reveal_in_explorer,
     run_uninstaller_and_wait,

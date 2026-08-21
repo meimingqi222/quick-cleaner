@@ -35,6 +35,8 @@ impl crate::ui::Root {
         if self.apps.scanning {
             return;
         }
+        // 清空旧图标缓存——应用可能被卸载或新装，旧缓存不再可靠
+        crate::ui::app_icons::clear();
         self.apps.scanning = true;
         self.apps.scanned = false;
         self.status = bilingual(|l| tr_status_apps_scanning(l).to_string());
@@ -57,6 +59,41 @@ impl crate::ui::Root {
                 let (count, size) = (this.apps.list.len(), fmt_size(total_size));
                 this.status = bilingual(|l| tr_status_apps_done(l, count, &size));
                 cx.notify();
+
+                let icon_paths: Vec<std::path::PathBuf> = this
+                    .apps
+                    .list
+                    .iter()
+                    .filter_map(|app| app.icon_cache_key())
+                    .collect();
+                let fast = cx.background_executor().spawn({
+                    let paths = icon_paths;
+                    async move { crate::ui::app_icons::load_icons_from_bundle(paths) }
+                });
+                cx.spawn(async move |this, cx| {
+                    let leftover = fast.await;
+                    let leftover_n = leftover.len();
+                    this.update(cx, |this, cx| {
+                        this.apps.gen += 1;
+                        cx.notify();
+                    })
+                    .ok();
+                    if leftover.is_empty() {
+                        crate::log!("应用图标加载完成：全部来自 bundle");
+                        return;
+                    }
+                    let loaded = cx
+                        .background_executor()
+                        .spawn(async move { crate::ui::app_icons::load_icons(leftover) })
+                        .await;
+                    crate::log!("应用图标 AppKit 回退完成：{loaded}/{leftover_n}");
+                    this.update(cx, |this, cx| {
+                        this.apps.gen += 1;
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
             })
             .ok();
         }));

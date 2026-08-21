@@ -2,6 +2,7 @@
 
 use crate::core::apps::InstalledApp;
 use crate::core::model::{fmt_size, truncate};
+use crate::ui::app_icons::try_get_icon;
 use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
 use crate::ui::components::scroll::{
@@ -9,7 +10,7 @@ use crate::ui::components::scroll::{
 };
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Div, SharedString};
+use gpui::{div, img, prelude::*, px, rgb, AnyElement, Context, Div, ImageSource, SharedString};
 
 pub(super) fn render_app_row(
     root: &Root,
@@ -30,6 +31,35 @@ pub(super) fn render_app_row(
         .unwrap_or('?')
         .to_uppercase()
         .to_string();
+
+    // 优先显示应用真实图标（NSWorkspace 提取），缓存未命中时回退到首字母
+    let icon_element = app
+        .icon_cache_key()
+        .as_deref()
+        .and_then(try_get_icon)
+        .map(|image| {
+            let src = ImageSource::from(image);
+            img(src)
+                .id(SharedString::from(format!("app-icon-{idx}")))
+                .w(px(APP_ICON_SIZE))
+                .h(px(APP_ICON_SIZE))
+                .flex_none()
+                .into_any_element()
+        })
+        .unwrap_or_else(|| {
+            div()
+                .w(px(APP_ICON_SIZE))
+                .h(px(APP_ICON_SIZE))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(PRIMARY))
+                .child(initial.clone())
+                .into_any_element()
+        });
 
     let lang = root.language;
     let is_busy = root.residual.scanning || root.clean.running;
@@ -62,23 +92,7 @@ pub(super) fn render_app_row(
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(
-                    div()
-                        .w(px(36.))
-                        .h(px(36.))
-                        .flex_none()
-                        .rounded_xl()
-                        .bg(rgb(SURF_HIGH))
-                        .border_1()
-                        .border_color(rgba(OUTLINE_VAR, 0.5))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(PRIMARY))
-                        .child(initial),
-                )
+                .child(icon_element)
                 .child(
                     div()
                         .flex_1()
@@ -226,8 +240,11 @@ pub(super) fn render_app_row(
         .into_any_element()
 }
 
+/// 行内应用图标边长。
+const APP_ICON_SIZE: f32 = 48.0;
+
 /// 软件表的行高。uniform_list 要求等高，因此行内名称强制单行。
-pub(super) const APP_ROW_H: f32 = 73.0;
+pub(super) const APP_ROW_H: f32 = 80.0;
 
 /// 操作列宽度。macOS 只有「卸载」+ 更多，Windows 还要放下「强力清理」。
 pub(super) const APP_ACTIONS_COL_W: f32 = if cfg!(target_os = "macos") {
