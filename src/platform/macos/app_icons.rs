@@ -72,7 +72,8 @@ fn find_bundle_icon_file(app: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    if let Some(name) = plist_string_value(&app.join("Contents").join("Info.plist"), "CFBundleIconFile")
+    if let Some(name) =
+        plist_string_value(&app.join("Contents").join("Info.plist"), "CFBundleIconFile")
     {
         if let Some(path) = resolve_icon_name(&resources, &name) {
             return Some(path);
@@ -96,7 +97,9 @@ fn find_bundle_icon_file(app: &Path) -> Option<PathBuf> {
     if let Ok(rd) = std::fs::read_dir(&resources) {
         for entry in rd.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("icns"))
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("icns"))
                 && !is_document_icns(&path)
             {
                 count += 1;
@@ -283,7 +286,8 @@ impl BPlist<'_> {
         }
         read_be(
             self.data,
-            self.table_off.checked_add(idx.checked_mul(self.offset_size)?)?,
+            self.table_off
+                .checked_add(idx.checked_mul(self.offset_size)?)?,
             self.offset_size,
         )
         .map(|v| v as usize)
@@ -297,7 +301,9 @@ impl BPlist<'_> {
         }
         let (count, payload_off) = self.sized_count(off, marker & 0x0F)?;
         let refs_bytes = count.checked_mul(self.ref_size)?.checked_mul(2)?;
-        let payload = self.data.get(payload_off..payload_off.checked_add(refs_bytes)?)?;
+        let payload = self
+            .data
+            .get(payload_off..payload_off.checked_add(refs_bytes)?)?;
         for i in 0..count {
             let key_ref = read_be(payload, i * self.ref_size, self.ref_size)? as usize;
             if self.as_str(key_ref).as_deref() != Some(key) {
@@ -485,7 +491,11 @@ mod tests {
         assert!(png.starts_with(PNG_MAGIC), "payload is not PNG");
         let img = image::load_from_memory(&png).expect("extracted PNG should decode");
         assert!(img.width() >= 32 && img.width() <= 128, "w={}", img.width());
-        assert!(img.height() >= 32 && img.height() <= 128, "h={}", img.height());
+        assert!(
+            img.height() >= 32 && img.height() <= 128,
+            "h={}",
+            img.height()
+        );
     }
 
     #[test]

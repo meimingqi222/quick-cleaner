@@ -984,6 +984,17 @@ mod tests {
     }
 
     #[test]
+    fn icon_cache_key_falls_back_to_install_location() {
+        let mut app = create_test_app("坚果云", "上海亦存网络科技有限公司", 1, 0, 0);
+        app.install_location = Some(std::path::PathBuf::from(r"C:\Program Files\Nutstore\"));
+        app.display_icon = None;
+        assert_eq!(
+            app.icon_cache_key().as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\Nutstore\"))
+        );
+    }
+
+    #[test]
     fn test_filter_and_sort_by_size() {
         let apps = vec![
             create_test_app("Chrome", "Google", 200 * 1024 * 1024, 20230101, 100),
