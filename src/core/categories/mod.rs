@@ -57,9 +57,9 @@ pub enum CategoryId {
     // ---- macOS 专用，默认不勾选 ----
     LocalSnapshots,
     IosBackup,
-    /// `/Applications/JetBrains/` 下除最新版本外的旧版 IDE 安装。
-    /// macOS 专属（Windows 的 JetBrains 布局不同，不在本类目范围）。
-    OldIdeInstall,
+    /// `~/Library/Application Support/JetBrains/` 下除最新版本外的旧版
+    /// IDE 数据目录。macOS 专属（Windows 的 JetBrains 布局不同）。
+    OldIdeData,
 }
 
 impl CategoryId {
@@ -78,7 +78,7 @@ impl CategoryId {
         CategoryId::DevWorktrees,
         CategoryId::LocalSnapshots,
         CategoryId::IosBackup,
-        CategoryId::OldIdeInstall,
+        CategoryId::OldIdeData,
     ];
 
     /// 扫描完成后是否默认勾选。
@@ -99,7 +99,7 @@ impl CategoryId {
                 | CategoryId::DevWorktrees
                 | CategoryId::LocalSnapshots
                 | CategoryId::IosBackup
-                | CategoryId::OldIdeInstall
+                | CategoryId::OldIdeData
         )
     }
 
@@ -116,7 +116,7 @@ impl CategoryId {
         matches!(
             self,
             CategoryId::DevBuild | CategoryId::DevWorktrees | CategoryId::IosBackup
-                | CategoryId::OldIdeInstall
+                | CategoryId::OldIdeData
         )
     }
 
@@ -150,7 +150,7 @@ impl CategoryId {
                 CategoryId::DevWorktrees => "AI agent 临时 worktree",
                 CategoryId::LocalSnapshots => "APFS 本地快照",
                 CategoryId::IosBackup => "iOS 设备备份",
-                CategoryId::OldIdeInstall => "旧版 IDE 安装",
+                CategoryId::OldIdeData => "旧版 IDE 数据",
             },
             Language::En => match self {
                 CategoryId::SystemTemp => "System Temp Files",
@@ -167,7 +167,7 @@ impl CategoryId {
                 CategoryId::DevWorktrees => "AI Agent Git Worktrees",
                 CategoryId::LocalSnapshots => "APFS Local Snapshots",
                 CategoryId::IosBackup => "iOS Device Backup",
-                CategoryId::OldIdeInstall => "Old IDE Installations",
+                CategoryId::OldIdeData => "Old IDE Version Data",
             },
         }
     }
@@ -188,7 +188,7 @@ impl CategoryId {
             CategoryId::DevWorktrees => "🌿",
             CategoryId::LocalSnapshots => "📸",
             CategoryId::IosBackup => "📱",
-            CategoryId::OldIdeInstall => "💻",
+            CategoryId::OldIdeData => "💻",
         }
     }
 
@@ -220,8 +220,8 @@ impl CategoryId {
                 CategoryId::IosBackup => {
                     "iTunes / Finder 创建的 iOS 设备完整备份，单个可达 100 GB+"
                 }
-                CategoryId::OldIdeInstall => {
-                    "/Applications/JetBrains 下已有更新版本的旧 IDE，移入废纸篓"
+                CategoryId::OldIdeData => {
+                    "Application Support 下 JetBrains 的按版本数据目录，当前版本之外的旧目录，永久删除"
                 }
             },
             Language::En => match self {
@@ -251,8 +251,8 @@ impl CategoryId {
                 CategoryId::IosBackup => {
                     "Full iOS device backups created by iTunes / Finder, can be 100 GB+ each"
                 }
-                CategoryId::OldIdeInstall => {
-                    "Superseded JetBrains IDE versions under /Applications/JetBrains, moved to Trash"
+                CategoryId::OldIdeData => {
+                    "Per-version JetBrains data dirs under Application Support, excluding the newest, permanently deleted"
                 }
             },
         }
@@ -282,10 +282,9 @@ impl CategoryId {
             CategoryId::DevWorktrees => Safety::Danger,
             CategoryId::LocalSnapshots => Safety::Caution,
             CategoryId::IosBackup => Safety::Danger,
-            // 不丢用户数据（配置/插件在 ~/Library 下，不在这批目录里），
-            // 但删掉的是「还能回退一个版本」的能力，且处置走废纸篓可还原
-            // ——比 Danger 的 IosBackup/DevWorktrees 轻，仍需用户确认。
-            CategoryId::OldIdeInstall => Safety::Caution,
+            // 内容是已卸载旧版本的配置/插件/缓存（当前版本的数据目录保留），
+            // 但毕竟按版本永久删除，仍需用户确认。
+            CategoryId::OldIdeData => Safety::Caution,
         }
     }
 }

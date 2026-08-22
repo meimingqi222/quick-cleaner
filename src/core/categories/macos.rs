@@ -30,24 +30,83 @@ pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     // 清理时走废纸篓而非永久删除，系统级条目会由 Finder 请求授权。
     push_broken_login_items(t, home);
 
-    // /Applications/JetBrains 下的旧版 IDE 安装（发现式枚举，但目标形态
-    // 固定，不走 devscan 管线）。清理侧有独立的窄口子放行，见
-    // safety::is_old_ide_install_target。
-    push_old_ide_targets(t);
+    // Application Support 下 JetBrains 的旧版数据目录（发现式枚举，但
+    // 目标形态固定，不走 devscan 管线）。
+    push_old_ide_targets(t, home);
 }
 
-/// `/Applications/JetBrains` 下的旧版 IDE 安装。
-///
-/// JetBrains 的版本化安装天然落在 `/Applications` 这个受保护前缀下——
-/// 那层保护是给磁盘透镜手选路径兜底的，不能整体放开。所以这里只做
-/// **发现**：按产品分组、每组只保留最新版本，其余列给用户勾选；能否
-/// 真正删除由 `clean_targets` 的专属分支经
-/// [`crate::core::safety::is_old_ide_install_target`] 重新校验，处置送
-/// 废纸篓。解析不出产品+版本的目录（Daemon、Toolbox）不列入。
+/// JetBrains 收录进发现列表的产品表。表里存展示名，匹配时与目录名
+/// 一起折叠（去空格/连字符、转小写）。
 #[cfg(target_os = "macos")]
-pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>) {
-    const BASE: &str = "/Applications/JetBrains";
-    let Ok(entries) = std::fs::read_dir(BASE) else {
+const JETBRAINS_PRODUCTS: &[&str] = &[
+    "IntelliJ IDEA",
+    "PyCharm",
+    "WebStorm",
+    "CLion",
+    "GoLand",
+    "RubyMine",
+    "PhpStorm",
+    "DataGrip",
+    "Rider",
+    "RustRover",
+];
+
+/// 解析 JetBrains 版本化目录名，返回 `(产品展示名, (年, 次版本))`。
+///
+/// 目录名形如 `IntelliJIdea2026.2`（真实布局大小写不齐，折叠后匹配）。
+/// 解析不出的（`Daemon`、`Toolbox`、`PermanentDeviceId` 等共享目录和
+/// 文件）返回 `None`——分不清新旧的一律不列入。
+#[cfg(target_os = "macos")]
+fn parse_jetbrains_versioned_name(name: &str) -> Option<(&'static str, (u32, u32))> {
+    let folded: String = name
+        .to_lowercase()
+        .chars()
+        .filter(|c| *c != ' ' && *c != '-')
+        .collect();
+    for product in JETBRAINS_PRODUCTS {
+        let key: String = product
+            .to_lowercase()
+            .chars()
+            .filter(|c| *c != ' ' && *c != '-')
+            .collect();
+        let Some(rest) = folded.strip_prefix(&key) else {
+            continue;
+        };
+        // 版本形如 `2026.2`（允许 `2026.2.1` 三段）；解析不出数字版本的
+        // 前缀命中（如 `PyCharmEdu`）不算。
+        let mut parts = rest.split('.');
+        let (Some(y), Some(n)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let extra_ok = match parts.next() {
+            Some(patch) => !patch.is_empty() && patch.chars().all(|c| c.is_ascii_digit()),
+            None => true,
+        };
+        if !extra_ok
+            || y.len() != 4
+            || !y.chars().all(|c| c.is_ascii_digit())
+            || n.is_empty()
+            || !n.chars().all(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        return Some((*product, (y.parse().ok()?, n.parse().ok()?)));
+    }
+    None
+}
+
+/// `~/Library/Application Support/JetBrains` 下的旧版 IDE 数据目录。
+///
+/// JetBrains 按版本各留一份数据目录（配置、插件、缓存），更新到新版本
+/// 后旧目录不会跟着卸载——IDE 本体只装当前版，旧目录就是死重。这里
+/// 按产品分组、每组只保留最新版本，其余列给用户勾选。路径在用户主目
+/// 目录下、不受 `/Applications` 保护前缀约束，走标准清理管线（用户
+/// 确认后永久删除）。解析不出产品+版本的共享目录（Daemon、Toolbox）
+/// 一律不碰。
+#[cfg(target_os = "macos")]
+pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+    let base = home.join("Library/Application Support/JetBrains");
+    let Ok(entries) = std::fs::read_dir(&base) else {
         return;
     };
     let names: Vec<String> = entries
@@ -56,12 +115,12 @@ pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>) {
         .collect();
     for (name, family, version) in select_old_versions(&names) {
         t.push(target(
-            PathBuf::from(BASE).join(&name),
+            base.join(&name),
             Text::new(
-                format!("{family} {}.{}（旧版本）", version.0, version.1),
-                format!("{family} {}.{} (old version)", version.0, version.1),
+                format!("{family} {}.{}（旧版本数据）", version.0, version.1),
+                format!("{family} {}.{} (old version data)", version.0, version.1),
             ),
-            CategoryId::OldIdeInstall,
+            CategoryId::OldIdeData,
         ));
     }
 }
@@ -76,7 +135,7 @@ fn select_old_versions(names: &[String]) -> Vec<(String, &'static str, (u32, u32
         .iter()
         .enumerate()
         .filter_map(|(i, n)| {
-            crate::core::safety::parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v))
+            parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v))
         })
         .collect();
     let mut out = Vec::new();
@@ -375,7 +434,38 @@ pub(super) fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 
 #[cfg(all(test, target_os = "macos"))]
 mod old_ide_tests {
-    use super::select_old_versions;
+    use super::{parse_jetbrains_versioned_name, select_old_versions};
+
+    /// 目录名解析：产品 + 年.次版本。真实布局大小写不齐
+    /// （`IntelliJIdea2025.2`），折叠后必须照样匹配。
+    #[test]
+    fn parses_jetbrains_versioned_names() {
+        assert_eq!(
+            parse_jetbrains_versioned_name("IntelliJIdea2026.2"),
+            Some(("IntelliJ IDEA", (2026, 2)))
+        );
+        assert_eq!(
+            parse_jetbrains_versioned_name("DataGrip2025.1"),
+            Some(("DataGrip", (2025, 1)))
+        );
+        // 展示名形态（带空格）与三段版本号都要认
+        assert_eq!(
+            parse_jetbrains_versioned_name("IntelliJ IDEA 2025.2.1"),
+            Some(("IntelliJ IDEA", (2025, 2)))
+        );
+        assert_eq!(
+            parse_jetbrains_versioned_name("rustrover2026.1"),
+            Some(("RustRover", (2026, 1)))
+        );
+
+        // 分不清新旧的一律 None：无版本的共享目录、表外名字、
+        // 前缀命中但没有数字版本
+        assert_eq!(parse_jetbrains_versioned_name("Daemon"), None);
+        assert_eq!(parse_jetbrains_versioned_name("Toolbox"), None);
+        assert_eq!(parse_jetbrains_versioned_name("PermanentDeviceId"), None);
+        assert_eq!(parse_jetbrains_versioned_name("PyCharmEdu"), None);
+        assert_eq!(parse_jetbrains_versioned_name("PyCharmLatest"), None);
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
