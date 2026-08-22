@@ -5,6 +5,16 @@ use objc::runtime::{Object, BOOL, NO};
 use objc::{class, msg_send, sel, sel_impl};
 use std::path::Path;
 
+/// 这个路径是不是**本机废纸篓 `~/.Trash` 本身**。
+///
+/// 必须精确匹配,不能用 `contains(".Trash")` 之类的子串判断:外接卷的废纸篓是
+/// `/Volumes/<卷>/.Trashes/<uid>`,路径里同样含 ".Trash",但 [`empty_trash`]
+/// 清的是 `~/.Trash`——子串匹配会清掉用户没勾的本机废纸篓,还让外接卷自己
+/// 那份一个字节都没删。外接卷废纸篓走普通的「清空目录内容」路径即可。
+pub fn is_system_trash(path: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| path == home.join(".Trash"))
+}
+
 pub fn empty_trash(p: &CleanProgress) -> CleanReport {
     if let Some(home) = dirs::home_dir() {
         let trash = home.join(".Trash");
@@ -168,6 +178,28 @@ unsafe fn nsstring_to_string(s: *mut Object) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 外接卷废纸篓的路径同样含 ".Trash"，绝不能被当成本机废纸篓：
+    /// 那会清掉用户没勾的 `~/.Trash`，且外接卷自己那份一个字节都不删。
+    #[test]
+    fn only_home_trash_is_system_trash() {
+        let home = dirs::home_dir().expect("测试环境必须有 home");
+        assert!(is_system_trash(&home.join(".Trash")));
+
+        for other in [
+            std::path::PathBuf::from("/Volumes/外接盘/.Trashes/501"),
+            std::path::PathBuf::from("/Volumes/Backup/.Trashes"),
+            home.join(".TrashOld"),
+            home.join("Documents/Docs.Trash"),
+            home.join(".Trash/子目录"),
+        ] {
+            assert!(
+                !is_system_trash(&other),
+                "{} 不该被当成本机废纸篓",
+                other.display()
+            );
+        }
+    }
 
     /// 真的往废纸篓里放一个临时文件再捞出来核对。
     ///

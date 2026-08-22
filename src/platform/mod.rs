@@ -20,6 +20,7 @@
 //! | `scan_residuals` / `verify_residuals` / `clean_residuals` | 卸载残留的采集、复核与清理 |
 //! | `reveal_in_explorer` | 在系统文件管理器中定位路径 |
 //! | `move_to_trash` | 把单个路径移入回收站/废纸篓（可还原） |
+//! | `is_system_trash` / `empty_trash` | 识别系统回收站/废纸篓目录，以及清空它 |
 
 /// 编译期校验：当前平台分支确实提供了门面要求的全部函数，且签名一致。
 ///
@@ -51,6 +52,11 @@ macro_rules! platform_contract {
             // 永久删除——用户勾了「删除到回收站」反而拿到不可撤销的删除。
             // 进契约后各平台漏实现会直接编译失败。
             let _: fn(&Path) -> Result<(), String> = move_to_trash;
+            // 「识别回收站目录」和「清空回收站」以前也没进契约，core 只能
+            // 靠 `#[cfg]` 分别直连 windows::recycle 和 macos::trash，两条分支
+            // 的形状还不一样。收进契约后 `clean_targets` 里那段平台分支整个消失。
+            let _: fn(&Path) -> bool = is_system_trash;
+            let _: fn(&CleanProgress) -> CleanReport = empty_trash;
             let _: fn(&Path) = open_in_default_app;
         };
     };
@@ -73,14 +79,32 @@ fn posix_locale_tag() -> String {
 #[cfg(windows)]
 pub mod windows;
 #[cfg(windows)]
-pub use windows::*;
+/// 门面对外只开放**契约里那 16 个函数**，外加两个跨平台通用的图标读取。
+///
+/// 以前这里是 `pub use windows::*`：平台内部的每个 `pub` 符号都被透传出去，
+/// 于是 `crate::platform::real_user_home()` 这类只有 Windows 才有的东西，在
+/// Windows 上编得过、在 macOS 上直接编不过——而契约宏只校验它列出的那些函数，
+/// 拦不住这种「看起来像门面、其实是单平台」的调用。显式列表把它挡在编译期：
+/// 确实需要单平台能力时，得写 `platform::windows::...` 并自己加 `#[cfg]`，
+/// 一眼能看出这是平台分支而不是通用接口。
+pub use windows::{
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_system_language, empty_trash,
+    get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
+    move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
+};
 #[cfg(windows)]
 platform_contract!();
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::*;
+pub use macos::{
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_system_language, empty_trash,
+    get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
+    move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
+};
 #[cfg(target_os = "macos")]
 platform_contract!();
 
@@ -153,10 +177,25 @@ pub mod fallback {
         Err("当前平台没有回收站".into())
     }
 
+    /// 没有回收站，也就没有「回收站目录」这个概念。
+    pub fn is_system_trash(_path: &Path) -> bool {
+        false
+    }
+
+    pub fn empty_trash(_prog: &CleanProgress) -> CleanReport {
+        CleanReport::default()
+    }
+
     pub fn open_in_default_app(_path: &Path) {}
 }
 
 #[cfg(all(not(windows), not(target_os = "macos")))]
-pub use fallback::*;
+// fallback 不含 `app_icon_*`：UI 侧对这个 target 已经用 `#[cfg]` 关掉了图标加载。
+pub use fallback::{
+    clean_residuals, detect_system_language, empty_trash, get_volume_space, is_elevated,
+    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
+    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
+    scan_volume, verify_residuals,
+};
 #[cfg(all(not(windows), not(target_os = "macos")))]
 platform_contract!();

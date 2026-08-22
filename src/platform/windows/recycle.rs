@@ -114,7 +114,7 @@ pub fn sweep_orphaned_recycle(p: &CleanProgress) -> CleanReport {
 /// 当跨账户提权（OTS）导致真实用户 SID 与进程管理员 SID 不一致时，跳过 `SHEmptyRecycleBinW`
 /// （避免误清管理员自身的回收站），直接对真实用户的 `$Recycle.Bin\<SID>` 目录执行
 /// 深度清理并保留 desktop.ini。
-pub fn empty_recycle_bin(p: &CleanProgress) -> CleanReport {
+pub fn empty_trash(p: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
     let real_sid = real_user_sid();
     let proc_sid = current_user_sid();
@@ -149,7 +149,7 @@ pub fn empty_recycle_bin(p: &CleanProgress) -> CleanReport {
 }
 
 /// 判断一个扫描目标是否是回收站（需要走 SHEmptyRecycleBin 特殊路径）。
-pub fn is_recycle_bin(path: &Path) -> bool {
+pub fn is_system_trash(path: &Path) -> bool {
     path.to_string_lossy()
         .to_ascii_lowercase()
         .contains("$recycle.bin")

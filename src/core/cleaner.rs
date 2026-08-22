@@ -506,22 +506,12 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
         let d = &t.path;
         p.note(d);
 
-        #[cfg(windows)]
-        if crate::platform::windows::recycle::is_recycle_bin(d) {
+        // 系统回收站/废纸篓：整目录一次清空，不逐条删。平台差异（Windows 的
+        // `$Recycle.Bin` 与 macOS 的 `~/.Trash`）由门面契约的 `is_system_trash`
+        // / `empty_trash` 吃掉，这里不再有 `#[cfg]` 分支。
+        if crate::platform::is_system_trash(d) {
             if !bin_done {
-                report.merge(crate::platform::windows::recycle::empty_recycle_bin(p));
-                bin_done = true;
-            }
-            continue;
-        }
-        // 只有本机废纸篓 `~/.Trash` 走 empty_trash（它清的就是这一个目录）。
-        // 外接卷的 `/Volumes/<卷>/.Trashes/<uid>` 不能走这里：路径里同样含
-        // ".Trash"，但 empty_trash 清的是 `~/.Trash`，会清掉用户没勾的本机
-        // 废纸篓，还把 bin_done 置位让外接卷自己那份一个字节都没删。
-        #[cfg(target_os = "macos")]
-        if is_home_trash(d) {
-            if !bin_done {
-                report.merge(crate::platform::macos::trash::empty_trash(p));
+                report.merge(crate::platform::empty_trash(p));
                 bin_done = true;
             }
             continue;
@@ -529,7 +519,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
 
         #[cfg(target_os = "macos")]
         if is_launch_agent_plist(d) {
-            let result = match crate::platform::macos::trash::move_to_trash(d) {
+            let result = match crate::platform::move_to_trash(d) {
                 Ok(()) => {
                     p.files.fetch_add(1, Ordering::Relaxed);
                     CleanResult::Ok
@@ -551,12 +541,6 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
     }
     audit_result(&report, p);
     report
-}
-
-/// 本机废纸篓 `~/.Trash` 本身（不含外接卷的 `.Trashes/<uid>`）。
-#[cfg(target_os = "macos")]
-fn is_home_trash(path: &Path) -> bool {
-    dirs::home_dir().is_some_and(|home| path == home.join(".Trash"))
 }
 
 #[cfg(target_os = "macos")]
@@ -699,29 +683,6 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// 外接卷废纸篓的路径同样含 ".Trash"，绝不能被当成本机废纸篓：
-    /// 那会清掉用户没勾的 `~/.Trash`，且外接卷自己那份一个字节都不删。
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn only_home_trash_routes_to_empty_trash() {
-        let home = dirs::home_dir().expect("测试环境必须有 home");
-        assert!(is_home_trash(&home.join(".Trash")));
-
-        for other in [
-            PathBuf::from("/Volumes/外接盘/.Trashes/501"),
-            PathBuf::from("/Volumes/Backup/.Trashes"),
-            home.join(".TrashOld"),
-            home.join("Documents/Docs.Trash"),
-            home.join(".Trash/子目录"),
-        ] {
-            assert!(
-                !is_home_trash(&other),
-                "{} 不该走 empty_trash",
-                other.display()
-            );
-        }
     }
 
     #[cfg(windows)]
