@@ -142,11 +142,9 @@ pub fn list_volumes() -> Vec<VolumeId> {
 
     let mut out = Vec::with_capacity(physical.len());
     for (mount, _, name) in physical {
-        let label = if name.len() > 22 {
-            format!("{}…", &name[..22])
-        } else {
-            name
-        };
+        // 按字符截断而不是字节：中文卷名 8 个字就是 24 字节，
+        // 在第 22 字节切开会落在字符中间直接 panic。
+        let label = crate::core::model::truncate(&name, 22);
         out.push(VolumeId::from_mount_point_with_label(mount, label));
     }
 

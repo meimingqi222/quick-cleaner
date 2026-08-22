@@ -79,6 +79,16 @@ pub fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
+    /// 卷标签靠它截断。按字节切会在中文字符中间 panic。
+    #[test]
+    fn truncate_is_char_safe() {
+        assert_eq!(truncate("短名", 22), "短名");
+        // 24 字节 / 8 字符，不足 22 字符，应原样返回
+        assert_eq!(truncate("我的外置移动硬盘", 22), "我的外置移动硬盘");
+        assert_eq!(truncate("一二三四", 2), "一二…");
+        assert_eq!(truncate("🍎🍎🍎", 1), "🍎…");
+    }
+
     #[test]
     fn test_fmt_size() {
         assert_eq!(fmt_size(500), "500 B");
