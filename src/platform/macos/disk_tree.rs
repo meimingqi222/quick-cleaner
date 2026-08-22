@@ -117,6 +117,10 @@ impl MappedIndex {
         &at[a..b]
     }
 
+    /// # Safety 前提
+    ///
+    /// `off` 的 4 字节对齐和 `off + count * 4 <= len` 都由 `map_index_fd`
+    /// 的头部校验保证，映射基址本身是页对齐的。调用方只传 `cs_off` / `ca_off`。
     fn u32s(&self, off: usize, count: usize) -> &[u32] {
         unsafe { std::slice::from_raw_parts(self.ptr.add(off) as *const u32, count) }
     }
@@ -308,6 +312,12 @@ fn map_index_fd(file: std::fs::File, verify: bool) -> Option<MappedIndex> {
         || cs_off.saturating_add((n + 1) * 4) > len
         || ca_off.saturating_add(ca_len * 4) > len
         || !ent_off.is_multiple_of(std::mem::align_of::<TreeEntry>())
+        // CSR 的两段都按 `&[u32]` 取用（见 `MappedIndex::u32s`），偏移必须
+        // 4 字节对齐。写入端产出的偏移天然对齐，但这个函数的职责就是校验
+        // 不可信的磁盘数据——被截断或被改过的索引能构造出未对齐切片，那是
+        // UB，不是「读到脏数据」。长度校验挡不住它，得单独校验对齐。
+        || !cs_off.is_multiple_of(4)
+        || !ca_off.is_multiple_of(4)
     {
         unsafe { libc::munmap(ptr, len) };
         return None;
@@ -1981,20 +1991,28 @@ impl SizeTree {
             return String::new();
         }
 
-        // 回溯父链
+        // 回溯父链。只有走到根或命中缓存才算解析成功；父链断裂（槽位失效、
+        // 自环、深度超限）一律返回空串，与 `!self.valid(idx)` 同一档处理。
+        // 以前这些情况会拿挂载点当前缀，把残缺的链拼成一条看着合法、实则
+        // 指向别处的路径——磁盘透镜会拿它去删文件。
         let mut chain: Vec<u32> = Vec::new();
         let mut cur = idx;
-        let mut base = String::new();
+        let mut base = None;
         let mut depth = 0;
-        const MAX_DEPTH: usize = 64;
+        // PATH_MAX 是 1024 字节，每层至少占「一个字符 + 分隔符」，
+        // 512 层足够覆盖任何真实路径，同时仍能兜住父链成环。
+        const MAX_DEPTH: usize = 512;
 
         loop {
-            if cur == ROOT_NODE || depth > MAX_DEPTH {
-                base = self.volume().mount_point().display().to_string();
+            if cur == ROOT_NODE {
+                base = Some(self.volume().mount_point().display().to_string());
+                break;
+            }
+            if depth > MAX_DEPTH {
                 break;
             }
             if let Some(hit) = cache.get(&cur) {
-                base = hit.clone();
+                base = Some(hit.clone());
                 break;
             }
             let i = cur as usize;
@@ -2009,6 +2027,10 @@ impl SizeTree {
             cur = next;
             depth += 1;
         }
+
+        let Some(base) = base else {
+            return String::new();
+        };
 
         let mut path = base;
         for &node in chain.iter().rev() {
@@ -2657,5 +2679,129 @@ impl std::fmt::Display for ScanError {
             ScanError::NotNtfs => write!(f, "不是 NTFS 卷"),
             ScanError::Io(e) => write!(f, "IO 错误: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_path_tests {
+    use super::*;
+
+    fn entry(parent: u32, name: &str, is_dir: bool) -> TreeIndexEntry {
+        TreeIndexEntry {
+            parent,
+            name: name.to_string(),
+            is_dir,
+            size: 0,
+            used: true,
+            mtime: 0,
+        }
+    }
+
+    fn tree(entries: Vec<TreeIndexEntry>) -> SizeTree {
+        SizeTree::from_compact(VolumeId::from_mount_point(PathBuf::from("/")), entries)
+    }
+
+    #[test]
+    fn resolves_normal_chain() {
+        let t = tree(vec![
+            entry(ROOT_NODE, "/", true),
+            entry(ROOT_NODE, "Users", true),
+            entry(1, "me", true),
+            entry(2, "a.txt", false),
+        ]);
+        assert_eq!(t.path_of(3), "/Users/me/a.txt");
+    }
+
+    /// 父链断裂时必须返回空串，而不是拿挂载点当前缀拼出一条
+    /// 看着合法、实则指向别处的路径——上层会拿它去删文件。
+    #[test]
+    fn self_referencing_parent_yields_empty() {
+        // 索引 1 的父指向自己：既到不了根，也不该伪装成 /orphan
+        let t = tree(vec![entry(ROOT_NODE, "/", true), entry(1, "orphan", true)]);
+        assert_eq!(t.path_of(1), "");
+    }
+
+    #[test]
+    fn over_deep_chain_yields_empty() {
+        let mut entries = vec![entry(ROOT_NODE, "/", true)];
+        // 造一条超过 MAX_DEPTH(512) 的链
+        for i in 1..=600u32 {
+            entries.push(entry(i - 1, &format!("d{i}"), true));
+        }
+        let t = tree(entries);
+        assert_eq!(t.path_of(600), "");
+        // 深度以内的仍然正常解析
+        assert!(t.path_of(10).ends_with("/d10"));
+    }
+}
+
+#[cfg(test)]
+mod v7_header_validation_tests {
+    use super::*;
+
+    fn meta() -> IndexMeta {
+        IndexMeta {
+            mount: "/".into(),
+            label: "/".into(),
+            file_count: 1,
+            dir_count: 1,
+            total_size: 0,
+            last_event_id: 0,
+            scanned_at: 0,
+        }
+    }
+
+    fn sample_tree() -> SizeTree {
+        let e = |parent: u32, name: &str, is_dir: bool| TreeIndexEntry {
+            parent,
+            name: name.to_string(),
+            is_dir,
+            size: if is_dir { 0 } else { 16 },
+            used: true,
+            mtime: 0,
+        };
+        SizeTree::from_compact(
+            VolumeId::from_mount_point(PathBuf::from("/")),
+            vec![
+                e(ROOT_NODE, "/", true),
+                e(ROOT_NODE, "Users", true),
+                e(1, "a.txt", false),
+            ],
+        )
+    }
+
+    /// CSR 的两段偏移会被当成 `&[u32]` 取用，未对齐就是 UB。
+    /// 长度校验挡不住它：把偏移 +1 仍然落在文件内，只是不再 4 字节对齐。
+    /// 加载器的职责是校验不可信的磁盘数据，必须拒绝这种文件而不是照单全收。
+    #[test]
+    fn misaligned_csr_offsets_are_rejected() {
+        let dir = std::env::temp_dir().join("qc_v7_align");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("index.bin");
+        sample_tree().write_v7(&path, meta()).expect("写索引应成功");
+
+        // 控制组：没改过的文件能正常加载
+        assert!(
+            map_index_file(&path, false).is_some(),
+            "原始索引应当可加载，否则下面的断言证明不了是对齐拦下的"
+        );
+
+        // 88..92 是 cs_off，92..96 是 ca_off
+        for field in [88usize, 92] {
+            let mut bytes = std::fs::read(&path).unwrap();
+            let cur = u32::from_le_bytes(bytes[field..field + 4].try_into().unwrap());
+            bytes[field..field + 4].copy_from_slice(&(cur + 1).to_le_bytes());
+            let bad = dir.join(format!("bad-{field}.bin"));
+            std::fs::write(&bad, &bytes).unwrap();
+
+            assert!(
+                map_index_file(&bad, false).is_none(),
+                "偏移字段 {field} 未按 4 字节对齐时必须拒绝加载"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
