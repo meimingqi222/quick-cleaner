@@ -664,12 +664,25 @@ impl EntityInputHandler for Root {
         cx: &mut Context<Self>,
     ) {
         let is_file = self.file_search_focused(window);
-        self.text_input_mut(is_file).replace_and_mark(
-            range_utf16.as_ref(),
-            new_text,
-            new_selected_range_utf16.as_ref(),
-        );
-        self.after_text_edit(is_file, cx);
+        let still_composing = {
+            let input = self.text_input_mut(is_file);
+            input.replace_and_mark(
+                range_utf16.as_ref(),
+                new_text,
+                new_selected_range_utf16.as_ref(),
+            );
+            input.marked.is_some()
+        };
+        // 组词期间不触发搜索：拼音串不是用户要搜的内容，之前的实现每个按键
+        // 都走 `after_text_edit`，防抖被反复重置后拿着半截拼音真的去搜了。
+        // 确认后的汉字走 `replace_text_in_range`，那里才收尾。唯一的例外是
+        // 组词被清空（Esc 或删完拼音，`replace_and_mark` 对空文本会把
+        // marked 归 None），文本已回到组词前，按普通编辑收尾。
+        if still_composing {
+            cx.notify();
+        } else {
+            self.after_text_edit(is_file, cx);
+        }
         self.poke_cursor_blink(cx);
     }
 
