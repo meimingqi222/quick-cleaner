@@ -1,11 +1,13 @@
 //! 重复文件比对视图 (Duplicates Comparison View)
 
-use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::common::{
+    render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
+};
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
-use crate::ui::components::icons::{icon_badge, icon_files_duplicate, icon_trash};
+use crate::ui::components::icons::{icon_badge, icon_files_duplicate};
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
@@ -435,79 +437,14 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 )
                 .children(groups_view),
         )
-        // 底部悬浮操作条 (Stitch Duplicates Bottom Bar)
-        .child(
-            div()
-                .h(px(70.))
-                .flex_none()
-                .px_8()
-                .bg(rgb(CARD))
-                .border_t_1()
-                .border_color(rgba(OUTLINE_VAR, 0.35))
-                .shadow_md()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(icon_badge(
-                            icon_trash(ERROR, 18.),
-                            ERROR_CONTAINER,
-                            ERROR,
-                            36.,
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(TEXT))
-                                        .child(if lang == Language::Zh {
-                                            format!("已选择 {} 个重复文件", total_selected_count)
-                                        } else {
-                                            format!("{total_selected_count} duplicates selected")
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(if lang == Language::Zh {
-                                            format!("预计释放 {}", fmt_size(total_cleanable))
-                                        } else {
-                                            format!("Reclaiming {} of space", fmt_size(total_cleanable))
-                                        }),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("btn-remove-selected-dups")
-                        .px_6()
-                        .py_2()
-                        .rounded_lg()
-                        .bg(rgb(PRIMARY))
-                        .when(total_selected_count > 0, |d| {
-                            d.hover(|h| h.bg(rgb(PRIMARY_BRIGHT))).cursor_pointer()
-                        })
-                        .when(total_selected_count == 0, |d| d.opacity(0.4))
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(ON_PRIMARY))
-                        .child(match lang {
-                            Language::Zh => "清理所选项 ›",
-                            Language::En => "Remove Selected ›",
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.clean_declutter_selected(DeclutterTab::Duplicates, cx);
-                        })),
-                ),
-        )
+        // 底部操作条：与其余三个页签共用 common.rs 里的实现，见其上注释。
+        .child(render_declutter_action_bar(
+            lang,
+            DeclutterTab::Duplicates,
+            total_selected_count,
+            total_cleanable,
+            false,
+            cx,
+        ))
         .into_any_element()
 }

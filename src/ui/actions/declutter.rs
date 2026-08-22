@@ -175,6 +175,32 @@ impl crate::ui::Root {
         }));
     }
 
+    /// 清空当前页签的全部勾选。
+    ///
+    /// 只有「大型与旧文件」页有这个入口（相似图片页对应的是「智能全选」），
+    /// 所以操作条按参数决定显不显示——但选择状态怎么清是各页签自己的事，
+    /// 收在这里和 `selected_declutter_paths` / `prune_cleaned_declutter_items`
+    /// 放在一起，三个「按页签分派」的地方形状保持一致。
+    pub fn clear_declutter_selection(&mut self, tab: DeclutterTab, cx: &mut Context<Self>) {
+        let d = &mut self.declutter;
+        match tab {
+            DeclutterTab::Downloads => d.download_items.iter_mut().for_each(|f| f.selected = false),
+            DeclutterTab::LargeFiles => d.large_files.iter_mut().for_each(|f| f.selected = false),
+            DeclutterTab::SimilarPhotos => d
+                .photo_groups
+                .iter_mut()
+                .flat_map(|g| &mut g.photos)
+                .for_each(|p| p.selected = false),
+            DeclutterTab::Duplicates => d
+                .duplicate_groups
+                .iter_mut()
+                .flat_map(|g| &mut g.files)
+                .for_each(|f| f.selected = false),
+            DeclutterTab::Overview => {}
+        }
+        cx.notify();
+    }
+
     /// 当前页签下被勾选的路径。
     fn selected_declutter_paths(&self, tab: DeclutterTab) -> Vec<PathBuf> {
         let d = &self.declutter;

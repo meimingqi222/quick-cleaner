@@ -1,6 +1,8 @@
 //! 相似照片与连拍视图 (Similar Photos Gallery)
 
-use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::common::{
+    render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
+};
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
@@ -806,36 +808,21 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             this.declutter.auto_pick_best_photos();
                                             cx.notify();
                                         })),
-                                )
-                                .child(
-                                    div()
-                                        .id("btn-delete-selected-photos")
-                                        .px_5()
-                                        .py_2()
-                                        .rounded_full()
-                                        .bg(rgb(ERROR))
-                                        .when(total_selected_count > 0, |d| {
-                                            d.hover(|h| h.opacity(0.9)).cursor_pointer()
-                                        })
-                                        .when(total_selected_count == 0, |d| d.opacity(0.4))
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(ON_PRIMARY))
-                                        .child(format!(
-                                            "{} ({})",
-                                            match lang {
-                                                Language::Zh => "清理已选",
-                                                Language::En => "Delete Selected",
-                                            },
-                                            fmt_size(total_cleanable)
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.clean_declutter_selected(DeclutterTab::SimilarPhotos, cx);
-                                        })),
                                 ),
                         ),
                 )
                 .children(groups_view),
         )
+        // 底部操作条：原来「清理已选」按钮长在头部工具条里，文案和外层容器
+        // 都和其余三个页签的底部横条不一样，是四份里唯一的例外；现在换成和
+        // 其余三个页签一样、共用 common.rs 里实现的底部横条，见其上注释。
+        .child(render_declutter_action_bar(
+            lang,
+            DeclutterTab::SimilarPhotos,
+            total_selected_count,
+            total_cleanable,
+            false,
+            cx,
+        ))
         .into_any_element()
 }

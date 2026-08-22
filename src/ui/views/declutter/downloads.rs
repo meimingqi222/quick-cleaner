@@ -1,6 +1,8 @@
 //! 下载项整理视图 (Downloads View)
 
-use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::common::{
+    render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
+};
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
@@ -330,51 +332,13 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .child(div().flex().flex_col().children(rows)),
                 ),
         )
-        .child(
-            div()
-                .h(px(70.))
-                .flex_none()
-                .px_8()
-                .bg(rgb(CARD))
-                .border_t_1()
-                .border_color(rgba(OUTLINE_VAR, 0.35))
-                .shadow_md()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(TEXT))
-                        .child(if lang == Language::Zh {
-                            format!("已选 {} 个项目 • 释放 {}", total_sel_count, fmt_size(total_sel))
-                        } else {
-                            format!("{total_sel_count} items selected • {}", fmt_size(total_sel))
-                        }),
-                )
-                .child(
-                    div()
-                        .id("btn-remove-selected-downloads")
-                        .px_6()
-                        .py_2()
-                        .rounded_lg()
-                        .bg(rgb(PRIMARY))
-                        .when(total_sel_count > 0, |d| {
-                            d.hover(|h| h.bg(rgb(PRIMARY_BRIGHT))).cursor_pointer()
-                        })
-                        .when(total_sel_count == 0, |d| d.opacity(0.4))
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(ON_PRIMARY))
-                        .child(match lang {
-                            Language::Zh => "清理所选项 ›",
-                            Language::En => "Remove Selected ›",
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.clean_declutter_selected(DeclutterTab::Downloads, cx);
-                        })),
-                ),
-        )
+        .child(render_declutter_action_bar(
+            lang,
+            DeclutterTab::Downloads,
+            total_sel_count,
+            total_sel,
+            false,
+            cx,
+        ))
         .into_any_element()
 }

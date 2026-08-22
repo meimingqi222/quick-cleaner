@@ -1,12 +1,14 @@
 //! 大型与旧文件视图 (Large & Old Files View)
 
-use super::common::{render_empty_state_card, render_unified_nav_header};
+use super::common::{
+    render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
+};
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{
-    icon_badge, icon_folder_large, icon_photos_similar, icon_trash, icon_video, icon_zip,
+    icon_badge, icon_folder_large, icon_photos_similar, icon_video, icon_zip,
 };
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -465,85 +467,14 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                         .child(div().flex().flex_col().children(rows)),
                 ),
         )
-        // 底部悬浮操作条 (Stitch Large Files Action Bar)
-        .child(
-            div()
-                .h(px(70.))
-                .flex_none()
-                .px_8()
-                .bg(rgb(CARD))
-                .border_t_1()
-                .border_color(rgba(OUTLINE_VAR, 0.35))
-                .shadow_md()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(TEXT))
-                        .child(if lang == Language::Zh {
-                            format!("已选 {} 个项目 • 释放 {}", total_sel_count, fmt_size(total_sel))
-                        } else {
-                            format!("{total_sel_count} items selected • {}", fmt_size(total_sel))
-                        }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            div()
-                                .id("btn-cancel-large")
-                                .px_5()
-                                .py_2()
-                                .rounded_lg()
-                                .border_1()
-                                .border_color(rgb(OUTLINE_VAR))
-                                .hover(|h| h.bg(rgb(SURF_LOW)))
-                                .cursor_pointer()
-                                .text_sm()
-                                .text_color(rgb(MUTED))
-                                .child(match lang {
-                                    Language::Zh => "取消全选",
-                                    Language::En => "Cancel",
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    for f in &mut this.declutter.large_files {
-                                        f.selected = false;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id("btn-remove-selected-large")
-                                .px_6()
-                                .py_2()
-                                .rounded_lg()
-                                .bg(rgb(ERROR))
-                                .when(total_sel_count > 0, |d| {
-                                    d.hover(|h| h.opacity(0.9)).cursor_pointer()
-                                })
-                                .when(total_sel_count == 0, |d| d.opacity(0.4))
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(ON_PRIMARY))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(icon_trash(0xffffff, 16.))
-                                .child(match lang {
-                                    Language::Zh => "清理所选项",
-                                    Language::En => "Remove Selected",
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.clean_declutter_selected(DeclutterTab::LargeFiles, cx);
-                                })),
-                        ),
-                ),
-        )
+        // 底部操作条：与其余三个页签共用 common.rs 里的实现，见其上注释。
+        .child(render_declutter_action_bar(
+            lang,
+            DeclutterTab::LargeFiles,
+            total_sel_count,
+            total_sel,
+            true,
+            cx,
+        ))
         .into_any_element()
 }
