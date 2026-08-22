@@ -191,7 +191,7 @@ impl crate::ui::Root {
         if !self.search_index_ready() {
             return;
         }
-        let query = self.search.query.trim().to_string();
+        let query = self.search.input.text.trim().to_string();
         let generation = self
             .search
             .search_generation
@@ -348,20 +348,20 @@ impl crate::ui::Root {
 
     /// 搜索框退格键
     pub fn file_search_backspace(&mut self, cx: &mut Context<Self>) {
-        let sel = clamp_to_boundary(&self.search.query, self.search.sel.clone());
+        let sel = clamp_to_boundary(&self.search.input.text, self.search.input.sel.clone());
         if sel.start != sel.end {
-            self.search.query.replace_range(sel.clone(), "");
-            self.search.sel = sel.start..sel.start;
+            self.search.input.text.replace_range(sel.clone(), "");
+            self.search.input.sel = sel.start..sel.start;
         } else if sel.start > 0 {
-            let prev = self.search.query[..sel.start]
+            let prev = self.search.input.text[..sel.start]
                 .char_indices()
                 .next_back()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            self.search.query.replace_range(prev..sel.start, "");
-            self.search.sel = prev..prev;
+            self.search.input.text.replace_range(prev..sel.start, "");
+            self.search.input.sel = prev..prev;
         }
-        self.search.marked = None;
+        self.search.input.marked = None;
         self.search_input_changed(cx);
     }
 
@@ -371,9 +371,9 @@ impl crate::ui::Root {
     /// 与刚进入搜索页时的状态一致。
     pub fn file_search_clear(&mut self, cx: &mut Context<Self>) {
         self.search.search_task = None;
-        self.search.query.clear();
-        self.search.sel = 0..0;
-        self.search.marked = None;
+        self.search.input.text.clear();
+        self.search.input.sel = 0..0;
+        self.search.input.marked = None;
         // 不再 clear results，而是走空查询搜索（top N）
         self.search_input_changed(cx);
     }

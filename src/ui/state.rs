@@ -214,6 +214,91 @@ pub struct SearchTextHit {
     pub line: gpui::ShapedLine,
 }
 
+/// 一个单行文本输入框的全部状态。
+///
+/// Apps 搜索框和文件搜索框本来各带一套完全相同的字段，`text_input.rs`
+/// 的每个方法、`search_box.rs` 的每个回调都要写一遍
+/// `if is_file_search { …search… } else { …apps… }`——两份实现已经开始
+///各自漂移。现在两边共用这一个结构体，分支只剩「拿哪一个」。
+pub struct TextInputState {
+    pub text: String,
+    /// 光标/选区的**字节**范围
+    pub sel: std::ops::Range<usize>,
+    /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
+    pub marked: Option<std::ops::Range<usize>>,
+    /// 输入框最近一次绘制的位置，用来定位输入法候选窗口
+    pub bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    /// 文本区真实排版（绘制与点击命中共用）
+    pub text_hit: Option<SearchTextHit>,
+    /// 文本拖拽选区的锚点字节偏移（鼠标按下时的位置）
+    pub text_drag: Option<usize>,
+    pub focus_handle: gpui::FocusHandle,
+}
+
+impl TextInputState {
+    pub fn new(focus_handle: gpui::FocusHandle) -> Self {
+        Self {
+            text: String::new(),
+            sel: 0..0,
+            marked: None,
+            bounds: None,
+            text_hit: None,
+            text_drag: None,
+            focus_handle,
+        }
+    }
+
+    /// 光标（或选区）的字节范围，已钳到合法的字符边界。
+    pub fn selection(&self) -> std::ops::Range<usize> {
+        crate::ui::text_input::clamp_to_boundary(&self.text, self.sel.clone())
+    }
+
+    /// 把光标收到末尾。内容被外部改动（清空按钮、切换筛选）后要调一次，
+    /// 否则残留的旧偏移会指到字符串外面。
+    pub fn reset_caret(&mut self) {
+        let end = self.text.len();
+        self.sel = end..end;
+        self.marked = None;
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.reset_caret();
+    }
+
+    /// 提交文本：普通打字与输入法确认后的汉字都走这里。
+    pub fn replace(&mut self, range_utf16: Option<&std::ops::Range<usize>>, new_text: &str) {
+        let (sel, marked) = crate::ui::text_input::replace_text(
+            &mut self.text,
+            &self.sel,
+            &self.marked,
+            range_utf16,
+            new_text,
+        );
+        self.sel = sel;
+        self.marked = marked;
+    }
+
+    /// 组合中的文本：输入法候选阶段的拼音串，尚未确认。
+    pub fn replace_and_mark(
+        &mut self,
+        range_utf16: Option<&std::ops::Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<&std::ops::Range<usize>>,
+    ) {
+        let (sel, marked) = crate::ui::text_input::replace_and_mark_text(
+            &mut self.text,
+            &self.sel,
+            &self.marked,
+            range_utf16,
+            new_text,
+            new_selected_range_utf16,
+        );
+        self.sel = sel;
+        self.marked = marked;
+    }
+}
+
 /// 软件管理页的状态（Geek Uninstaller 风格）。
 pub struct AppsState {
     pub list: Vec<InstalledApp>,
@@ -222,15 +307,8 @@ pub struct AppsState {
     pub task: Option<Task<()>>,
     pub sort: AppSortState,
     pub preset: AppFilterPreset,
-    pub search: String,
-    /// 搜索框光标/选区的**字节**范围
-    pub search_sel: std::ops::Range<usize>,
-    /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
-    pub search_marked: Option<std::ops::Range<usize>>,
-    /// 搜索框最近一次绘制的位置，用来定位输入法候选窗口
-    pub search_bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    /// 文本区真实排版（绘制与点击命中共用）
-    pub text_hit: Option<SearchTextHit>,
+    /// 搜索框（文本 + 选区 + IME + 命中测试）
+    pub input: TextInputState,
     /// 软件表每次被整体替换就自增，用来判定渲染缓存是否失效
     pub gen: u64,
     /// 过滤 + 排序后的 `list` 下标，渲染直接读这里
@@ -239,9 +317,6 @@ pub struct AppsState {
     /// 软件表也走虚拟化列表，句柄需长期持有
     pub scroll: gpui::UniformListScrollHandle,
     pub scroll_drag: Option<(f32, f32)>,
-    /// 文本拖拽选区的锚点字节偏移（鼠标按下时的位置）
-    pub text_drag: Option<usize>,
-    pub focus_handle: gpui::FocusHandle,
     pub context_menu: Option<AppsContextMenu>,
 }
 
@@ -276,18 +351,10 @@ pub enum SearchSortCol {
 /// 文件快速检索状态。
 ///
 /// 搜索框走和 AppsState 搜索框一样的 IME 管线（EntityInputHandler），
-/// 通过 `active_input` 字段区分当前哪个输入框获得焦点。
+/// 两边共用 [`TextInputState`]，由焦点决定输入落到哪一个。
 pub struct SearchState {
-    pub query: String,
-    /// 搜索框光标/选区的**字节**范围
-    pub sel: std::ops::Range<usize>,
-    /// 输入法组合中文本的字节范围
-    pub marked: Option<std::ops::Range<usize>>,
-    /// 搜索框最近一次绘制的位置，定位输入法候选窗口
-    pub bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    /// 文本区真实排版（绘制与点击命中共用）
-    pub text_hit: Option<SearchTextHit>,
-    pub focus_handle: gpui::FocusHandle,
+    /// 搜索框（文本 + 选区 + IME + 命中测试）
+    pub input: TextInputState,
     pub results: Vec<crate::core::disk::SearchHit>,
     /// 是否正在后台构建搜索索引
     pub indexing: bool,
@@ -295,8 +362,6 @@ pub struct SearchState {
     /// Windows: 所有卷的 MFT 树。macOS: 复用 Root::macos_root_index。
     #[cfg(windows)]
     pub indices: Vec<std::sync::Arc<crate::core::disk::ScanResult>>,
-    /// 文本拖拽选区的锚点字节偏移
-    pub text_drag: Option<usize>,
     /// 搜索结果虚拟列表
     pub scroll: gpui::UniformListScrollHandle,
     /// 滚动条拖拽状态：(按下时鼠标 y, 按下时滚动 top)

@@ -107,11 +107,7 @@ pub fn search_box(
                         },
                     );
                     text_entity.update(cx, |this, _| {
-                        if is_file_search {
-                            this.search.text_hit = Some(hit);
-                        } else {
-                            this.apps.text_hit = Some(hit);
-                        }
+                        this.text_input_mut(is_file_search).text_hit = Some(hit);
                     });
                 },
             )
@@ -166,44 +162,26 @@ pub fn search_box(
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 fh.focus(window);
                 if event.click_count >= 2 {
-                    if is_file_search {
-                        let len = this.search.query.len();
-                        this.search.sel = 0..len;
-                        this.search.text_drag = None;
-                        this.search.marked = None;
-                    } else {
-                        let len = this.apps.search.len();
-                        this.apps.search_sel = 0..len;
-                        this.apps.text_drag = None;
-                        this.apps.search_marked = None;
-                    }
+                    let input = this.text_input_mut(is_file_search);
+                    input.sel = 0..input.text.len();
+                    input.text_drag = None;
+                    input.marked = None;
                     this.poke_cursor_blink(cx);
                     return;
                 }
                 let mouse_x: f32 = event.position.x.into();
-                if is_file_search {
-                    let idx = index_for_mouse_x(
-                        &this.search.query,
-                        mouse_x,
-                        this.search.text_hit.as_ref(),
-                        font_size,
-                        window,
-                    );
-                    this.search.sel = idx..idx;
-                    this.search.text_drag = Some(idx);
-                    this.search.marked = None;
-                } else {
-                    let idx = index_for_mouse_x(
-                        &this.apps.search,
-                        mouse_x,
-                        this.apps.text_hit.as_ref(),
-                        font_size,
-                        window,
-                    );
-                    this.apps.search_sel = idx..idx;
-                    this.apps.text_drag = Some(idx);
-                    this.apps.search_marked = None;
-                }
+                let input = this.text_input_mut(is_file_search);
+                let idx = index_for_mouse_x(
+                    &input.text,
+                    mouse_x,
+                    input.text_hit.as_ref(),
+                    font_size,
+                    window,
+                );
+                let input = this.text_input_mut(is_file_search);
+                input.sel = idx..idx;
+                input.text_drag = Some(idx);
+                input.marked = None;
                 this.poke_cursor_blink(cx);
             })
         })
@@ -212,120 +190,65 @@ pub fn search_box(
             let shift = event.keystroke.modifiers.shift;
             match event.keystroke.key.as_str() {
                 "backspace" => on_backspace(this, cx),
-                "delete" => {
-                    if is_file_search {
-                        this.file_search_delete(cx);
-                    } else {
-                        this.apps_search_delete();
-                        cx.notify();
-                    }
-                }
+                "delete" => this.text_input_delete(is_file_search, cx),
                 "escape" => on_escape(this, cx),
+                // 光标移动不改文本，两个框都只要重绘
                 "left" => {
-                    if is_file_search {
-                        this.file_search_move_left(shift, cx);
-                    } else {
-                        this.apps_search_move_left(shift);
-                        cx.notify();
-                    }
+                    this.text_input_move_left(is_file_search, shift);
+                    cx.notify();
                 }
                 "right" => {
-                    if is_file_search {
-                        this.file_search_move_right(shift, cx);
-                    } else {
-                        this.apps_search_move_right(shift);
-                        cx.notify();
-                    }
+                    this.text_input_move_right(is_file_search, shift);
+                    cx.notify();
                 }
                 "home" => {
-                    if is_file_search {
-                        this.file_search_move_home(shift, cx);
-                    } else {
-                        this.apps_search_move_home(shift);
-                        cx.notify();
-                    }
+                    this.text_input_move_home(is_file_search, shift);
+                    cx.notify();
                 }
                 "end" => {
-                    if is_file_search {
-                        this.file_search_move_end(shift, cx);
-                    } else {
-                        this.apps_search_move_end(shift);
-                        cx.notify();
-                    }
+                    this.text_input_move_end(is_file_search, shift);
+                    cx.notify();
                 }
                 // Ctrl+A：全选
                 "a" if ctrl => {
-                    if is_file_search {
-                        let len = this.search.query.len();
-                        this.search.sel = 0..len;
-                    } else {
-                        let len = this.apps.search.len();
-                        this.apps.search_sel = 0..len;
-                    }
+                    let input = this.text_input_mut(is_file_search);
+                    input.sel = 0..input.text.len();
                     cx.notify();
                 }
                 // Ctrl+C：复制选中文本
                 "c" if ctrl => {
-                    let text = if is_file_search {
-                        let sel = clamp_to_boundary(&this.search.query, this.search.sel.clone());
-                        this.search.query[sel].to_string()
-                    } else {
-                        let sel =
-                            clamp_to_boundary(&this.apps.search, this.apps.search_sel.clone());
-                        this.apps.search[sel].to_string()
-                    };
+                    let input = this.text_input(is_file_search);
+                    let text = input.text[input.selection()].to_string();
                     if !text.is_empty() {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                     }
                 }
                 // Ctrl+X：剪切选中文本
                 "x" if ctrl => {
-                    if is_file_search {
-                        let sel = clamp_to_boundary(&this.search.query, this.search.sel.clone());
-                        let cut = this.search.query[sel.clone()].to_string();
-                        if !cut.is_empty() {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
-                            this.search.query.replace_range(sel.clone(), "");
-                            this.search.sel = sel.start..sel.start;
-                            this.search.marked = None;
-                            this.search_input_changed(cx);
-                        }
-                    } else {
-                        let sel =
-                            clamp_to_boundary(&this.apps.search, this.apps.search_sel.clone());
-                        let cut = this.apps.search[sel.clone()].to_string();
-                        if !cut.is_empty() {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
-                            this.apps.search.replace_range(sel.clone(), "");
-                            this.apps.search_sel = sel.start..sel.start;
-                            this.apps.search_marked = None;
-                            cx.notify();
-                        }
+                    let input = this.text_input_mut(is_file_search);
+                    let sel = input.selection();
+                    let cut = input.text[sel.clone()].to_string();
+                    if !cut.is_empty() {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
+                        let input = this.text_input_mut(is_file_search);
+                        input.text.replace_range(sel.clone(), "");
+                        input.sel = sel.start..sel.start;
+                        input.marked = None;
+                        this.after_text_edit(is_file_search, cx);
                     }
                 }
                 // Ctrl+V：粘贴
                 "v" if ctrl => {
                     if let Some(item) = cx.read_from_clipboard() {
                         if let Some(pasted) = item.text() {
-                            if is_file_search {
-                                let sel =
-                                    clamp_to_boundary(&this.search.query, this.search.sel.clone());
-                                this.search.query.replace_range(sel.clone(), &pasted);
-                                let caret = sel.start + pasted.len();
-                                this.search.sel = caret..caret;
-                                this.search.marked = None;
-                                this.search_input_changed(cx);
-                            } else {
-                                let sel = clamp_to_boundary(
-                                    &this.apps.search,
-                                    this.apps.search_sel.clone(),
-                                );
-                                this.apps.search.replace_range(sel.clone(), &pasted);
-                                let caret = sel.start + pasted.len();
-                                this.apps.search_sel = caret..caret;
-                                this.apps.search_marked = None;
-                                cx.notify();
-                            }
+                            // 粘贴替换的是选区，不是 IME 组合中的那段
+                            let input = this.text_input_mut(is_file_search);
+                            let sel = input.selection();
+                            input.text.replace_range(sel.clone(), &pasted);
+                            let caret = sel.start + pasted.len();
+                            input.sel = caret..caret;
+                            input.marked = None;
+                            this.after_text_edit(is_file_search, cx);
                         }
                     }
                 }
@@ -362,29 +285,19 @@ pub fn search_box(
                         }
                         let mouse_x: f32 = event.position.x.into();
                         ent.update(cx, |this, cx| {
-                            if fs {
-                                if let Some(anchor) = this.search.text_drag {
-                                    let cur = index_for_mouse_x(
-                                        &this.search.query,
-                                        mouse_x,
-                                        this.search.text_hit.as_ref(),
-                                        fsize,
-                                        window,
-                                    );
-                                    this.search.sel = cur.min(anchor)..cur.max(anchor);
-                                    this.poke_cursor_blink(cx);
-                                }
-                            } else if let Some(anchor) = this.apps.text_drag {
-                                let cur = index_for_mouse_x(
-                                    &this.apps.search,
-                                    mouse_x,
-                                    this.apps.text_hit.as_ref(),
-                                    fsize,
-                                    window,
-                                );
-                                this.apps.search_sel = cur.min(anchor)..cur.max(anchor);
-                                this.poke_cursor_blink(cx);
-                            }
+                            let input = this.text_input(fs);
+                            let Some(anchor) = input.text_drag else {
+                                return;
+                            };
+                            let cur = index_for_mouse_x(
+                                &input.text,
+                                mouse_x,
+                                input.text_hit.as_ref(),
+                                fsize,
+                                window,
+                            );
+                            this.text_input_mut(fs).sel = cur.min(anchor)..cur.max(anchor);
+                            this.poke_cursor_blink(cx);
                         });
                     });
 
@@ -398,13 +311,7 @@ pub fn search_box(
                             return;
                         }
                         ent2.update(cx, |this, cx| {
-                            if fs {
-                                if this.search.text_drag.is_some() {
-                                    this.search.text_drag = None;
-                                    cx.notify();
-                                }
-                            } else if this.apps.text_drag.is_some() {
-                                this.apps.text_drag = None;
+                            if this.text_input_mut(fs).text_drag.take().is_some() {
                                 cx.notify();
                             }
                         });

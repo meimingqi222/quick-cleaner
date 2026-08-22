@@ -23,7 +23,7 @@ const ROW_H: f32 = 40.;
 pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
     let indexing = root.search.indexing;
-    let query = root.search.query.clone();
+    let query = root.search.input.text.clone();
     let results_len = root.search.results.len();
     let results_empty = root.search.results.is_empty();
     let ready = root.search_index_ready();
@@ -384,11 +384,11 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
 
 fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> Stateful<Div> {
     let lang = root.language;
-    let focused = root.search.focus_handle.is_focused(window);
-    let query = root.search.query.clone();
-    let search_focus_handle = root.search.focus_handle.clone();
-    let selection = root.search.sel.clone();
-    let marked = root.search.marked.clone();
+    let focused = root.search.input.focus_handle.is_focused(window);
+    let query = root.search.input.text.clone();
+    let search_focus_handle = root.search.input.focus_handle.clone();
+    let selection = root.search.input.sel.clone();
+    let marked = root.search.input.marked.clone();
     let font_size = 13.0;
 
     let sel = crate::ui::text_input::clamp_to_boundary(&query, selection);
@@ -413,7 +413,7 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
         |this, cx| this.file_search_backspace(cx),
         |this, cx| this.file_search_clear(cx),
         |this, bounds| {
-            this.search.bounds = Some(bounds);
+            this.search.input.bounds = Some(bounds);
         },
         cx,
     )

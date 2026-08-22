@@ -32,7 +32,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::ui::theme::{rgba, OUTLINE, PRIMARY, TEXT};
-use crate::ui::{Root, SearchTextHit};
+use crate::ui::{Root, SearchTextHit, TextInputState};
 
 /// 搜索框绘制与命中测试共用的字体：系统 UI 字体 + Medium。
 ///
@@ -448,95 +448,150 @@ pub fn delete_backward(text: &mut String, sel: Range<usize>) -> Range<usize> {
     }
 }
 
+/// 输入法给的替换范围：显式范围 > 组合中范围 > 当前选区。
+fn resolve_replace_range(
+    text: &str,
+    sel: &Range<usize>,
+    marked: &Option<Range<usize>>,
+    range_utf16: Option<&Range<usize>>,
+) -> Range<usize> {
+    let range = range_utf16
+        .map(|r| range_from_utf16(text, r))
+        .or_else(|| marked.clone())
+        .unwrap_or_else(|| clamp_to_boundary(text, sel.clone()));
+    clamp_to_boundary(text, range)
+}
+
+/// 提交文本：普通打字与输入法确认后的汉字都走这里。
+///
+/// 返回新的 `(选区, 组合中范围)`——与 [`move_left`] 等同族函数一样，
+/// 状态改动交给调用方落地，函数本身可以脱离 GPUI 单独测试。
+pub fn replace_text(
+    text: &mut String,
+    sel: &Range<usize>,
+    marked: &Option<Range<usize>>,
+    range_utf16: Option<&Range<usize>>,
+    new_text: &str,
+) -> (Range<usize>, Option<Range<usize>>) {
+    let range = resolve_replace_range(text, sel, marked, range_utf16);
+    text.replace_range(range.clone(), new_text);
+    let caret = range.start + new_text.len();
+    (caret..caret, None)
+}
+
+/// 组合中的文本：输入法候选阶段的拼音串，尚未确认。
+pub fn replace_and_mark_text(
+    text: &mut String,
+    sel: &Range<usize>,
+    marked: &Option<Range<usize>>,
+    range_utf16: Option<&Range<usize>>,
+    new_text: &str,
+    new_selected_range_utf16: Option<&Range<usize>>,
+) -> (Range<usize>, Option<Range<usize>>) {
+    let range = resolve_replace_range(text, sel, marked, range_utf16);
+    text.replace_range(range.clone(), new_text);
+    let new_marked = if new_text.is_empty() {
+        None
+    } else {
+        Some(range.start..range.start + new_text.len())
+    };
+    let composed = &text[range.start..range.start + new_text.len()];
+    let new_sel = match new_selected_range_utf16 {
+        Some(r) => {
+            let inner = range_from_utf16(composed, r);
+            range.start + inner.start..range.start + inner.end
+        }
+        None => {
+            let caret = range.start + new_text.len();
+            caret..caret
+        }
+    };
+    (new_sel, new_marked)
+}
+
 impl Root {
-    /// 当前搜索框里光标（或选区）的字节范围，已钳到合法边界。
-    fn search_selection(&self) -> Range<usize> {
-        clamp_to_boundary(&self.apps.search, self.apps.search_sel.clone())
+    /// 按「是不是文件搜索框」取输入框状态。
+    ///
+    /// 两个搜索框的编辑逻辑完全一样，差异只有两处：落在哪个
+    /// `TextInputState` 上，以及改完之后的收尾动作（文件搜索要重新
+    /// 触发查询，Apps 搜索只需要重绘）。前者由这里收口，后者见
+    /// [`Self::after_text_edit`]。
+    pub fn text_input(&self, is_file_search: bool) -> &TextInputState {
+        if is_file_search {
+            &self.search.input
+        } else {
+            &self.apps.input
+        }
     }
 
-    /// 文件搜索框的选区（字节范围，已钳边界）。
-    fn file_search_selection(&self) -> Range<usize> {
-        clamp_to_boundary(&self.search.query, self.search.sel.clone())
+    pub fn text_input_mut(&mut self, is_file_search: bool) -> &mut TextInputState {
+        if is_file_search {
+            &mut self.search.input
+        } else {
+            &mut self.apps.input
+        }
     }
 
-    /// 把光标收到末尾。内容被外部改动（清空按钮、切换筛选）后要调一次，
-    /// 否则残留的旧偏移会指到字符串外面。
+    /// 文本改动后的收尾：文件搜索走防抖查询，Apps 搜索重绘即可。
+    pub fn after_text_edit(&mut self, is_file_search: bool, cx: &mut Context<Self>) {
+        if is_file_search {
+            self.search_input_changed(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// 把光标收到末尾（Apps 搜索框；内容被清空按钮/筛选切换改过之后调用）。
     pub fn reset_search_caret(&mut self) {
-        let end = self.apps.search.len();
-        self.apps.search_sel = end..end;
-        self.apps.search_marked = None;
+        self.apps.input.reset_caret();
     }
 
     /// 退格：删掉光标前的一个字符或整个选区。
     pub fn search_backspace(&mut self) {
-        self.apps.search_sel = delete_backward(&mut self.apps.search, self.apps.search_sel.clone());
-        self.apps.search_marked = None;
-    }
-
-    pub fn apps_search_delete(&mut self) {
-        self.apps.search_sel = delete_forward(&mut self.apps.search, self.apps.search_sel.clone());
-        self.apps.search_marked = None;
-    }
-
-    pub fn apps_search_move_left(&mut self, shift: bool) {
-        self.apps.search_sel = move_left(&self.apps.search, self.apps.search_sel.clone(), shift);
-        self.apps.search_marked = None;
-    }
-
-    pub fn apps_search_move_right(&mut self, shift: bool) {
-        self.apps.search_sel = move_right(&self.apps.search, self.apps.search_sel.clone(), shift);
-        self.apps.search_marked = None;
-    }
-
-    pub fn apps_search_move_home(&mut self, shift: bool) {
-        self.apps.search_sel = move_home(&self.apps.search, self.apps.search_sel.clone(), shift);
-        self.apps.search_marked = None;
-    }
-
-    pub fn apps_search_move_end(&mut self, shift: bool) {
-        self.apps.search_sel = move_end(&self.apps.search, self.apps.search_sel.clone(), shift);
-        self.apps.search_marked = None;
-    }
-
-    pub fn file_search_move_left(&mut self, shift: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_left(&self.search.query, self.search.sel.clone(), shift);
-        self.search.marked = None;
-        cx.notify();
-    }
-
-    pub fn file_search_move_right(&mut self, shift: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_right(&self.search.query, self.search.sel.clone(), shift);
-        self.search.marked = None;
-        cx.notify();
-    }
-
-    pub fn file_search_move_home(&mut self, shift: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_home(&self.search.query, self.search.sel.clone(), shift);
-        self.search.marked = None;
-        cx.notify();
-    }
-
-    pub fn file_search_move_end(&mut self, shift: bool, cx: &mut Context<Self>) {
-        self.search.sel = move_end(&self.search.query, self.search.sel.clone(), shift);
-        self.search.marked = None;
-        cx.notify();
-    }
-
-    pub fn file_search_delete(&mut self, cx: &mut Context<Self>) {
-        self.search.sel = delete_forward(&mut self.search.query, self.search.sel.clone());
-        self.search.marked = None;
-        self.search_input_changed(cx);
+        let input = &mut self.apps.input;
+        input.sel = delete_backward(&mut input.text, input.sel.clone());
+        input.marked = None;
     }
 
     pub fn search_clear(&mut self) {
-        self.apps.search.clear();
-        self.reset_search_caret();
+        self.apps.input.clear();
+    }
+
+    pub fn text_input_delete(&mut self, is_file_search: bool, cx: &mut Context<Self>) {
+        let input = self.text_input_mut(is_file_search);
+        input.sel = delete_forward(&mut input.text, input.sel.clone());
+        input.marked = None;
+        self.after_text_edit(is_file_search, cx);
+    }
+
+    pub fn text_input_move_left(&mut self, is_file_search: bool, shift: bool) {
+        let input = self.text_input_mut(is_file_search);
+        input.sel = move_left(&input.text, input.sel.clone(), shift);
+        input.marked = None;
+    }
+
+    pub fn text_input_move_right(&mut self, is_file_search: bool, shift: bool) {
+        let input = self.text_input_mut(is_file_search);
+        input.sel = move_right(&input.text, input.sel.clone(), shift);
+        input.marked = None;
+    }
+
+    pub fn text_input_move_home(&mut self, is_file_search: bool, shift: bool) {
+        let input = self.text_input_mut(is_file_search);
+        input.sel = move_home(&input.text, input.sel.clone(), shift);
+        input.marked = None;
+    }
+
+    pub fn text_input_move_end(&mut self, is_file_search: bool, shift: bool) {
+        let input = self.text_input_mut(is_file_search);
+        input.sel = move_end(&input.text, input.sel.clone(), shift);
+        input.marked = None;
     }
 
     /// 判断当前 IME 输入应该路由到哪个搜索框。
     /// 两个焦点句柄都不在焦点时默认走 apps 搜索框（保持向后兼容）。
     fn file_search_focused(&self, window: &Window) -> bool {
-        self.search.focus_handle.is_focused(window)
+        self.search.input.focus_handle.is_focused(window)
     }
 }
 
@@ -548,21 +603,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        if self.file_search_focused(window) {
-            let range = clamp_to_boundary(
-                &self.search.query,
-                range_from_utf16(&self.search.query, &range_utf16),
-            );
-            actual_range.replace(range_to_utf16(&self.search.query, &range));
-            Some(self.search.query[range].to_string())
-        } else {
-            let range = clamp_to_boundary(
-                &self.apps.search,
-                range_from_utf16(&self.apps.search, &range_utf16),
-            );
-            actual_range.replace(range_to_utf16(&self.apps.search, &range));
-            Some(self.apps.search[range].to_string())
-        }
+        let input = self.text_input(self.file_search_focused(window));
+        let range = clamp_to_boundary(&input.text, range_from_utf16(&input.text, &range_utf16));
+        actual_range.replace(range_to_utf16(&input.text, &range));
+        Some(input.text[range].to_string())
     }
 
     fn selected_text_range(
@@ -571,17 +615,11 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        if self.file_search_focused(window) {
-            Some(UTF16Selection {
-                range: range_to_utf16(&self.search.query, &self.file_search_selection()),
-                reversed: false,
-            })
-        } else {
-            Some(UTF16Selection {
-                range: range_to_utf16(&self.apps.search, &self.search_selection()),
-                reversed: false,
-            })
-        }
+        let input = self.text_input(self.file_search_focused(window));
+        Some(UTF16Selection {
+            range: range_to_utf16(&input.text, &input.selection()),
+            reversed: false,
+        })
     }
 
     fn marked_text_range(
@@ -589,25 +627,16 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        if self.file_search_focused(window) {
-            self.search
-                .marked
-                .as_ref()
-                .map(|r| range_to_utf16(&self.search.query, r))
-        } else {
-            self.apps
-                .search_marked
-                .as_ref()
-                .map(|r| range_to_utf16(&self.apps.search, r))
-        }
+        let input = self.text_input(self.file_search_focused(window));
+        input
+            .marked
+            .as_ref()
+            .map(|r| range_to_utf16(&input.text, r))
     }
 
     fn unmark_text(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        if self.file_search_focused(window) {
-            self.search.marked = None;
-        } else {
-            self.apps.search_marked = None;
-        }
+        let is_file = self.file_search_focused(window);
+        self.text_input_mut(is_file).marked = None;
     }
 
     /// 提交文本：普通打字与输入法确认后的汉字都走这里。
@@ -618,33 +647,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_search_focused(window) {
-            let range = range_utf16
-                .as_ref()
-                .map(|r| range_from_utf16(&self.search.query, r))
-                .or_else(|| self.search.marked.clone())
-                .unwrap_or_else(|| self.file_search_selection());
-            let range = clamp_to_boundary(&self.search.query, range);
-
-            self.search.query.replace_range(range.clone(), new_text);
-            let caret = range.start + new_text.len();
-            self.search.sel = caret..caret;
-            self.search.marked = None;
-            self.search_input_changed(cx);
-        } else {
-            let range = range_utf16
-                .as_ref()
-                .map(|r| range_from_utf16(&self.apps.search, r))
-                .or_else(|| self.apps.search_marked.clone())
-                .unwrap_or_else(|| self.search_selection());
-            let range = clamp_to_boundary(&self.apps.search, range);
-
-            self.apps.search.replace_range(range.clone(), new_text);
-            let caret = range.start + new_text.len();
-            self.apps.search_sel = caret..caret;
-            self.apps.search_marked = None;
-            cx.notify();
-        }
+        let is_file = self.file_search_focused(window);
+        self.text_input_mut(is_file)
+            .replace(range_utf16.as_ref(), new_text);
+        self.after_text_edit(is_file, cx);
         self.poke_cursor_blink(cx);
     }
 
@@ -657,61 +663,13 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_search_focused(window) {
-            let range = range_utf16
-                .as_ref()
-                .map(|r| range_from_utf16(&self.search.query, r))
-                .or_else(|| self.search.marked.clone())
-                .unwrap_or_else(|| self.file_search_selection());
-            let range = clamp_to_boundary(&self.search.query, range);
-
-            self.search.query.replace_range(range.clone(), new_text);
-            self.search.marked = if new_text.is_empty() {
-                None
-            } else {
-                Some(range.start..range.start + new_text.len())
-            };
-
-            let composed = &self.search.query[range.start..range.start + new_text.len()];
-            self.search.sel = match new_selected_range_utf16.as_ref() {
-                Some(r) => {
-                    let inner = range_from_utf16(composed, r);
-                    range.start + inner.start..range.start + inner.end
-                }
-                None => {
-                    let caret = range.start + new_text.len();
-                    caret..caret
-                }
-            };
-            self.search_input_changed(cx);
-        } else {
-            let range = range_utf16
-                .as_ref()
-                .map(|r| range_from_utf16(&self.apps.search, r))
-                .or_else(|| self.apps.search_marked.clone())
-                .unwrap_or_else(|| self.search_selection());
-            let range = clamp_to_boundary(&self.apps.search, range);
-
-            self.apps.search.replace_range(range.clone(), new_text);
-            self.apps.search_marked = if new_text.is_empty() {
-                None
-            } else {
-                Some(range.start..range.start + new_text.len())
-            };
-
-            let composed = &self.apps.search[range.start..range.start + new_text.len()];
-            self.apps.search_sel = match new_selected_range_utf16.as_ref() {
-                Some(r) => {
-                    let inner = range_from_utf16(composed, r);
-                    range.start + inner.start..range.start + inner.end
-                }
-                None => {
-                    let caret = range.start + new_text.len();
-                    caret..caret
-                }
-            };
-            cx.notify();
-        }
+        let is_file = self.file_search_focused(window);
+        self.text_input_mut(is_file).replace_and_mark(
+            range_utf16.as_ref(),
+            new_text,
+            new_selected_range_utf16.as_ref(),
+        );
+        self.after_text_edit(is_file, cx);
         self.poke_cursor_blink(cx);
     }
 
@@ -723,21 +681,12 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let (text, hit, box_bounds) = if self.file_search_focused(window) {
-            (
-                self.search.query.as_str(),
-                self.search.text_hit.as_ref(),
-                self.search.bounds,
-            )
-        } else {
-            (
-                self.apps.search.as_str(),
-                self.apps.text_hit.as_ref(),
-                self.apps.search_bounds,
-            )
-        };
-        if let Some(hit) = hit {
-            let range = clamp_to_boundary(text, range_from_utf16(text, &range_utf16));
+        let input = self.text_input(self.file_search_focused(window));
+        if let Some(hit) = input.text_hit.as_ref() {
+            let range = clamp_to_boundary(
+                &input.text,
+                range_from_utf16(&input.text, &range_utf16),
+            );
             let x1 = hit.line.x_for_index(range.start.min(hit.line.len()));
             let x2 = hit.line.x_for_index(range.end.min(hit.line.len()));
             return Some(Bounds::from_corners(
@@ -748,7 +697,7 @@ impl EntityInputHandler for Root {
                 ),
             ));
         }
-        Some(box_bounds.unwrap_or(element_bounds))
+        Some(input.bounds.unwrap_or(element_bounds))
     }
 
     fn character_index_for_point(
@@ -757,17 +706,18 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let (text, hit, font_size) = if self.file_search_focused(window) {
-            (
-                self.search.query.as_str(),
-                self.search.text_hit.as_ref(),
-                13.0,
-            )
-        } else {
-            (self.apps.search.as_str(), self.apps.text_hit.as_ref(), 12.0)
-        };
-        let byte_idx = index_for_mouse_x(text, f32::from(point.x), hit, font_size, window);
-        Some(offset_to_utf16(text, byte_idx))
+        let is_file = self.file_search_focused(window);
+        // 两个框的字号不同，命中测试必须跟实际绘制用的一致
+        let font_size = if is_file { 13.0 } else { 12.0 };
+        let input = self.text_input(is_file);
+        let byte_idx = index_for_mouse_x(
+            &input.text,
+            f32::from(point.x),
+            input.text_hit.as_ref(),
+            font_size,
+            window,
+        );
+        Some(offset_to_utf16(&input.text, byte_idx))
     }
 }
 
@@ -793,6 +743,64 @@ mod tests {
         assert_eq!(closest_boundary_for_x(text, 29.0, x_of, width), 4);
         // 点在起点左侧
         assert_eq!(closest_boundary_for_x(text, -3.0, x_of, width), 0);
+    }
+
+    /// 普通打字：没有选区、没有组合中范围，就在光标处插入。
+    #[test]
+    fn replace_inserts_at_caret() {
+        let mut text = "ab".to_string();
+        let (sel, marked) = replace_text(&mut text, &(1..1), &None, None, "X");
+        assert_eq!(text, "aXb");
+        assert_eq!(sel, 2..2);
+        assert_eq!(marked, None);
+    }
+
+    /// 有选区时提交文本替换整个选区。
+    #[test]
+    fn replace_overwrites_selection() {
+        let mut text = "abcd".to_string();
+        let (sel, _) = replace_text(&mut text, &(1..3), &None, None, "X");
+        assert_eq!(text, "aXd");
+        assert_eq!(sel, 2..2);
+    }
+
+    /// 组合中范围优先于选区：输入法确认汉字时替换的是拼音串，
+    /// 不是用户之前选中的那段——两者搞反会把已有文字吃掉。
+    #[test]
+    fn replace_prefers_marked_range_over_selection() {
+        let mut text = "ni hao".to_string();
+        let (sel, marked) = replace_text(&mut text, &(5..6), &Some(0..2), None, "你");
+        assert_eq!(text, "你 hao");
+        assert_eq!(sel, 3..3);
+        assert_eq!(marked, None, "确认之后不再有组合中范围");
+    }
+
+    /// 输入法候选阶段：拼音串被标为组合中，选区落在候选窗给的子范围上。
+    #[test]
+    fn replace_and_mark_tracks_the_composing_run() {
+        let mut text = String::new();
+        let (sel, marked) = replace_and_mark_text(&mut text, &(0..0), &None, None, "ni", None);
+        assert_eq!(text, "ni");
+        assert_eq!(marked, Some(0..2));
+        assert_eq!(sel, 2..2);
+
+        // 继续输入：新的组合中文本替换掉上一段组合中文本
+        let (sel, marked) =
+            replace_and_mark_text(&mut text, &sel, &marked, None, "nihao", Some(&(1..3)));
+        assert_eq!(text, "nihao");
+        assert_eq!(marked, Some(0..5));
+        assert_eq!(sel, 1..3, "选区来自候选窗给的 UTF-16 子范围");
+    }
+
+    /// 组合被清空（按 esc 或删光拼音）时组合中范围必须归零，
+    /// 否则下一次输入会去替换一段已经不存在的文本。
+    #[test]
+    fn replace_and_mark_clears_marked_on_empty_text() {
+        let mut text = "ni".to_string();
+        let (sel, marked) = replace_and_mark_text(&mut text, &(2..2), &Some(0..2), None, "", None);
+        assert_eq!(text, "");
+        assert_eq!(marked, None);
+        assert_eq!(sel, 0..0);
     }
 
     #[test]

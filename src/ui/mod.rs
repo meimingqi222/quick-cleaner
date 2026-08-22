@@ -167,18 +167,12 @@ impl Root {
                 task: None,
                 sort: AppSortState::default(),
                 preset: AppFilterPreset::All,
-                search: String::new(),
-                search_sel: 0..0,
-                search_marked: None,
-                search_bounds: None,
-                text_hit: None,
+                input: TextInputState::new(apps_focus_handle),
                 gen: 0,
                 view: Vec::new(),
                 view_key: None,
                 scroll: gpui::UniformListScrollHandle::new(),
                 scroll_drag: None,
-                text_drag: None,
-                focus_handle: apps_focus_handle,
                 context_menu: None,
             },
 
@@ -221,18 +215,12 @@ impl Root {
             declutter: DeclutterState::default(),
 
             search: SearchState {
-                query: String::new(),
-                sel: 0..0,
-                marked: None,
-                bounds: None,
-                text_hit: None,
-                focus_handle: search_focus_handle,
+                input: TextInputState::new(search_focus_handle),
                 results: Vec::new(),
                 indexing: false,
                 index_task: None,
                 #[cfg(windows)]
                 indices: Vec::new(),
-                text_drag: None,
                 scroll: gpui::UniformListScrollHandle::new(),
                 scroll_drag: None,
                 search_task: None,
@@ -622,7 +610,7 @@ impl Root {
         let hit = self.apps.view_key.as_ref().is_some_and(|k| {
             k.0 == self.apps.gen
                 && k.1 == self.apps.preset
-                && k.2 == self.apps.search
+                && k.2 == self.apps.input.text
                 && k.3 == self.apps.sort
         });
         if hit {
@@ -632,13 +620,13 @@ impl Root {
         self.apps.view = filter_and_sort_apps(
             &self.apps.list,
             self.apps.preset,
-            &self.apps.search,
+            &self.apps.input.text,
             self.apps.sort,
         );
         self.apps.view_key = Some((
             self.apps.gen,
             self.apps.preset,
-            self.apps.search.clone(),
+            self.apps.input.text.clone(),
             self.apps.sort,
         ));
     }
@@ -661,8 +649,8 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_render_caches();
 
-        self.cursor_blink_wanted = self.search.focus_handle.is_focused(window)
-            || self.apps.focus_handle.is_focused(window);
+        self.cursor_blink_wanted = self.search.input.focus_handle.is_focused(window)
+            || self.apps.input.focus_handle.is_focused(window);
         if self.cursor_blink_wanted {
             self.ensure_cursor_blink(cx);
         }

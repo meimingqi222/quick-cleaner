@@ -220,11 +220,11 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         })
         .collect();
 
-    let search_focused = root.apps.focus_handle.is_focused(window);
-    let search_text = root.apps.search.clone();
-    let apps_focus_handle = root.apps.focus_handle.clone();
-    let search_sel = root.apps.search_sel.clone();
-    let search_marked = root.apps.search_marked.clone();
+    let search_focused = root.apps.input.focus_handle.is_focused(window);
+    let search_text = root.apps.input.text.clone();
+    let apps_focus_handle = root.apps.input.focus_handle.clone();
+    let search_sel = root.apps.input.sel.clone();
+    let search_marked = root.apps.input.marked.clone();
     let font_size = 12.0;
 
     let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
@@ -258,12 +258,12 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             cx.notify();
         },
         |this, bounds| {
-            this.apps.search_bounds = Some(bounds);
+            this.apps.input.bounds = Some(bounds);
         },
         cx,
     );
 
-    let filter_stats_text = if root.apps.search.is_empty() {
+    let filter_stats_text = if root.apps.input.text.is_empty() {
         match lang {
             Language::Zh => format!("共 {} 款", display_apps.len()),
             Language::En => format!("{} apps", display_apps.len()),
@@ -469,7 +469,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     };
 
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
-    let footer_text = if root.apps.search.is_empty() {
+    let footer_text = if root.apps.input.text.is_empty() {
         match lang {
             Language::Zh => format!(
                 "当前列表展示 {} 款软件（总计 {} 款已装）",
