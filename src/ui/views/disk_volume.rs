@@ -3,7 +3,6 @@
 use crate::core::disk::VolumeId;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
-use crate::platform::get_volume_space;
 use crate::ui::components::icons::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -115,7 +114,7 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
         .map(|v| {
             let active = root.disk.volume == *v;
             let vol_label = format_volume_label(v, lang);
-            let space_info = get_volume_space(v);
+            let space_info = root.disk.volume_space(v);
             let space_str = if let Some((tot, fre)) = space_info {
                 let used = tot.saturating_sub(fre);
                 match lang {

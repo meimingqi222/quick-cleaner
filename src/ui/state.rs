@@ -359,6 +359,10 @@ pub struct DiskState {
     /// 磁盘透镜的勾选状态（含继承与局部排除），实现见 `core::disk`
     pub sel: DiskSelectionState,
     pub space: Option<(u64, u64)>,
+    /// 各卷的容量/可用量缓存。渲染每帧都要给卷列表画「已用 x / 共 y」，
+    /// 直接调 `get_volume_space` 等于每帧对每个卷做一次 statfs 系统调用。
+    /// 与 `space` 同一时机刷新（构造时、切卷/扫描时）。
+    pub volume_spaces: std::collections::HashMap<VolumeId, (u64, u64)>,
     /// 当前目录（或最大文件列表）的渲染行缓存
     pub rows: Vec<DiskRow>,
     pub(super) rows_key: Option<DiskRowsKey>,
@@ -366,6 +370,23 @@ pub struct DiskState {
     pub volume_menu_open: bool,
     /// MFT 树每次被替换或就地修改就自增
     pub gen: u64,
+}
+
+impl DiskState {
+    /// 取某个卷的 (总量, 可用量)，读缓存而不是每帧 statfs。
+    pub fn volume_space(&self, vol: &VolumeId) -> Option<(u64, u64)> {
+        self.volume_spaces.get(vol).copied()
+    }
+
+    /// 重新采集所有卷的空间信息，并同步当前卷的 `space`。
+    pub fn refresh_volume_spaces(&mut self) {
+        self.volume_spaces = self
+            .volumes
+            .iter()
+            .filter_map(|v| crate::platform::get_volume_space(v).map(|s| (v.clone(), s)))
+            .collect();
+        self.space = self.volume_space(&self.volume);
+    }
 }
 
 /// 正在执行的清理任务及其结果。

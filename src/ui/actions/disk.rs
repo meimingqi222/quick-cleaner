@@ -4,7 +4,7 @@ use crate::core::cleaner::clean_arbitrary;
 use crate::core::disk::VolumeId;
 use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;
-use crate::platform::{get_volume_space, scan_volume};
+use crate::platform::scan_volume;
 use crate::ui::components::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use gpui::Context;
@@ -37,7 +37,7 @@ impl crate::ui::Root {
         self.disk.scanning = true;
         self.disk.error = None;
         let vol = self.disk.volume.clone();
-        self.disk.space = get_volume_space(&vol);
+        self.disk.refresh_volume_spaces();
         self.disk.sel.clear();
         let saved_path = self.current_disk_full_path();
         self.status = bilingual(|l| tr_status_disk_scanning(l, &vol));

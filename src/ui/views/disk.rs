@@ -6,7 +6,6 @@ use super::disk_volume::format_volume_label;
 use crate::core::disk::ScanResult;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
-use crate::platform::get_volume_space;
 use crate::ui::components::controls::{loading_state_view, page_heading};
 use crate::ui::components::icons::*;
 use crate::ui::i18n::*;
@@ -98,7 +97,7 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
             .map(|v| {
                 let active = root.disk.volume == *v;
                 let vol_label = format_volume_label(v, lang);
-                let space_info = get_volume_space(v);
+                let space_info = root.disk.volume_space(v);
                 let space_str = if let Some((tot, fre)) = space_info {
                     let used = tot.saturating_sub(fre);
                     match lang {

@@ -69,6 +69,9 @@ pub struct Root {
     /// 搜索框光标闪烁状态（true=显示，false=隐藏）
     pub cursor_blink_visible: bool,
     pub cursor_blink_task: Option<Task<()>>,
+    /// 当前是否有输入框持有焦点。由 `render` 每帧写入，闪烁任务读它决定
+    /// 自己该不该继续跑——否则焦点离开后任务会一直空转到进程退出。
+    pub cursor_blink_wanted: bool,
     /// macOS 专属：是否已获得完全磁盘访问权限（FDA）。
     pub fda_status: bool,
     /// 是否展示完全磁盘访问权限引导模态弹窗。
@@ -104,7 +107,11 @@ impl Root {
         } else {
             volumes.first().cloned().unwrap_or(default_vol)
         };
-        let disk_space = get_volume_space(&disk_volume);
+        let volume_spaces: std::collections::HashMap<_, _> = volumes
+            .iter()
+            .filter_map(|v| get_volume_space(v).map(|s| (v.clone(), s)))
+            .collect();
+        let disk_space = volume_spaces.get(&disk_volume).copied();
         let apps_focus_handle = cx.focus_handle();
         let search_focus_handle = cx.focus_handle();
         // 有配置文件就照配置文件，没有就按系统显示语言（中文系统用中文，其余英文）
@@ -132,6 +139,7 @@ impl Root {
             anim_phase: 0,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            cursor_blink_wanted: false,
             fda_status,
             show_fda_onboarding,
 
@@ -193,6 +201,7 @@ impl Root {
                 path: vec![crate::core::disk::ROOT_NODE],
                 sel: DiskSelectionState::new(),
                 space: disk_space,
+                volume_spaces: volume_spaces.clone(),
                 rows: Vec::new(),
                 rows_key: None,
                 volume_menu_open: false,
@@ -517,16 +526,23 @@ impl Root {
     }
 
     /// 确保光标闪烁任务正在运行（以 530ms 频率翻转光标可见性）。
+    ///
+    /// 任务在焦点离开输入框后自行退出（见 `cursor_blink_wanted`）；下次
+    /// 输入框重新拿到焦点时 `render` 会再把它拉起来。
     pub fn ensure_cursor_blink(&mut self, cx: &mut Context<Self>) {
         if self.cursor_blink_task.is_some() {
             return;
         }
+        self.cursor_blink_visible = true;
         self.cursor_blink_task = Some(cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(530))
                 .await;
             let should_continue = this
                 .update(cx, |this, cx| {
+                    if !this.cursor_blink_wanted {
+                        return false;
+                    }
                     this.cursor_blink_visible = !this.cursor_blink_visible;
                     cx.notify();
                     true
@@ -645,8 +661,9 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_render_caches();
 
-        if self.search.focus_handle.is_focused(window) || self.apps.focus_handle.is_focused(window)
-        {
+        self.cursor_blink_wanted = self.search.focus_handle.is_focused(window)
+            || self.apps.focus_handle.is_focused(window);
+        if self.cursor_blink_wanted {
             self.ensure_cursor_blink(cx);
         }
 
