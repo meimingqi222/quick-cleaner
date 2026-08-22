@@ -585,3 +585,50 @@ pub fn tr_declutter_ctx_copy_path(lang: Language) -> &'static str {
         Language::En => "Copy Full Path",
     }
 }
+
+// ------------------------------------- 大文件页筛选 chips 与概览页状态徽标
+// 这几处原先以 `match (值, lang)` 的元组匹配留在视图里，不在当初
+// 「78 处内联 match lang」的统计口径内，因此漏在了 tr_* 体系外面。
+
+/// 大文件页「大小」筛选 chip。`min_size` 为 0 表示未选（下拉箭头），
+/// 其余为已选阈值（✕ 可清除）。
+pub fn tr_declutter_large_size_filter(lang: Language, min_size: u64) -> &'static str {
+    match (min_size, lang) {
+        (0, Language::Zh) => "大小: 全部 ▾",
+        (0, Language::En) => "Size: All ▾",
+        (50_000_000, Language::Zh) => "大小: > 50MB ✕",
+        (50_000_000, Language::En) => "Size: > 50MB ✕",
+        (100_000_000, Language::Zh) => "大小: > 100MB ✕",
+        (100_000_000, Language::En) => "Size: > 100MB ✕",
+        (500_000_000, Language::Zh) => "大小: > 500MB ✕",
+        (500_000_000, Language::En) => "Size: > 500MB ✕",
+        (_, Language::Zh) => "大小: > 1GB ✕",
+        (_, Language::En) => "Size: > 1GB ✕",
+    }
+}
+
+/// 大文件页「类型」筛选 chip。`kind` 为 `None` 表示未选。
+pub fn tr_declutter_large_kind_filter(lang: Language, kind: Option<usize>) -> &'static str {
+    match (kind, lang) {
+        (Some(0), Language::Zh) => "类型: 视频 ✕",
+        (Some(0), Language::En) => "Kind: Video ✕",
+        (Some(1), Language::Zh) => "类型: 压缩包 ✕",
+        (Some(1), Language::En) => "Kind: Archive ✕",
+        (Some(2), Language::Zh) => "类型: 文件夹 ✕",
+        (Some(2), Language::En) => "Kind: Folder ✕",
+        (Some(3), Language::Zh) => "类型: 图片 ✕",
+        (Some(3), Language::En) => "Kind: Image ✕",
+        (_, Language::Zh) => "类型: 全部 ▾",
+        (_, Language::En) => "Kind: All Types ▾",
+    }
+}
+
+/// 概览页头部的分析状态徽标。
+pub fn tr_declutter_overview_status_badge(lang: Language, scanned: bool) -> &'static str {
+    match (scanned, lang) {
+        (true, Language::Zh) => "● 已分析",
+        (true, Language::En) => "● Analyzed",
+        (false, Language::Zh) => "● 待扫描",
+        (false, Language::En) => "● Pending",
+    }
+}

@@ -4,7 +4,6 @@ use super::common::{
     render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
 };
 use super::DeclutterTab;
-use crate::core::i18n::Language;
 use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
@@ -314,18 +313,10 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .cursor_pointer()
-                                        .child(match (state.min_size_filter, lang) {
-                                            (0, Language::Zh) => "大小: 全部 ▾",
-                                            (0, Language::En) => "Size: All ▾",
-                                            (50_000_000, Language::Zh) => "大小: > 50MB ✕",
-                                            (50_000_000, Language::En) => "Size: > 50MB ✕",
-                                            (100_000_000, Language::Zh) => "大小: > 100MB ✕",
-                                            (100_000_000, Language::En) => "Size: > 100MB ✕",
-                                            (500_000_000, Language::Zh) => "大小: > 500MB ✕",
-                                            (500_000_000, Language::En) => "Size: > 500MB ✕",
-                                            (_, Language::Zh) => "大小: > 1GB ✕",
-                                            (_, Language::En) => "Size: > 1GB ✕",
-                                        })
+                                        .child(tr_declutter_large_size_filter(
+                                            lang,
+                                            state.min_size_filter,
+                                        ))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.min_size_filter = match this.declutter.min_size_filter {
                                                 100_000_000 => 500_000_000,
@@ -353,18 +344,10 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         })
                                         .text_xs()
                                         .cursor_pointer()
-                                        .child(match (state.kind_filter, lang) {
-                                            (Some(0), Language::Zh) => "类型: 视频 ✕",
-                                            (Some(0), Language::En) => "Kind: Video ✕",
-                                            (Some(1), Language::Zh) => "类型: 压缩包 ✕",
-                                            (Some(1), Language::En) => "Kind: Archive ✕",
-                                            (Some(2), Language::Zh) => "类型: 文件夹 ✕",
-                                            (Some(2), Language::En) => "Kind: Folder ✕",
-                                            (Some(3), Language::Zh) => "类型: 图片 ✕",
-                                            (Some(3), Language::En) => "Kind: Image ✕",
-                                            (_, Language::Zh) => "类型: 全部 ▾",
-                                            (_, Language::En) => "Kind: All Types ▾",
-                                        })
+                                        .child(tr_declutter_large_kind_filter(
+                                            lang,
+                                            state.kind_filter,
+                                        ))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.kind_filter = match this.declutter.kind_filter {
                                                 None => Some(0),

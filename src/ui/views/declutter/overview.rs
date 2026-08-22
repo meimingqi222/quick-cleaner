@@ -1,7 +1,6 @@
 //! 冗余整理总览视图 (Overview Bento Grid)
 
 use super::DeclutterTab;
-use crate::core::i18n::Language;
 use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::{
@@ -586,12 +585,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .bg(rgb(SURF_HIGH))
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
-                                                .child(match (state.scanned, lang) {
-                                                    (true, Language::Zh) => "● 已分析",
-                                                    (true, Language::En) => "● Analyzed",
-                                                    (false, Language::Zh) => "● 待扫描",
-                                                    (false, Language::En) => "● Pending",
-                                                }),
+                                                .child(tr_declutter_overview_status_badge(
+                                                    lang, state.scanned,
+                                                )),
                                         ),
                                 )
                                 .child(
