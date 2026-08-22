@@ -1106,7 +1106,7 @@ fn scan_prefetch(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     for ent in rd.flatten() {
         let name = ent.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(exe) = prefetch_file_exe(name) else {
+        let Some(exe) = super::apps::prefetch_exe_name(name) else {
             continue;
         };
         if !ctx.exe_names.iter().any(|e| e.eq_ignore_ascii_case(&exe)) {
@@ -1121,23 +1121,6 @@ fn scan_prefetch(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             ResidualKind::File(p, size),
             ResidualSource::PrefetchFile,
         ));
-    }
-}
-
-fn prefetch_file_exe(filename: &str) -> Option<String> {
-    let lower = filename.to_lowercase();
-    let stem = lower.strip_suffix(".pf")?;
-    let dash = stem.rfind('-')?;
-    let hash = &stem[dash + 1..];
-    if hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        let name = &stem[..dash];
-        if name.is_empty() {
-            None
-        } else {
-            Some(name.to_string())
-        }
-    } else {
-        None
     }
 }
 
@@ -1518,15 +1501,6 @@ mod tests {
         assert!(is_system_clsid("NotAGuid"));
         assert!(is_system_clsid("{00000000-0000-0000-0000-000000000000}"));
         assert!(!is_system_clsid("{12345678-1234-1234-1234-1234567890AB}"));
-    }
-
-    #[test]
-    fn prefetch_filename_roundtrip() {
-        assert_eq!(
-            prefetch_file_exe("CHROME.EXE-A8C2E3F1.pf").as_deref(),
-            Some("chrome.exe")
-        );
-        assert_eq!(prefetch_file_exe("readme.txt"), None);
     }
 
     #[test]

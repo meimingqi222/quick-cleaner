@@ -291,35 +291,11 @@ fn unix_from_run_blob(data: &[u8], data_len: u32) -> Option<u64> {
     filetime_to_unix(u64::from_le_bytes(ft))
 }
 
-/// 从 DisplayIcon / UninstallString 抽出真正的 exe 路径。
-///
-/// DisplayIcon 经常写成 `"C:\Program Files\App\app.exe",0`，Path::file_name
-/// 会得到 `app.exe,0`，对不上 UserAssist / Prefetch 里的 `app.exe`。
-fn extract_exe_path(raw: &str) -> Option<String> {
-    let s = raw.trim().trim_matches('"');
-    if s.is_empty() {
-        return None;
-    }
-    let without_index = if let Some(comma) = s.rfind(',') {
-        let suffix = s[comma + 1..].trim();
-        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '-') {
-            s[..comma].trim().trim_matches('"')
-        } else {
-            s
-        }
-    } else {
-        s
-    };
-    let p = without_index.trim();
-    if p.is_empty() {
-        None
-    } else {
-        Some(p.to_string())
-    }
-}
-
 /// Prefetch 文件名 `CHROME.EXE-A8C2E3F1.pf` → `chrome.exe`
-fn prefetch_exe_name(filename: &str) -> Option<String> {
+///
+/// `residuals.rs` 的 Prefetch 扫描复用同一实现，避免两份逐字符一致的解析逻辑
+/// 分开维护。
+pub(super) fn prefetch_exe_name(filename: &str) -> Option<String> {
     let lower = filename.to_lowercase();
     let stem = lower.strip_suffix(".pf")?;
     let dash = stem.rfind('-')?;
@@ -933,8 +909,8 @@ fn last_used_for_app(
     max_ts = max_ts.max(ua.lookup_one(&name_lower));
 
     if let Some(icon) = &app.display_icon {
-        if let Some(exe) = extract_exe_path(icon) {
-            max_ts = max_ts.max(lookup_exe(ua, &exe));
+        if let Some(exe) = crate::core::apps::display_icon_path(icon) {
+            max_ts = max_ts.max(lookup_exe(ua, &exe.to_string_lossy()));
         }
     }
     for cmd in app
@@ -1324,22 +1300,6 @@ mod tests {
 
         let tokens2 = extract_app_tokens("PowerShell 7.6.3.0-x64");
         assert!(tokens2.contains(&"powershell".to_string()));
-    }
-
-    #[test]
-    fn display_icon_strips_resource_index() {
-        assert_eq!(
-            extract_exe_path(r#""C:\Program Files\App\app.exe",0"#).as_deref(),
-            Some(r"C:\Program Files\App\app.exe")
-        );
-        assert_eq!(
-            extract_exe_path(r"C:\Program Files\App\app.exe,-1").as_deref(),
-            Some(r"C:\Program Files\App\app.exe")
-        );
-        assert_eq!(
-            extract_exe_path(r"C:\Program Files\App\app.exe").as_deref(),
-            Some(r"C:\Program Files\App\app.exe")
-        );
     }
 
     #[test]
