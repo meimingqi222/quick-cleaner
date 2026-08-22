@@ -92,6 +92,11 @@ struct Guards {
     /// 名本身就是本地化的，企业环境还可能整体挪到网络盘。
     /// 见 `platform::windows::real_user_known_folders`。
     known_folders: Vec<String>,
+    /// macOS「自身禁止」档：`~`、`~/Library`、`~/Library/Application Support`
+    /// 三个目录**本身**的归一化路径。对齐 Windows 对 AppData 骨架的处理——
+    /// 骨架自保、内容照常可清（旧版 IDE 数据、卸载残留都住在这里面）。
+    #[cfg(target_os = "macos")]
+    macos_self_banned: Vec<String>,
 }
 
 fn guards() -> &'static Guards {
@@ -110,6 +115,20 @@ fn guards() -> &'static Guards {
         #[cfg(not(windows))]
         let known_folders = Vec::new();
 
+        #[cfg(target_os = "macos")]
+        let macos_self_banned = dirs::home_dir()
+            .map(|h| {
+                let n = norm(&h);
+                [
+                    n.clone(),
+                    format!("{n}\\library"),
+                    format!("{n}\\library\\application support"),
+                ]
+                .into_iter()
+                .collect()
+            })
+            .unwrap_or_default();
+
         Guards {
             windows: norm_str(
                 &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
@@ -117,6 +136,8 @@ fn guards() -> &'static Guards {
             home: dirs::home_dir().map(|h| norm(&h)),
             orig_home,
             known_folders,
+            #[cfg(target_os = "macos")]
+            macos_self_banned,
         }
     })
 }
@@ -223,6 +244,10 @@ pub fn is_protected_residual_path(path: &Path) -> bool {
 /// 语义分两档：
 /// - **子树禁止**（`System32`、`WinSxS`、`System Volume Information` …）：自身和内部全部不可删。
 /// - **自身禁止**（`C:\Windows`、`%TEMP%`、用户主目录 …）：目录本身要保留，但内容可以清。
+///   macOS 侧对齐 Windows 对 AppData 骨架的处理：`~`、`~/Library`、
+///   `~/Library/Application Support` 的目录本身不可删——一键删掉整个
+///   应用数据根目录是最坏事故；内容不受影响，旧版 IDE 数据、卸载残留
+///   等类目照常工作。
 pub fn is_protected(path: &Path) -> bool {
     let lower = norm(path);
 
@@ -239,6 +264,12 @@ pub fn is_protected(path: &Path) -> bool {
         .iter()
         .any(|prefix| at_or_under(&lower, prefix))
     {
+        return true;
+    }
+
+    // macOS 自身禁止档（精确匹配，见 Guards::macos_self_banned 的注释）。
+    #[cfg(target_os = "macos")]
+    if guards().macos_self_banned.contains(&lower) {
         return true;
     }
 
@@ -389,6 +420,27 @@ pub fn is_elevated_residual_target(path: &Path) -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub fn is_elevated_residual_target(_path: &Path) -> bool {
+    false
+}
+
+/// 路径是否位于 `~/Library/Application Support` **之下**（不含根自身——
+/// 根自身由 [`is_protected`] 的自身禁止档挡住）。
+///
+/// 磁盘透镜/右键删除的确认弹窗用它升级警示：Application Support 里装
+/// 的是聊天记录、密码库、本地数据库这类不可重建的应用数据，和删一个
+/// 缓存目录不是一个量级的事。
+#[cfg(target_os = "macos")]
+pub fn under_home_app_support(path: &Path) -> bool {
+    let Some(home) = guards().home.as_deref() else {
+        return false;
+    };
+    let root = format!("{home}\\library\\application support");
+    let lower = norm(path);
+    lower != root && at_or_under(&lower, &root)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn under_home_app_support(_path: &Path) -> bool {
     false
 }
 
@@ -578,6 +630,42 @@ mod tests {
             "c:\\windows\\system32foo",
             "c:\\windows\\system32"
         ));
+    }
+
+    /// macOS 自身禁止档：`~`、`~/Library`、`~/Library/Application Support`
+    /// 的目录本身受保护，但内容不受影响——后者是旧版 IDE 数据与卸载
+    /// 残留两个类目的工作前提。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_home_skeletons_are_self_banned_but_contents_are_free() {
+        let home = dirs::home_dir().expect("测试环境必须有 home");
+        assert!(is_protected(&home));
+        assert!(is_protected(&home.join("Library")));
+        assert!(is_protected(&home.join("Library/Application Support")));
+
+        // 内容照常可清
+        assert!(!is_protected(&home.join("Library/Caches")));
+        assert!(!is_protected(
+            &home.join("Library/Application Support/JetBrains/IntelliJIdea2025.2")
+        ));
+        // 系统级 /Library 仍然整棵受保护（子树禁止档）
+        assert!(is_protected(Path::new("/Library/Fonts")));
+        // 大小写不敏感
+        assert!(is_protected(&home.join("LIBRARY")));
+    }
+
+    /// 确认弹窗的升级判定：严格位于 Application Support 之下才算。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn under_home_app_support_is_strict() {
+        let home = dirs::home_dir().expect("测试环境必须有 home");
+        let app_support = home.join("Library/Application Support");
+        assert!(!under_home_app_support(&app_support), "根自身不算（它已被保护挡住）");
+        assert!(under_home_app_support(
+            &app_support.join("JetBrains/IntelliJIdea2025.2")
+        ));
+        assert!(!under_home_app_support(&home.join("Library/Caches")));
+        assert!(!under_home_app_support(Path::new("/Applications/Safari.app")));
     }
 
     /// AppData 那几层以前只有残留扫描挡着，磁盘透镜的任意路径删除绕得过去。

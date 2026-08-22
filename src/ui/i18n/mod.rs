@@ -695,6 +695,14 @@ pub fn tr_confirm_no_recycle_check_data(lang: Language) -> &'static str {
     }
 }
 
+/// 确认弹窗的应用数据升级警示：目标触及 ~/Library/Application Support。
+pub fn tr_confirm_app_data_warning(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "目标位于 ~/Library/Application Support：这里存放应用数据（聊天记录、密码库、本地数据库等），永久删除后无法恢复。请确认你了解这些目录的用途。",
+        Language::En => "The target is under ~/Library/Application Support - application data lives here (chat history, password vaults, local databases) and cannot be recovered once permanently deleted. Make sure you know what these directories contain.",
+    }
+}
+
 /// 删单个路径时的警告：多提醒一句「别删正在跑的程序的数据」。
 pub fn tr_confirm_no_recycle_check_running(lang: Language) -> &'static str {
     match lang {

@@ -24,6 +24,7 @@ impl crate::ui::Root {
             body: tr_confirm_delete_msg(lang, count, &fmt_size(self.selected_size())),
             detail: tr_confirm_no_recycle(lang).to_string(),
             kind: ConfirmKind::CleanSelected,
+            app_data: false,
         });
         cx.notify();
     }
@@ -40,11 +41,13 @@ impl crate::ui::Root {
             return;
         }
 
+        let app_data = crate::core::safety::under_home_app_support(&path);
         self.confirm = Some(ConfirmRequest {
             title: tr_confirm_delete_title(lang).to_string(),
             body: tr_confirm_delete_path_msg(lang, &path.display().to_string(), &fmt_size(size)),
             detail: tr_confirm_no_recycle_check_running(lang).to_string(),
             kind: ConfirmKind::CleanPath(path, size),
+            app_data,
         });
         cx.notify();
     }

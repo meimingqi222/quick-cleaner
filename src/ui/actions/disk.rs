@@ -172,12 +172,21 @@ impl crate::ui::Root {
         let total_size = self.disk_selected_size();
         let count = self.disk.sel.len();
         let lang = self.language;
+        // 任一目标位于 ~/Library/Application Support 之下就把确认弹窗升级
+        // 成 Danger 警示——那里是聊天记录、密码库这类不可重建数据的家。
+        let app_data = self
+            .disk
+            .sel
+            .resolve_targets()
+            .iter()
+            .any(|p| crate::core::safety::under_home_app_support(p));
 
         self.confirm = Some(ConfirmRequest {
             title: tr_confirm_delete_selected_title(lang).to_string(),
             body: tr_confirm_delete_selected_msg(lang, count, &fmt_size(total_size)),
             detail: tr_confirm_no_recycle_check_data(lang).to_string(),
             kind: ConfirmKind::CleanDiskSelected,
+            app_data,
         });
         cx.notify();
     }

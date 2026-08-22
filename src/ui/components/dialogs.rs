@@ -27,6 +27,10 @@ pub struct ConfirmRequest {
     pub title: String,
     pub body: String,
     pub detail: String,
+    /// 目标触及 `~/Library/Application Support` 下的应用数据。这里装的是
+    /// 聊天记录、密码库这类不可重建的东西，确认弹窗要升级成醒目的
+    /// Danger 警示（见 `render_confirm_dialog` 里的追加块）。
+    pub app_data: bool,
 }
 
 pub fn render_confirm_dialog(
@@ -93,6 +97,20 @@ pub fn render_confirm_dialog(
                         .text_color(rgb(detail_color))
                         .child(req.detail.clone()),
                 )
+                .when(req.app_data, |d| {
+                    d.child(
+                        div()
+                            .rounded_md()
+                            .bg(rgb(ERROR_CONTAINER))
+                            .border_1()
+                            .border_color(rgb(ERROR))
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(rgb(ERROR))
+                            .child(tr_confirm_app_data_warning(lang)),
+                    )
+                })
                 .child(
                     div()
                         .flex()

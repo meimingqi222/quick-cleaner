@@ -144,6 +144,7 @@ impl crate::ui::Root {
             body,
             detail,
             kind: ConfirmKind::UninstallApp(Box::new(app)),
+            app_data: false,
         });
         cx.notify();
     }
