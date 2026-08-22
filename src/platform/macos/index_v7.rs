@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-pub const INDEX_V7_MAGIC: &[u8; 8] = b"QCIDXV07";
+pub(crate) const INDEX_V7_MAGIC: &[u8; 8] = b"QCIDXV07";
 pub(crate) const INDEX_V7_HEADER: usize = 128;
 
 /// 一条 `TreeEntry` 在文件里的字节数。

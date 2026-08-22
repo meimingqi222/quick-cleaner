@@ -324,8 +324,9 @@ pub(super) fn full_macos_scan(
 /// 用 FSEvents 变更路径重扫局部子树，避免每次小改动都重扫整个用户目录。
 ///
 /// 直接在 `SizeTree` 上就地操作：删除旧子树、追加新子树、重建 CSR 索引。
-/// 不再走 `snapshot_entries` → `from_snapshot` 的全量 PathBuf 转换路径，
-/// 避免为更新一个 `node_modules` 目录而把 6.6M 节点全部转成路径再重建。
+/// 不再做「先把整棵树物化成全量 PathBuf 再重建」的往返（旧路径靠
+/// from_snapshot 一类转换函数），避免为更新一个 `node_modules` 目录
+/// 而把 6.6M 节点全部转成路径再重建。
 ///
 /// 删除和重命名会重扫对应父目录，日志丢失等不可信情况在 FSEvents 层
 /// 标记为需要全量扫描。

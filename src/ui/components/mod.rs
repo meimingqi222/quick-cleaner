@@ -24,7 +24,7 @@ pub mod tooltip;
 pub mod topbar;
 
 pub use buttons::{danger_button, ghost_button, primary_button, small_button};
-pub use cards::{card, stat_tile};
+pub use cards::card;
 pub use controls::{badge, checkbox, page_heading};
 pub use dialogs::{
     render_confirm_dialog, render_fda_onboarding_modal, render_residual_modal, ConfirmKind,

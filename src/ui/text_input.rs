@@ -541,11 +541,6 @@ impl Root {
         }
     }
 
-    /// 把光标收到末尾（Apps 搜索框；内容被清空按钮/筛选切换改过之后调用）。
-    pub fn reset_search_caret(&mut self) {
-        self.apps.input.reset_caret();
-    }
-
     /// 退格：删掉光标前的一个字符或整个选区。
     pub fn search_backspace(&mut self) {
         let input = &mut self.apps.input;

@@ -692,27 +692,10 @@ impl SizeTree {
         pool_str(&self.name_pool, self.entries[i].name_off)
     }
 
-    /// 把完整目录树转换成适合持久化的扁平索引。
-    pub fn snapshot_entries(&self) -> Vec<TreeSnapshotEntry> {
-        let mut cache = HashMap::new();
-        (0..self.n())
-            .filter(|&idx| self.slot(idx).used())
-            .map(|idx| {
-                let entry = self.slot(idx);
-                TreeSnapshotEntry {
-                    path: PathBuf::from(self.path_of_with(idx as u32, &mut cache)),
-                    is_dir: entry.is_dir(),
-                    size: self.size_of(idx as u32),
-                    mtime: entry.mtime as u64,
-                }
-            })
-            .collect()
-    }
-
     /// 转成紧凑持久化格式，避免为每个节点复制完整路径。
     ///
-    /// 测试和局部子树构造还走这条路径；整盘索引落盘改走 [`Self::compacted_packed`]，
-    /// 不再为 1600 万节点各分配一个 `String`。
+    /// 测试和局部子树构造还走这条路径；整盘索引落盘走 v7 writer
+    /// （`index_v7`），不再为 1600 万节点各分配一个 `String`。
     #[allow(clippy::needless_range_loop)]
     pub fn compact_entries(&self) -> Vec<TreeIndexEntry> {
         // 增量替换会把旧节点标成 unused 并在末尾追加新节点。若把这些
@@ -747,45 +730,6 @@ impl SizeTree {
                 }
             })
             .collect()
-    }
-
-    /// 过滤墓碑后输出 POD 条目 + intern 名字池，供 v6 索引落盘。
-    #[allow(clippy::needless_range_loop)]
-    pub fn compacted_packed(&self) -> (Vec<u8>, Vec<TreeEntry>) {
-        let n = self.n();
-        let mut remap = vec![u32::MAX; n];
-        let mut next = 0u32;
-        let mut used = 0usize;
-        for index in 0..n {
-            if self.slot(index).used() {
-                remap[index] = next;
-                next += 1;
-                used += 1;
-            }
-        }
-        let mut intern = NameInterner::with_capacity(used);
-        let mut out = Vec::with_capacity(used);
-        for index in 0..n {
-            let entry = self.slot(index);
-            if !entry.used() {
-                continue;
-            }
-            let parent = if index == ROOT_NODE as usize {
-                ROOT_NODE
-            } else {
-                remap[entry.parent() as usize]
-            };
-            let name_off = intern.intern(self.entry_name_str(index as u32).as_bytes());
-            out.push(TreeEntry::new(
-                parent,
-                name_off,
-                entry.is_dir(),
-                entry.size,
-                entry.mtime as u64,
-                entry.file_count,
-            ));
-        }
-        (intern.finish(), out)
     }
 
     /// 从 POD 条目 + 名字池重建运行时目录树（CSR 从 parent 重建）。
@@ -843,7 +787,7 @@ impl SizeTree {
 
     /// 流式压实写出。
     ///
-    /// 之前的实现走 `compacted_packed`：一次性物化 remap、新 TreeEntry
+    /// 之前的实现一次性物化 remap、新 TreeEntry
     /// 数组、名字 interner、新名字池和 CSR（16M 条目合计 600MB+），
     /// 保存期间 physical footprint 冲到 1.3GiB，释放后 allocator 仍保留
     /// 800MB+，稳态卡在 964MiB。现在除了 remap 和子计数两块 O(n) u32

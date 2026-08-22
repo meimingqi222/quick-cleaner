@@ -900,23 +900,37 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn packed_round_trip_preserves_aggregates_and_names() {
-        let tree = build_test_tree();
-        let root_size = tree.size_of(tree.root());
-        let root_files = tree.file_count_of(tree.root());
-        let (pool, entries) = tree.compacted_packed();
+    fn from_packed_builds_tree_from_pod_entries_and_pool() {
+        // 名字池编码：每项 [u16 le 长度][字节]，name_off 指向项起始。
+        // 原先这个用例靠已删除的 compacted_packed 造输入（生产路径只剩
+        // walk.rs 一处），这里手工搭一个最小池，覆盖保持不变。
+        let names = ["/", "proj", "a.txt", "src.rs"];
+        let mut pool = Vec::new();
+        let mut offs = Vec::new();
+        for name in names {
+            offs.push(pool.len() as u32);
+            pool.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            pool.extend_from_slice(name.as_bytes());
+        }
+        // 0: 根（parent=ROOT_NODE=0）；1: proj 目录；2: 根下文件；3: proj 下文件。
+        // 目录的 size/file_count 存多少都行——build_from_entries_with_pool
+        // 会清零后沿父链重算。
+        let entries = vec![
+            super::TreeEntry::new(super::ROOT_NODE, offs[0], true, 0, 0, 0),
+            super::TreeEntry::new(super::ROOT_NODE, offs[1], true, 0, 0, 0),
+            super::TreeEntry::new(super::ROOT_NODE, offs[2], false, 100, 0, 0),
+            super::TreeEntry::new(1, offs[3], false, 200, 0, 0),
+        ];
         let vol = super::VolumeId::from_mount_point(PathBuf::from("/root"));
         let restored = super::SizeTree::from_packed(vol, pool, entries);
-        assert_eq!(restored.size_of(restored.root()), root_size);
-        assert_eq!(restored.file_count_of(restored.root()), root_files);
-        assert_eq!(
-            restored.entry_name(
-                restored
-                    .find_node_by_path(&PathBuf::from("/root/proj"))
-                    .unwrap()
-            ),
-            "proj"
-        );
+
+        assert_eq!(restored.size_of(restored.root()), 300);
+        assert_eq!(restored.file_count_of(restored.root()), 2);
+        let proj = restored
+            .find_node_by_path(&PathBuf::from("/root/proj"))
+            .unwrap();
+        assert_eq!(restored.entry_name(proj), "proj");
+        assert_eq!(restored.size_of(proj), 200);
     }
 
     #[cfg(not(windows))]
