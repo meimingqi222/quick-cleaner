@@ -4,7 +4,7 @@ use crate::core::apps::{
     app_gone_after_residual_clean, residual_clean_follow_up, InstalledApp, ResidualItem,
     ResidualScanResult,
 };
-use crate::core::cleaner::CleanProgress;
+use crate::core::cleaner::{CleanFailure, CleanProgress};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
 use crate::platform::{
@@ -321,7 +321,14 @@ impl crate::ui::Root {
 
                 // 没勾选的项视为这次不处理，不再二次弹出。勾选了却没删掉的
                 // 才留在对话框里方便授权后重试。
-                let failed: HashSet<PathBuf> = report.failed.iter().cloned().collect();
+                // 手动处理项和失败项一样要留在列表里：系统扩展在用户去系统
+                // 设置关掉之前一直都在，只是重试没有意义。
+                let unresolved: HashSet<CleanFailure> = report
+                    .failed
+                    .iter()
+                    .chain(report.manual.iter())
+                    .cloned()
+                    .collect();
                 let original_items = res.items;
                 let follow =
                     residual_clean_follow_up(&original_items, &selected_before, |item| match &item
@@ -329,9 +336,10 @@ impl crate::ui::Root {
                     {
                         crate::core::apps::ResidualKind::File(path, _)
                         | crate::core::apps::ResidualKind::Directory(path, _) => {
-                            path.exists() || failed.contains(path)
+                            path.exists() || unresolved.contains(&CleanFailure::Path(path.clone()))
                         }
-                        _ => failed.contains(&PathBuf::from(item.kind.display_label())),
+                        // 注册表键、计划任务、系统扩展没有路径，按标识串比对
+                        _ => unresolved.contains(&CleanFailure::Id(item.kind.display_label())),
                     });
                 this.residual.selected = follow.retry_selected;
                 if app_gone_after_residual_clean(&original_items, &follow.leftover_for_app) {
@@ -349,12 +357,21 @@ impl crate::ui::Root {
                     });
                 }
 
-                let (ok, fails, size) = (report.ok, report.failed.len(), fmt_size(snap.bytes));
+                let (ok, fails, manual, size) = (
+                    report.ok,
+                    report.failed.len(),
+                    report.manual.len(),
+                    fmt_size(snap.bytes),
+                );
                 this.status = bilingual(|l| {
-                    if fails == 0 {
-                        tr_status_residual_cleaned(l, &app_name, ok, &size)
-                    } else {
+                    if fails > 0 {
                         tr_status_residual_cleaned_partial(l, &app_name, &size, fails)
+                    } else if manual > 0 {
+                        // 「权限不足」在这里是假话：SIP 下的系统扩展本来就
+                        // 不该由我们删，重试多少次都一样。
+                        tr_status_residual_cleaned_manual(l, &app_name, ok, &size, manual)
+                    } else {
+                        tr_status_residual_cleaned(l, &app_name, ok, &size)
                     }
                 });
                 cx.notify();

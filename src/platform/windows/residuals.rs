@@ -20,7 +20,7 @@ use crate::core::apps::{
     is_safe_app_token, split_command, AppRegRoot, Confidence, InstalledApp, ResidualItem,
     ResidualKind, ResidualScanResult, ResidualSource,
 };
-use crate::core::cleaner::{clean_path, CleanProgress, CleanReport};
+use crate::core::cleaner::{clean_path, CleanFailure, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
 use crate::platform::windows::apps::dir_or_file_size;
 use crate::platform::windows::registry::{
@@ -1329,7 +1329,7 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 } else {
                     report
                         .failed
-                        .push(PathBuf::from(format!("{}\\{}", root.label(), subpath)));
+                        .push(CleanFailure::Id(format!("{}\\{}", root.label(), subpath)));
                 }
             }
             ResidualKind::RegistryValue(root, subpath, name) => {
@@ -1341,7 +1341,7 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 if delete_reg_value(hkey_of(*root), subpath, name, sam) {
                     report.ok += 1;
                 } else {
-                    report.failed.push(PathBuf::from(format!(
+                    report.failed.push(CleanFailure::Id(format!(
                         "{}\\{} → {}",
                         root.label(),
                         subpath,
@@ -1353,7 +1353,7 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 if delete_scheduled_task(name) {
                     report.ok += 1;
                 } else {
-                    report.failed.push(PathBuf::from(name));
+                    report.failed.push(CleanFailure::Id(name.clone()));
                 }
             }
             // macOS 专用，Windows 侧的扫描器不会产出。

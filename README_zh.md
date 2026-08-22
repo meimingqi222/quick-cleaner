@@ -53,12 +53,11 @@
 
 ```
 quick-cleaner/
+├── examples/
+│   └── mftscan.rs              # Windows 专用 $MFT 校验（不随产品打包）
 ├── src/
 │   ├── main.rs                 # 应用程序主入口与 UAC 提权自重启
 │   ├── lib.rs                  # 模块定义
-│   ├── bin/
-│   │   └── mftscan.rs          # 独立命令行 MFT 验证工具
-│   │
 │   ├── core/                   # 领域逻辑层（不依赖 GPUI，无系统强耦合）
 │   │   ├── i18n.rs             # 核心多语言定义（Language 枚举）
 │   │   ├── categories.rs       # 10 大清理类别与扫描规则
@@ -111,13 +110,12 @@ cargo build --release
 
 编译生成的可执行文件位于 `target/release/quick-cleaner.exe`。
 
-### 独立命令行工具
+### Windows `$MFT` 校验（仅开发用）
 
-项目附带了一个独立的命令行 $MFT 扫描验证工具，用于快速排查磁盘解析性能与准确性：
+不是产品入口，macOS 默认构建也不会编它。要对盘符和 WizTree 做对比时：
 
 ```bash
-# 扫描 C 盘并输出前 20 个最大文件
-cargo run --bin mftscan -- C 20
+cargo run --example mftscan --features mftscan -- C 20
 ```
 
 ---

@@ -93,22 +93,72 @@ pub enum CleanResult {
     Ok,
     Skipped,
     Failed,
+    /// 平台不允许由本进程完成，必须用户自己动手。
+    ///
+    /// 和 `Failed` 的区别在于「重试没有意义」：SIP 开启时的系统扩展就算再点
+    /// 一百次也不会消失，正确出路是去系统设置。混进 `Failed` 会让 UI 报
+    /// 「权限不足」，把平台限制说成软件出错。
+    ManualAction,
 }
 
-/// 一次清理的汇总结果。失败路径会被记录下来供 UI 展示。
+/// 一次清理里没能删掉的目标。
+///
+/// 多数是文件路径，但注册表键、计划任务、系统扩展这些**没有路径**。以前它们
+/// 被硬塞进 `PathBuf`（`PathBuf::from("回收站")`、`PathBuf::from(bundle_id)`），
+/// 类型上说了谎——任何拿这个列表去 `exists()` 或「在 Finder 中显示」的代码
+/// 都会出错。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CleanFailure {
+    Path(PathBuf),
+    /// 非路径目标的标识串：注册表键、计划任务、系统扩展 Bundle ID……
+    Id(String),
+}
+
+impl CleanFailure {
+    /// 只有真正是路径的目标才返回 `Some`，供「在 Finder 中显示」这类操作使用。
+    pub fn as_path(&self) -> Option<&Path> {
+        match self {
+            CleanFailure::Path(path) => Some(path),
+            CleanFailure::Id(_) => None,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            CleanFailure::Path(path) => path.display().to_string(),
+            CleanFailure::Id(id) => id.clone(),
+        }
+    }
+}
+
+impl From<&Path> for CleanFailure {
+    fn from(path: &Path) -> Self {
+        CleanFailure::Path(path.to_path_buf())
+    }
+}
+
+/// 一次清理的汇总结果。没删掉的目标会被记录下来供 UI 展示。
 #[derive(Clone, Debug, Default)]
 pub struct CleanReport {
     pub ok: usize,
     pub skipped: usize,
-    pub failed: Vec<PathBuf>,
+    pub failed: Vec<CleanFailure>,
+    /// 需要用户手动处理的目标。重试无意义，因此和 `failed` 分开计数，
+    /// 否则 UI 会把平台限制报成「权限不足」。
+    pub manual: Vec<CleanFailure>,
 }
 
 impl CleanReport {
     pub fn record(&mut self, path: &Path, r: CleanResult) {
+        self.record_target(CleanFailure::from(path), r);
+    }
+
+    pub fn record_target(&mut self, target: CleanFailure, r: CleanResult) {
         match r {
             CleanResult::Ok => self.ok += 1,
             CleanResult::Skipped => self.skipped += 1,
-            CleanResult::Failed => self.failed.push(path.to_path_buf()),
+            CleanResult::Failed => self.failed.push(target),
+            CleanResult::ManualAction => self.manual.push(target),
         }
     }
 
@@ -116,6 +166,7 @@ impl CleanReport {
         self.ok += other.ok;
         self.skipped += other.skipped;
         self.failed.extend(other.failed);
+        self.manual.extend(other.manual);
     }
 }
 
@@ -291,7 +342,7 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         return report;
     };
     if md.file_type().is_symlink() || !md.is_dir() || is_protected(dir) {
-        report.failed.push(dir.to_path_buf());
+        report.failed.push(CleanFailure::Path(dir.to_path_buf()));
         return report;
     }
 
@@ -299,7 +350,7 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         Ok(rd) => rd,
         Err(_) => {
             if dir.exists() {
-                report.failed.push(dir.to_path_buf());
+                report.failed.push(CleanFailure::Path(dir.to_path_buf()));
             } else {
                 report.skipped += 1;
             }
@@ -338,7 +389,7 @@ fn audit_result(report: &CleanReport, p: &CleanProgress) {
         .failed
         .iter()
         .take(MAX_LISTED)
-        .map(|f| f.display().to_string())
+        .map(CleanFailure::label)
         .collect();
     let more = report.failed.len().saturating_sub(shown.len());
 
@@ -506,7 +557,7 @@ pub fn clean_arbitrary(paths: &[PathBuf], disposal: Disposal, p: &CleanProgress)
         }
         p.note(path);
         if is_protected(path) {
-            report.failed.push(path.clone());
+            report.failed.push(CleanFailure::Path(path.clone()));
             continue;
         }
         report.record(path, dispose(path, disposal, p));
@@ -591,6 +642,41 @@ mod tests {
             .sum()
     }
 
+    /// `ManualAction` 不能混进 `failed`：SIP 下的系统扩展重试没有意义，
+    /// 报成失败会让 UI 说「权限不足」，把平台限制说成软件出错。
+    #[test]
+    fn manual_action_is_counted_separately_from_failure() {
+        let mut report = CleanReport::default();
+        report.record_target(
+            CleanFailure::Id("org.pqrs.Driver".into()),
+            CleanResult::ManualAction,
+        );
+        report.record_target(
+            CleanFailure::Path(PathBuf::from("/tmp/x")),
+            CleanResult::Failed,
+        );
+        report.record(Path::new("/tmp/y"), CleanResult::Ok);
+
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.manual.len(), 1);
+        assert_eq!(report.ok, 1);
+
+        let mut other = CleanReport::default();
+        other.merge(report);
+        assert_eq!(other.manual.len(), 1, "merge 不能丢掉手动处理项");
+    }
+
+    /// 非路径目标不再伪装成 `PathBuf`：拿去做「在 Finder 中显示」要拿不到路径。
+    #[test]
+    fn non_path_targets_expose_no_path() {
+        assert_eq!(CleanFailure::Id("org.pqrs.Driver".into()).as_path(), None);
+        assert_eq!(
+            CleanFailure::Path(PathBuf::from("/tmp/x")).as_path(),
+            Some(Path::new("/tmp/x"))
+        );
+        assert_eq!(CleanFailure::Id("回收站".into()).label(), "回收站");
+    }
+
     #[test]
     fn progress_counts_match_actual_tree() {
         let base = make_tree("counts", 30, 512);
@@ -639,7 +725,7 @@ mod tests {
 
         let report = clean_dir_contents(&link, &CleanProgress::default());
 
-        assert_eq!(report.failed, vec![link]);
+        assert_eq!(report.failed, vec![CleanFailure::Path(link)]);
         assert_eq!(
             std::fs::read(target.join("keep.txt")).unwrap(),
             b"important"

@@ -1,34 +1,21 @@
-//! MFT 扫描的命令行验证工具。
+//! Windows 上校验 NTFS `$MFT` 解析的开发工具，不是产品入口。
 //!
-//! 用法：
-//!   mftscan [盘符] [top_n]                     只跑 MFT 扫描并打印结果
-//!   mftscan [盘符] [top_n] --csv <WizTree.csv> 跑完再和 WizTree 导出对比
+//! ```text
+//! cargo run --example mftscan --features mftscan -- C 20
+//! cargo run --example mftscan --features mftscan -- C 20 --csv <WizTree.csv>
+//! ```
 //!
-//! WizTree CSV 是正确性基准：目录行的“大小”列是递归真实大小，和我们
-//! 聚合出来的 dir_size 应当一致（活动系统上会有少量漂移，属正常）。
-//!
-//! 本工具是 NTFS 专属的：`platform::mft` 只在 Windows 分支存在。整个文件按平台
-//! 门禁，非 Windows 上只保留一个说明用途的 `main`，否则 `cargo build` 会在
-//! macOS / Linux 上直接失败（`unresolved import quick_cleaner::platform::mft`）。
+//! 未加 `--features mftscan` 时 Cargo 不会编译这个 example，macOS 默认构建
+//! 和 `cargo bundle` 都不会带上它。
 
-#[cfg(windows)]
+#![cfg(windows)]
+
 use quick_cleaner::core::disk::VolumeId;
-#[cfg(windows)]
 use quick_cleaner::core::model::fmt_size;
-#[cfg(windows)]
 use quick_cleaner::platform::{is_elevated, mft};
-#[cfg(windows)]
 use std::collections::HashMap;
-#[cfg(windows)]
 use std::io::{BufRead, BufReader};
 
-#[cfg(not(windows))]
-fn main() {
-    eprintln!("mftscan 用于验证 NTFS $MFT 解析，仅在 Windows 上可用。");
-    std::process::exit(1);
-}
-
-#[cfg(windows)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let letter = args
@@ -107,7 +94,6 @@ fn main() {
 }
 
 /// 解析 WizTree 导出的 CSV，和 MFT 扫描结果逐目录对比。
-#[cfg(windows)]
 fn compare_with_wiztree(scan: &mft::ScanResult, csv_path: &str) {
     println!("\n================ 与 WizTree 基准对比 ================");
     let file = match std::fs::File::open(csv_path) {
@@ -225,7 +211,6 @@ fn compare_with_wiztree(scan: &mft::ScanResult, csv_path: &str) {
     }
 }
 
-#[cfg(windows)]
 fn pct_diff(mine: u64, base: u64) -> f64 {
     if base == 0 {
         return 0.0;
@@ -234,13 +219,11 @@ fn pct_diff(mine: u64, base: u64) -> f64 {
 }
 
 /// 统一成小写、去掉结尾反斜杠，方便两边比对。
-#[cfg(windows)]
 fn normalize(p: &str) -> String {
     p.trim_end_matches('\\').to_ascii_lowercase()
 }
 
 /// 极简 CSV 解析：只需处理 WizTree 的双引号包裹字段。
-#[cfg(windows)]
 fn parse_csv_row(line: &str) -> Option<Vec<String>> {
     if line.is_empty() {
         return None;

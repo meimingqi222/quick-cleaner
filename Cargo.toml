@@ -40,6 +40,17 @@ winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinb
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
 
+# MFT 校验 CLI 不是产品入口。不声明成 `[[bin]]`，否则 cargo-bundle 会把它
+# 打进 .app。example + required-features：默认构建 / clippy / bundle 都跳过，
+# macOS 上不会出现这个可执行文件。
+[features]
+mftscan = []
+
+[[example]]
+name = "mftscan"
+path = "examples/mftscan.rs"
+required-features = ["mftscan"]
+
 [package.metadata.bundle]
 name = "QuickCleaner"
 identifier = "com.quickcleaner.app"

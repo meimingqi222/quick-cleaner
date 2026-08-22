@@ -11,7 +11,7 @@
 use crate::core::apps::{
     InstalledApp, ResidualItem, ResidualKind, ResidualScanResult, ResidualSource,
 };
-use crate::core::cleaner::{clean_path, CleanProgress, CleanReport, CleanResult};
+use crate::core::cleaner::{clean_path, CleanFailure, CleanProgress, CleanReport, CleanResult};
 use std::path::{Path, PathBuf};
 
 /// 扫描应用卸载后的残留文件和目录。
@@ -57,131 +57,18 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
     let library = home.join("Library");
     let bundle_id = &app.registry_subpath;
     let app_name = &app.name;
-
-    // 1. Application Support — 安全清理（应用数据，非用户文档）
-    //    按应用名和 bundle id 两种方式搜索
-    for search_name in &[app_name, bundle_id] {
-        if search_name.is_empty() {
-            continue;
-        }
-        let path = library.join("Application Support").join(search_name);
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::certain(
-                ResidualKind::Directory(path, size),
-                ResidualSource::AppSupportDir,
-            ));
-        }
-    }
-
-    // 2. Caches — 安全清理
-    for search_name in &[app_name, bundle_id] {
-        if search_name.is_empty() {
-            continue;
-        }
-        let path = library.join("Caches").join(search_name);
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::certain(
-                ResidualKind::Directory(path, size),
-                ResidualSource::CacheDir,
-            ));
-        }
-    }
-
-    // 3. Preferences — 安全清理（plist 文件）
-    if !bundle_id.is_empty() {
-        let plist = library
-            .join("Preferences")
-            .join(format!("{bundle_id}.plist"));
-        if plist.exists() {
-            let size = super::apps::dir_size(&plist);
-            items.push(ResidualItem::certain(
-                ResidualKind::File(plist, size),
-                ResidualSource::PreferenceFile,
-            ));
-        }
-    }
-
-    // 4. Logs — 安全清理
-    for search_name in &[app_name, bundle_id] {
-        if search_name.is_empty() {
-            continue;
-        }
-        let path = library.join("Logs").join(search_name);
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::certain(
-                ResidualKind::Directory(path, size),
-                ResidualSource::LogDir,
-            ));
-        }
-    }
-
-    // 5. Saved Application State — 安全清理（窗口状态）
-    if !bundle_id.is_empty() {
-        let path = library
-            .join("Saved Application State")
-            .join(format!("{bundle_id}.savedState"));
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::certain(
-                ResidualKind::Directory(path, size),
-                ResidualSource::Other,
-            ));
-        }
-    }
-
-    // 6. HTTPStorages — 安全清理
-    if !bundle_id.is_empty() {
-        let path = library.join("HTTPStorages").join(bundle_id);
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::certain(
-                ResidualKind::Directory(path, size),
-                ResidualSource::Other,
-            ));
-        }
-    }
-
-    // 7. Containers — 注意项（沙盒数据，可能含用户文档）
-    if !bundle_id.is_empty() {
-        let path = library.join("Containers").join(bundle_id);
-        if path.exists() {
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::possible(
-                ResidualKind::Directory(path, size),
-                ResidualSource::ContainerDir,
-            ));
-        }
-    }
-
-    // 8. Group Containers — 注意项（应用组共享数据）
-    if !bundle_id.is_empty() {
-        let group_dir = library.join("Group Containers");
-        if let Ok(entries) = std::fs::read_dir(&group_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                // Group container 通常以 bundle id 前缀命名
-                if name_str.starts_with(bundle_id) || name_str.contains(bundle_id.as_str()) {
-                    let path = entry.path();
-                    let size = super::apps::dir_size(&path);
-                    items.push(ResidualItem::possible(
-                        ResidualKind::Directory(path, size),
-                        ResidualSource::Other,
-                    ));
-                }
-            }
-        }
-    }
-
-    // 主应用之外的 Login Item、XPC 和 Extension 通常拥有独立 Bundle ID。
-    // 这些 ID 必须在 .app 仍存在时从包内 Info.plist 读取；仅拿主 ID 拼路径
-    // 会漏掉 iShotHelper 这一类辅助容器和 Application Scripts。
     let bundle_ids = app_bundle_ids(app);
+
+    // ---- 确定 ----
+    // Login Item / XPC / appex 的 ID 必须在 .app 还在时从包里读。
     for (index, id) in bundle_ids.iter().enumerate() {
         let primary = index == 0;
+        for (subdir, source) in SATELLITE_DIRS {
+            add_bundle_satellites(&mut items, &library.join(subdir), id, *source);
+        }
+        if let Some(cache_root) = darwin_cache {
+            add_bundle_satellites(&mut items, cache_root, id, ResidualSource::CacheDir);
+        }
 
         add_named_entry(
             &mut items,
@@ -191,15 +78,6 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
             ResidualSource::ApplicationScript,
             primary,
         );
-        add_named_entry(
-            &mut items,
-            &library.join("Containers"),
-            id,
-            "",
-            ResidualSource::ContainerDir,
-            false,
-        );
-
         let recent = library.join(
             "Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments",
         );
@@ -213,9 +91,67 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
                 true,
             );
         }
+    }
 
-        // 安装收据位于 root 管理的系统目录，默认列为“需要确认”，不会
-        // 和用户缓存一起自动勾选。这里仍应展示，否则会错误报告“无残留”。
+    // Application Support 不在卫星表里，避免把整段厂商目录抬成确定。
+    for search_name in &[app_name.as_str(), bundle_id.as_str()] {
+        if search_name.is_empty() {
+            continue;
+        }
+        let path = library.join("Application Support").join(search_name);
+        if path.exists() {
+            let size = super::apps::dir_size(&path);
+            items.push(ResidualItem::certain(
+                ResidualKind::Directory(path, size),
+                ResidualSource::AppSupportDir,
+            ));
+        }
+    }
+
+    // App 名（含 Electron 去空格的 productName）。卫星只认 Bundle ID。
+    if !app_name.is_empty() {
+        for (subdir, source) in [
+            ("Caches", ResidualSource::CacheDir),
+            ("Logs", ResidualSource::LogDir),
+        ] {
+            let path = library.join(subdir).join(app_name);
+            if path.exists() {
+                let size = super::apps::dir_size(&path);
+                items.push(ResidualItem::certain(
+                    ResidualKind::Directory(path, size),
+                    source,
+                ));
+            }
+            add_name_matched_entry(&mut items, &library.join(subdir), app_name, "", source);
+        }
+        add_name_matched_entry(
+            &mut items,
+            &library.join("Application Support"),
+            app_name,
+            "",
+            ResidualSource::AppSupportDir,
+        );
+        add_name_matched_entry(
+            &mut items,
+            &library.join("Preferences"),
+            app_name,
+            ".plist",
+            ResidualSource::PreferenceFile,
+        );
+    }
+
+    add_crash_reporter_entries(&mut items, &library, app_name);
+
+    // ---- 可能 ----
+    for id in &bundle_ids {
+        add_named_entry(
+            &mut items,
+            &library.join("Containers"),
+            id,
+            "",
+            ResidualSource::ContainerDir,
+            false,
+        );
         for suffix in [".bom", ".plist"] {
             add_named_entry(
                 &mut items,
@@ -226,21 +162,9 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
                 false,
             );
         }
-
-        if let Some(cache_root) = darwin_cache {
-            add_named_entry(
-                &mut items,
-                cache_root,
-                id,
-                "",
-                ResidualSource::CacheDir,
-                true,
-            );
-        }
     }
 
     // App Group 名称不一定包含主 Bundle ID，必须从已签名 entitlements 读取。
-    // 同一个 group ID 会同时对应 Group Containers 和 Application Scripts。
     for group_id in app_group_ids(app) {
         add_named_entry(
             &mut items,
@@ -260,24 +184,24 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
         );
     }
 
-    // 上面全部是精确 ID 匹配，够不到两类东西：住在 `/Library` 的系统级组件
-    // （Karabiner 的 77 MB 驱动目录、8 个 launchd plist），以及和主 ID 同厂商
-    // 但不同产品名的兄弟组件（`org.pqrs.Karabiner-Menu`）。二者都按厂商前缀找。
     add_vendor_family(&mut items, &library, roots, &bundle_ids);
-
-    // Homebrew 装的、或跨平台移植的 App 会把配置写进 `~/.config` 一类点目录，
-    // 这些名字既不是 Bundle ID 也不一定等于 App 名（`~/.config/karabiner`）。
     add_dotfile_configs(&mut items, home, app);
-
-    // 系统扩展只在扩展数据库里，磁盘上没有能直接删的路径。列出来是为了让
-    // 用户知道「卸干净了但驱动还在跑」，清理动作另走 systemextensionsctl。
     add_system_extensions(&mut items, &bundle_ids);
 
-    // 前面的传统精确路径和扩展 Bundle ID 扫描可能指向同一项，按真实路径
-    // 去重后重新统计，避免 UI 重复展示或重复计算大小。
+    // 前面的传统精确路径和扩展 Bundle ID 扫描可能指向同一项，去重后重新统计。
+    //
+    // 去重键必须是 `canonicalize` 的结果，不能是路径字符串。macOS 默认的 APFS
+    // 是**大小写不敏感**的：App 叫「QoderWork CN」而磁盘上的目录叫
+    // `qoderwork cn` 时，逐字拼接的 `Library/Logs/QoderWork CN` 和 `read_dir`
+    // 读回的 `Library/Logs/qoderwork cn` 是两个不同的字符串、同一个目录。按
+    // 字符串去重会让它在 UI 上列两遍、体积算两遍（实测能把 47.8 MB 报成
+    // 95.6 MB）。大小写敏感卷上两者本就是不同目录，canonicalize 也会如实区分。
     let mut seen = std::collections::HashSet::<PathBuf>::new();
     items.retain(|item| match &item.kind {
-        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => seen.insert(path.clone()),
+        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => {
+            let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            seen.insert(key)
+        }
         _ => true,
     });
     let total_file_size = items.iter().map(ResidualItem::size).sum();
@@ -293,6 +217,117 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
         app_id: app.id.clone(),
         items,
         total_file_size,
+    }
+}
+
+/// Electron / Sparkle / XPC 辅助进程用的目录名后缀。
+///
+/// 这些进程的缓存目录叫 `<主 Bundle ID><后缀>`，例如
+/// `com.qoder.work.cn.helper.GPU`。只认这张固定表，**不能**改成通用的
+/// 「以 Bundle ID 加点开头」前缀匹配——`com.qoder.work` 和 `com.qoder.work.cn`
+/// 是两个各自独立的产品，前缀匹配会让前者把后者的数据一起带走。
+///
+/// 长后缀在前，避免 `.helper` 先吃掉 `.helper.gpu`。
+const HELPER_ID_SUFFIXES: &[&str] = &[
+    ".helper.renderer",
+    ".helper.plugin",
+    ".helper.alerts",
+    ".helper.gpu",
+    ".helper.np",
+    ".helper",
+    ".shipit",
+    ".sparkle",
+    ".xpc",
+];
+
+/// 用户级目录里按「本 Bundle ID 的卫星名」收，命中标确定。
+const SATELLITE_DIRS: &[(&str, ResidualSource)] = &[
+    ("Preferences", ResidualSource::PreferenceFile),
+    ("Preferences/ByHost", ResidualSource::PreferenceFile),
+    ("Caches", ResidualSource::CacheDir),
+    ("Logs", ResidualSource::LogDir),
+    ("HTTPStorages", ResidualSource::Other),
+    ("Saved Application State", ResidualSource::Other),
+    ("LaunchAgents", ResidualSource::LaunchAgent),
+];
+
+/// 文件/目录名是不是本 Bundle ID 的卫星残留。
+///
+/// 只认精确 ID，以及 ID 后面跟封闭后缀（可再跟本机 UUID）：
+/// `com.augment.intent.ShipIt.{UUID}.plist` 是 Sparkle 更新器，确定；
+/// `org.cindori.SenseiMonitor`、`com.qoder.work.cn` 是另一个产品，不是卫星。
+fn is_bundle_satellite(name: &str, bundle_id: &str) -> bool {
+    if !valid_bundle_id(bundle_id) {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    let mut stem = lower.as_str();
+    for ext in [
+        ".plist",
+        ".binarycookies",
+        ".savedstate",
+        ".sfl2",
+        ".sfl3",
+        ".sfl4",
+    ] {
+        if let Some(stripped) = stem.strip_suffix(ext) {
+            stem = stripped;
+            break;
+        }
+    }
+    let id = bundle_id.to_ascii_lowercase();
+    if stem == id {
+        return true;
+    }
+    let Some(rest) = stem.strip_prefix(&id).and_then(|r| r.strip_prefix('.')) else {
+        return false;
+    };
+    is_uuid_like(rest) || helper_suffix_then_optional_uuid(rest)
+}
+
+fn helper_suffix_then_optional_uuid(rest: &str) -> bool {
+    for suffix in HELPER_ID_SUFFIXES {
+        let suffix = suffix.trim_start_matches('.');
+        if rest == suffix {
+            return true;
+        }
+        if let Some(after) = rest.strip_prefix(suffix) {
+            if let Some(uuid) = after.strip_prefix('.') {
+                if is_uuid_like(uuid) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn add_bundle_satellites(
+    items: &mut Vec<ResidualItem>,
+    root: &Path,
+    bundle_id: &str,
+    source: ResidualSource,
+) {
+    if !valid_bundle_id(bundle_id) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !is_bundle_satellite(&name, bundle_id) {
+            continue;
+        }
+        let path = entry.path();
+        let size = super::apps::dir_size(&path);
+        let kind = if path.is_dir() {
+            ResidualKind::Directory(path, size)
+        } else {
+            ResidualKind::File(path, size)
+        };
+        items.push(ResidualItem::certain(kind, source));
     }
 }
 
@@ -461,6 +496,60 @@ fn add_named_entry(
     }
 }
 
+/// `~/Library/Application Support/CrashReporter/{AppName}_{UUID}.plist`
+///
+/// 崩溃元数据，按显示名精确到 UUID，不会把 `SenseiMonitor` 算进 `Sensei`。
+fn add_crash_reporter_entries(items: &mut Vec<ResidualItem>, library: &Path, app_name: &str) {
+    if app_name.len() < 2 {
+        return;
+    }
+    let root = library.join("Application Support/CrashReporter");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !crash_reporter_plist_for_app(&name, app_name) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            continue;
+        }
+        let size = super::apps::dir_size(&path);
+        items.push(ResidualItem::certain(
+            ResidualKind::File(path, size),
+            ResidualSource::CrashDump,
+        ));
+    }
+}
+
+fn crash_reporter_plist_for_app(file_name: &str, app_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    let prefix = format!("{}_", app_name.to_ascii_lowercase());
+    let Some(rest) = lower.strip_prefix(&prefix) else {
+        return false;
+    };
+    let Some(uuid) = rest.strip_suffix(".plist") else {
+        return false;
+    };
+    is_uuid_like(uuid)
+}
+
+fn is_uuid_like(value: &str) -> bool {
+    let mut parts = value.split('-');
+    for len in [8, 4, 4, 4, 12] {
+        let Some(part) = parts.next() else {
+            return false;
+        };
+        if part.len() != len || !part.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return false;
+        }
+    }
+    parts.next().is_none()
+}
+
 /// 这些前缀下挂着大量互不相关的产品，按家族匹配会把别的软件一起带走。
 const SHARED_VENDOR_PREFIXES: &[&str] = &[
     "com.apple",
@@ -619,9 +708,104 @@ fn config_slug(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// 按「去掉分隔符后完全相等」在目录直接子项里找 App 名对应的残留。
+///
+/// 只做**相等**，不做前缀：`QoderCN` 和 `QoderWork CN` 归一化后分别是
+/// `qodercn` 和 `qoderworkcn`，一字之差是两个产品，其中一个还装着。
+fn add_name_matched_entry(
+    items: &mut Vec<ResidualItem>,
+    root: &Path,
+    app_name: &str,
+    suffix: &str,
+    source: ResidualSource,
+) {
+    let wanted = config_slug(&format!("{app_name}{suffix}"));
+    if wanted.len() < 3 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // 逐字相等的那条路径前面已经收过了，这里只补归一化后才相等的
+        if name == format!("{app_name}{suffix}") || config_slug(&name) != wanted {
+            continue;
+        }
+        let path = entry.path();
+        let size = super::apps::dir_size(&path);
+        let kind = if path.is_dir() {
+            ResidualKind::Directory(path, size)
+        } else {
+            ResidualKind::File(path, size)
+        };
+        items.push(ResidualItem::certain(kind, source));
+    }
+}
+
+/// 点目录 `dir_slug` 能不能算作这个 App 的残留。
+///
+/// - 完全相等是硬证据：`.qoder-cn` ↔「Qoder CN」
+/// - 前缀相等只说明「同系列」：`.qoder` ↔「Qoder CN」。这种情况下只要还有
+///   别的已安装 App 也姓这个姓（`QoderWork CN`），就谁都不算——`~/.qoder`
+///   有 4.7 GB，误判成残留的代价太大
+fn dotdir_belongs_to_app(
+    dir_slug: &str,
+    app_slugs: &[String],
+    other_apps: &[String],
+    has_exact_sibling: bool,
+) -> bool {
+    if app_slugs.iter().any(|app_slug| app_slug == dir_slug) {
+        return true;
+    }
+    // 已经找到专属的同名点目录，再收同前缀的短名字就是在拿别人的东西。
+    if has_exact_sibling {
+        return false;
+    }
+    // 四字母的点目录名太容易撞车（`.note` 之于「Notebook」），而前缀匹配本来
+    // 就只是弱证据，这里比相等匹配多要一个字符。
+    if dir_slug.len() < 5 {
+        return false;
+    }
+    // 方向只能是「点目录名 ⊂ App 名」：`karabiner` ⊂ `karabinerelements`。
+    // 反过来（App 名 ⊂ 点目录名）会让叫「Disc」的 App 认领 `.config/discord`。
+    let family = app_slugs
+        .iter()
+        .any(|app_slug| app_slug.starts_with(dir_slug));
+    family && !other_apps.iter().any(|other| other.starts_with(dir_slug))
+}
+
+/// `/Applications` 和 `~/Applications` 里**其它**已安装 App 的归一化名字。
+///
+/// 用来否决点目录的前缀匹配：`~/.qoder` 到底属于正在卸载的「Qoder CN」还是
+/// 仍然装着的「QoderWork CN」，无法确定，那就谁都不算。
+fn other_installed_app_slugs(app: &InstalledApp, home: &Path) -> Vec<String> {
+    let self_slug = config_slug(&app.name);
+    let mut slugs = Vec::new();
+    for root in [PathBuf::from("/Applications"), home.join("Applications")] {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(stem) = name.strip_suffix(".app") else {
+                continue;
+            };
+            let slug = config_slug(stem);
+            if slug.is_empty() || slug == self_slug || slugs.contains(&slug) {
+                continue;
+            }
+            slugs.push(slug);
+        }
+    }
+    slugs
+}
+
 fn add_dotfile_configs(items: &mut Vec<ResidualItem>, home: &Path, app: &InstalledApp) {
     // App 名和 Bundle ID 末段都可能是点目录用的名字：Karabiner-Elements 写的是
-    // `~/.config/karabiner`，两边都不精确相等，只能按前缀互相包含来判定。
+    // `~/.config/karabiner`，两边都不精确相等，只能按前缀包含来判定。
     let mut slugs = vec![config_slug(&app.name)];
     if let Some(last) = app.registry_subpath.rsplit('.').next() {
         let slug = config_slug(last);
@@ -633,7 +817,11 @@ fn add_dotfile_configs(items: &mut Vec<ResidualItem>, home: &Path, app: &Install
     if slugs.is_empty() {
         return;
     }
+    let other_apps = other_installed_app_slugs(app, home);
 
+    // 先把所有候选收齐再判定。前缀匹配要用到「同一批候选里有没有精确命中」
+    // 这个信息，边遍历边决定拿不到。
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for parent in DOT_CONFIG_PARENTS {
         let dir = if parent.is_empty() {
             home.to_path_buf()
@@ -659,22 +847,29 @@ fn add_dotfile_configs(items: &mut Vec<ResidualItem>, home: &Path, app: &Install
             if slug.len() < 4 || PROTECTED_DOT_DIRS.contains(&slug.as_str()) {
                 continue;
             }
-            if !slugs
-                .iter()
-                .any(|app_slug| app_slug.starts_with(&slug) || slug.starts_with(app_slug))
-            {
-                continue;
-            }
             if !entry.path().is_dir() {
                 continue;
             }
-            let path = entry.path();
-            let size = super::apps::dir_size(&path);
-            items.push(ResidualItem::possible(
-                ResidualKind::Directory(path, size),
-                ResidualSource::DotConfigDir,
-            ));
+            candidates.push((entry.path(), slug));
         }
+    }
+
+    // 存在精确同名的点目录，就说明这个 App 有自己专属的那一个，同前缀的更短
+    // 名字属于系列里的别人：`.qoder-cn` 是「Qoder CN」的，`.qoder`（4.7 GB）
+    // 是 qodercli 的。qodercli 没有 .app，靠 `other_apps` 查不出来。
+    let has_exact = candidates
+        .iter()
+        .any(|(_, slug)| slugs.iter().any(|app_slug| app_slug == slug));
+
+    for (path, slug) in candidates {
+        if !dotdir_belongs_to_app(&slug, &slugs, &other_apps, has_exact) {
+            continue;
+        }
+        let size = super::apps::dir_size(&path);
+        items.push(ResidualItem::possible(
+            ResidualKind::Directory(path, size),
+            ResidualSource::DotConfigDir,
+        ));
     }
 }
 
@@ -714,13 +909,7 @@ fn add_system_extensions(items: &mut Vec<ResidualItem>, bundle_ids: &[String]) {
     if prefixes.is_empty() && bundle_ids.is_empty() {
         return;
     }
-    let Ok(output) = std::process::Command::new("systemextensionsctl")
-        .arg("list")
-        .output()
-    else {
-        return;
-    };
-    for (team_id, bundle_id) in parse_system_extensions(&String::from_utf8_lossy(&output.stdout)) {
+    for (team_id, bundle_id) in active_system_extensions() {
         let owned = bundle_ids
             .iter()
             .any(|id| id.eq_ignore_ascii_case(&bundle_id))
@@ -751,7 +940,9 @@ fn deactivate_system_extension(team_id: &str, bundle_id: &str) -> CleanResult {
         .map(|out| String::from_utf8_lossy(&out.stdout).contains("enabled"))
         .unwrap_or(true);
     if sip_enabled {
-        return CleanResult::Failed;
+        // 不是失败，是这台机器上根本不允许——重试没有意义，得用户自己去
+        // 系统设置 > 通用 > 登录项与扩展 里关。
+        return CleanResult::ManualAction;
     }
     let _ = std::process::Command::new("systemextensionsctl")
         .arg("uninstall")
@@ -760,20 +951,51 @@ fn deactivate_system_extension(team_id: &str, bundle_id: &str) -> CleanResult {
         .output();
 
     // 以复查为准：uninstall 是异步的，而且失败时退出码照样是 0。
-    let still_there = std::process::Command::new("systemextensionsctl")
-        .arg("list")
-        .output()
-        .map(|out| {
-            parse_system_extensions(&String::from_utf8_lossy(&out.stdout))
-                .iter()
-                .any(|(_, id)| id.eq_ignore_ascii_case(bundle_id))
-        })
-        .unwrap_or(true);
-    if still_there {
+    if system_extension_active(bundle_id) {
         CleanResult::Failed
     } else {
         CleanResult::Ok
     }
+}
+
+/// 该 Bundle ID 的系统扩展是否仍处于 activated 状态。
+///
+/// 查不到命令时返回 `true`：宁可让残留继续显示，也不要谎报已经清掉。
+fn system_extension_active(bundle_id: &str) -> bool {
+    keep_system_extension(bundle_id, list_system_extensions().as_deref())
+}
+
+/// `listed == None` 表示没查到（命令失败 / 非零退出 / 空输出），当作还在。
+fn keep_system_extension(bundle_id: &str, listed: Option<&[(String, String)]>) -> bool {
+    match listed {
+        None => true,
+        Some(active) => active
+            .iter()
+            .any(|(_, id)| id.eq_ignore_ascii_case(bundle_id)),
+    }
+}
+
+/// 当前 activated 的系统扩展，命令不可用时返回空表。
+///
+/// 只给扫描侧用：查不到就不要凭空捏造条目。复核走 [`keep_system_extension`]，
+/// 失败方向相反。
+fn active_system_extensions() -> Vec<(String, String)> {
+    list_system_extensions().unwrap_or_default()
+}
+
+fn list_system_extensions() -> Option<Vec<(String, String)>> {
+    let output = std::process::Command::new("systemextensionsctl")
+        .arg("list")
+        .output()
+        .ok()?;
+    // `Command::output()` 进程能启动就是 Ok，非零退出也算成功拿到 Output。
+    // 空 stdout 同样当没查到：正常会至少打出 `0 extension(s)`。
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    Some(parse_system_extensions(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 /// 把一组 Bundle ID 折算成去重后的厂商前缀。
@@ -805,8 +1027,10 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
         match &item.kind {
             ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => {
                 prog.note(path);
-                // 攒起来晚点一起提权，避免每个文件弹一次密码框。
-                if super::elevate::needs_elevation(path) {
+                // `/Library` 白名单路径就算已经是 root 也不能走 `clean_path`：
+                // `is_protected` 会整棵挡住。攒起来走一次提权批次（root 下
+                // 跳过 osascript，仍套白名单）。
+                if super::elevate::needs_privileged_delete(path) {
                     elevated.push(path.clone());
                     continue;
                 }
@@ -814,8 +1038,10 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 report.record(path, res);
             }
             ResidualKind::SystemExtension(team_id, bundle_id) => {
+                // 系统扩展没有可删的路径，记标识串——塞进 `PathBuf` 会让
+                // 拿这个列表当路径用的代码（`exists()`、在 Finder 中显示）出错。
                 let res = deactivate_system_extension(team_id, bundle_id);
-                report.record(Path::new(bundle_id), res);
+                report.record_target(CleanFailure::Id(bundle_id.clone()), res);
             }
             _ => {}
         }
@@ -837,10 +1063,27 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
 
 /// 复核候选残留是否仍然存在（对应 Windows 侧的「先扫描后卸载」流程）。
 pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
+    // `systemextensionsctl list` 的输出是全局的，一次拿到就够所有条目比对，
+    // 不必每条都 fork 一个子进程。查不到时 `listed=None`，下面按「还在」保留，
+    // 不能当成空表把扩展滤掉。
+    let listed = if items
+        .iter()
+        .any(|it| matches!(it.kind, ResidualKind::SystemExtension(..)))
+    {
+        list_system_extensions()
+    } else {
+        Some(Vec::new())
+    };
+
     items
         .into_iter()
         .filter(|it| match &it.kind {
             ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => p.exists(),
+            // 用户可能在两次扫描之间自己去系统设置关掉了扩展，不复查就会一直
+            // 挂在残留列表里。查不到命令时保守保留，避免谎报已经清掉。
+            ResidualKind::SystemExtension(_, bundle_id) => {
+                keep_system_extension(bundle_id, listed.as_deref())
+            }
             _ => true,
         })
         // 官方卸载器可能只清掉目录的一部分，不能继续展示卸载前的旧体积。
@@ -949,7 +1192,26 @@ mod tests {
             },
         );
 
-        assert_eq!(result.items.len(), 6);
+        let paths: Vec<String> = result
+            .items
+            .iter()
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        let has = |needle: &str| paths.iter().any(|p| p.ends_with(needle));
+        assert!(has("Application Scripts/cn.better365.ishot"), "{paths:?}");
+        assert!(
+            has("Application Scripts/cn.better365.ishothelper"),
+            "{paths:?}"
+        );
+        assert!(has("Containers/cn.better365.iShotHelper"), "{paths:?}");
+        assert!(has("cn.better365.ishot.sfl3"), "{paths:?}");
+        assert!(has("cn.better365.ishot.bom"), "{paths:?}");
+        assert!(has("cn.better365.ishot.plist"), "{paths:?}");
         assert!(result
             .items
             .iter()
@@ -969,6 +1231,53 @@ mod tests {
                 .filter(|item| item.source == ResidualSource::PackageReceipt)
                 .count(),
             2
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 卫星用 read_dir + 大小写折叠，不能再靠 `join(bundle_id).exists()`。
+    #[test]
+    fn scan_finds_cache_dir_ignoring_ascii_case() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-residuals-case-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join("Library/Caches/ORG.CINDORI.SENSEI")).unwrap();
+        let receipts = root.join("receipts");
+        std::fs::create_dir_all(&receipts).unwrap();
+
+        let app = make_app("Sensei", "org.cindori.Sensei");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &receipts,
+                darwin_cache: None,
+            },
+        );
+        let certain: Vec<String> = result
+            .items
+            .iter()
+            .filter(|item| item.confidence.is_certain())
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        assert!(
+            certain.iter().any(|p| p
+                .to_ascii_lowercase()
+                .ends_with("library/caches/org.cindori.sensei")),
+            "大小写不同的 Caches 目录应确定勾选: {certain:?}"
         );
 
         std::fs::remove_dir_all(root).unwrap();
@@ -1103,6 +1412,419 @@ mod tests {
             "org.pqrs"
         ));
         assert!(!in_vendor_family("org.pqrsx.foo", "org.pqrs"));
+    }
+
+    #[test]
+    fn bundle_satellite_is_this_app_not_a_sibling() {
+        let id = "com.augment.intent";
+        assert!(is_bundle_satellite("com.augment.intent", id));
+        assert!(is_bundle_satellite("com.augment.intent.plist", id));
+        assert!(is_bundle_satellite("com.augment.intent.helper", id));
+        assert!(is_bundle_satellite(
+            "com.augment.intent.C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+            id
+        ));
+        assert!(is_bundle_satellite(
+            "com.augment.intent.ShipIt.C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+            id
+        ));
+        assert!(
+            !is_bundle_satellite("org.cindori.SenseiMonitor", "org.cindori.Sensei"),
+            "不能把另一个产品的粘连名字当成卫星"
+        );
+        assert!(
+            !is_bundle_satellite("com.qoder.work.cn", "com.qoder.work"),
+            "不能把 Bundle ID 多一段的独立产品当成卫星"
+        );
+        assert!(!is_bundle_satellite(
+            "com.augment.other.C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+            id
+        ));
+        assert!(!is_bundle_satellite(
+            "org.pqrs.Karabiner-Menu.plist",
+            "org.pqrs.Karabiner-Elements.Settings"
+        ));
+    }
+
+    /// ByHost 里 Sparkle ShipIt / 本机 UUID 偏好是本应用的，应默认勾选；
+    /// 同厂商另一个产品的 ByHost 只能标「可能」。
+    #[test]
+    fn scan_marks_byhost_shipit_certain_but_not_sibling_products() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-residuals-byhost-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        let byhost = home.join("Library/Preferences/ByHost");
+        std::fs::create_dir_all(&byhost).unwrap();
+        let uuid = "C8D05D83-BF4F-55BA-A1CF-CE93688756A3";
+        std::fs::write(
+            byhost.join(format!("com.augment.intent.ShipIt.{uuid}.plist")),
+            b"shipit",
+        )
+        .unwrap();
+        std::fs::write(
+            byhost.join(format!("com.augment.intent.{uuid}.plist")),
+            b"byhost",
+        )
+        .unwrap();
+        std::fs::write(
+            byhost.join(format!("com.augment.other.{uuid}.plist")),
+            b"sibling",
+        )
+        .unwrap();
+        let receipts = root.join("receipts");
+        std::fs::create_dir_all(&receipts).unwrap();
+
+        let app = make_app("Intent by Augment", "com.augment.intent");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &receipts,
+                darwin_cache: None,
+            },
+        );
+
+        let certain: Vec<String> = result
+            .items
+            .iter()
+            .filter(|item| item.confidence.is_certain())
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        let possible: Vec<String> = result
+            .items
+            .iter()
+            .filter(|item| !item.confidence.is_certain())
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        let has = |hay: &[String], needle: &str| hay.iter().any(|p| p.ends_with(needle));
+
+        assert!(
+            has(&certain, &format!("com.augment.intent.ShipIt.{uuid}.plist")),
+            "ShipIt ByHost 应默认勾选: {certain:?}"
+        );
+        assert!(
+            has(&certain, &format!("com.augment.intent.{uuid}.plist")),
+            "本应用 ByHost 应默认勾选: {certain:?}"
+        );
+        assert!(
+            !has(&certain, &format!("com.augment.other.{uuid}.plist")),
+            "同厂商另一产品不能默认勾选: {certain:?}"
+        );
+        assert!(
+            has(&possible, &format!("com.augment.other.{uuid}.plist")),
+            "同厂商另一产品仍应列成可能: {possible:?}"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn crash_reporter_plist_requires_app_name_and_uuid() {
+        assert!(crash_reporter_plist_for_app(
+            "Sensei_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+            "Sensei"
+        ));
+        assert!(
+            crash_reporter_plist_for_app(
+                "sensei_c8d05d83-bf4f-55ba-a1cf-ce93688756a3.plist",
+                "Sensei"
+            ),
+            "文件名大小写不能挡住"
+        );
+        assert!(
+            !crash_reporter_plist_for_app(
+                "SenseiMonitor_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+                "Sensei"
+            ),
+            "不能把辅助进程的崩溃报告算进主应用"
+        );
+        assert!(!crash_reporter_plist_for_app(
+            "Notebook_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist",
+            "Note"
+        ));
+        assert!(!crash_reporter_plist_for_app("Sensei.plist", "Sensei"));
+        assert!(!crash_reporter_plist_for_app(
+            "Sensei_not-a-uuid.plist",
+            "Sensei"
+        ));
+    }
+
+    /// HTTPStorages 的 cookie 文件在目录外面；CrashReporter 按 App 名+UUID 收。
+    #[test]
+    fn scan_finds_httpstorage_cookies_and_crash_reporter() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-residuals-cookies-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        let http = home.join("Library/HTTPStorages");
+        let crash = home.join("Library/Application Support/CrashReporter");
+        std::fs::create_dir_all(&http).unwrap();
+        std::fs::create_dir_all(&crash).unwrap();
+        std::fs::create_dir_all(http.join("org.cindori.Sensei")).unwrap();
+        std::fs::write(http.join("org.cindori.Sensei.binarycookies"), b"ck").unwrap();
+        std::fs::write(http.join("org.cindori.SenseiMonitor.binarycookies"), b"m").unwrap();
+        std::fs::write(
+            crash.join("Sensei_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist"),
+            b"cr",
+        )
+        .unwrap();
+        std::fs::write(
+            crash.join("SenseiMonitor_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist"),
+            b"other",
+        )
+        .unwrap();
+        let receipts = root.join("receipts");
+        std::fs::create_dir_all(&receipts).unwrap();
+
+        let app = make_app("Sensei", "org.cindori.Sensei");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &receipts,
+                darwin_cache: None,
+            },
+        );
+
+        let certain: Vec<String> = result
+            .items
+            .iter()
+            .filter(|item| item.confidence.is_certain())
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        let has = |needle: &str| certain.iter().any(|p| p.ends_with(needle));
+
+        assert!(
+            has("org.cindori.Sensei.binarycookies"),
+            "漏了 HTTPStorages 同级 cookie 文件: {certain:?}"
+        );
+        assert!(
+            has("Sensei_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist"),
+            "漏了 CrashReporter: {certain:?}"
+        );
+        assert!(
+            !has("SenseiMonitor.binarycookies"),
+            "辅助进程 cookie 不能默认勾选: {certain:?}"
+        );
+        assert!(
+            !has("SenseiMonitor_C8D05D83-BF4F-55BA-A1CF-CE93688756A3.plist"),
+            "辅助进程崩溃报告不能算进主应用: {certain:?}"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Electron 的 userData 目录用 productName，常常和 App 名差一个空格。
+    /// 但差一个词就是另一个产品，而且那个产品可能还装着。
+    #[test]
+    fn name_match_normalizes_separators_but_not_sibling_products() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-residuals-name-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        let support = home.join("Library/Application Support");
+        std::fs::create_dir_all(support.join("QoderCN")).unwrap();
+        std::fs::create_dir_all(support.join("QoderWork CN")).unwrap();
+        std::fs::create_dir_all(support.join("QoderWork")).unwrap();
+        std::fs::create_dir_all(home.join("Library/Preferences")).unwrap();
+        std::fs::write(home.join("Library/Preferences/QoderCN.plist"), b"p").unwrap();
+        let receipts = root.join("receipts");
+        std::fs::create_dir_all(&receipts).unwrap();
+
+        let app = make_app("Qoder CN", "com.aliyun.lingma.ide");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &receipts,
+                darwin_cache: None,
+            },
+        );
+
+        let paths: Vec<String> = result
+            .items
+            .iter()
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        let has = |needle: &str| paths.iter().any(|p| p.ends_with(needle));
+
+        assert!(
+            has("Application Support/QoderCN"),
+            "漏了去空格的 userData 目录: {paths:?}"
+        );
+        assert!(
+            has("Preferences/QoderCN.plist"),
+            "漏了去空格的偏好文件: {paths:?}"
+        );
+        assert!(!has("QoderWork CN"), "带走了另一个产品的数据: {paths:?}");
+        assert!(
+            !has("Support/QoderWork"),
+            "带走了另一个产品的数据: {paths:?}"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `~/.qoder` 4.7 GB 属于仍然装着的 QoderWork CN，不能算到 Qoder CN 头上。
+    /// `~/.qoder` 4.7 GB 不属于「Qoder CN」，两条独立的证据都能否掉它。
+    #[test]
+    fn dotdir_prefix_match_yields_to_stronger_owners() {
+        let app_slugs = vec!["qodercn".to_string()];
+
+        // 没有别的同系列 App，也没有更精确的兄弟目录：前缀匹配成立
+        // （Karabiner-Elements ↔ .config/karabiner）
+        assert!(dotdir_belongs_to_app(
+            "karabiner",
+            &["karabinerelements".to_string()],
+            &[],
+            false
+        ));
+
+        // 完全相等永远成立
+        assert!(dotdir_belongs_to_app(
+            "qodercn",
+            &app_slugs,
+            &["qoderworkcn".to_string()],
+            true
+        ));
+
+        // 证据一：同系列的另一个 App 还装着（QoderWork CN）
+        assert!(!dotdir_belongs_to_app(
+            "qoder",
+            &app_slugs,
+            &["qoderworkcn".to_string()],
+            false
+        ));
+
+        // 证据二：同一批候选里已经有精确同名的 `.qoder-cn`，说明 `.qoder`
+        // 是系列里别人的。qodercli 是 CLI、没有 .app，只有这条能拦住它。
+        assert!(!dotdir_belongs_to_app("qoder", &app_slugs, &[], true));
+
+        // 两条证据都没有时仍然成立
+        assert!(dotdir_belongs_to_app("qoder", &app_slugs, &[], false));
+
+        // 压根不沾边
+        assert!(!dotdir_belongs_to_app("safari", &app_slugs, &[], false));
+    }
+
+    /// 前缀匹配的方向只能是「点目录名 ⊂ App 名」。反过来会让短名字的 App
+    /// 认领一堆同前缀的无关目录。
+    #[test]
+    fn dotdir_prefix_direction_and_length_floor() {
+        // 叫「Disc」的 App 不能认领 Discord 的配置目录
+        assert!(!dotdir_belongs_to_app(
+            "discord",
+            &["disc".to_string()],
+            &[],
+            false
+        ));
+        // 叫「Note」的 App 不能认领 .config/notes / .config/notebook
+        assert!(!dotdir_belongs_to_app(
+            "notes",
+            &["note".to_string()],
+            &[],
+            false
+        ));
+        assert!(!dotdir_belongs_to_app(
+            "notebook",
+            &["note".to_string()],
+            &[],
+            false
+        ));
+        // 反方向且够长才算：`.note` 对「Notebook」仍然太短，不收
+        assert!(!dotdir_belongs_to_app(
+            "note",
+            &["notebook".to_string()],
+            &[],
+            false
+        ));
+        // 五个字符起才允许前缀匹配
+        assert!(dotdir_belongs_to_app(
+            "noteb",
+            &["notebook".to_string()],
+            &[],
+            false
+        ));
+        // 但完全相等不受长度下限影响
+        assert!(dotdir_belongs_to_app(
+            "note",
+            &["note".to_string()],
+            &[],
+            false
+        ));
+    }
+
+    #[test]
+    fn verify_keeps_system_extension_when_listing_fails() {
+        let id = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
+        assert!(
+            keep_system_extension(id, None),
+            "查不到命令时必须当还在，不能把扩展从复核列表里丢掉"
+        );
+        assert!(
+            !keep_system_extension(id, Some(&[])),
+            "命令成功且列表为空才说明已经不在了"
+        );
+        assert!(keep_system_extension(
+            id,
+            Some(&[(
+                "G43BCU2T37".to_string(),
+                "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice".to_string()
+            )])
+        ));
+        assert!(
+            keep_system_extension(
+                id,
+                Some(&[(
+                    "G43BCU2T37".to_string(),
+                    "ORG.PQRS.KARABINER-DRIVERKIT-VIRTUALHIDDEVICE".to_string()
+                )])
+            ),
+            "bundle id 比较必须忽略大小写"
+        );
+        assert!(!keep_system_extension(
+            id,
+            Some(&[("TEAM".to_string(), "com.other.unrelated".to_string())])
+        ));
     }
 
     #[test]

@@ -53,12 +53,11 @@ QuickCleaner follows a strict unidirectional layered architecture:
 
 ```
 quick-cleaner/
+├── examples/
+│   └── mftscan.rs              # Windows-only $MFT verification (not shipped)
 ├── src/
 │   ├── main.rs                 # Entry point & UAC self-elevation handler
 │   ├── lib.rs                  # Module declarations
-│   ├── bin/
-│   │   └── mftscan.rs          # Standalone CLI tool for $MFT verification
-│   │
 │   ├── core/                   # Pure domain logic (independent of GPUI & OS specifics)
 │   │   ├── i18n.rs             # Core multilingual definitions (Language enum)
 │   │   ├── categories.rs       # 10 junk categories & scan definitions
@@ -111,13 +110,12 @@ cargo build --release
 
 The compiled binary will be located at `target/release/quick-cleaner.exe`.
 
-### Standalone CLI Tool
+### Windows `$MFT` verification (dev only)
 
-A standalone CLI `$MFT` scanner is included for profiling disk parsing performance and accuracy:
+Not a product binary, and not built on macOS. Enable the `mftscan` feature to compare a volume against WizTree:
 
 ```bash
-# Scan Drive C: and output the top 20 largest files
-cargo run --bin mftscan -- C 20
+cargo run --example mftscan --features mftscan -- C 20
 ```
 
 ---

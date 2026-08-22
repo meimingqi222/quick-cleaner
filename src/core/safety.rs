@@ -330,6 +330,22 @@ const MACOS_ELEVATED_RESIDUAL_PARENTS: &[&str] = &[
     "\\private\\var\\db\\receipts",
 ];
 
+/// `/Library` 白名单目录下、不以 `com.apple.` 命名的系统组件。
+#[cfg(target_os = "macos")]
+const MACOS_SYSTEM_COMPONENT_NAMES: &[&str] = &[
+    "systemconfiguration",
+    "crashreporter",
+    "keychains",
+    "security",
+    "preferencepanes",
+    "systemprofiler",
+    "logs",
+    "caches",
+    "managedpreferences",
+    "systemmigration",
+    "apple",
+];
+
 /// 该路径是否属于「残留清理可以提权删除」的白名单。
 ///
 /// 只有 macOS 残留清理这一条调用链可以用它绕开 [`is_protected`]；磁盘透镜、
@@ -350,6 +366,15 @@ pub fn is_elevated_residual_target(path: &Path) -> bool {
         .map(|n| n.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     if name.starts_with("com.apple.") || name == "com.apple" {
+        return false;
+    }
+    // 白名单目录里还住着一批不带反向域名的系统组件。厂商前缀匹配够不到它们
+    // （前缀一定含点，而这些名字不含点），但提权删除的口子不该依赖上游扫描器
+    // 的实现细节来保证安全。
+    if MACOS_SYSTEM_COMPONENT_NAMES
+        .iter()
+        .any(|reserved| name == *reserved)
+    {
         return false;
     }
 
@@ -434,6 +459,22 @@ mod tests {
             "/Library/Preferences/com.apple.loginwindow.plist",
             "/Library/Application Support/com.apple.TCC",
             "/Library/LaunchDaemons/com.apple.smbd.plist",
+        ] {
+            assert!(
+                !is_elevated_residual_target(Path::new(p)),
+                "{p} 不应被允许提权删除"
+            );
+        }
+    }
+
+    /// 白名单目录里还住着不带反向域名的系统组件。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn elevated_residual_allowlist_never_touches_bare_system_components() {
+        for p in [
+            "/Library/Preferences/SystemConfiguration",
+            "/Library/Application Support/CrashReporter",
+            "/Library/Caches/Keychains",
         ] {
             assert!(
                 !is_elevated_residual_target(Path::new(p)),

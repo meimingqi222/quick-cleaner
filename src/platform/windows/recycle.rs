@@ -1,6 +1,6 @@
 //! Windows 回收站管理与孤儿残留清理
 
-use crate::core::cleaner::{delete_tree, CleanProgress, CleanReport};
+use crate::core::cleaner::{delete_tree, CleanFailure, CleanProgress, CleanReport};
 use crate::platform::windows::security::current_user_sid;
 use crate::platform::windows::user_env::real_user_sid;
 use std::os::windows::ffi::OsStrExt;
@@ -132,7 +132,8 @@ pub fn empty_recycle_bin(p: &CleanProgress) -> CleanReport {
         } else if hr as u32 == 0x8000_FFFF {
             report.skipped += 1;
         } else {
-            report.failed.push(PathBuf::from("回收站"));
+            // 回收站是 shell 命名空间里的对象，不是文件路径
+            report.failed.push(CleanFailure::Id("回收站".into()));
         }
     }
 
