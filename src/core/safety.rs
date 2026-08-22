@@ -306,6 +306,67 @@ pub fn is_protected(path: &Path) -> bool {
     false
 }
 
+/// 应用残留清理**唯一**允许提权触碰的系统目录，写法是「父目录」。
+///
+/// `/Library` 整棵子树在 [`MACOS_PROTECTED_PREFIXES`] 里是禁删的，磁盘透镜的
+/// 任意路径删除绝不能碰。但 launchd plist 和系统级支持目录本来就只住在那儿，
+/// 一刀切的后果是这些残留在 UI 上列得出来、点了清理却静默失败。
+///
+/// 口子开在「父目录精确等于表中某项」这一层，不是前缀匹配。三重后果：
+/// - `/Library/Application Support` 自身删不掉（它的父目录是 `/library`）
+/// - `/Library/Application Support/org.pqrs` 可以（残留扫描产出的就是这一层）
+/// - `/Library/Application Support/org.pqrs/Karabiner-Elements` 不行——再深
+///   一层意味着调用方算错了粒度，宁可失败也不能以 root 身份 `rm -rf` 下去
+#[cfg(target_os = "macos")]
+const MACOS_ELEVATED_RESIDUAL_PARENTS: &[&str] = &[
+    "\\library\\application support",
+    "\\library\\application scripts",
+    "\\library\\caches",
+    "\\library\\logs",
+    "\\library\\preferences",
+    "\\library\\launchagents",
+    "\\library\\launchdaemons",
+    "\\library\\privilegedhelpertools",
+    "\\private\\var\\db\\receipts",
+];
+
+/// 该路径是否属于「残留清理可以提权删除」的白名单。
+///
+/// 只有 macOS 残留清理这一条调用链可以用它绕开 [`is_protected`]；磁盘透镜、
+/// 分类清理都不许调，否则 `/Library` 的保护就形同虚设。
+#[cfg(target_os = "macos")]
+pub fn is_elevated_residual_target(path: &Path) -> bool {
+    // 符号链接会让「父目录在白名单里」这个判断失去意义：`/Library/Caches/x`
+    // 可以指向任意位置，以 root 身份 rm -rf 过去就是任意文件删除。
+    match std::fs::symlink_metadata(path) {
+        Ok(md) if !md.file_type().is_symlink() => {}
+        _ => return false,
+    }
+    // 白名单目录里混着系统自己的东西：`/Library/Preferences/com.apple.*` 是
+    // 登录窗口、SystemConfiguration 这类配置，`/Library/Application Support`
+    // 下还有 com.apple.TCC。以 root 身份删掉其中任何一个都是在拆系统。
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if name.starts_with("com.apple.") || name == "com.apple" {
+        return false;
+    }
+
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent = norm(parent);
+    MACOS_ELEVATED_RESIDUAL_PARENTS
+        .iter()
+        .any(|allowed| parent == *allowed)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_elevated_residual_target(_path: &Path) -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 const MACOS_PROTECTED_PREFIXES: &[&str] = &[
     "\\system",
@@ -330,6 +391,68 @@ mod tests {
         assert!(is_protected(Path::new("C:\\")));
         assert!(is_protected(Path::new("C:")));
         assert!(is_protected(Path::new("D:\\")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn elevated_residual_allowlist_only_opens_one_level() {
+        // 扫描器产出的就是这一层，必须放行——否则 UI 列得出来、点了却静默失败
+        assert!(is_elevated_residual_target(Path::new(
+            "/Library/Application Support/org.pqrs"
+        )));
+        assert!(is_elevated_residual_target(Path::new(
+            "/Library/LaunchDaemons/org.pqrs.karabiner.karabiner_grabber.plist"
+        )));
+        assert!(is_elevated_residual_target(Path::new(
+            "/private/var/db/receipts/org.pqrs.Karabiner-Elements.bom"
+        )));
+
+        // 骨架目录自身：父目录是 /library，不在表里
+        assert!(!is_elevated_residual_target(Path::new(
+            "/Library/Application Support"
+        )));
+        assert!(!is_elevated_residual_target(Path::new("/Library")));
+        // 再深一层说明调用方算错了粒度
+        assert!(!is_elevated_residual_target(Path::new(
+            "/Library/Application Support/org.pqrs/Karabiner-Elements"
+        )));
+        // 白名单之外
+        assert!(!is_elevated_residual_target(Path::new(
+            "/System/Library/CoreServices"
+        )));
+        assert!(!is_elevated_residual_target(Path::new("/usr/bin/env")));
+        assert!(!is_elevated_residual_target(Path::new(
+            "/Library/Extensions/foo.kext"
+        )));
+    }
+
+    /// 白名单目录里混着 Apple 自己的配置，以 root 身份删掉就是拆系统。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn elevated_residual_allowlist_never_touches_apple_items() {
+        for p in [
+            "/Library/Preferences/com.apple.loginwindow.plist",
+            "/Library/Application Support/com.apple.TCC",
+            "/Library/LaunchDaemons/com.apple.smbd.plist",
+        ] {
+            assert!(
+                !is_elevated_residual_target(Path::new(p)),
+                "{p} 不应被允许提权删除"
+            );
+        }
+    }
+
+    /// 提权删除的口子只对残留清理开放，磁盘透镜那条路必须照旧全挡。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn library_subtree_stays_protected_for_generic_cleaning() {
+        for p in [
+            "/Library/Application Support/org.pqrs",
+            "/Library/LaunchDaemons/org.pqrs.x.plist",
+            "/private/var/db/receipts/org.pqrs.x.bom",
+        ] {
+            assert!(is_protected(Path::new(p)), "{p} 对通用清理仍应是保护路径");
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -1265,6 +1265,8 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
                     .any(|(n, _)| n.eq_ignore_ascii_case(name))
             }
             ResidualKind::ScheduledTask(name) => scheduled_task_exists(name),
+            // macOS 专用，Windows 侧的扫描器不会产出，但枚举是共用的。
+            ResidualKind::SystemExtension(..) => false,
         })
         // 体积在卸载后会变（安装目录可能只剩残渣），重新算一遍
         .map(|mut it| {
@@ -1354,6 +1356,8 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                     report.failed.push(PathBuf::from(name));
                 }
             }
+            // macOS 专用，Windows 侧的扫描器不会产出。
+            ResidualKind::SystemExtension(..) => {}
         }
     }
 

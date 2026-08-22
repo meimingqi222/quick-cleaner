@@ -347,6 +347,12 @@ pub enum ResidualKind {
     /// 任务文件在 `System32\Tasks` 下，整棵 System32 是保护目录，不能当
     /// 普通文件删，必须走 `schtasks /Delete`。
     ScheduledTask(String),
+    /// macOS 系统扩展（DriverKit / 网络扩展）：`(teamID, bundleID)`。
+    ///
+    /// 磁盘上的 `.dext` 由 macOS 自己 staged 在 `/Library/SystemExtensions`
+    /// 并登记在扩展数据库里，删文件既删不动（SIP）也只会留下不一致状态，
+    /// 必须走 `systemextensionsctl` 或系统设置。
+    SystemExtension(String, String),
 }
 
 impl ResidualKind {
@@ -355,7 +361,8 @@ impl ResidualKind {
             ResidualKind::File(_, s) | ResidualKind::Directory(_, s) => *s,
             ResidualKind::RegistryKey(..)
             | ResidualKind::RegistryValue(..)
-            | ResidualKind::ScheduledTask(..) => 0,
+            | ResidualKind::ScheduledTask(..)
+            | ResidualKind::SystemExtension(..) => 0,
         }
     }
 
@@ -372,6 +379,7 @@ impl ResidualKind {
                 ResidualKind::RegistryKey(..) => "注册表项",
                 ResidualKind::RegistryValue(..) => "注册表值",
                 ResidualKind::ScheduledTask(..) => "计划任务",
+                ResidualKind::SystemExtension(..) => "系统扩展",
             },
             Language::En => match self {
                 ResidualKind::File(..) => "File",
@@ -379,6 +387,7 @@ impl ResidualKind {
                 ResidualKind::RegistryKey(..) => "Registry Key",
                 ResidualKind::RegistryValue(..) => "Registry Value",
                 ResidualKind::ScheduledTask(..) => "Scheduled task",
+                ResidualKind::SystemExtension(..) => "System extension",
             },
         }
     }
@@ -395,6 +404,7 @@ impl ResidualKind {
                 format!("{}\\{} → {}", root.label(), sub, name)
             }
             ResidualKind::ScheduledTask(name) => name.clone(),
+            ResidualKind::SystemExtension(_, bundle_id) => bundle_id.clone(),
         }
     }
 }
@@ -442,6 +452,14 @@ pub enum ResidualSource {
     ApplicationScript,
     RecentDocumentList,
     PackageReceipt,
+    /// `LaunchAgents` 下的 plist：随用户登录启动，删前要先 `launchctl bootout`。
+    LaunchAgent,
+    /// `LaunchDaemons` / `PrivilegedHelperTools`：root 身份运行，需要提权才能删。
+    LaunchDaemon,
+    /// `~/.config` 等点目录下按名字命中的配置。
+    DotConfigDir,
+    /// 已激活的系统扩展。删不掉，只能引导用户去系统设置里关。
+    SystemExtension,
     Other,
 }
 
@@ -488,6 +506,10 @@ impl ResidualSource {
                 ResidualSource::ApplicationScript => "应用脚本目录",
                 ResidualSource::RecentDocumentList => "最近使用记录",
                 ResidualSource::PackageReceipt => "安装收据",
+                ResidualSource::LaunchAgent => "登录启动项",
+                ResidualSource::LaunchDaemon => "系统守护进程",
+                ResidualSource::DotConfigDir => "配置目录",
+                ResidualSource::SystemExtension => "系统扩展（需在系统设置中关闭）",
                 ResidualSource::Other => "其他残留",
             },
             Language::En => match self {
@@ -526,6 +548,10 @@ impl ResidualSource {
                 ResidualSource::ApplicationScript => "Application scripts",
                 ResidualSource::RecentDocumentList => "Recent document list",
                 ResidualSource::PackageReceipt => "Package receipt",
+                ResidualSource::LaunchAgent => "Launch agent",
+                ResidualSource::LaunchDaemon => "Launch daemon",
+                ResidualSource::DotConfigDir => "Dotfile config directory",
+                ResidualSource::SystemExtension => "System extension (turn off in System Settings)",
                 ResidualSource::Other => "Other residual",
             },
         }
