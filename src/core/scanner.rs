@@ -3,6 +3,7 @@
 use crate::core::categories::{CategoryId, ScanTarget};
 use crate::core::fs_query::FileIndexQuery;
 use crate::core::i18n::Text;
+use crate::core::model::is_virtual_path;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -106,8 +107,8 @@ fn scan_fixed_inner(
     let measured: Vec<(ScanItem, std::time::Duration)> = targets
         .par_iter()
         .filter(|t| {
-            // tmutil:// 虚拟路径（APFS 本地快照）不走文件系统 exists() 检查
-            if t.path.to_string_lossy().starts_with("tmutil://") {
+            // 虚拟路径（APFS 本地快照）不走文件系统 exists() 检查
+            if is_virtual_path(&t.path) {
                 return true;
             }
             // 固定目标本身是符号链接时绝不扫描。否则称重可能来自链接目标，
@@ -116,8 +117,8 @@ fn scan_fixed_inner(
         })
         .filter_map(|t| {
             let started = std::time::Instant::now();
-            // tmutil:// 虚拟路径：大小未知（APFS 快照是 COW 的），用 0 占位
-            if t.path.to_string_lossy().starts_with("tmutil://") {
+            // 虚拟路径：大小未知（APFS 快照是 COW 的），用 0 占位
+            if is_virtual_path(&t.path) {
                 return Some((
                     ScanItem {
                         path: t.path.clone(),

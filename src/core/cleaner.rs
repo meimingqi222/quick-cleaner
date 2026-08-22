@@ -1,5 +1,6 @@
 //! 核心清理引擎与安全防护
 
+use crate::core::model::snapshot_name;
 use crate::core::safety::is_protected;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -338,9 +339,8 @@ static DELETE_FAILURES_LOGGED: std::sync::atomic::AtomicUsize =
 
 /// 清理单个路径本身（连同其内容）。
 pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
-    // tmutil:// 虚拟路径：APFS 本地快照，用 tmutil deletelocalsnapshots 删除
-    let path_str = path.to_string_lossy();
-    if let Some(snapshot) = path_str.strip_prefix("tmutil://snapshot/") {
+    // 虚拟路径：APFS 本地快照，用 tmutil deletelocalsnapshots 删除
+    if let Some(snapshot) = snapshot_name(path) {
         p.note(path);
         let status = std::process::Command::new("tmutil")
             .arg("deletelocalsnapshots")

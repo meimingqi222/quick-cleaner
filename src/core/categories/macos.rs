@@ -3,6 +3,7 @@
 use super::{target, target_with_recommendation, ScanTarget};
 use crate::core::categories::CategoryId;
 use crate::core::i18n::Text;
+use crate::core::model::snapshot_path;
 use std::path::{Path, PathBuf};
 
 /// macOS 专属清理目标
@@ -91,8 +92,8 @@ pub(super) fn push_local_snapshots(t: &mut Vec<ScanTarget>) {
         if name.is_empty() {
             continue;
         }
-        // 虚拟路径：scanner 和 cleaner 识别 `tmutil://` 前缀
-        let virtual_path = PathBuf::from(format!("tmutil://snapshot/{name}"));
+        // 虚拟路径：scanner 跳过称重，cleaner 路由到 tmutil
+        let virtual_path = snapshot_path(name);
         t.push(target(
             virtual_path,
             Text::new(

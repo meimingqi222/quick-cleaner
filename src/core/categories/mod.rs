@@ -623,9 +623,8 @@ mod tests {
     #[test]
     fn all_targets_are_absolute_and_categorised() {
         for t in all_targets() {
-            // tmutil:// 虚拟路径（APFS 本地快照）不是文件系统路径，跳过绝对路径检查
-            let path_str = t.path.to_string_lossy();
-            if path_str.starts_with("tmutil://") {
+            // 虚拟路径（APFS 本地快照）不是文件系统路径，跳过绝对路径检查
+            if crate::core::model::is_virtual_path(&t.path) {
                 // 仍然检查标签
                 for lang in Language::ALL {
                     assert!(

@@ -1,5 +1,35 @@
 //! 核心通用数据模型与工具函数
 
+use std::path::{Path, PathBuf};
+
+/// APFS 本地快照的虚拟路径前缀。
+///
+/// 快照没有可枚举的文件系统路径，扫描管线又要求每个目标都有一个 `PathBuf`，
+/// 所以用 `tmutil://snapshot/<name>` 这条虚拟路径代表它：
+/// `categories::macos` 造，`scanner` 靠它跳过 `symlink_metadata` 与称重
+/// （COW 快照的实际占用取不到，一律记 0），`cleaner` 靠它路由到
+/// `tmutil deletelocalsnapshots`。
+///
+/// 三方各自写一遍前缀字面量必然漂移，构造与判定都只走这里的三个函数。
+const SNAPSHOT_PREFIX: &str = "tmutil://snapshot/";
+
+/// 由快照名造虚拟路径。
+pub fn snapshot_path(name: &str) -> PathBuf {
+    PathBuf::from(format!("{SNAPSHOT_PREFIX}{name}"))
+}
+
+/// 是否是虚拟路径——即不该拿去做任何文件系统调用的目标。
+pub fn is_virtual_path(path: &Path) -> bool {
+    path.to_string_lossy().starts_with(SNAPSHOT_PREFIX)
+}
+
+/// 取回虚拟路径里的快照名，不是快照路径则为 `None`。
+pub fn snapshot_name(path: &Path) -> Option<String> {
+    path.to_string_lossy()
+        .strip_prefix(SNAPSHOT_PREFIX)
+        .map(str::to_string)
+}
+
 /// 复选框三态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Check {
@@ -87,6 +117,25 @@ mod tests {
         assert_eq!(truncate("我的外置移动硬盘", 22), "我的外置移动硬盘");
         assert_eq!(truncate("一二三四", 2), "一二…");
         assert_eq!(truncate("🍎🍎🍎", 1), "🍎…");
+    }
+
+    /// 构造与解析必须是一对：cleaner 拿 `snapshot_name` 的结果直接喂给
+    /// `tmutil deletelocalsnapshots`，多切或少切一段前缀就是删不掉。
+    #[test]
+    fn snapshot_path_round_trips() {
+        let p = snapshot_path("com.apple.TimeMachine.2024-01-15-123456");
+        assert!(is_virtual_path(&p));
+        assert_eq!(
+            snapshot_name(&p).as_deref(),
+            Some("com.apple.TimeMachine.2024-01-15-123456")
+        );
+    }
+
+    #[test]
+    fn real_paths_are_not_virtual() {
+        let p = Path::new("/Users/me/Library/Caches");
+        assert!(!is_virtual_path(p));
+        assert_eq!(snapshot_name(p), None);
     }
 
     #[test]
