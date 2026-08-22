@@ -41,6 +41,7 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
         CategoryId::DevWorktrees => icon_shield(fg, size),
         CategoryId::LocalSnapshots => icon_clock(fg, size),
         CategoryId::IosBackup => icon_apps(fg, size),
+        CategoryId::OldIdeInstall => icon_apps(fg, size),
     }
 }
 

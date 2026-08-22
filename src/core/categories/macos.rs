@@ -29,6 +29,66 @@ pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     // 遗留 LaunchAgent：仅收配置无效或绝对执行路径已经不存在的 plist。
     // 清理时走废纸篓而非永久删除，系统级条目会由 Finder 请求授权。
     push_broken_login_items(t, home);
+
+    // /Applications/JetBrains 下的旧版 IDE 安装（发现式枚举，但目标形态
+    // 固定，不走 devscan 管线）。清理侧有独立的窄口子放行，见
+    // safety::is_old_ide_install_target。
+    push_old_ide_targets(t);
+}
+
+/// `/Applications/JetBrains` 下的旧版 IDE 安装。
+///
+/// JetBrains 的版本化安装天然落在 `/Applications` 这个受保护前缀下——
+/// 那层保护是给磁盘透镜手选路径兜底的，不能整体放开。所以这里只做
+/// **发现**：按产品分组、每组只保留最新版本，其余列给用户勾选；能否
+/// 真正删除由 `clean_targets` 的专属分支经
+/// [`crate::core::safety::is_old_ide_install_target`] 重新校验，处置送
+/// 废纸篓。解析不出产品+版本的目录（Daemon、Toolbox）不列入。
+#[cfg(target_os = "macos")]
+pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>) {
+    const BASE: &str = "/Applications/JetBrains";
+    let Ok(entries) = std::fs::read_dir(BASE) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    for (name, family, version) in select_old_versions(&names) {
+        t.push(target(
+            PathBuf::from(BASE).join(&name),
+            Text::new(
+                format!("{family} {}.{}（旧版本）", version.0, version.1),
+                format!("{family} {}.{} (old version)", version.0, version.1),
+            ),
+            CategoryId::OldIdeInstall,
+        ));
+    }
+}
+
+/// 从目录名列表里挑出「同产品已有更高版本」的旧版本。
+///
+/// 独立成纯函数以便单测；实际磁盘枚举在调用方。O(n²) 不在乎——
+/// JetBrains 目录下通常只有个位数条目。
+#[cfg(target_os = "macos")]
+fn select_old_versions(names: &[String]) -> Vec<(String, &'static str, (u32, u32))> {
+    let parsed: Vec<(usize, &'static str, (u32, u32))> = names
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            crate::core::safety::parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for &(i, family, version) in &parsed {
+        let has_newer = parsed
+            .iter()
+            .any(|&(_, f2, v2)| f2 == family && v2 > version);
+        if has_newer {
+            out.push((names[i].clone(), family, version));
+        }
+    }
+    out
 }
 
 #[cfg(target_os = "macos")]
@@ -310,5 +370,54 @@ pub(super) fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod old_ide_tests {
+    use super::select_old_versions;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 每个产品只报旧版本：最新版、无版本目录、单版本产品都不列入。
+    #[test]
+    fn only_superseded_versions_are_listed() {
+        let out = select_old_versions(&names(&[
+            "IntelliJIDEA2026.2",
+            "IntelliJIDEA2025.2",
+            "IntelliJIDEA2024.3",
+            "PyCharm2024.3",
+            "Daemon",
+            "Toolbox",
+        ]));
+        // 两个旧版 IntelliJ 都该列出，最新的 2026.2 与解析不出的不算
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .any(|(n, f, v)| n == "IntelliJIDEA2025.2" && *f == "IntelliJ IDEA" && *v == (2025, 2)));
+        assert!(out
+            .iter()
+            .any(|(n, _, _)| n == "IntelliJIDEA2024.3"));
+        // 只有一个版本的产品（PyCharm2024.3）没有更新版本，不列
+        assert!(!out.iter().any(|(n, _, _)| n.starts_with("PyCharm")));
+    }
+
+    /// 版本比较要按 (年, 次版本) 语义来：2024.10 > 2024.9，
+    /// 字符串比较会得出相反结论。
+    #[test]
+    fn versions_compare_numerically() {
+        let out = select_old_versions(&names(&["WebStorm2024.9", "WebStorm2024.10"]));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "WebStorm2024.9");
+    }
+
+    /// 目录不存在或为空时什么都不报（push_old_ide_targets 的
+    /// read_dir 失败路径），这里用空列表覆盖同一逻辑入口。
+    #[test]
+    fn empty_listing_is_noop() {
+        assert!(select_old_versions(&[]).is_empty());
+        assert!(select_old_versions(&names(&["Daemon", "Toolbox"])).is_empty());
     }
 }

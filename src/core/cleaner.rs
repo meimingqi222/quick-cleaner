@@ -533,6 +533,28 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             continue;
         }
 
+        // 旧版 IDE 安装：`/Applications` 受保护前缀下唯一可清理的类目。
+        // 放行判定在 safety 里窄口子化（层级精确、真实目录、可解析出
+        // 产品+版本、且清理瞬间重算确认存在更高版本——扫描后新版本若被
+        // 手动删掉，旧版本就不再是冗余）。处置送废纸篓，删错了能捞回来；
+        // 废纸篓不释放空间，所以只记条目数。磁盘透镜（clean_arbitrary）
+        // 不走这条分支，`/Applications` 的通用保护对它原样生效。
+        #[cfg(target_os = "macos")]
+        if crate::core::safety::is_old_ide_install_target(d) {
+            let result = match crate::platform::move_to_trash(d) {
+                Ok(()) => {
+                    p.files.fetch_add(1, Ordering::Relaxed);
+                    CleanResult::Ok
+                }
+                Err(_) => {
+                    p.failed.fetch_add(1, Ordering::Relaxed);
+                    CleanResult::Failed
+                }
+            };
+            report.record(d, result);
+            continue;
+        }
+
         if t.remove_dir {
             report.record(d, clean_path(d, p));
         } else {
