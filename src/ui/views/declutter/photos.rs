@@ -5,6 +5,7 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_folder_large, icon_sparkle, icon_star};
@@ -27,10 +28,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
 
     let tab_nav = render_unified_nav_header(
         DeclutterTab::SimilarPhotos,
-        match lang {
-            Language::Zh => "相似图片",
-            Language::En => "Similar Photos",
-        },
+        tr_declutter_photos_title(lang),
         lang,
         cx,
     );
@@ -40,14 +38,8 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
     let groups_view: Vec<AnyElement> = if display_groups.is_empty() {
         vec![render_empty_state_card(
             "🖼️",
-            match lang {
-                Language::Zh => "暂未发现相似或连拍冗余照片",
-                Language::En => "No similar or burst photos found",
-            },
-            match lang {
-                Language::Zh => "您的相册非常整洁，未发现连拍或高重复度照片。",
-                Language::En => "Your photo library is clean without redundant bursts.",
-            },
+            tr_declutter_photos_empty_title(lang),
+            tr_declutter_photos_empty_desc(lang),
         )]
     } else {
         display_groups
@@ -179,10 +171,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         .items_center()
                                         .gap_1()
                                         .child(icon_star(0xffffff, 11.))
-                                        .child(match lang {
-                                            Language::Zh => "最佳品质 (已保留)",
-                                            Language::En => "Best Quality (Kept)",
-                                        }),
+                                        .child(tr_declutter_photos_best_quality(lang)),
                                 )
                                 .child(
                                     // 浮层操作按钮
@@ -383,15 +372,9 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(0xffffff))
                                             .child(if is_sel {
-                                                match lang {
-                                                    Language::Zh => "待清理",
-                                                    Language::En => "To Clean",
-                                                }
+                                                tr_declutter_photos_to_clean(lang)
                                             } else {
-                                                match lang {
-                                                    Language::Zh => "已保留",
-                                                    Language::En => "Kept",
-                                                }
+                                                tr_declutter_photos_kept(lang)
                                             }),
                                     )
                                     .child(
@@ -566,19 +549,12 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         div()
                                             .text_xs()
                                             .text_color(rgb(MUTED))
-                                            .child(if lang == Language::Zh {
-                                                if group_sel_count > 0 {
-                                                    format!("• 共 {} 张照片 (待清理 {} 张 · 可释放 {})", group.photos.len(), group_sel_count, fmt_size(group_cleanable))
-                                                } else {
-                                                    format!("• 共 {} 张照片 (全部已保留)", group.photos.len())
-                                                }
-                                            } else {
-                                                if group_sel_count > 0 {
-                                                    format!("• {} photos ({} to clean · {})", group.photos.len(), group_sel_count, fmt_size(group_cleanable))
-                                                } else {
-                                                    format!("• {} photos (all kept)", group.photos.len())
-                                                }
-                                            }),
+                                            .child(tr_declutter_photos_group_stats(
+                                                lang,
+                                                group.photos.len(),
+                                                group_sel_count,
+                                                &fmt_size(group_cleanable),
+                                            )),
                                     ),
                             )
                             .child(
@@ -598,10 +574,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(PRIMARY))
                                             .cursor_pointer()
-                                            .child(match lang {
-                                                Language::Zh => "★ 仅保留最佳",
-                                                Language::En => "★ Keep Best Only",
-                                            })
+                                            .child(tr_declutter_photos_keep_best(lang))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
                                                     for p in &mut g.photos {
@@ -623,10 +596,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(rgb(MUTED))
                                             .cursor_pointer()
-                                            .child(match lang {
-                                                Language::Zh => "全部保留",
-                                                Language::En => "Keep All",
-                                            })
+                                            .child(tr_declutter_photos_keep_all(lang))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
                                                     for p in &mut g.photos {
@@ -656,10 +626,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(MUTED))
-                                            .child(match lang {
-                                                Language::Zh => format!("待清理相似副本 (共 {} 张)：", redundant_total_count),
-                                                Language::En => format!("Redundant Copies ({}):", redundant_total_count),
-                                            }),
+                                            .child(tr_declutter_photos_redundant_copies(lang, redundant_total_count)),
                                     )
                                     .child(
                                         div()
@@ -690,15 +657,9 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(PRIMARY))
                                                                 .child(if is_expanded {
-                                                                    match lang {
-                                                                        Language::Zh => "▲ 收起".to_string(),
-                                                                        Language::En => "▲ Collapse".to_string(),
-                                                                    }
+                                                                    tr_declutter_photos_collapse(lang).to_string()
                                                                 } else {
-                                                                    match lang {
-                                                                        Language::Zh => format!("+ 查看其余 {} 张...", redundant_total_count - 4),
-                                                                        Language::En => format!("+ {} more...", redundant_total_count - 4),
-                                                                    }
+                                                                    tr_declutter_photos_show_more(lang, redundant_total_count - 4)
                                                                 }),
                                                         )
                                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -752,29 +713,20 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(PRIMARY))
-                                        .child(match lang {
-                                            Language::Zh => "◧ 冗余整理",
-                                            Language::En => "◧ DECLUTTER MODULE",
-                                        }),
+                                        .child(tr_declutter_photos_kicker(lang)),
                                 )
                                 .child(
                                     div()
                                         .text_2xl()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
-                                        .child(match lang {
-                                            Language::Zh => "相似图片整理",
-                                            Language::En => "Similar Photos",
-                                        }),
+                                        .child(tr_declutter_photos_heading(lang)),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child(match lang {
-                                            Language::Zh => "审查视觉上高度相似或连拍的图片组。系统已自动为您标出每组最佳品质的照片，只需一键清理冗余版本。",
-                                            Language::En => "Review grouped images that appear visually identical or highly similar. We've highlighted the highest quality version in each group.",
-                                        }),
+                                        .child(tr_declutter_photos_subheading(lang)),
                                 )
                         )
                         .child(
@@ -800,10 +752,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         .items_center()
                                         .gap_2()
                                         .child(icon_sparkle(PRIMARY, 16.))
-                                        .child(match lang {
-                                            Language::Zh => "✨ 自动挑选最佳",
-                                            Language::En => "✨ Smart Select All",
-                                        })
+                                        .child(tr_declutter_photos_smart_select(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.auto_pick_best_photos();
                                             cx.notify();

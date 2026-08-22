@@ -5,6 +5,7 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{
@@ -55,10 +56,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
 
     let tab_nav = render_unified_nav_header(
         DeclutterTab::LargeFiles,
-        match lang {
-            Language::Zh => "大型与旧文件",
-            Language::En => "Large & Old Files",
-        },
+        tr_declutter_large_files_title(lang),
         lang,
         cx,
     );
@@ -66,14 +64,8 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
     let rows: Vec<AnyElement> = if filtered_indices.is_empty() {
         vec![render_empty_state_card(
             "📦",
-            match lang {
-                Language::Zh => "未发现符合条件的大型文件",
-                Language::En => "No large files found",
-            },
-            match lang {
-                Language::Zh => "未找到大于指定筛选体积的文件，您可以尝试清除筛选条件。",
-                Language::En => "No files exceed the size filter. Try clearing the filter.",
-            },
+            tr_declutter_large_files_empty_title(lang),
+            tr_declutter_large_files_empty_desc(lang),
         )]
     } else {
         filtered_indices
@@ -176,10 +168,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(rgb(MUTED))
                                     .cursor_pointer()
-                                    .child(match lang {
-                                        Language::Zh => "定位",
-                                        Language::En => "Reveal",
-                                    })
+                                    .child(tr_declutter_reveal(lang))
                                     .on_click({
                                         let p = item.path.clone();
                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -200,10 +189,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(rgb(MUTED))
                                     .cursor_pointer()
-                                    .child(match lang {
-                                        Language::Zh => "打开",
-                                        Language::En => "Open",
-                                    })
+                                    .child(tr_declutter_open(lang))
                                     .on_click({
                                         let p = item.path.clone();
                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -278,19 +264,13 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                                 .text_xl()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(TEXT))
-                                                .child(match lang {
-                                                Language::Zh => "审查大型文件",
-                                                Language::En => "Review Items",
-                                                }),
+                                                .child(tr_declutter_large_files_heading(lang)),
                                         )
                                         .child(
                                             div()
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
-                                                .child(match lang {
-                                                    Language::Zh => "选择不再需要的文件，安全清理以释放宝贵的磁盘空间。",
-                                                    Language::En => "Select files you no longer need. Safely remove them to free up disk space.",
-                                                }),
+                                                .child(tr_declutter_large_files_subheading(lang)),
                                         ),
                                 )
                                 .child(
@@ -298,10 +278,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         .flex()
                                         .flex_col()
                                         .items_end()
-                                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(match lang {
-                                            Language::Zh => "筛选总计",
-                                            Language::En => "TOTAL FOUND",
-                                        }))
+                                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(tr_declutter_large_files_total_found(lang)))
                                         .child(
                                             div()
                                                 .text_xl()
@@ -408,10 +385,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         .text_color(rgb(PRIMARY))
                                         .hover(|h| h.underline())
                                         .cursor_pointer()
-                                        .child(match lang {
-                                            Language::Zh => "清除筛选",
-                                            Language::En => "Clear Filters",
-                                        })
+                                        .child(tr_declutter_large_files_clear_filters(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.min_size_filter = 0;
                                             this.declutter.kind_filter = None;
@@ -444,24 +418,15 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(OUTLINE))
-                                .child(div().flex_1().min_w(px(0.)).child(match lang {
-                                    Language::Zh => "文件名",
-                                    Language::En => "FILE NAME",
-                                }))
+                                .child(div().flex_1().min_w(px(0.)).child(tr_declutter_col_name(lang)))
                                 .child(
                                     div()
                                         .flex_none()
                                         .flex()
                                         .items_center()
                                         .gap_8()
-                                        .child(div().w(px(100.)).text_right().child(match lang {
-                                            Language::Zh => "大小",
-                                            Language::En => "SIZE",
-                                        }))
-                                        .child(div().w(px(120.)).text_right().child(match lang {
-                                            Language::Zh => "最后访问",
-                                            Language::En => "LAST ACCESSED",
-                                        })),
+                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_size(lang)))
+                                        .child(div().w(px(120.)).text_right().child(tr_declutter_col_last_accessed(lang))),
                                 ),
                         )
                         .child(div().flex().flex_col().children(rows)),

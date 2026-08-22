@@ -5,6 +5,7 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_downloads};
@@ -19,10 +20,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
 
     let tab_nav = render_unified_nav_header(
         DeclutterTab::Downloads,
-        match lang {
-            Language::Zh => "下载项整理",
-            Language::En => "Downloads",
-        },
+        tr_declutter_downloads_title(lang),
         lang,
         cx,
     );
@@ -32,14 +30,8 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let rows: Vec<AnyElement> = if state.download_items.is_empty() {
         vec![render_empty_state_card(
             "📥",
-            match lang {
-                Language::Zh => "下载文件夹暂无可清理项",
-                Language::En => "No downloads found",
-            },
-            match lang {
-                Language::Zh => "您的 Downloads 文件夹中没有可识别的历史安装包或残留归档。",
-                Language::En => "No installer packages or archives found in Downloads.",
-            },
+            tr_declutter_downloads_empty_title(lang),
+            tr_declutter_downloads_empty_desc(lang),
         )]
     } else {
         state
@@ -141,10 +133,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(rgb(MUTED))
                                     .cursor_pointer()
-                                    .child(match lang {
-                                        Language::Zh => "定位",
-                                        Language::En => "Reveal",
-                                    })
+                                    .child(tr_declutter_reveal(lang))
                                     .on_click({
                                         let p = item.path.clone();
                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -165,10 +154,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(rgb(MUTED))
                                     .cursor_pointer()
-                                    .child(match lang {
-                                        Language::Zh => "打开",
-                                        Language::En => "Open",
-                                    })
+                                    .child(tr_declutter_open(lang))
                                     .on_click({
                                         let p = item.path.clone();
                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -254,19 +240,13 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                         .text_xl()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
-                                        .child(match lang {
-                                            Language::Zh => "审查下载项",
-                                            Language::En => "Review Downloads",
-                                        }),
+                                        .child(tr_declutter_downloads_heading(lang)),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child(match lang {
-                                            Language::Zh => "清理 Downloads 目录中残留的历史安装包、压缩归档与临时文件。",
-                                            Language::En => "Clean old DMG installers, archives and temp files from ~/Downloads.",
-                                        }),
+                                        .child(tr_declutter_downloads_subheading(lang)),
                                 ),
                         )
                         .child(
@@ -274,11 +254,10 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_xl()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(PRIMARY))
-                                .child(if lang == Language::Zh {
-                                    format!("{} 项", state.download_items.len())
-                                } else {
-                                    format!("{} items", state.download_items.len())
-                                }),
+                                .child(tr_declutter_downloads_count(
+                                    lang,
+                                    state.download_items.len(),
+                                )),
                         ),
                 )
                 .child(
@@ -305,28 +284,16 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(OUTLINE))
-                                .child(div().flex_1().min_w(px(0.)).child(match lang {
-                                    Language::Zh => "文件名",
-                                    Language::En => "FILE NAME",
-                                }))
+                                .child(div().flex_1().min_w(px(0.)).child(tr_declutter_col_name(lang)))
                                 .child(
                                     div()
                                         .flex_none()
                                         .flex()
                                         .items_center()
                                         .gap_8()
-                                        .child(div().w(px(70.)).text_center().child(match lang {
-                                            Language::Zh => "类型",
-                                            Language::En => "KIND",
-                                        }))
-                                        .child(div().w(px(100.)).text_right().child(match lang {
-                                            Language::Zh => "大小",
-                                            Language::En => "SIZE",
-                                        }))
-                                        .child(div().w(px(100.)).text_right().child(match lang {
-                                            Language::Zh => "下载时间",
-                                            Language::En => "DOWNLOADED",
-                                        })),
+                                        .child(div().w(px(70.)).text_center().child(tr_declutter_col_kind(lang)))
+                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_size(lang)))
+                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_downloaded(lang))),
                                 ),
                         )
                         .child(div().flex().flex_col().children(rows)),

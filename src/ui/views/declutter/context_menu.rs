@@ -1,6 +1,6 @@
 //! 冗余整理右键悬浮上下文菜单 (Declutter Context Menu)
 
-use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::ui::components::icons::{icon_folder_large, icon_search, icon_zip};
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -27,30 +27,15 @@ pub fn render_declutter_context_menu(root: &Root, cx: &mut Context<Root>) -> Opt
     let y = (menu.y - 10.).clamp(10., 620.);
 
     #[cfg(target_os = "macos")]
-    let ctx_reveal = match lang {
-        Language::Zh => "在访达中定位显示",
-        Language::En => "Reveal in Finder",
-    };
+    let ctx_reveal = tr_declutter_ctx_reveal_finder(lang);
     #[cfg(windows)]
-    let ctx_reveal = match lang {
-        Language::Zh => "在文件资源管理器中定位",
-        Language::En => "Reveal in File Explorer",
-    };
+    let ctx_reveal = tr_declutter_ctx_reveal_explorer(lang);
     #[cfg(not(any(target_os = "macos", windows)))]
-    let ctx_reveal = match lang {
-        Language::Zh => "在文件管理器中定位",
-        Language::En => "Show in File Manager",
-    };
+    let ctx_reveal = tr_declutter_ctx_reveal_generic(lang);
 
-    let ctx_open = match lang {
-        Language::Zh => "使用系统程序打开",
-        Language::En => "Open with System App",
-    };
+    let ctx_open = tr_declutter_ctx_open(lang);
 
-    let ctx_copy = match lang {
-        Language::Zh => "复制完整文件路径",
-        Language::En => "Copy Full Path",
-    };
+    let ctx_copy = tr_declutter_ctx_copy_path(lang);
 
     let p_reveal = path.clone();
     let p_open = path.clone();

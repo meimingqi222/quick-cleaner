@@ -2,6 +2,7 @@
 
 use super::DeclutterTab;
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -73,10 +74,7 @@ pub fn render_unified_nav_header(
                         .text_sm()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(TEXT))
-                        .child(match lang {
-                            Language::Zh => "返回概览",
-                            Language::En => "Back to Overview",
-                        }),
+                        .child(tr_declutter_back_to_overview(lang)),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.declutter.tab = DeclutterTab::Overview;
@@ -173,17 +171,11 @@ pub fn render_declutter_action_bar(
                 .text_sm()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(TEXT))
-                .child(if lang == Language::Zh {
-                    format!(
-                        "已选 {selected_count} 个项目 • 共 {}",
-                        fmt_size(selected_size)
-                    )
-                } else {
-                    format!(
-                        "{selected_count} items selected • {} total",
-                        fmt_size(selected_size)
-                    )
-                }),
+                .child(tr_declutter_selected_summary(
+                    lang,
+                    selected_count,
+                    &fmt_size(selected_size),
+                )),
         )
         .child(
             div()
@@ -203,10 +195,7 @@ pub fn render_declutter_action_bar(
                             .cursor_pointer()
                             .text_sm()
                             .text_color(rgb(MUTED))
-                            .child(match lang {
-                                Language::Zh => "取消全选",
-                                Language::En => "Cancel",
-                            })
+                            .child(tr_declutter_cancel_selection(lang))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.clear_declutter_selection(tab, cx);
                             })),
@@ -228,10 +217,7 @@ pub fn render_declutter_action_bar(
                         .text_sm()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(ON_PRIMARY))
-                        .child(match lang {
-                            Language::Zh => "清理所选项 ›",
-                            Language::En => "Remove Selected ›",
-                        })
+                        .child(tr_declutter_remove_selected(lang))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.clean_declutter_selected(tab, cx);
                         })),

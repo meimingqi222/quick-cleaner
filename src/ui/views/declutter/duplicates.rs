@@ -4,7 +4,7 @@ use super::common::{
     render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
 };
 use super::DeclutterTab;
-use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_files_duplicate};
@@ -31,10 +31,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
 
     let tab_nav = render_unified_nav_header(
         DeclutterTab::Duplicates,
-        match lang {
-            Language::Zh => "重复文件",
-            Language::En => "Duplicates",
-        },
+        tr_declutter_duplicates_title(lang),
         lang,
         cx,
     );
@@ -45,14 +42,8 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let groups_view: Vec<AnyElement> = if display_groups.is_empty() {
         vec![render_empty_state_card(
             "📑",
-            match lang {
-                Language::Zh => "未发现重复文件",
-                Language::En => "No duplicate files found",
-            },
-            match lang {
-                Language::Zh => "您的磁盘非常整洁，未发现占用空间的完全相同文件副本。",
-                Language::En => "Your drive is clean with no identical duplicate files.",
-            },
+            tr_declutter_duplicates_empty_title(lang),
+            tr_declutter_duplicates_empty_desc(lang),
         )]
     } else {
         display_groups
@@ -124,11 +115,10 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                                 .text_xs()
                                                 .text_color(rgb(OUTLINE))
                                                 .overflow_hidden()
-                                                .child(if lang == Language::Zh {
-                                                    format!("修改时间: {}", file.modified_at_str)
-                                                } else {
-                                                    format!("Modified: {}", file.modified_at_str)
-                                                }),
+                                                .child(tr_declutter_modified_at(
+                                                    lang,
+                                                    &file.modified_at_str,
+                                                )),
                                         ),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -163,10 +153,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(MUTED))
                                         .cursor_pointer()
-                                        .child(match lang {
-                                            Language::Zh => "定位",
-                                            Language::En => "Reveal",
-                                        })
+                                        .child(tr_declutter_reveal(lang))
                                         .on_click({
                                             let p = file.path.clone();
                                             cx.listener(
@@ -193,10 +180,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(MUTED))
                                         .cursor_pointer()
-                                        .child(match lang {
-                                            Language::Zh => "打开",
-                                            Language::En => "Open",
-                                        })
+                                        .child(tr_declutter_open(lang))
                                         .on_click({
                                             let p = file.path.clone();
                                             cx.listener(
@@ -217,10 +201,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(OUTLINE))
-                                            .child(match lang {
-                                                Language::Zh => "原件",
-                                                Language::En => "ORIGINAL",
-                                            }),
+                                            .child(tr_declutter_duplicates_original(lang)),
                                     )
                                 })
                                 .when(!is_orig && is_sel, |d| {
@@ -233,10 +214,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(ERROR))
-                                            .child(match lang {
-                                                Language::Zh => "副本",
-                                                Language::En => "DUPLICATE",
-                                            }),
+                                            .child(tr_declutter_duplicates_copy(lang)),
                                     )
                                 }),
                         )
@@ -294,19 +272,11 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                                     .text_xs()
                                                     .text_color(rgb(OUTLINE))
                                                     .overflow_hidden()
-                                                    .child(if lang == Language::Zh {
-                                                        format!(
-                                                            "{} · {} 份相同副本",
-                                                            fmt_size(group.size_per_copy),
-                                                            group.files.len()
-                                                        )
-                                                    } else {
-                                                        format!(
-                                                            "{} · {} identical copies",
-                                                            fmt_size(group.size_per_copy),
-                                                            group.files.len()
-                                                        )
-                                                    }),
+                                                    .child(tr_declutter_duplicates_group_sub(
+                                                        lang,
+                                                        &fmt_size(group.size_per_copy),
+                                                        group.files.len(),
+                                                    )),
                                             ),
                                     ),
                             ),
@@ -350,36 +320,16 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .text_2xl()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
-                                        .child(match lang {
-                                            Language::Zh => "重复文件",
-                                            Language::En => "Duplicate Files",
-                                        }),
+                                        .child(tr_declutter_duplicates_heading(lang)),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child(if lang == Language::Zh {
-                                            format!(
-                                                "共发现 {} 组完全相同的重复副本占用磁盘空间。{}",
-                                                state.duplicate_groups.len(),
-                                                if state.duplicate_groups.len() > 50 {
-                                                    "（列表展示占用空间最大的前 50 组）"
-                                                } else {
-                                                    ""
-                                                }
-                                            )
-                                        } else {
-                                            format!(
-                                                "Found {} sets of identical duplicate files hoarding storage.{}",
-                                                state.duplicate_groups.len(),
-                                                if state.duplicate_groups.len() > 50 {
-                                                    " (Displaying top 50 largest groups)"
-                                                } else {
-                                                    ""
-                                                }
-                                            )
-                                        }),
+                                        .child(tr_declutter_duplicates_summary(
+                                            lang,
+                                            state.duplicate_groups.len(),
+                                        )),
                                 ),
                         )
                         .child(
@@ -401,10 +351,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .text_color(rgb(TEXT))
                                         .hover(|h| h.bg(rgb(SURF_LOW)))
                                         .cursor_pointer()
-                                        .child(match lang {
-                                            Language::Zh => "保留最新副本",
-                                            Language::En => "Keep Newest",
-                                        })
+                                        .child(tr_declutter_duplicates_keep_newest(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.pick_duplicates_keep_newest();
                                             cx.notify();
@@ -424,10 +371,7 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .text_color(rgb(TEXT))
                                         .hover(|h| h.bg(rgb(SURF_LOW)))
                                         .cursor_pointer()
-                                        .child(match lang {
-                                            Language::Zh => "保留最旧副本",
-                                            Language::En => "Keep Oldest",
-                                        })
+                                        .child(tr_declutter_duplicates_keep_oldest(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.pick_duplicates_keep_oldest();
                                             cx.notify();

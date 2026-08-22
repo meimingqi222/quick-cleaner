@@ -2,6 +2,7 @@
 
 use super::DeclutterTab;
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::{
     icon_badge, icon_downloads, icon_files_duplicate, icon_photos_similar, icon_rocket, icon_weight,
@@ -70,10 +71,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(0x5c2d91))
-                                            .child(match lang {
-                                                Language::Zh => "扫描中...",
-                                                Language::En => "Scanning...",
-                                            }),
+                                            .child(tr_declutter_scanning(lang)),
                                     )
                             } else if let Some(secs) = state.scan_elapsed_secs {
                                 div()
@@ -96,14 +94,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(rgb(0x5c2d91))
-                                            .child(match lang {
-                                                Language::Zh => {
-                                                    format!("扫描耗时 {:.1}s", secs)
-                                                }
-                                                Language::En => {
-                                                    format!("Scan took {:.1}s", secs)
-                                                }
-                                            }),
+                                            .child(tr_declutter_scan_elapsed(lang, secs)),
                                     )
                             } else {
                                 div()
@@ -114,19 +105,13 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_3xl()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child(match lang {
-                                    Language::Zh => "磁盘冗余整理与瘦身",
-                                    Language::En => "Declutter Your Drive",
-                                }),
+                                .child(tr_declutter_overview_heading(lang)),
                         )
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(rgb(MUTED))
-                                .child(match lang {
-                                    Language::Zh => "我们识别到了占用存储空间的非必要文件。查看下方维度，只需轻点几下即可重获充裕的磁盘性能。",
-                                    Language::En => "We've identified unnecessary files hoarding your storage space. Review the categories below and reclaim your disk performance with a single click.",
-                                }),
+                                .child(tr_declutter_overview_subheading(lang)),
                         ),
                 )
                 .child(
@@ -153,15 +138,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_sm()
                                 .child(icon_rocket(0xffffff, 18.))
                                 .child(if state.scanning {
-                                    match lang {
-                                        Language::Zh => "正在智能分析扫描...",
-                                        Language::En => "Scanning Drive...",
-                                    }
+                                    tr_declutter_overview_scanning_btn(lang)
                                 } else {
-                                    match lang {
-                                        Language::Zh => "开启全盘冗余扫描",
-                                        Language::En => "Start Smart Scan",
-                                    }
+                                    tr_declutter_overview_scan_btn(lang)
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.start_declutter_scan(cx);
@@ -174,14 +153,11 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .child(if state.scanned {
                                     format!(
                                         "{} {}",
-                                        if lang == Language::Zh { "可优化空间:" } else { "Potential Savings:" },
+                                        tr_declutter_overview_savings_label(lang),
                                         fmt_size(total_savings)
                                     )
                                 } else {
-                                    match lang {
-                                        Language::Zh => "预计耗时: ~1-2 秒 (索引加速)".to_string(),
-                                        Language::En => "Estimated time: ~1-2 secs (Indexed)".to_string(),
-                                    }
+                                    tr_declutter_overview_scan_eta(lang).to_string()
                                 }),
                         ),
                 ),
@@ -242,19 +218,13 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                                 .text_base()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
-                                                                .child(match lang {
-                                                                    Language::Zh => "下载项文件夹",
-                                                                    Language::En => "Downloads Folder",
-                                                                }),
+                                                                .child(tr_declutter_overview_downloads_title(lang)),
                                                         )
                                                         .child(
                                                             div()
                                                                 .text_xs()
                                                                 .text_color(rgb(MUTED))
-                                                                .child(match lang {
-                                                                    Language::Zh => "历史安装包、归档与缓存",
-                                                                    Language::En => "Old installers and archives",
-                                                                }),
+                                                                .child(tr_declutter_overview_downloads_sub(lang)),
                                                         ),
                                                 ),
                                         )
@@ -267,10 +237,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::MEDIUM)
                                                 .text_color(rgb(TEXT))
-                                                .child(match lang {
-                                                    Language::Zh => "查看 ›",
-                                                    Language::En => "Review ›",
-                                                }),
+                                                .child(tr_declutter_review(lang)),
                                         ),
                                 )
                                 .child(
@@ -287,10 +254,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .text_xs()
                                                         .font_weight(gpui::FontWeight::BOLD)
                                                         .text_color(rgb(OUTLINE))
-                                                        .child(match lang {
-                                                            Language::Zh => "可释放空间",
-                                                            Language::En => "POTENTIAL SAVINGS",
-                                                        }),
+                                                        .child(tr_declutter_overview_potential_savings(lang)),
                                                 )
                                                 .child(
                                                     div()
@@ -299,10 +263,8 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .text_color(rgb(0x0078d4))
                                                         .child(if state.scanned {
                                                             fmt_size(downloads_size)
-                                                        } else if lang == Language::Zh {
-                                                            "待扫描".to_string()
                                                         } else {
-                                                            "Pending".to_string()
+                                                            tr_declutter_pending(lang).to_string()
                                                         }),
                                                 ),
                                         )
@@ -380,10 +342,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .text_base()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(TEXT))
-                                                .child(match lang {
-                                                    Language::Zh => "大型与旧文件",
-                                                    Language::En => "Large & Old Files",
-                                                }),
+                                                .child(tr_declutter_large_files_title(lang)),
                                         ),
                                 )
                                 .child(
@@ -415,10 +374,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(OUTLINE))
-                                                        .child(match lang {
-                                                            Language::Zh => "个文件",
-                                                            Language::En => "Files",
-                                                        }),
+                                                        .child(tr_declutter_overview_files_unit(lang)),
                                                 ),
                                         )
                                         .child(
@@ -430,10 +386,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(MUTED))
-                                                        .child(match lang {
-                                                            Language::Zh => "超过 100MB 且半年未访问",
-                                                            Language::En => "Over 100MB untouched in 6 mos",
-                                                        }),
+                                                        .child(tr_declutter_overview_large_files_sub(lang)),
                                                 ),
                                         ),
                                 )
@@ -451,15 +404,12 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(ERROR))
                                                 .child(if state.scanned {
-                                                    if lang == Language::Zh {
-                                                        format!("总计 ~{}", fmt_size(large_files_size))
-                                                    } else {
-                                                        format!("~{} Total", fmt_size(large_files_size))
-                                                    }
-                                                } else if lang == Language::Zh {
-                                                    "待扫描".to_string()
+                                                    tr_declutter_overview_large_files_total(
+                                                        lang,
+                                                        &fmt_size(large_files_size),
+                                                    )
                                                 } else {
-                                                    "Pending".to_string()
+                                                    tr_declutter_pending(lang).to_string()
                                                 }),
                                         )
                                         .child(
@@ -467,10 +417,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(PRIMARY))
-                                                .child(match lang {
-                                                    Language::Zh => "查看 ›",
-                                                    Language::En => "Review ›",
-                                                }),
+                                                .child(tr_declutter_review(lang)),
                                         ),
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -527,19 +474,13 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                                 .text_base()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
-                                                                .child(match lang {
-                                                                    Language::Zh => "重复文件",
-                                                                    Language::En => "Duplicates",
-                                                                }),
+                                                                .child(tr_declutter_duplicates_title(lang)),
                                                         )
                                                         .child(
                                                             div()
                                                                 .text_xs()
                                                                 .text_color(rgb(OUTLINE))
-                                                                .child(match lang {
-                                                                    Language::Zh => "冗余副本数据",
-                                                                    Language::En => "REDUNDANT DATA",
-                                                                }),
+                                                                .child(tr_declutter_overview_duplicates_kicker(lang)),
                                                         ),
                                                 ),
                                         ),
@@ -565,10 +506,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(MUTED))
-                                                        .child(match lang {
-                                                            Language::Zh => "组完全相同副本",
-                                                            Language::En => "Sets found across folders",
-                                                        }),
+                                                        .child(tr_declutter_overview_duplicates_unit(lang)),
                                                 ),
                                         )
                                         .child(
@@ -580,10 +518,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(0x5c2d91))
-                                                .child(match lang {
-                                                    Language::Zh => "智能挑选 ›",
-                                                    Language::En => "Select ›",
-                                                }),
+                                                .child(tr_declutter_overview_select(lang)),
                                         ),
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -633,19 +568,13 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                                 .text_base()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
-                                                                .child(match lang {
-                                                                    Language::Zh => "相似图片",
-                                                                    Language::En => "Similar Photos",
-                                                                }),
+                                                                .child(tr_declutter_photos_title(lang)),
                                                         )
                                                         .child(
                                                             div()
                                                                 .text_xs()
                                                                 .text_color(rgb(OUTLINE))
-                                                                .child(match lang {
-                                                                    Language::Zh => "视觉冗余整理",
-                                                                    Language::En => "VISUAL CLUTTER",
-                                                                }),
+                                                                .child(tr_declutter_overview_photos_kicker(lang)),
                                                         ),
                                                 ),
                                         )
@@ -679,10 +608,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(MUTED))
-                                                        .child(match lang {
-                                                            Language::Zh => "相似/连拍照片组",
-                                                            Language::En => "Estimated groups",
-                                                        }),
+                                                        .child(tr_declutter_overview_photos_unit(lang)),
                                                 )
                                                 .child(
                                                     div()
