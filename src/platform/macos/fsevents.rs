@@ -191,11 +191,7 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
 
     // 索引文件保存在用户目录内，保存索引本身也会产生 FSEvents；这些事件
     // 不代表用户文件发生变化，否则每次启动都会被自己的写盘操作触发重扫。
-    let cache_dir = dirs::home_dir().map(|home| {
-        home.join("Library")
-            .join("Application Support")
-            .join("QuickCleaner")
-    });
+    let cache_dir = super::cache::cache_dir_path();
     let mut paths = Vec::new();
     let mut requires_full_scan = false;
     let mut full_scan_reason: Option<&'static str> = None;

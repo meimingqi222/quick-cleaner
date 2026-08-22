@@ -1,18 +1,18 @@
-//! macOS 扫描结果缓存
+//! macOS 扫描结果索引持久化
 //!
-//! M4 的第一步：把扫描结果序列化到磁盘，下次启动时快速恢复。
+//! 把全量/增量扫描结果落盘为 v7 二进制索引，下次启动时 mmap 恢复，
+//! 避免每次都重新走一遍完整扫描。
 //!
-//! # 缓存策略
+//! # 索引文件
 //!
-//! - 缓存文件：`~/Library/Application Support/QuickCleaner/scan-cache.json`
-//! - 存储内容：卷标识、总大小、文件数、目录数、扫描时间、顶层目录摘要
-//! - 失效条件：缓存文件的修改时间与扫描时间不一致，或缓存超过 24 小时
+//! - Base 索引：`~/Library/Application Support/QuickCleaner/scan-index-<key>.bin`
+//! - Delta 增量：同目录下 `scan-index-<key>.delta.bin`，与 base 一一对应
+//! - `<key>` 由卷挂载点路径逐字节转十六进制得到
 //!
 //! # 测试隔离
 //!
 //! `QUICKCLEANER_CACHE_DIR` 环境变量可覆盖缓存目录。测试用它指向临时目录，
-//! 避免覆盖用户真实的缓存文件——`scan_volume` 在扫描完成后会无条件 `save()`，
-//! 不隔离的话跑一次 `cargo test` 就把用户的 `scan-cache.json` 冲掉。
+//! 避免覆盖用户真实的索引文件。
 //!
 //! # FSEvents 增量
 //!
@@ -21,121 +21,36 @@
 
 use crate::core::disk::{ScanResult, SizeTree, VolumeId};
 use crate::platform::macos::disk_tree::IndexMeta;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 缓存的单个目录摘要。
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CachedDir {
-    pub name: String,
-    pub size: u64,
-    pub file_count: u64,
-}
-
-/// 扫描结果的缓存条目。
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScanCache {
-    /// 卷的挂载点路径（用作缓存 key）
-    pub volume_mount: String,
-    /// 卷的展示标签
-    pub volume_label: String,
-    /// 总占用大小
-    pub total_size: u64,
-    /// 文件总数
-    pub file_count: u64,
-    /// 目录总数
-    pub dir_count: u64,
-    /// 扫描耗时（毫秒）
-    pub elapsed_ms: u64,
-    /// 扫描完成的时间戳（Unix epoch 秒）
-    pub scanned_at: u64,
-    /// 顶层目录摘要（最多 100 个，按大小降序）
-    pub top_dirs: Vec<CachedDir>,
-}
-
-impl ScanCache {
-    /// 缓存有效期：24 小时。
-    const MAX_AGE_SECS: u64 = 24 * 60 * 60;
-
-    /// 缓存目录路径。
-    ///
-    /// 优先读 `QUICKCLEANER_CACHE_DIR` 环境变量（测试隔离用），否则落到
-    /// `~/Library/Application Support/QuickCleaner`。环境变量指向的目录
-    /// 不存在时会自动创建。
-    fn cache_dir() -> Option<PathBuf> {
-        if let Ok(custom) = std::env::var("QUICKCLEANER_CACHE_DIR") {
-            let dir = PathBuf::from(custom);
-            std::fs::create_dir_all(&dir).ok()?;
-            return Some(dir);
-        }
-        let home = dirs::home_dir()?;
-        let dir = home
+/// 缓存/索引文件所在目录，**不保证存在**。
+///
+/// 唯一权威来源：[`cache_dir`]（会顺手建目录）和 FSEvents 的
+/// 自过滤都从这里取。以前 fsevents.rs 自己拼了一份写死的
+/// `~/Library/Application Support/QuickCleaner`，一旦 `QUICKCLEANER_CACHE_DIR`
+/// 生效，两边就指向不同目录——FSEvents 会把自己写索引产生的事件当成用户
+/// 文件变化，每次启动都触发一次全量重扫。
+pub(crate) fn cache_dir_path() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("QUICKCLEANER_CACHE_DIR") {
+        return Some(PathBuf::from(custom));
+    }
+    Some(
+        dirs::home_dir()?
             .join("Library")
             .join("Application Support")
-            .join("QuickCleaner");
-        std::fs::create_dir_all(&dir).ok()?;
-        Some(dir)
-    }
+            .join("QuickCleaner"),
+    )
+}
 
-    /// 缓存文件路径。
-    fn cache_path() -> Option<PathBuf> {
-        Self::cache_dir().map(|d| d.join("scan-cache.json"))
-    }
-
-    /// 保存扫描结果到缓存。
-    pub fn save(&self) {
-        if let Some(path) = Self::cache_path() {
-            if let Ok(json) = serde_json::to_string(self) {
-                let _ = std::fs::write(&path, json);
-            }
-        }
-    }
-
-    /// 加载缓存。如果缓存不存在、过期或损坏，返回 `None`。
-    pub fn load_for(volume: &VolumeId) -> Option<Self> {
-        let path = Self::cache_path()?;
-        let json = std::fs::read_to_string(&path).ok()?;
-        let cache: Self = serde_json::from_str(&json).ok()?;
-
-        // 检查卷是否匹配
-        if cache.volume_mount != volume.mount_point().to_string_lossy() {
-            return None;
-        }
-
-        // 检查是否过期
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if now > cache.scanned_at && now - cache.scanned_at > Self::MAX_AGE_SECS {
-            return None;
-        }
-
-        Some(cache)
-    }
-
-    /// 从扫描结果构建缓存条目。
-    pub fn from_scan(
-        volume: &VolumeId,
-        scan: &crate::core::disk::ScanResult,
-        top_dirs: Vec<CachedDir>,
-    ) -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        Self {
-            volume_mount: volume.mount_point().to_string_lossy().to_string(),
-            volume_label: volume.display().to_string(),
-            total_size: scan.total_size,
-            file_count: scan.file_count,
-            dir_count: scan.dir_count,
-            elapsed_ms: scan.elapsed_ms,
-            scanned_at: now,
-            top_dirs,
-        }
-    }
+/// 缓存/索引目录路径，不存在时自动创建。
+///
+/// 优先读 `QUICKCLEANER_CACHE_DIR` 环境变量（测试隔离用），否则落到
+/// `~/Library/Application Support/QuickCleaner`。
+pub(crate) fn cache_dir() -> Option<PathBuf> {
+    let dir = cache_dir_path()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 pub struct LoadedIndex {
@@ -152,14 +67,14 @@ static INDEX_SAVE_WATERMARKS: std::sync::LazyLock<
 fn index_path(volume: &VolumeId) -> Option<PathBuf> {
     let mount = volume.mount_point().to_string_lossy();
     let key: String = mount.bytes().map(|byte| format!("{byte:02x}")).collect();
-    ScanCache::cache_dir().map(|dir| dir.join(format!("scan-index-{key}.bin")))
+    cache_dir().map(|dir| dir.join(format!("scan-index-{key}.bin")))
 }
 
 /// delta 文件路径，与 base 索引一一对应。
 fn index_delta_path(volume: &VolumeId) -> Option<PathBuf> {
     let mount = volume.mount_point().to_string_lossy();
     let key: String = mount.bytes().map(|byte| format!("{byte:02x}")).collect();
-    ScanCache::cache_dir().map(|dir| dir.join(format!("scan-index-{key}.delta.bin")))
+    cache_dir().map(|dir| dir.join(format!("scan-index-{key}.delta.bin")))
 }
 
 /// 增量规模超过该值（追加 + 覆盖节点合计）时不再追加 delta，
@@ -503,39 +418,6 @@ mod tests {
         assert_eq!(tree.size_of(tree.root()), 4096);
         let restored = SizeTree::from_compact(volume, tree.compact_entries());
         assert_eq!(restored.size_of(restored.root()), 4096);
-    }
-
-    #[test]
-    fn cache_round_trip() {
-        let _guard = isolate_cache_dir("cache_round_trip");
-
-        let cache = ScanCache {
-            volume_mount: "/".to_string(),
-            volume_label: "/".to_string(),
-            total_size: 123456789,
-            file_count: 1000,
-            dir_count: 100,
-            elapsed_ms: 5000,
-            scanned_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            top_dirs: vec![CachedDir {
-                name: "Library".to_string(),
-                size: 50000000,
-                file_count: 500,
-            }],
-        };
-        cache.save();
-
-        let vol = VolumeId::from_mount_point(PathBuf::from("/"));
-        let loaded = ScanCache::load_for(&vol);
-        assert!(loaded.is_some(), "缓存应当能加载");
-        let loaded = loaded.unwrap();
-        assert_eq!(loaded.total_size, cache.total_size);
-        assert_eq!(loaded.file_count, cache.file_count);
-        assert_eq!(loaded.top_dirs.len(), 1);
-        assert_eq!(loaded.top_dirs[0].name, "Library");
     }
 
     #[test]
@@ -1292,7 +1174,7 @@ mod tests {
             );
         }
 
-        let baseline_path = ScanCache::cache_dir()
+        let baseline_path = cache_dir()
             .map(|d| d.join("search-perf-baseline.json"))
             .expect("应当有缓存目录");
         let update = std::env::var("QC_PERF_GATE_UPDATE").is_ok();

@@ -165,20 +165,8 @@ pub fn scan_volume(vol: &VolumeId, _top_n: usize) -> Result<ScanResult, ScanErro
     let live = std::sync::atomic::AtomicBool::new(true);
     let result = crate::platform::macos::walk::scan_root(root, vol.clone(), &live)?;
 
-    // 缓存扫描结果（M4 缓存层）
-    let top_dirs: Vec<crate::platform::macos::cache::CachedDir> = result
-        .tree
-        .children(result.tree.root())
-        .iter()
-        .take(100)
-        .map(|n| crate::platform::macos::cache::CachedDir {
-            name: n.name.clone(),
-            size: n.size,
-            file_count: n.file_count,
-        })
-        .collect();
-    let cache = crate::platform::macos::cache::ScanCache::from_scan(vol, &result, top_dirs);
-    cache.save();
+    // 全量扫描的持久化走 v7 二进制索引（见 cache::save_index），
+    // 这里不再重复构建/落盘一份只写不读的 JSON 摘要。
 
     Ok(result)
 }
