@@ -605,11 +605,18 @@ mod tests {
             &plist("<key>ProgramArguments</key><array><string>tool-on-path</string></array>"),
         );
         let empty = write("empty.plist", &plist(""));
+        // 语法根本不合法的 plist。原来靠一次 `plutil -lint` 预检拦下，
+        // 现在预检去掉了，得确认它仍然被判为损坏（`-extract` 会失败）。
+        let malformed = write("malformed.plist", "<plist><dict><key>Program");
 
         assert!(!is_broken_launch_agent(&valid));
         assert!(is_broken_launch_agent(&missing));
         assert!(!is_broken_launch_agent(&relative));
         assert!(is_broken_launch_agent(&empty));
+        assert!(
+            is_broken_launch_agent(&malformed),
+            "语法非法的 plist 必须判为损坏"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -12,29 +12,22 @@ pub(super) fn is_older_than(path: &Path, age: std::time::Duration) -> bool {
         .is_some_and(|elapsed| elapsed >= age)
 }
 
+/// LaunchAgent 的 plist 是不是已经指向一个不存在的程序。
+///
+/// 「什么算损坏」是领域判断，留在这里；读 plist 的机制在
+/// `platform::macos::plist`——以前这里直接 `Command::new("plutil")`，
+/// 是领域层自己调外部进程。
+///
+/// 另外去掉了原来先跑一次 `plutil -lint` 的预检：`-extract` 对语法非法的
+/// plist 本来就会失败，两条路都归到「读不出 Program」这个分支，结果完全
+/// 一样，但每个 plist 少 fork 一次进程。
 #[cfg(target_os = "macos")]
 pub(super) fn is_broken_launch_agent(plist: &Path) -> bool {
-    let valid = std::process::Command::new("plutil")
-        .args(["-lint", "-s"])
-        .arg(plist)
-        .status()
-        .is_ok_and(|status| status.success());
-    if !valid {
-        return true;
-    }
+    use crate::platform::macos::plist::read_scalar;
 
-    let read_value = |key: &str| {
-        std::process::Command::new("plutil")
-            .args(["-extract", key, "raw", "-o", "-"])
-            .arg(plist)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let Some(program) = read_value("Program").or_else(|| read_value("ProgramArguments.0")) else {
+    let Some(program) =
+        read_scalar(plist, "Program").or_else(|| read_scalar(plist, "ProgramArguments.0"))
+    else {
         return true;
     };
 

@@ -11,6 +11,7 @@ pub mod disk_tree;
 pub mod dock;
 pub mod elevate;
 pub mod fsevents;
+pub mod plist;
 pub mod residuals;
 pub mod tcc;
 pub mod trash;
