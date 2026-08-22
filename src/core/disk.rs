@@ -64,15 +64,20 @@ impl std::fmt::Display for VolumeId {
     }
 }
 
-/// 冗余整理时跳过的目录名（跨平台共享）。
+/// 扫描用户内容时统一跳过的目录名（跨平台共享的**基表**）。
 ///
-/// 隐藏目录、构建产物、依赖缓存等不含用户内容，整理时不应进入。
-pub fn is_declutter_ignored_dir_name(name: &str) -> bool {
-    let s = name.to_lowercase();
-    // 排除所有隐藏目录（以 . 开头，如 .cache, .npm, .cargo, .gradle, .git, .vscode, .idea 等）
-    if s.starts_with('.') {
+/// 隐藏目录、构建产物、依赖缓存、系统骨架等不含用户自己的文件。
+/// 以前这张表在 `core::disk` / `core::fs_query` / `core::declutter::photos`
+/// 各有一份，已经漂移出三种口径（回收站只有其中一份挡掉）。三个入口现在
+/// 都从这里取基表，各自只加自己那几条增量。
+///
+/// `name` 传目录名本身，不是路径。
+pub fn is_ignored_dir_name(name: &str) -> bool {
+    // 隐藏目录一律跳过（.cache、.npm、.cargo、.git、.vscode …）
+    if name.starts_with('.') {
         return true;
     }
+    let s = name.to_lowercase();
     matches!(
         s.as_str(),
         "node_modules"
@@ -108,7 +113,29 @@ pub fn is_declutter_ignored_dir_name(name: &str) -> bool {
             | "manual"
             | "sdk"
             | "javadoc"
-    )
+    ) || is_system_meta_dir_name(&s)
+}
+
+/// 系统自己的元数据目录。回收站尤其重要：里面全是已删除文件，
+/// 不该在「大文件 / 重复文件」里当成用户内容列出来给人再删一次。
+///
+/// `$Recycle.Bin` 不以 `.` 开头，隐藏目录规则挡不住它。
+fn is_system_meta_dir_name(lower: &str) -> bool {
+    matches!(lower, "$recycle.bin" | "system volume information")
+}
+
+/// 冗余整理（大文件候选枚举）时跳过的目录名。
+pub fn is_declutter_ignored_dir_name(name: &str) -> bool {
+    is_ignored_dir_name(name)
+}
+
+/// 图片整理额外跳过的目录名：素材/文档目录里的图多是软件自带资源，
+/// 不是用户相册内容。
+pub fn is_photo_ignored_dir_name(name: &str) -> bool {
+    if is_ignored_dir_name(name) {
+        return true;
+    }
+    matches!(name.to_lowercase().as_str(), "site" | "help" | "manuals")
 }
 
 /// 文件搜索结果条目。跨平台共用。
@@ -296,6 +323,42 @@ pub use super::disk_selection::DiskSelectionState;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回收站里全是已删除文件，不该在「大文件 / 重复文件」里当用户内容
+    /// 再列一遍。它不以 `.` 开头，隐藏目录规则挡不住，必须显式列入。
+    #[test]
+    fn recycle_bin_is_ignored_everywhere() {
+        for name in ["$RECYCLE.BIN", "$Recycle.Bin", "System Volume Information"] {
+            assert!(is_ignored_dir_name(name), "{name} 应被跳过");
+            assert!(is_declutter_ignored_dir_name(name), "{name} 应被跳过");
+            assert!(is_photo_ignored_dir_name(name), "{name} 应被跳过");
+        }
+    }
+
+    #[test]
+    fn shared_base_and_per_use_extras() {
+        // 基表：三个入口口径一致
+        for name in [
+            "node_modules",
+            ".git",
+            "Library",
+            "__pycache__",
+            "DerivedData",
+        ] {
+            assert!(is_declutter_ignored_dir_name(name));
+            assert!(is_photo_ignored_dir_name(name));
+        }
+        // 图片整理的增量：素材/文档目录只在它这里跳过
+        for name in ["site", "help", "manuals"] {
+            assert!(is_photo_ignored_dir_name(name), "{name} 图片整理应跳过");
+            assert!(!is_declutter_ignored_dir_name(name), "{name} 不属于基表");
+        }
+        // 普通用户目录不受影响
+        for name in ["Pictures", "我的照片", "Projects"] {
+            assert!(!is_ignored_dir_name(name));
+            assert!(!is_photo_ignored_dir_name(name));
+        }
+    }
 
     #[test]
     fn wildcard_match_basic() {

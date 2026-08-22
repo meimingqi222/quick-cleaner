@@ -326,48 +326,7 @@ impl<'a> FileIndexQuery for FSIndexEngine<'a> {
 
 fn is_ignored_scan_dir(p: &Path) -> bool {
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if name.starts_with('.') {
-        return true;
-    }
-    let s = name.to_lowercase();
-    matches!(
-        s.as_str(),
-        "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | "out"
-            | "bin"
-            | "obj"
-            | "pkg"
-            | "vendor"
-            | "pods"
-            | "deriveddata"
-            | "bower_components"
-            | "venv"
-            | "env"
-            | "__pycache__"
-            | "library"
-            | "appdata"
-            | "application data"
-            | "application support"
-            | "local settings"
-            | "cache"
-            | "caches"
-            | "temp"
-            | "tmp"
-            | "logs"
-            | "gems"
-            | "site-packages"
-            | "docs"
-            | "doc"
-            | "documentation"
-            | "manual"
-            | "sdk"
-            | "javadoc"
-            | "$recycle.bin"
-            | "system volume information"
-    )
+    crate::core::disk::is_ignored_dir_name(name)
 }
 
 #[cfg(test)]

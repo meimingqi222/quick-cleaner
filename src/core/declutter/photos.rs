@@ -398,60 +398,9 @@ fn is_sequential_camera_name(stem_a: &str, stem_b: &str) -> bool {
 }
 
 fn is_ignored_photo_path(p: &Path) -> bool {
-    for comp in p.components() {
-        let name = comp.as_os_str().to_string_lossy();
-        if name.starts_with('.') {
-            return true;
-        }
-        let s = name.to_lowercase();
-        if matches!(
-            s.as_str(),
-            "node_modules"
-                | "target"
-                | "dist"
-                | "build"
-                | "out"
-                | "bin"
-                | "obj"
-                | "pkg"
-                | "vendor"
-                | "pods"
-                | "deriveddata"
-                | "bower_components"
-                | "venv"
-                | "env"
-                | "__pycache__"
-                | "library"
-                | "appdata"
-                | "application data"
-                | "application support"
-                | "cache"
-                | "caches"
-                | "temp"
-                | "tmp"
-                | "logs"
-                | "gems"
-                | "site-packages"
-                | "docs"
-                | "doc"
-                | "documentation"
-                | "manual"
-                | "manuals"
-                | "sdk"
-                | "javadoc"
-                | "site"
-                | "help"
-        ) {
-            return true;
-        }
-    }
-    let s = p.to_string_lossy().to_lowercase();
-    s.contains(".photoslibrary/database")
-        || s.contains(".photoslibrary/scopes")
-        || s.contains(".photoslibrary/search")
-        || s.contains(".photoslibrary/private")
-        || s.contains(".photoslibrary/resources")
-        || s.contains(".gdb")
+    p.components().any(|comp| {
+        crate::core::disk::is_photo_ignored_dir_name(&comp.as_os_str().to_string_lossy())
+    })
 }
 
 fn estimate_dimensions(file_size: u64) -> (u32, u32) {
