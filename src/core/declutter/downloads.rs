@@ -2,6 +2,7 @@
 
 use crate::core::disk::SizeTree;
 use crate::core::fs_query::{FSIndexEngine, FileIndexQuery, QueryFilter};
+use crate::core::i18n::Text;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
@@ -12,7 +13,7 @@ pub struct DownloadItem {
     pub path: PathBuf,
     pub size: u64,
     pub modified_at: u64,
-    pub downloaded_at_str: String,
+    pub downloaded_at_str: Text,
     pub kind_zh: &'static str,
     pub kind_en: &'static str,
     pub selected: bool,
@@ -44,7 +45,7 @@ pub fn scan_downloads_folder(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<
                 .unwrap_or_default();
 
             let (kind_zh, kind_en) = classify_download_extension(&f.path);
-            let time_str = format_relative_age(f.mtime, now_secs);
+            let time_str = format_relative_age_text(f.mtime, now_secs);
 
             DownloadItem {
                 filename,
@@ -89,22 +90,14 @@ fn classify_download_extension(path: &Path) -> (&'static str, &'static str) {
     }
 }
 
-fn format_relative_age(mtime: u64, now_secs: u64) -> String {
+/// 时间戳版本：先把 mtime 换算成「距今天数」，再委托给 [`super::format_age_text`]，
+/// 避免和大文件页那份「今天/昨天/N 天前」分支逻辑重复维护两次。
+/// mtime 为 0（未知修改时间）或晚于当前时间（异常/时钟漂移）时，两种语言都
+/// 展示"刚刚/Just now"，不参与天数换算。
+fn format_relative_age_text(mtime: u64, now_secs: u64) -> Text {
     if mtime == 0 || now_secs <= mtime {
-        return "刚刚".to_string();
+        return Text::new("刚刚", "Just now");
     }
-    let diff = now_secs.saturating_sub(mtime);
-    let days = diff / 86400;
-
-    if days == 0 {
-        "今天".to_string()
-    } else if days == 1 {
-        "昨天".to_string()
-    } else if days < 30 {
-        format!("{} 天前", days)
-    } else if days < 365 {
-        format!("{} 个月前", days / 30)
-    } else {
-        format!("{} 年前", days / 365)
-    }
+    let days = now_secs.saturating_sub(mtime) / 86400;
+    super::format_age_text(days)
 }

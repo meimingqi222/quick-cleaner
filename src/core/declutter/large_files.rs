@@ -1,8 +1,9 @@
 //! 大文件与旧文件扫描器 (Large & Old Files Scanner)
 
-use super::{format_age_str, get_user_content_roots};
+use super::{format_age_text, get_user_content_roots};
 use crate::core::disk::SizeTree;
 use crate::core::fs_query::{FSIndexEngine, FileIndexQuery};
+use crate::core::i18n::Text;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,7 +15,7 @@ pub struct LargeFileItem {
     pub path: PathBuf,
     pub size: u64,
     pub last_accessed_secs: u64,
-    pub last_accessed_str: String,
+    pub last_accessed_str: Text,
     pub kind_zh: &'static str,
     pub kind_en: &'static str,
     pub icon_type: usize,
@@ -54,7 +55,7 @@ pub fn scan_large_old_files(
 
             let (kind_zh, kind_en, icon_type) = classify_large_file_type(&ext);
             let age_days = now.saturating_sub(f.mtime) / 86400;
-            let last_accessed_str = format_age_str(age_days);
+            let last_accessed_str = format_age_text(age_days);
 
             let selected = age_days >= 90;
 

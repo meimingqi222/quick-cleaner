@@ -1,8 +1,11 @@
-//! 文件整理扫描动作
+//! 文件整理的扫描与清理动作
 
+use crate::core::cleaner::{clean_arbitrary, CleanProgress, Disposal};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
+use crate::ui::views::DeclutterTab;
 use gpui::Context;
+use std::path::{Path, PathBuf};
 
 impl crate::ui::Root {
     pub fn start_declutter_scan(&mut self, cx: &mut Context<Self>) {
@@ -99,5 +102,149 @@ impl crate::ui::Root {
             .ok();
         })
         .detach();
+    }
+
+    /// 冗余整理四个页签共用的「清理所选项」。
+    ///
+    /// 委托给 `core::cleaner::clean_arbitrary(Disposal::RecycleBin)`——它本来就是
+    /// 为「用户手选的任意路径」设计的：循环 → `is_protected` → 处置 → 报表，
+    /// 和这里需要的形状完全一致。以前 declutter 自带一份 `clean_declutter_items`
+    /// 平行实现，代价是三份 trash 原语、两套保护检查、两套计数口径各自演化，
+    /// 符号链接和目录大小两个 bug 就是各自补课补出来的。
+    ///
+    /// 计数口径也随之对齐 core 的不变量：**移入废纸篓不释放空间**，所以只报
+    /// 条目数，不再说「释放 X」。
+    pub fn clean_declutter_selected(&mut self, tab: DeclutterTab, cx: &mut Context<Self>) {
+        if self.declutter.cleaning {
+            return;
+        }
+        let paths = self.selected_declutter_paths(tab);
+        if paths.is_empty() {
+            return;
+        }
+
+        let n = paths.len();
+        self.declutter.cleaning = true;
+        self.status = bilingual(move |l| match l {
+            Language::Zh => format!("正在把 {n} 项移入废纸篓..."),
+            Language::En => format!("Moving {n} items to Trash..."),
+        });
+        cx.notify();
+
+        let work = cx.background_executor().spawn(async move {
+            // 废纸篓不释放空间，字节总量填 0：进度条上的「已释放」必须是真的。
+            let progress = CleanProgress::new(paths.len() as u64, 0);
+            let report = clean_arbitrary(&paths, Disposal::RecycleBin, &progress);
+            let failed: Vec<PathBuf> = report
+                .failed
+                .iter()
+                .chain(report.manual.iter())
+                .filter_map(|f| f.as_path().map(Path::to_path_buf))
+                .collect();
+            (report.ok, failed)
+        });
+
+        self.declutter.clean_task = Some(cx.spawn(async move |this, cx| {
+            let (moved, failed) = work.await;
+            this.update(cx, |this, cx| {
+                this.declutter.cleaning = false;
+                // 只摘掉真正移走的条目：失败的留在列表里，用户还能看见和重试。
+                this.prune_cleaned_declutter_items(tab, &failed);
+
+                let (zh_noun, en_noun) = declutter_item_noun(tab);
+                let n_failed = failed.len();
+                this.status = bilingual(move |l| match l {
+                    Language::Zh => {
+                        let mut msg = format!("已把 {moved} 个{zh_noun}移入废纸篓");
+                        if n_failed > 0 {
+                            msg.push_str(&format!("；{n_failed} 个失败"));
+                        }
+                        msg
+                    }
+                    Language::En => {
+                        let mut msg = format!("Moved {moved} {en_noun} to Trash");
+                        if n_failed > 0 {
+                            msg.push_str(&format!("; {n_failed} failed"));
+                        }
+                        msg
+                    }
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// 当前页签下被勾选的路径。
+    fn selected_declutter_paths(&self, tab: DeclutterTab) -> Vec<PathBuf> {
+        let d = &self.declutter;
+        match tab {
+            DeclutterTab::Downloads => d
+                .download_items
+                .iter()
+                .filter(|f| f.selected)
+                .map(|f| f.path.clone())
+                .collect(),
+            DeclutterTab::LargeFiles => d
+                .large_files
+                .iter()
+                .filter(|f| f.selected)
+                .map(|f| f.path.clone())
+                .collect(),
+            DeclutterTab::SimilarPhotos => d
+                .photo_groups
+                .iter()
+                .flat_map(|g| &g.photos)
+                .filter(|p| p.selected)
+                .map(|p| p.path.clone())
+                .collect(),
+            DeclutterTab::Duplicates => d
+                .duplicate_groups
+                .iter()
+                .flat_map(|g| &g.files)
+                .filter(|f| f.selected)
+                .map(|f| f.path.clone())
+                .collect(),
+            DeclutterTab::Overview => Vec::new(),
+        }
+    }
+
+    /// 删除完成后把已清掉的条目从列表里摘掉。
+    ///
+    /// 分组页签还要丢掉只剩一个成员的组：一张照片谈不上「相似」，
+    /// 一个文件谈不上「重复」。
+    fn prune_cleaned_declutter_items(&mut self, tab: DeclutterTab, failed: &[PathBuf]) {
+        // 勾上了但没移走的要留下：以前无条件按 selected 摘除，失败的条目会从
+        // 界面上消失，用户以为清掉了，其实文件还在盘上。
+        let gone = |path: &PathBuf, selected: bool| selected && !failed.contains(path);
+        let d = &mut self.declutter;
+        match tab {
+            DeclutterTab::Downloads => d.download_items.retain(|f| !gone(&f.path, f.selected)),
+            DeclutterTab::LargeFiles => d.large_files.retain(|f| !gone(&f.path, f.selected)),
+            DeclutterTab::SimilarPhotos => {
+                for g in &mut d.photo_groups {
+                    g.photos.retain(|p| !gone(&p.path, p.selected));
+                }
+                d.photo_groups.retain(|g| g.photos.len() >= 2);
+            }
+            DeclutterTab::Duplicates => {
+                for g in &mut d.duplicate_groups {
+                    g.files.retain(|f| !gone(&f.path, f.selected));
+                }
+                d.duplicate_groups.retain(|g| g.files.len() >= 2);
+            }
+            DeclutterTab::Overview => {}
+        }
+    }
+}
+
+/// 状态栏里对这批条目的称呼。
+fn declutter_item_noun(tab: DeclutterTab) -> (&'static str, &'static str) {
+    match tab {
+        DeclutterTab::Downloads => ("下载项", "downloads"),
+        DeclutterTab::LargeFiles => ("大文件", "large files"),
+        DeclutterTab::SimilarPhotos => ("相似照片", "similar photos"),
+        DeclutterTab::Duplicates => ("重复文件", "duplicate files"),
+        DeclutterTab::Overview => ("项目", "items"),
     }
 }

@@ -2,7 +2,6 @@
 
 use super::common::{render_empty_state_card, render_unified_nav_header};
 use super::DeclutterTab;
-use crate::core::declutter::clean_declutter_items;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
@@ -11,7 +10,6 @@ use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, Context, SharedString};
-use std::path::PathBuf;
 
 pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
@@ -208,7 +206,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .text_right()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child(item.downloaded_at_str.clone()),
+                                    .child(item.downloaded_at_str.get(lang).to_string()),
                             ),
                     )
                     .into_any_element()
@@ -374,31 +372,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             Language::En => "Remove Selected ›",
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let paths_to_delete: Vec<PathBuf> = this
-                                .declutter
-                                .download_items
-                                .iter()
-                                .filter(|f| f.selected)
-                                .map(|f| f.path.clone())
-                                .collect();
-
-                            if !paths_to_delete.is_empty() {
-                                let report = clean_declutter_items(&paths_to_delete, true);
-                                this.declutter.download_items.retain(|f| !f.selected);
-                                this.status = crate::core::i18n::Text::new(
-                                    format!(
-                                        "已清理 {} 个下载项，释放 {}",
-                                        report.deleted_files,
-                                        fmt_size(report.freed_bytes)
-                                    ),
-                                    format!(
-                                        "Cleaned {} downloads, freed {}",
-                                        report.deleted_files,
-                                        fmt_size(report.freed_bytes)
-                                    ),
-                                );
-                                cx.notify();
-                            }
+                            this.clean_declutter_selected(DeclutterTab::Downloads, cx);
                         })),
                 ),
         )

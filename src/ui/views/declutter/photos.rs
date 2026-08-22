@@ -2,7 +2,6 @@
 
 use super::common::{render_empty_state_card, render_unified_nav_header};
 use super::DeclutterTab;
-use crate::core::declutter::clean_declutter_items;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
@@ -11,7 +10,6 @@ use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
 use gpui::{div, img, px, rgb, AnyElement, Context, SharedString};
-use std::path::PathBuf;
 
 pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
@@ -832,35 +830,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             fmt_size(total_cleanable)
                                         ))
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            let paths_to_delete: Vec<PathBuf> = this
-                                                .declutter
-                                                .photo_groups
-                                                .iter()
-                                                .flat_map(|g| &g.photos)
-                                                .filter(|p| p.selected)
-                                                .map(|p| p.path.clone())
-                                                .collect();
-
-                                            if !paths_to_delete.is_empty() {
-                                                let report = clean_declutter_items(&paths_to_delete, true);
-                                                for g in &mut this.declutter.photo_groups {
-                                                    g.photos.retain(|p| !p.selected);
-                                                }
-                                                this.declutter.photo_groups.retain(|g| g.photos.len() >= 2);
-                                                this.status = crate::core::i18n::Text::new(
-                                                    format!(
-                                                        "已清理 {} 张相似照片，释放 {}",
-                                                        report.deleted_files,
-                                                        fmt_size(report.freed_bytes)
-                                                    ),
-                                                    format!(
-                                                        "Cleaned {} similar photos, freed {}",
-                                                        report.deleted_files,
-                                                        fmt_size(report.freed_bytes)
-                                                    ),
-                                                );
-                                                cx.notify();
-                                            }
+                                            this.clean_declutter_selected(DeclutterTab::SimilarPhotos, cx);
                                         })),
                                 ),
                         ),

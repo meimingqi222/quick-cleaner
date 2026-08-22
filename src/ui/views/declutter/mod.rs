@@ -20,7 +20,7 @@ pub use photos::render_similar_photos_tab;
 use crate::core::declutter::{DownloadItem, DuplicateGroup, LargeFileItem, PhotoGroup};
 use crate::core::i18n::Language;
 use crate::ui::Root;
-use gpui::{AnyElement, Context};
+use gpui::{AnyElement, Context, Task};
 
 /// 冗余整理子标签页
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +65,12 @@ pub struct DeclutterState {
     pub kind_filter: Option<usize>,
     pub context_menu: Option<DeclutterContextMenu>,
     pub expanded_photo_groups: std::collections::HashSet<usize>,
+    /// 正在后台执行删除。四个页签的「清理所选项」以前在 on_click 里同步
+    /// 删文件，几百个条目就足以把 UI 线程卡到无响应；现在走后台任务，
+    /// 这个标志用来挡住任务未完成时的重复点击。
+    pub cleaning: bool,
+    /// 删除任务独占的句柄，与扫描任务分开持有，两者不会互相顶掉。
+    pub clean_task: Option<Task<()>>,
 }
 
 impl Default for DeclutterState {
@@ -83,6 +89,8 @@ impl Default for DeclutterState {
             kind_filter: None,
             context_menu: None,
             expanded_photo_groups: std::collections::HashSet::new(),
+            cleaning: false,
+            clean_task: None,
         }
     }
 }
