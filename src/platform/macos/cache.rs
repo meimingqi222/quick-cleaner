@@ -569,7 +569,7 @@ mod tests {
         let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         let cs_off = u32::from_le_bytes(bytes[88..92].try_into().unwrap()) as usize;
         bytes[cs_off + n * 4..cs_off + (n + 1) * 4].copy_from_slice(&0u32.to_le_bytes());
-        let sum = crate::platform::macos::disk_tree::index_checksum_bytes(&bytes);
+        let sum = crate::platform::macos::index_v7::index_checksum_bytes(&bytes);
         bytes[72..80].copy_from_slice(&sum.to_le_bytes());
         std::fs::write(&path, bytes).expect("应当能写回结构损坏的索引");
         assert!(
@@ -591,7 +591,7 @@ mod tests {
         assert!(ca_len >= 2);
         let first = bytes[ca_off..ca_off + 4].to_vec();
         bytes[ca_off + 4..ca_off + 8].copy_from_slice(&first);
-        let sum = crate::platform::macos::disk_tree::index_checksum_bytes(&bytes);
+        let sum = crate::platform::macos::index_v7::index_checksum_bytes(&bytes);
         bytes[72..80].copy_from_slice(&sum.to_le_bytes());
         std::fs::write(&path, bytes).expect("应当能写回结构损坏的索引");
         assert!(
@@ -613,7 +613,7 @@ mod tests {
         let parent_off = ent_off + 24;
         let used_dir_bits = 0xC000_0000u32;
         bytes[parent_off..parent_off + 4].copy_from_slice(&(2u32 | used_dir_bits).to_le_bytes());
-        let sum = crate::platform::macos::disk_tree::index_checksum_bytes(&bytes);
+        let sum = crate::platform::macos::index_v7::index_checksum_bytes(&bytes);
         bytes[72..80].copy_from_slice(&sum.to_le_bytes());
         std::fs::write(&path, bytes).expect("应当能写回结构损坏的索引");
         assert!(
@@ -823,7 +823,7 @@ mod tests {
         let mut bytes = std::fs::read(&delta_path).expect("应当能读出 delta");
         let appended_index = scan.tree.entry_count() as u32;
         bytes[128..132].copy_from_slice(&appended_index.to_le_bytes());
-        let sum = crate::platform::macos::disk_tree::delta_checksum(&bytes[..128], &bytes[128..]);
+        let sum = crate::platform::macos::index_v7::delta_checksum(&bytes[..128], &bytes[128..]);
         bytes[100..108].copy_from_slice(&sum.to_le_bytes());
         std::fs::write(&delta_path, bytes).expect("应当能写回损坏 delta");
 

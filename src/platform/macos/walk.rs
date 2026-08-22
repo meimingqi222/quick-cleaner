@@ -12,8 +12,10 @@
 //! - **权限错误**：跳过不可访问目录，不中断扫描。
 //! - **取消**：通过 `AtomicBool` 检查取消标志。
 
+use super::index_v7::{
+    finalize_checksum, now_secs, MmapOut, MmapPool, NameInterner, V7Header, V7Layout,
+};
 use crate::core::disk::{ScanError, ScanResult, SizeTree, TreeEntry, VolumeId};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -743,53 +745,15 @@ fn build_size_tree(volume: VolumeId, buf: ScanBuf) -> SizeTree {
         return SizeTree::empty(volume);
     }
 
-    let mut intern_map: std::collections::HashMap<u64, u32> =
-        std::collections::HashMap::with_capacity(n / 4);
-    let mut name_pool = Vec::with_capacity(buf.names.len().min(n * 12));
+    let mut intern = NameInterner::with_capacity(n);
     let mut tree_entries = Vec::with_capacity(n);
-
-    fn fnv1a64(data: &[u8]) -> u64 {
-        let mut h = 0xcbf29ce484222325u64;
-        for b in data {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100_0000_01b3);
-        }
-        h
-    }
 
     for e in &buf.entries {
         let start = e.name_off as usize;
         let end = start
             .saturating_add(e.name_len as usize)
             .min(buf.names.len());
-        let name = &buf.names[start..end];
-        let h = fnv1a64(name);
-        let name_off = if let Some(&off) = intern_map.get(&h) {
-            let i = off as usize;
-            let len = if i + 2 <= name_pool.len() {
-                u16::from_le_bytes([name_pool[i], name_pool[i + 1]]) as usize
-            } else {
-                0
-            };
-            let existing = &name_pool[i + 2..i + 2 + len];
-            if existing == name {
-                off
-            } else {
-                let off = name_pool.len() as u32;
-                let len = name.len() as u16;
-                name_pool.extend_from_slice(&len.to_le_bytes());
-                name_pool.extend_from_slice(name);
-                intern_map.insert(h, off);
-                off
-            }
-        } else {
-            let off = name_pool.len() as u32;
-            let len = name.len() as u16;
-            name_pool.extend_from_slice(&len.to_le_bytes());
-            name_pool.extend_from_slice(name);
-            intern_map.insert(h, off);
-            off
-        };
+        let name_off = intern.intern(&buf.names[start..end]);
         tree_entries.push(TreeEntry::new(
             e.parent,
             name_off,
@@ -799,7 +763,7 @@ fn build_size_tree(volume: VolumeId, buf: ScanBuf) -> SizeTree {
             if e.is_dir { 0 } else { 1 },
         ));
     }
-    drop(intern_map);
+    let name_pool = intern.finish();
     drop(buf);
 
     SizeTree::from_packed(volume, name_pool, tree_entries)
@@ -889,11 +853,6 @@ fn build_size_tree_streaming(
     volume: VolumeId,
     p: StreamingBuild<'_>,
 ) -> Result<SizeTree, std::io::Error> {
-    use crate::platform::macos::disk_tree::{
-        index_checksum_bytes, INDEX_V7_HEADER, INDEX_V7_MAGIC,
-    };
-    use std::os::unix::io::AsRawFd;
-
     let StreamingBuild {
         spill_path,
         n: n_u64,
@@ -909,6 +868,8 @@ fn build_size_tree_streaming(
             "溢写为空",
         ));
     }
+    let cancelled = || std::io::Error::new(std::io::ErrorKind::Interrupted, "扫描已取消");
+
     // 每趟读取都独立打开文件：try_clone 复制的 fd 与原句柄共享偏移，
     // 第一趟读到 EOF 后第二趟会立刻拿到空流。
     // Pass A0：每个节点的子节点数 → CSR 前缀和。
@@ -919,10 +880,7 @@ fn build_size_tree_streaming(
         let mut name_buf = Vec::new();
         for i in 0..n {
             if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "扫描已取消",
-                ));
+                return Err(cancelled());
             }
             let rec = read_spill_rec(&mut r, &mut name_buf)?.ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "溢写提前结束")
@@ -935,26 +893,19 @@ fn build_size_tree_streaming(
     let mut ca_len = 0usize;
     for (i, s) in start.iter_mut().enumerate() {
         if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "扫描已取消",
-            ));
+            return Err(cancelled());
         }
         let c = *s;
         *s = ca_len as u32;
         ca_len += c as usize;
     }
 
-    // 布局：header | mount/label | entries | CSR | names
     let mount = volume.mount_point().to_string_lossy().into_owned();
     let label = volume.display().to_string();
     let mount_b = mount.as_bytes();
     let label_b = label.as_bytes();
-    let ent_off = (INDEX_V7_HEADER + mount_b.len() + label_b.len() + 7) & !7;
-    let cs_off = ent_off + n * 24;
-    let ca_off = cs_off + (n + 1) * 4;
-    let pool_off = ca_off + ca_len * 4;
-    let reserve_len = pool_off + name_bytes as usize;
+    let layout =
+        V7Layout::names_trailing(n, mount_b.len(), label_b.len(), ca_len, name_bytes as usize);
 
     // 输出文件：持久化目标走 .tmp 再 rename；否则用独立临时文件
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -966,187 +917,76 @@ fn build_size_tree_streaming(
             SEQ.fetch_add(1, Ordering::Relaxed)
         )),
     };
-    struct OutputCleanup(PathBuf);
-    impl Drop for OutputCleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let _output_cleanup = OutputCleanup(out_path.clone());
-    let out = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .open(&out_path)?;
-    out.set_len(reserve_len as u64)?;
-    let ptr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            reserve_len,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            out.as_raw_fd(),
-            0,
-        )
-    };
-    if ptr == libc::MAP_FAILED {
-        let _ = std::fs::remove_file(&out_path);
-        return Err(std::io::Error::last_os_error());
-    }
-    struct Guard {
-        ptr: *mut u8,
-        len: usize,
-    }
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            if !self.ptr.is_null() {
-                unsafe {
-                    libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_DONTNEED);
-                    libc::munmap(self.ptr as *mut libc::c_void, self.len);
-                }
-                self.ptr = std::ptr::null_mut();
-            }
-        }
-    }
-    let guard = Guard {
-        ptr: ptr as *mut u8,
-        len: reserve_len,
-    };
-    let buf = unsafe { std::slice::from_raw_parts_mut(guard.ptr, reserve_len) };
+    let mut out = MmapOut::create(out_path, layout.len)?;
+    let ptr = out.ptr();
+    let buf = out.as_mut_slice();
 
     // child_start 先填前缀和，Pass A 里当游标递增，结束后重写
-    for (i, s) in start.iter().enumerate() {
-        let o = cs_off + i * 4;
-        buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
-    }
-    buf[cs_off + n * 4..cs_off + n * 4 + 4].copy_from_slice(&(ca_len as u32).to_le_bytes());
+    layout.write_child_start(buf, &start);
 
     // Pass A：intern 名字 + 写条目 + 填 child_at
-    fn fnv1a64(data: &[u8]) -> u64 {
-        let mut h = 0xcbf29ce484222325u64;
-        for b in data {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100_0000_01b3);
-        }
-        h
-    }
-    const MSYNC_CHUNK: usize = 32 * 1024 * 1024;
-    let mut intern: HashMap<u64, u32> = HashMap::with_capacity(n / 4);
-    let mut pool_cursor = pool_off;
-    let mut synced = 0usize;
+    let mut pool = MmapPool::new(layout.name_off, n);
     {
         let f = std::fs::File::open(spill_path)?;
         let mut r = std::io::BufReader::with_capacity(1 << 20, f);
         let mut name_buf = Vec::new();
         for i in 0..n {
             if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "扫描已取消",
-                ));
+                return Err(cancelled());
             }
             let rec = read_spill_rec(&mut r, &mut name_buf)?.ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "溢写提前结束")
             })?;
-            let h = fnv1a64(&name_buf);
-            let name_off = match intern.get(&h) {
-                Some(&off) => {
-                    let p = pool_off + off as usize;
-                    let len = u16::from_le_bytes([buf[p], buf[p + 1]]) as usize;
-                    if len == name_buf.len() && &buf[p + 2..p + 2 + len] == name_buf.as_slice() {
-                        off
-                    } else {
-                        let off = (pool_cursor - pool_off) as u32;
-                        buf[pool_cursor..pool_cursor + 2]
-                            .copy_from_slice(&(name_buf.len() as u16).to_le_bytes());
-                        pool_cursor += 2;
-                        buf[pool_cursor..pool_cursor + name_buf.len()].copy_from_slice(&name_buf);
-                        pool_cursor += name_buf.len();
-                        intern.insert(h, off);
-                        off
-                    }
-                }
-                None => {
-                    let off = (pool_cursor - pool_off) as u32;
-                    buf[pool_cursor..pool_cursor + 2]
-                        .copy_from_slice(&(name_buf.len() as u16).to_le_bytes());
-                    pool_cursor += 2;
-                    buf[pool_cursor..pool_cursor + name_buf.len()].copy_from_slice(&name_buf);
-                    pool_cursor += name_buf.len();
-                    intern.insert(h, off);
-                    off
-                }
-            };
-            let entry = TreeEntry::new(
+            let name_off = pool.intern(buf, &name_buf);
+            TreeEntry::new(
                 rec.parent,
                 name_off,
                 rec.is_dir,
                 rec.size,
                 rec.mtime as u64,
                 if rec.is_dir { 0 } else { 1 },
-            );
-            entry.write_bytes_to(&mut buf[ent_off + i * 24..ent_off + i * 24 + 24]);
+            )
+            .write_bytes_to(&mut buf[layout.entry_at(i)]);
             if i > 0 {
-                let co4 = cs_off + rec.parent as usize * 4;
-                let cur = u32::from_le_bytes(buf[co4..co4 + 4].try_into().unwrap()) as usize;
-                let co = ca_off + cur * 4;
-                buf[co..co + 4].copy_from_slice(&(i as u32).to_le_bytes());
-                buf[co4..co4 + 4].copy_from_slice(&((cur + 1) as u32).to_le_bytes());
+                layout.push_child(buf, rec.parent, i as u32);
             }
-            if pool_cursor - synced > MSYNC_CHUNK {
-                unsafe {
-                    libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_ASYNC);
-                }
-                synced = pool_cursor;
-            }
+            pool.maybe_flush(ptr);
         }
     }
-    drop(intern);
 
     // 重写 child_start（Pass A 里被当成游标改掉了）
-    for (i, s) in start.iter().enumerate() {
-        let o = cs_off + i * 4;
-        buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
-    }
+    layout.write_child_start(buf, &start);
     drop(start);
 
     // 聚合传播：目录清零后把文件大小沿父链累加。全部直接操作映射页。
     for i in 0..n {
         if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "扫描已取消",
-            ));
+            return Err(cancelled());
         }
-        let o = ent_off + i * 24;
-        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
+        let slot = layout.entry_at(i);
+        let e = TreeEntry::from_bytes(&buf[slot.clone()]);
         if e.is_dir() && (e.size != 0 || e.file_count != 0) {
-            e.with_totals(0, 0).write_bytes_to(&mut buf[o..o + 24]);
+            e.with_totals(0, 0).write_bytes_to(&mut buf[slot]);
         }
     }
     for i in 0..n {
         if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "扫描已取消",
-            ));
+            return Err(cancelled());
         }
-        let o = ent_off + i * 24;
-        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
+        let e = TreeEntry::from_bytes(&buf[layout.entry_at(i)]);
         if e.is_dir() {
             continue;
         }
         let (add_size, add_files) = (e.size, 1u32);
         let mut cur = e.parent();
         loop {
-            let po = ent_off + cur as usize * 24;
-            let p = TreeEntry::from_bytes(&buf[po..po + 24]);
+            let slot = layout.entry_at(cur as usize);
+            let p = TreeEntry::from_bytes(&buf[slot.clone()]);
             p.with_totals(
                 p.size.saturating_add(add_size),
                 p.file_count.saturating_add(add_files),
             )
-            .write_bytes_to(&mut buf[po..po + 24]);
+            .write_bytes_to(&mut buf[slot]);
             if cur == 0 {
                 break;
             }
@@ -1162,69 +1002,38 @@ fn build_size_tree_streaming(
     let mut hdr_dirs = 0u64;
     for i in 0..n {
         if i % 4096 == 0 && !live.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "扫描已取消",
-            ));
+            return Err(cancelled());
         }
-        let o = ent_off + i * 24;
-        let e = TreeEntry::from_bytes(&buf[o..o + 24]);
-        if e.is_dir() {
+        if TreeEntry::from_bytes(&buf[layout.entry_at(i)]).is_dir() {
             hdr_dirs += 1;
         } else {
             hdr_files += 1;
         }
     }
-    let root_total = TreeEntry::from_bytes(&buf[ent_off..ent_off + 24]).size;
-    let name_len = pool_cursor - pool_off;
-    buf[0..8].copy_from_slice(INDEX_V7_MAGIC);
-    buf[8..12].copy_from_slice(&7u32.to_le_bytes());
-    buf[12..16].copy_from_slice(&(n as u32).to_le_bytes());
-    buf[16..20].copy_from_slice(&(name_len as u32).to_le_bytes());
-    buf[20..24].copy_from_slice(&(ca_len as u32).to_le_bytes());
-    buf[24..28].copy_from_slice(&(mount_b.len() as u32).to_le_bytes());
-    buf[28..32].copy_from_slice(&(label_b.len() as u32).to_le_bytes());
-    buf[32..40].copy_from_slice(&hdr_files.to_le_bytes());
-    buf[40..48].copy_from_slice(&hdr_dirs.to_le_bytes());
-    buf[48..56].copy_from_slice(&root_total.to_le_bytes());
-    buf[56..64].copy_from_slice(&last_event_id.to_le_bytes());
-    buf[64..72].copy_from_slice(
-        &std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-            .to_le_bytes(),
-    );
-    buf[80..84].copy_from_slice(&(pool_off as u32).to_le_bytes());
-    buf[84..88].copy_from_slice(&(ent_off as u32).to_le_bytes());
-    buf[88..92].copy_from_slice(&(cs_off as u32).to_le_bytes());
-    buf[92..96].copy_from_slice(&(ca_off as u32).to_le_bytes());
-    buf[INDEX_V7_HEADER..INDEX_V7_HEADER + mount_b.len()].copy_from_slice(mount_b);
-    buf[INDEX_V7_HEADER + mount_b.len()..INDEX_V7_HEADER + mount_b.len() + label_b.len()]
-        .copy_from_slice(label_b);
-    let sum = index_checksum_bytes(&buf[..pool_cursor]);
-    buf[72..80].copy_from_slice(&sum.to_le_bytes());
+    let root_total = TreeEntry::from_bytes(&buf[layout.entry_at(0)]).size;
 
-    let sync = unsafe { libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_SYNC) };
-    drop(guard);
-    if sync != 0 {
-        let err = std::io::Error::last_os_error();
-        let _ = std::fs::remove_file(&out_path);
-        return Err(err);
+    V7Header {
+        layout: &layout,
+        mount: mount_b,
+        label: label_b,
+        name_len: pool.name_len(),
+        file_count: hdr_files,
+        dir_count: hdr_dirs,
+        total_size: root_total,
+        last_event_id,
+        scanned_at: now_secs(),
     }
-    // 截掉名字池预留的尾部（用可写句柄；File::open 只读会 EINVAL）
-    out.set_len(pool_cursor as u64)?;
-    drop(out);
+    .write_into(buf);
+    finalize_checksum(buf, pool.cursor());
 
+    out.commit(pool.cursor())?;
     if let Some(target) = persist {
-        std::fs::rename(&out_path, target)?;
+        out.rename_to(target)?;
     }
-    let tree = SizeTree::from_mapped(volume, persist.unwrap_or(&out_path))
+    let tree = SizeTree::from_mapped(volume, persist.unwrap_or(out.path()))
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "构建结果校验失败"))?;
-    if persist.is_none() {
-        // 映射已在树里持有，临时文件可以立即删除
-        let _ = std::fs::remove_file(&out_path);
-    }
+    // 映射已在树里持有（persist 时文件也已 rename 走），`out` 的 Drop
+    // 会把这个临时路径清掉。
     Ok(tree)
 }
 

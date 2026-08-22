@@ -1,5 +1,10 @@
 //! macOS 磁盘空间分析后备实现（SizeTree / Node / ScanResult）
 
+use super::index_v7::{
+    delta_checksum, entries_as_bytes, finalize_checksum, index_checksum_bytes, pool_str,
+    push_name, MmapOut, MmapPool, NameInterner, V7Header, V7Layout, INDEX_V7_HEADER,
+    INDEX_V7_MAGIC,
+};
 use crate::core::disk::VolumeId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -227,42 +232,6 @@ impl TreeEntry {
 const _: () = assert!(std::mem::size_of::<TreeEntry>() == 24);
 const _: () = assert!(std::mem::align_of::<TreeEntry>() == 8);
 
-pub const INDEX_V7_MAGIC: &[u8; 8] = b"QCIDXV07";
-pub(crate) const INDEX_V7_HEADER: usize = 128;
-
-pub(crate) fn fnv1a64_bytes(data: &[u8]) -> u64 {
-    fnv1a64_update(0xcbf29ce484222325u64, data)
-}
-
-fn fnv1a64_update(mut hash: u64, data: &[u8]) -> u64 {
-    for byte in data {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
-
-/// base 校验覆盖完整文件；checksum 字段自身按 8 个零字节计算。
-pub(crate) fn index_checksum_bytes(bytes: &[u8]) -> u64 {
-    if bytes.len() < 80 {
-        return 0;
-    }
-    let mut hash = fnv1a64_bytes(&bytes[..72]);
-    hash = fnv1a64_update(hash, &[0; 8]);
-    fnv1a64_update(hash, &bytes[80..])
-}
-
-/// delta 校验覆盖 header 与 payload；checksum 字段自身按零处理。
-pub(crate) fn delta_checksum(header: &[u8], payload: &[u8]) -> u64 {
-    if header.len() < 108 {
-        return 0;
-    }
-    let mut hash = fnv1a64_bytes(&header[..100]);
-    hash = fnv1a64_update(hash, &[0; 8]);
-    hash = fnv1a64_update(hash, &header[108..]);
-    fnv1a64_update(hash, payload)
-}
-
 fn map_index_file(path: &Path, verify: bool) -> Option<MappedIndex> {
     let file = std::fs::File::open(path).ok()?;
     map_index_fd(file, verify)
@@ -433,71 +402,6 @@ fn release_mapped_pages(m: &MappedIndex) {
         libc::posix_madvise(m.ptr as *mut libc::c_void, m.len, libc::POSIX_MADV_DONTNEED);
         libc::madvise(m.ptr as *mut libc::c_void, m.len, libc::MADV_FREE);
     }
-}
-
-/// 名字 intern：把相同文件名合成池里的一条。
-struct NameInterner {
-    pool: Vec<u8>,
-    map: HashMap<u64, u32>,
-}
-
-impl NameInterner {
-    fn with_capacity(n: usize) -> Self {
-        Self {
-            pool: Vec::with_capacity(n.saturating_mul(12)),
-            map: HashMap::with_capacity(n / 4),
-        }
-    }
-
-    fn intern(&mut self, name: &[u8]) -> u32 {
-        let h = fnv1a64(name);
-        if let Some(&off) = self.map.get(&h) {
-            if pool_bytes(&self.pool, off) == name {
-                return off;
-            }
-        }
-        let off = push_name(&mut self.pool, name);
-        self.map.insert(h, off);
-        off
-    }
-
-    fn finish(self) -> Vec<u8> {
-        let mut pool = self.pool;
-        pool.shrink_to_fit();
-        pool
-    }
-}
-
-fn fnv1a64(data: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in data {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-
-fn push_name(pool: &mut Vec<u8>, name: &[u8]) -> u32 {
-    let off = pool.len() as u32;
-    let len = name.len().min(u16::MAX as usize) as u16;
-    pool.extend_from_slice(&len.to_le_bytes());
-    pool.extend_from_slice(&name[..len as usize]);
-    off
-}
-
-fn pool_bytes(pool: &[u8], off: u32) -> &[u8] {
-    let i = off as usize;
-    if i + 2 > pool.len() {
-        return b"";
-    }
-    let len = u16::from_le_bytes([pool[i], pool[i + 1]]) as usize;
-    let start = i + 2;
-    let end = start.saturating_add(len).min(pool.len());
-    &pool[start..end]
-}
-
-fn pool_str(pool: &[u8], off: u32) -> &str {
-    std::str::from_utf8(pool_bytes(pool, off)).unwrap_or("")
 }
 
 /// overrides 的快速哈希。
@@ -950,7 +854,6 @@ impl SizeTree {
     /// 名字不重新 intern（省掉百 MB 级 HashMap），池按实际上限预留、
     /// 写完截断，因此放在文件末尾。
     fn write_v7_streaming(&self, path: &Path, meta: &IndexMeta) -> std::io::Result<()> {
-        use std::os::unix::io::AsRawFd;
         let n = self.n();
 
         // Pass A：有效节点数、旧→新下标映射、每个新节点的子节点数。
@@ -982,193 +885,78 @@ impl SizeTree {
 
         let mount = meta.mount.as_bytes();
         let label = meta.label.as_bytes();
-        let ent_off = (INDEX_V7_HEADER + mount.len() + label.len() + 7) & !7;
-        let cs_off = ent_off + used * std::mem::size_of::<TreeEntry>();
-        let ca_off = cs_off + (used + 1) * 4;
-        let pool_off = ca_off + ca_len * 4;
+        // 池上限 = base 池 + delta 池；名字仍要 intern，否则重名会让实际
+        // 写入超过这个上限。
         let pool_upper = self
             .mapped
             .as_ref()
             .map(|m| m.name_len)
             .unwrap_or(0)
             .saturating_add(self.name_pool.len());
-        let reserve_len = pool_off.saturating_add(pool_upper);
+        let layout =
+            V7Layout::names_trailing(used, mount.len(), label.len(), ca_len, pool_upper);
 
         let tmp = path.with_extension("bin.tmp");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open(&tmp)?;
-        file.set_len(reserve_len as u64)?;
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                reserve_len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                file.as_raw_fd(),
-                0,
-            )
-        };
-        if ptr == libc::MAP_FAILED {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(std::io::Error::last_os_error());
-        }
-        struct Guard {
-            ptr: *mut u8,
-            len: usize,
-        }
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                if !self.ptr.is_null() {
-                    unsafe {
-                        // 先把脏页还给内核再做 munmap，避免 footprint 高位驻留
-                        libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_DONTNEED);
-                        libc::munmap(self.ptr as *mut libc::c_void, self.len);
-                    }
-                    self.ptr = std::ptr::null_mut();
-                }
-            }
-        }
-        let guard = Guard {
-            ptr: ptr as *mut u8,
-            len: reserve_len,
-        };
-        let buf = unsafe { std::slice::from_raw_parts_mut(guard.ptr, reserve_len) };
+        let mut out = MmapOut::create(tmp, layout.len)?;
+        let ptr = out.ptr();
+        let buf = out.as_mut_slice();
 
         // child_start 先填前缀和，Pass B 期间把它当游标递增，结束后重写。
-        for (i, s) in start[..used].iter().enumerate() {
-            let o = cs_off + i * 4;
-            buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
-        }
-        buf[cs_off + used * 4..cs_off + used * 4 + 4]
-            .copy_from_slice(&(ca_len as u32).to_le_bytes());
+        layout.write_child_start(buf, &start[..used]);
 
         // Pass B：条目 + 名字 + child_at，一次遍历完成。
-        // 名字边写边 intern（哈希 + 字节比对确认），池上限 = base 池 +
-        // delta 池才成立；不 intern 的话去重名会让实际写入远超上限。
-        const MSYNC_CHUNK: usize = 32 * 1024 * 1024;
-        let mut intern: HashMap<u64, u32> = HashMap::with_capacity(used / 4);
-        let mut pool_cursor = pool_off;
-        let mut synced = 0usize;
+        let mut pool = MmapPool::new(layout.name_off, used);
         let mut j = 0usize;
         for i in 0..n {
             let e = self.slot(i);
             if !e.used() {
                 continue;
             }
-            let name = self.entry_name_str(i as u32).as_bytes();
-            let h = fnv1a64(name);
-            let name_off = match intern.get(&h) {
-                Some(&off) => {
-                    // 哈希碰撞防护：字节一致才算命中
-                    let p = pool_off + off as usize;
-                    let len = u16::from_le_bytes([buf[p], buf[p + 1]]) as usize;
-                    if len == name.len() && &buf[p + 2..p + 2 + len] == name {
-                        off
-                    } else {
-                        let off = (pool_cursor - pool_off) as u32;
-                        buf[pool_cursor..pool_cursor + 2]
-                            .copy_from_slice(&(name.len() as u16).to_le_bytes());
-                        pool_cursor += 2;
-                        buf[pool_cursor..pool_cursor + name.len()].copy_from_slice(name);
-                        pool_cursor += name.len();
-                        intern.insert(h, off);
-                        off
-                    }
-                }
-                None => {
-                    let off = (pool_cursor - pool_off) as u32;
-                    buf[pool_cursor..pool_cursor + 2]
-                        .copy_from_slice(&(name.len() as u16).to_le_bytes());
-                    pool_cursor += 2;
-                    buf[pool_cursor..pool_cursor + name.len()].copy_from_slice(name);
-                    pool_cursor += name.len();
-                    intern.insert(h, off);
-                    off
-                }
-            };
-
+            let name_off = pool.intern(buf, self.entry_name_str(i as u32).as_bytes());
             let parent = if i == 0 {
                 0
             } else {
                 remap[e.parent() as usize]
             };
-            let out = TreeEntry::new(
+            TreeEntry::new(
                 parent,
-                name_off as u32,
+                name_off,
                 e.is_dir(),
                 e.size,
                 e.mtime as u64,
                 e.file_count,
-            );
-            let ob = entries_as_bytes_local(std::slice::from_ref(&out));
-            buf[ent_off + j * 24..ent_off + j * 24 + 24].copy_from_slice(ob);
+            )
+            .write_bytes_to(&mut buf[layout.entry_at(j)]);
 
             if j > 0 {
-                let co4 = cs_off + parent as usize * 4;
-                let cur = u32::from_le_bytes(buf[co4..co4 + 4].try_into().unwrap()) as usize;
-                let co = ca_off + cur * 4;
-                buf[co..co + 4].copy_from_slice(&(j as u32).to_le_bytes());
-                buf[co4..co4 + 4].copy_from_slice(&((cur + 1) as u32).to_le_bytes());
+                layout.push_child(buf, parent, j as u32);
             }
             j += 1;
 
-            if pool_cursor - synced > MSYNC_CHUNK {
-                unsafe {
-                    libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_ASYNC);
-                }
-                synced = pool_cursor;
-            }
+            pool.maybe_flush(ptr);
         }
 
         // 重写 child_start（Pass B 里被当成游标改掉了）
-        for (i, s) in start[..used].iter().enumerate() {
-            let o = cs_off + i * 4;
-            buf[o..o + 4].copy_from_slice(&s.to_le_bytes());
-        }
+        layout.write_child_start(buf, &start[..used]);
         drop(start);
         drop(remap);
 
-        // header（name_len 用实际池大小）+ 全文件 checksum
-        let name_len = pool_cursor - pool_off;
-        buf[0..8].copy_from_slice(INDEX_V7_MAGIC);
-        buf[8..12].copy_from_slice(&7u32.to_le_bytes());
-        buf[12..16].copy_from_slice(&(used as u32).to_le_bytes());
-        buf[16..20].copy_from_slice(&(name_len as u32).to_le_bytes());
-        buf[20..24].copy_from_slice(&(ca_len as u32).to_le_bytes());
-        buf[24..28].copy_from_slice(&(mount.len() as u32).to_le_bytes());
-        buf[28..32].copy_from_slice(&(label.len() as u32).to_le_bytes());
-        buf[32..40].copy_from_slice(&meta.file_count.to_le_bytes());
-        buf[40..48].copy_from_slice(&meta.dir_count.to_le_bytes());
-        buf[48..56].copy_from_slice(&meta.total_size.to_le_bytes());
-        buf[56..64].copy_from_slice(&meta.last_event_id.to_le_bytes());
-        buf[64..72].copy_from_slice(&meta.scanned_at.to_le_bytes());
-        buf[80..84].copy_from_slice(&(pool_off as u32).to_le_bytes());
-        buf[84..88].copy_from_slice(&(ent_off as u32).to_le_bytes());
-        buf[88..92].copy_from_slice(&(cs_off as u32).to_le_bytes());
-        buf[92..96].copy_from_slice(&(ca_off as u32).to_le_bytes());
-        buf[INDEX_V7_HEADER..INDEX_V7_HEADER + mount.len()].copy_from_slice(mount);
-        buf[INDEX_V7_HEADER + mount.len()..INDEX_V7_HEADER + mount.len() + label.len()]
-            .copy_from_slice(label);
-        let sum = index_checksum_bytes(&buf[..pool_cursor]);
-        buf[72..80].copy_from_slice(&sum.to_le_bytes());
-
-        let sync =
-            unsafe { libc::msync(guard.ptr as *mut libc::c_void, pool_cursor, libc::MS_SYNC) };
-        drop(guard);
-        if sync != 0 {
-            let err = std::io::Error::last_os_error();
-            let _ = std::fs::remove_file(&tmp);
-            return Err(err);
+        V7Header {
+            layout: &layout,
+            mount,
+            label,
+            name_len: pool.name_len(),
+            file_count: meta.file_count,
+            dir_count: meta.dir_count,
+            total_size: meta.total_size,
+            last_event_id: meta.last_event_id,
+            scanned_at: meta.scanned_at,
         }
-        // 截掉名字池预留的尾部（用可写句柄；File::open 只读会 EINVAL）
-        file.set_len(pool_cursor as u64)?;
-        drop(file);
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        .write_into(buf);
+        finalize_checksum(buf, pool.cursor());
+
+        out.commit(pool.cursor())?;
+        out.rename_to(path)
     }
 
     pub fn mapped_header_stats(&self) -> Option<(u64, u64, u64, u64)> {
@@ -1195,13 +983,13 @@ impl SizeTree {
     /// 压实重写整个 587MB 的 base。
     pub fn write_delta(&self, path: &Path, meta: &DeltaMeta) -> std::io::Result<()> {
         let mut payload: Vec<u8> = Vec::new();
-        payload.extend_from_slice(entries_as_bytes_local(&self.entries));
+        payload.extend_from_slice(entries_as_bytes(&self.entries));
         payload.extend_from_slice(&self.name_pool);
         let mut overrides: Vec<(&u32, &TreeEntry)> = self.overrides.iter().collect();
         overrides.sort_by_key(|(idx, _)| **idx);
         for (&idx, e) in overrides {
             payload.extend_from_slice(&idx.to_le_bytes());
-            payload.extend_from_slice(entries_as_bytes_local(std::slice::from_ref(e)));
+            payload.extend_from_slice(entries_as_bytes(std::slice::from_ref(e)));
         }
         // extra_child：parent 有序，保证字节稳定
         let mut extras: Vec<(&u32, &Vec<u32>)> = self.extra_child.iter().collect();
@@ -1573,15 +1361,6 @@ fn parse_delta_file(path: &Path, base_checksum: u64) -> Option<(DeltaMeta, Vec<u
     Some((meta, payload))
 }
 
-fn entries_as_bytes_local(entries: &[TreeEntry]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            entries.as_ptr() as *const u8,
-            std::mem::size_of_val(entries),
-        )
-    }
-}
-
 fn write_v7_file(
     path: &Path,
     meta: &IndexMeta,
@@ -1590,7 +1369,6 @@ fn write_v7_file(
     child_start: &[u32],
     child_at: &[u32],
 ) -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
     let n = entries.len();
     if child_start.len() != n + 1 {
         return Err(std::io::Error::new(
@@ -1600,97 +1378,38 @@ fn write_v7_file(
     }
     let mount = meta.mount.as_bytes();
     let label = meta.label.as_bytes();
-    let mut name_off = INDEX_V7_HEADER + mount.len() + label.len();
-    name_off = (name_off + 7) & !7;
-    let ent_off = (name_off + name_pool.len() + 7) & !7;
-    let cs_off = ent_off + std::mem::size_of_val(entries);
-    let ca_off = cs_off + (n + 1) * 4;
-    let file_len = ca_off + child_at.len() * 4;
+    let layout = V7Layout::names_inline(n, mount.len(), label.len(), name_pool.len(), child_at.len());
+
     let tmp = path.with_extension("bin.tmp");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .open(&tmp)?;
-    file.set_len(file_len as u64)?;
-    let ptr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            file_len,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            file.as_raw_fd(),
-            0,
-        )
-    };
-    if ptr == libc::MAP_FAILED {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(std::io::Error::last_os_error());
+    let mut out = MmapOut::create(tmp, layout.len)?;
+    let buf = out.as_mut_slice();
+
+    V7Header {
+        layout: &layout,
+        mount,
+        label,
+        name_len: name_pool.len(),
+        file_count: meta.file_count,
+        dir_count: meta.dir_count,
+        total_size: meta.total_size,
+        last_event_id: meta.last_event_id,
+        scanned_at: meta.scanned_at,
     }
-    struct Guard {
-        ptr: *mut u8,
-        len: usize,
-    }
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            if !self.ptr.is_null() {
-                unsafe {
-                    libc::munmap(self.ptr as *mut libc::c_void, self.len);
-                }
-                self.ptr = std::ptr::null_mut();
-            }
-        }
-    }
-    let mut guard = Guard {
-        ptr: ptr as *mut u8,
-        len: file_len,
-    };
-    let buf = unsafe { std::slice::from_raw_parts_mut(guard.ptr, file_len) };
-    buf[0..8].copy_from_slice(INDEX_V7_MAGIC);
-    buf[8..12].copy_from_slice(&7u32.to_le_bytes());
-    buf[12..16].copy_from_slice(&(n as u32).to_le_bytes());
-    buf[16..20].copy_from_slice(&(name_pool.len() as u32).to_le_bytes());
-    buf[20..24].copy_from_slice(&(child_at.len() as u32).to_le_bytes());
-    buf[24..28].copy_from_slice(&(mount.len() as u32).to_le_bytes());
-    buf[28..32].copy_from_slice(&(label.len() as u32).to_le_bytes());
-    buf[32..40].copy_from_slice(&meta.file_count.to_le_bytes());
-    buf[40..48].copy_from_slice(&meta.dir_count.to_le_bytes());
-    buf[48..56].copy_from_slice(&meta.total_size.to_le_bytes());
-    buf[56..64].copy_from_slice(&meta.last_event_id.to_le_bytes());
-    buf[64..72].copy_from_slice(&meta.scanned_at.to_le_bytes());
-    buf[80..84].copy_from_slice(&(name_off as u32).to_le_bytes());
-    buf[84..88].copy_from_slice(&(ent_off as u32).to_le_bytes());
-    buf[88..92].copy_from_slice(&(cs_off as u32).to_le_bytes());
-    buf[92..96].copy_from_slice(&(ca_off as u32).to_le_bytes());
-    buf[INDEX_V7_HEADER..INDEX_V7_HEADER + mount.len()].copy_from_slice(mount);
-    buf[INDEX_V7_HEADER + mount.len()..INDEX_V7_HEADER + mount.len() + label.len()]
-        .copy_from_slice(label);
-    buf[name_off..name_off + name_pool.len()].copy_from_slice(name_pool);
-    let eb = entries_as_bytes_local(entries);
-    buf[ent_off..ent_off + eb.len()].copy_from_slice(eb);
-    for (i, v) in child_start.iter().enumerate() {
-        let o = cs_off + i * 4;
-        buf[o..o + 4].copy_from_slice(&v.to_le_bytes());
-    }
+    .write_into(buf);
+
+    buf[layout.name_off..layout.name_off + name_pool.len()].copy_from_slice(name_pool);
+    let eb = entries_as_bytes(entries);
+    buf[layout.ent_off..layout.ent_off + eb.len()].copy_from_slice(eb);
+    // child_start 传进来时已是最终前缀和，末位哨兵由 layout 补
+    layout.write_child_start(buf, &child_start[..n]);
     for (i, v) in child_at.iter().enumerate() {
-        let o = ca_off + i * 4;
+        let o = layout.ca_off + i * 4;
         buf[o..o + 4].copy_from_slice(&v.to_le_bytes());
     }
-    let sum = index_checksum_bytes(buf);
-    buf[72..80].copy_from_slice(&sum.to_le_bytes());
-    let sync = unsafe { libc::msync(guard.ptr as *mut libc::c_void, file_len, libc::MS_SYNC) };
-    if sync != 0 {
-        let err = std::io::Error::last_os_error();
-        let _ = std::fs::remove_file(&tmp);
-        return Err(err);
-    }
-    unsafe {
-        libc::munmap(guard.ptr as *mut libc::c_void, file_len);
-    }
-    guard.ptr = std::ptr::null_mut();
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    finalize_checksum(buf, layout.len);
+
+    out.commit(layout.len)?;
+    out.rename_to(path)
 }
 
 impl SizeTree {
@@ -2768,6 +2487,56 @@ mod v7_header_validation_tests {
                 e(1, "a.txt", false),
             ],
         )
+    }
+
+    /// 两条写盘路径必须产出语义相同的索引。
+    ///
+    /// 布局不同（原地把名字池摆在条目之前，流式摆在文件末尾再截断），
+    /// 所以不能比字节；但节点数、路径、体积、header 统计必须一致——
+    /// 它们本来就是同一棵树的两种落盘方式，差异只该出现在偏移上。
+    #[test]
+    fn inplace_and_streaming_writers_agree() {
+        let dir = std::env::temp_dir().join("qc_v7_equiv");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let tree = sample_tree();
+        assert!(
+            tree.can_write_inplace(),
+            "样本树必须走得通原地路径，否则这个测试比的是同一条路径"
+        );
+
+        // header 里的文件/目录数要和实际条目对得上，否则加载校验会拒收
+        // （`meta()` 那份 1/1 是给不做 verify 的用例准备的）。
+        let real_meta = || IndexMeta {
+            file_count: 1,
+            dir_count: 2,
+            total_size: 16,
+            ..meta()
+        };
+        let a = dir.join("inplace.bin");
+        let b = dir.join("streaming.bin");
+        tree.write_v7(&a, real_meta()).expect("原地写应成功");
+        tree.write_v7_streaming(&b, &real_meta())
+            .expect("流式写应成功");
+
+        let vol = VolumeId::from_mount_point(PathBuf::from("/"));
+        let la = SizeTree::from_mapped(vol.clone(), &a).expect("原地索引应可加载");
+        let lb = SizeTree::from_mapped(vol, &b).expect("流式索引应可加载");
+
+        assert_eq!(la.n(), lb.n());
+        assert_eq!(la.mapped_header_stats(), lb.mapped_header_stats());
+        for i in 0..la.n() as u32 {
+            assert_eq!(la.path_of(i), lb.path_of(i), "节点 {i} 的路径不一致");
+            assert_eq!(la.size_of(i), lb.size_of(i), "节点 {i} 的体积不一致");
+            assert_eq!(
+                la.file_count_of(i),
+                lb.file_count_of(i),
+                "节点 {i} 的文件数不一致"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// CSR 的两段偏移会被当成 `&[u32]` 取用，未对齐就是 UB。
