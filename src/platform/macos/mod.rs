@@ -26,7 +26,7 @@ pub use disk::{
 };
 pub use dock::set_dock_icon;
 pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
-pub use trash::empty_trash;
+pub use trash::{empty_trash, move_to_trash};
 
 // TCC 渐进式增强：UI 用这些函数检测和引导完全磁盘访问授权
 pub use tcc::{

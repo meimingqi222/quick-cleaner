@@ -19,6 +19,7 @@
 //! | `run_uninstaller_and_wait` | 调用官方卸载程序并等待退出 |
 //! | `scan_residuals` / `verify_residuals` / `clean_residuals` | 卸载残留的采集、复核与清理 |
 //! | `reveal_in_explorer` | 在系统文件管理器中定位路径 |
+//! | `move_to_trash` | 把单个路径移入回收站/废纸篓（可还原） |
 
 /// 编译期校验：当前平台分支确实提供了门面要求的全部函数，且签名一致。
 ///
@@ -45,6 +46,11 @@ macro_rules! platform_contract {
             let _: fn(&[ResidualItem], &CleanProgress) -> CleanReport = clean_residuals;
             let _: fn(Vec<ResidualItem>) -> Vec<ResidualItem> = verify_residuals;
             let _: fn(&Path) = reveal_in_explorer;
+            // 「送回收站」以前不在契约里：两个平台各有实现，但 core 的
+            // recycle_path 只 cfg 到了 Windows 那份，非 Windows 分支直接退化成
+            // 永久删除——用户勾了「删除到回收站」反而拿到不可撤销的删除。
+            // 进契约后各平台漏实现会直接编译失败。
+            let _: fn(&Path) -> Result<(), String> = move_to_trash;
             let _: fn(&Path) = open_in_default_app;
         };
     };
@@ -140,6 +146,12 @@ pub mod fallback {
     }
 
     pub fn reveal_in_explorer(_path: &Path) {}
+
+    /// 没有回收站就**如实报错**，绝不退化成永久删除：调用方开这个开关
+    /// 就是要「删错了能捞回来」，静默替他抹掉是把安全网抽走。
+    pub fn move_to_trash(_path: &Path) -> Result<(), String> {
+        Err("当前平台没有回收站".into())
+    }
 
     pub fn open_in_default_app(_path: &Path) {}
 }

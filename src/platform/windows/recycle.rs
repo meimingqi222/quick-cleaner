@@ -31,7 +31,7 @@ use winapi::um::shellapi::{
 /// - 单个文件比回收站配额还大——此时 Shell 会**直接永久删除**，我们用
 ///   `FOF_WANTNUKEWARNING` 的反面（不加它）配合静默标志，让它安静地做掉；
 /// - 路径超过 `MAX_PATH`：这个 API 是老式 ANSI 时代的产物，长路径不支持。
-pub fn move_to_recycle_bin(path: &Path) -> bool {
+pub fn move_to_trash(path: &Path) -> Result<(), String> {
     // pFrom 要求「双 NUL 结尾」的字符串列表：每项一个 NUL，整体再加一个。
     let mut from: Vec<u16> = path
         .as_os_str()
@@ -55,7 +55,13 @@ pub fn move_to_recycle_bin(path: &Path) -> bool {
     // 要么为 null（文档允许），要么指向 from。SHFileOperationW 只读它们。
     let rc = unsafe { SHFileOperationW(&mut op) };
 
-    rc == 0 && op.fAnyOperationsAborted == 0
+    if rc != 0 {
+        return Err(format!("SHFileOperationW 返回 0x{rc:08X}"));
+    }
+    if op.fAnyOperationsAborted != 0 {
+        return Err("回收站操作被中止".into());
+    }
+    Ok(())
 }
 
 /// 回收站 SID 目录里的某个条目是否该被扫尾清掉。

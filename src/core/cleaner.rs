@@ -258,7 +258,14 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
-    if std::fs::remove_dir(path).is_ok() && files_failed == 0 && subs_failed == 0 {
+    let dir_removed = match std::fs::remove_dir(path) {
+        Ok(()) => true,
+        Err(err) => {
+            note_delete_failure(path, &err);
+            false
+        }
+    };
+    if dir_removed && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
     } else {
         // 文件删不掉会记进 `p.failed`（见 delete_file），目录删不掉以前
@@ -301,8 +308,33 @@ fn remove_file_forcing(path: &Path) -> bool {
     if let Ok(md) = std::fs::symlink_metadata(path) {
         clear_readonly(path, &md);
     }
-    std::fs::remove_file(path).is_ok()
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(err) => {
+            note_delete_failure(path, &err);
+            false
+        }
+    }
 }
+
+/// 删除失败的原因以前被整个丢掉：报告里只剩一个失败计数，用户和日志都
+/// 看不出到底是被占用、没权限还是别的什么。这里补上原因。
+///
+/// 和 `audit_result` 的失败清单一样封顶 20 条：一次清理失败几万个是常态
+/// （多半整个目录被占用），全记会先把日志撑爆，前 20 条足够看出是哪一类。
+/// 计数在每批清理开始时（`audit`）归零。
+fn note_delete_failure(path: &Path, err: &dyn std::fmt::Display) {
+    const MAX_LOGGED: usize = 20;
+    let n = DELETE_FAILURES_LOGGED.fetch_add(1, Ordering::Relaxed);
+    if n < MAX_LOGGED {
+        crate::log!("[删除] 失败：{}（{err}）", path.display());
+    } else if n == MAX_LOGGED {
+        crate::log!("[删除] 失败原因已记满 {MAX_LOGGED} 条，本批后续不再记录");
+    }
+}
+
+static DELETE_FAILURES_LOGGED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// 清理单个路径本身（连同其内容）。
 pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
@@ -423,6 +455,7 @@ fn audit_result(report: &CleanReport, p: &CleanProgress) {
 /// 只记目标（用户勾选的那一层），不记递归展开出的每个文件——一次清理动辄
 /// 几十万个文件，全记下来日志会先被自己撑爆，而定位问题靠的是顶层目标。
 fn audit(action: &str, paths: impl Iterator<Item = PathBuf>) {
+    DELETE_FAILURES_LOGGED.store(0, Ordering::Relaxed);
     let list: Vec<String> = paths.map(|p| p.display().to_string()).collect();
     crate::log!(
         "[删除] {action}，共 {} 个目标：{}",
@@ -481,8 +514,12 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             }
             continue;
         }
+        // 只有本机废纸篓 `~/.Trash` 走 empty_trash（它清的就是这一个目录）。
+        // 外接卷的 `/Volumes/<卷>/.Trashes/<uid>` 不能走这里：路径里同样含
+        // ".Trash"，但 empty_trash 清的是 `~/.Trash`，会清掉用户没勾的本机
+        // 废纸篓，还把 bin_done 置位让外接卷自己那份一个字节都没删。
         #[cfg(target_os = "macos")]
-        if d.to_string_lossy().contains(".Trash") {
+        if is_home_trash(d) {
             if !bin_done {
                 report.merge(crate::platform::macos::trash::empty_trash(p));
                 bin_done = true;
@@ -514,6 +551,12 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
     }
     audit_result(&report, p);
     report
+}
+
+/// 本机废纸篓 `~/.Trash` 本身（不含外接卷的 `.Trashes/<uid>`）。
+#[cfg(target_os = "macos")]
+fn is_home_trash(path: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| path == home.join(".Trash"))
 }
 
 #[cfg(target_os = "macos")]
@@ -577,7 +620,17 @@ fn dispose(path: &Path, disposal: Disposal, p: &CleanProgress) -> CleanResult {
     }
 }
 
-#[cfg(windows)]
+/// 把路径送进回收站/废纸篓。
+///
+/// 以前这里按平台分成两份：Windows 走 `SHFileOperationW`，非 Windows 直接
+/// `clean_path` 永久删除，理由写的是「非 Windows 平台没有等价的回收站 API」。
+/// 那句话在本仓库里是假的——`platform::macos::trash::move_to_trash` 一直都在
+/// （走 `NSFileManager.trashItemAtURL:`）。结果是 macOS 上用户勾了「删除到
+/// 回收站」，`Disposal::RecycleBin` 的文档、审计日志和界面文案三处都承诺
+/// 「可以还原」，实际却是不可撤销的永久删除。现在统一走门面契约的
+/// `move_to_trash`，平台差异由 `platform` 层负责。
+///
+/// 失败时**不**回退到永久删除（见 [`dispose`]），如实报失败。
 fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
@@ -589,26 +642,87 @@ fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Failed;
     }
 
-    if crate::platform::windows::move_to_recycle_bin(path) {
-        // 回收站不释放空间，所以这里只记条目数，不往 bytes 上加——
-        // 界面上「已释放 X」必须是真的释放了才算。
-        p.files.fetch_add(1, Ordering::Relaxed);
-        CleanResult::Ok
-    } else {
-        p.failed.fetch_add(1, Ordering::Relaxed);
-        CleanResult::Failed
+    match crate::platform::move_to_trash(path) {
+        Ok(()) => {
+            // 回收站不释放空间，所以这里只记条目数，不往 bytes 上加——
+            // 界面上「已释放 X」必须是真的释放了才算。
+            p.files.fetch_add(1, Ordering::Relaxed);
+            CleanResult::Ok
+        }
+        Err(err) => {
+            note_delete_failure(path, &err);
+            p.failed.fetch_add(1, Ordering::Relaxed);
+            CleanResult::Failed
+        }
     }
-}
-
-/// 非 Windows 平台没有等价的回收站 API，一律按永久删除处理。
-#[cfg(not(windows))]
-fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
-    clean_path(path, p)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 「送回收站」的核心不变量：文件要么真的进了废纸篓，要么原地还在，
+    /// **绝不能静默消失**。
+    ///
+    /// macOS 上这条以前是不成立的——`recycle_path` 的非 Windows 分支直接
+    /// 转发给 `clean_path` 永久删除，而界面、枚举文档和审计日志三处都写着
+    /// 「可以还原」。这个断言故意写成「二选一」而不是「必须在废纸篓里」：
+    /// 沙盒、无 Finder、只读卷等环境下移动会失败，那时正确行为是保留原文件
+    /// 并报失败，同样满足不变量。
+    #[test]
+    fn recycle_never_silently_destroys() {
+        let base = std::env::temp_dir().join("qc_recycle_invariant");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("待回收.txt");
+        std::fs::write(&file, b"payload").unwrap();
+
+        let p = CleanProgress::new(1, 7);
+        let report = clean_arbitrary(std::slice::from_ref(&file), Disposal::RecycleBin, &p);
+
+        let snap = p.snapshot();
+        if report.ok == 1 {
+            assert!(!file.exists(), "报告成功就不该还留在原处");
+            // 回收站不释放空间：只记条目数，bytes 必须是 0
+            assert_eq!(snap.files, 1);
+            assert_eq!(snap.bytes, 0, "移入废纸篓不等于释放空间");
+
+            // 从废纸篓里把它清掉，别给用户留垃圾
+            if let Some(home) = dirs::home_dir() {
+                let _ = std::fs::remove_file(home.join(".Trash").join("待回收.txt"));
+            }
+        } else {
+            assert!(
+                file.exists(),
+                "移入废纸篓失败时必须保留原文件，绝不能退化成永久删除"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 外接卷废纸篓的路径同样含 ".Trash"，绝不能被当成本机废纸篓：
+    /// 那会清掉用户没勾的 `~/.Trash`，且外接卷自己那份一个字节都不删。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn only_home_trash_routes_to_empty_trash() {
+        let home = dirs::home_dir().expect("测试环境必须有 home");
+        assert!(is_home_trash(&home.join(".Trash")));
+
+        for other in [
+            PathBuf::from("/Volumes/外接盘/.Trashes/501"),
+            PathBuf::from("/Volumes/Backup/.Trashes"),
+            home.join(".TrashOld"),
+            home.join("Documents/Docs.Trash"),
+            home.join(".Trash/子目录"),
+        ] {
+            assert!(
+                !is_home_trash(&other),
+                "{} 不该走 empty_trash",
+                other.display()
+            );
+        }
+    }
 
     #[cfg(windows)]
     use crate::platform::windows::recycle::is_recycle_junk_entry;
