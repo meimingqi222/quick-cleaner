@@ -117,6 +117,9 @@ impl CategoryId {
             self,
             CategoryId::DevBuild | CategoryId::DevWorktrees | CategoryId::IosBackup
                 | CategoryId::OldIdeData
+                // 快照是整条虚拟路径即目标；不走 remove_dir 分支的话会被
+                // clean_dir_contents 当普通目录跳过，tmutil 根本执行不到。
+                | CategoryId::LocalSnapshots
         )
     }
 
