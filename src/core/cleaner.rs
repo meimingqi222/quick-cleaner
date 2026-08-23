@@ -474,6 +474,9 @@ pub struct CleanTarget {
     /// 假定它们存在），开发产物目录要删干净（空的 `.venv` / `node_modules`
     /// 比不存在更糟）。
     pub remove_dir: bool,
+    /// 虚拟路径目标（Docker 镜像）的真实体积。真实路径的体积在删除时
+    /// 逐文件累计，用不到这个字段。
+    pub size_hint: Option<u64>,
 }
 
 impl CleanTarget {
@@ -482,6 +485,7 @@ impl CleanTarget {
         Self {
             path,
             remove_dir: false,
+            size_hint: None,
         }
     }
 
@@ -490,6 +494,7 @@ impl CleanTarget {
         Self {
             path,
             remove_dir: true,
+            size_hint: None,
         }
     }
 }
@@ -533,6 +538,16 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             continue;
         }
 
+        // Docker 镜像：虚拟路径余文就是 rmi 引用参数，路由到
+        // `docker image rm`（机制与不用 --force 的理由见 `core::docker`）。
+        if let Some(rmi_ref) = crate::core::model::docker_rmi_ref(d) {
+            report.record_target(
+                CleanFailure::Path(d.clone()),
+                clean_docker_image(&rmi_ref, t.size_hint, p),
+            );
+            continue;
+        }
+
         if t.remove_dir {
             report.record(d, clean_path(d, p));
         } else {
@@ -553,6 +568,33 @@ fn is_launch_agent_plist(path: &Path) -> bool {
     };
     parent == Path::new("/Library/LaunchAgents")
         || dirs::home_dir().is_some_and(|home| parent == home.join("Library/LaunchAgents"))
+}
+
+/// 删除一个 Docker 镜像引用。
+///
+/// 字节记账：`docker image rm` 对多标签镜像可能只摘标签（`Untagged:`）
+/// 而不删层（`Deleted:`），只有层真删了磁盘空间才释放，此时才往
+/// bytes 上加——「已释放 X」必须是真的释放了才算。
+fn clean_docker_image(rmi_ref: &str, size_hint: Option<u64>, p: &CleanProgress) -> CleanResult {
+    if p.cancelled() {
+        return CleanResult::Skipped;
+    }
+    match crate::core::docker::remove_image(rmi_ref) {
+        Ok(layers_deleted) => {
+            p.files.fetch_add(1, Ordering::Relaxed);
+            if layers_deleted {
+                if let Some(size) = size_hint {
+                    p.bytes.fetch_add(size, Ordering::Relaxed);
+                }
+            }
+            CleanResult::Ok
+        }
+        Err(err) => {
+            note_delete_failure(Path::new(rmi_ref), &err);
+            p.failed.fetch_add(1, Ordering::Relaxed);
+            CleanResult::Failed
+        }
+    }
 }
 
 /// 手选路径的处置方式。

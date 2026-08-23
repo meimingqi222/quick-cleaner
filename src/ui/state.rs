@@ -138,9 +138,17 @@ impl JunkState {
                 // clean_path；clean_dir_contents 只适用于真实目录。
                 let is_file_or_link = std::fs::symlink_metadata(&i.path)
                     .is_ok_and(|md| md.is_file() || md.file_type().is_symlink());
+                // 虚拟路径（Docker 镜像）删除时不逐文件累计体积，把扫描
+                // 阶段的 size_hint 带下去，成功后一次性记账。
+                let size_hint = if crate::core::model::is_virtual_path(&i.path) {
+                    Some(i.size)
+                } else {
+                    None
+                };
                 CleanTarget {
                     path: i.path.clone(),
                     remove_dir: i.category.removes_directory() || is_file_or_link,
+                    size_hint,
                 }
             })
             .collect()

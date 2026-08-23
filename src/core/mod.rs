@@ -9,6 +9,7 @@ pub mod declutter;
 pub mod devscan;
 pub mod disk;
 mod disk_selection;
+pub mod docker;
 pub mod fs_query;
 pub mod i18n;
 pub mod log;

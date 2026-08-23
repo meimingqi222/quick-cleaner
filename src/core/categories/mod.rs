@@ -3,6 +3,7 @@
 mod browser;
 mod cache;
 mod dev;
+mod docker;
 mod helpers;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -60,10 +61,14 @@ pub enum CategoryId {
     /// `~/Library/Application Support/JetBrains/` 下除最新版本外的旧版
     /// IDE 数据目录。macOS 专属（Windows 的 JetBrains 布局不同）。
     OldIdeData,
+    /// Docker 冗余镜像：悬空镜像、未被任何容器引用的镜像与同仓库旧版本
+    /// 标签。条目是 `docker://image/<ref>` 虚拟路径，清理走
+    /// `docker image rm`，docker 不可用时类别静默消失。
+    DockerImages,
 }
 
 impl CategoryId {
-    pub const ALL: [CategoryId; 15] = [
+    pub const ALL: [CategoryId; 16] = [
         CategoryId::SystemTemp,
         CategoryId::UserTemp,
         CategoryId::UserCache,
@@ -79,6 +84,7 @@ impl CategoryId {
         CategoryId::LocalSnapshots,
         CategoryId::IosBackup,
         CategoryId::OldIdeData,
+        CategoryId::DockerImages,
     ];
 
     /// 扫描完成后是否默认勾选。
@@ -100,6 +106,7 @@ impl CategoryId {
                 | CategoryId::LocalSnapshots
                 | CategoryId::IosBackup
                 | CategoryId::OldIdeData
+                | CategoryId::DockerImages
         )
     }
 
@@ -120,6 +127,10 @@ impl CategoryId {
                 // 快照是整条虚拟路径即目标；不走 remove_dir 分支的话会被
                 // clean_dir_contents 当普通目录跳过，tmutil 根本执行不到。
                 | CategoryId::LocalSnapshots
+                // 虚拟路径条目整体即目标，没有「目录与内容」之分；同时
+                // 避免清理完成回调把非 remove_dir 目标当成「只清空了内容」
+                // 而整树失效磁盘索引。
+                | CategoryId::DockerImages
         )
     }
 
@@ -154,6 +165,7 @@ impl CategoryId {
                 CategoryId::LocalSnapshots => "APFS 本地快照",
                 CategoryId::IosBackup => "iOS 设备备份",
                 CategoryId::OldIdeData => "旧版 IDE 数据",
+                CategoryId::DockerImages => "冗余 Docker 镜像",
             },
             Language::En => match self {
                 CategoryId::SystemTemp => "System Temp Files",
@@ -171,6 +183,7 @@ impl CategoryId {
                 CategoryId::LocalSnapshots => "APFS Local Snapshots",
                 CategoryId::IosBackup => "iOS Device Backup",
                 CategoryId::OldIdeData => "Old IDE Version Data",
+                CategoryId::DockerImages => "Redundant Docker Images",
             },
         }
     }
@@ -192,6 +205,7 @@ impl CategoryId {
             CategoryId::LocalSnapshots => "📸",
             CategoryId::IosBackup => "📱",
             CategoryId::OldIdeData => "💻",
+            CategoryId::DockerImages => "🐳",
         }
     }
 
@@ -226,6 +240,9 @@ impl CategoryId {
                 CategoryId::OldIdeData => {
                     "Application Support 下 JetBrains 的按版本数据目录，当前版本之外的旧目录，永久删除"
                 }
+                CategoryId::DockerImages => {
+                    "悬空镜像、未被任何容器使用的镜像与同仓库旧版本标签，经 docker image rm 释放"
+                }
             },
             Language::En => match self {
                 CategoryId::SystemTemp => "System temporary files and update leftovers",
@@ -256,6 +273,9 @@ impl CategoryId {
                 }
                 CategoryId::OldIdeData => {
                     "Per-version JetBrains data dirs under Application Support, excluding the newest, permanently deleted"
+                }
+                CategoryId::DockerImages => {
+                    "Dangling images, tags unused by any container and old versions, freed via docker image rm"
                 }
             },
         }
@@ -288,6 +308,9 @@ impl CategoryId {
             // 内容是已卸载旧版本的配置/插件/缓存（当前版本的数据目录保留），
             // 但毕竟按版本永久删除，仍需用户确认。
             CategoryId::OldIdeData => Safety::Caution,
+            // 「未被使用」不等于「不再需要」：用户可能特意拉了基础镜像备
+            // 用，且删除按镜像永久执行，必须由用户逐项勾选。
+            CategoryId::DockerImages => Safety::Caution,
         }
     }
 }
@@ -304,6 +327,10 @@ pub struct ScanTarget {
     /// 是否属于"推荐清理"。同一分类里可以同时包含可无损重建的缓存和
     /// 需要用户确认的历史/工作区数据，不能再只由分类推断。
     pub recommended: bool,
+    /// 虚拟路径目标的真实体积（如 Docker 镜像）。真实路径走文件系统
+    /// 称重，用不到这个字段；快照这类取不到体积的虚拟目标保持 `None`
+    /// （扫描记 0）。
+    pub size_hint: Option<u64>,
 }
 
 /// 返回所有类别对应的扫描目标（支持跨平台）。
@@ -319,6 +346,7 @@ pub fn all_targets() -> Vec<ScanTarget> {
     cache::push_cache_targets(&mut t, &home);
     browser::push_browser_targets(&mut t, &home);
     dev::push_dev_targets(&mut t, &home);
+    docker::push_docker_targets(&mut t);
     #[cfg(target_os = "macos")]
     macos::push_macos_targets(&mut t, &home);
 
@@ -341,6 +369,24 @@ pub(super) fn target_with_recommendation(
         label: label.into(),
         category,
         recommended,
+        size_hint: None,
+    }
+}
+
+/// 带真实体积的虚拟路径目标（如 Docker 镜像）。`recommended` 语义同
+/// [`target`]：跟随分类默认。
+pub(super) fn target_with_size(
+    path: PathBuf,
+    label: impl Into<Text>,
+    category: CategoryId,
+    size_hint: u64,
+) -> ScanTarget {
+    ScanTarget {
+        path,
+        label: label.into(),
+        category,
+        recommended: category.default_selected(),
+        size_hint: Some(size_hint),
     }
 }
 
@@ -685,6 +731,10 @@ mod tests {
             ) {
                 // 废纸篓和损坏登录项都走平台专用通道；后者对 /Library 下的
                 // 系统级 plist 使用 Finder 授权移入废纸篓。
+                continue;
+            }
+            if crate::core::model::is_virtual_path(&t.path) {
+                // 虚拟目标（快照/Docker 镜像）不在文件系统上，没有子项可探测
                 continue;
             }
             let probe = t.path.join("__probe__");

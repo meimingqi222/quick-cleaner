@@ -13,20 +13,43 @@ use std::path::{Path, PathBuf};
 /// 三方各自写一遍前缀字面量必然漂移，构造与判定都只走这里的三个函数。
 const SNAPSHOT_PREFIX: &str = "tmutil://snapshot/";
 
+/// Docker 镜像的虚拟路径前缀，余文是 `docker image rm` 的引用参数
+/// （`repo:tag` 或镜像 ID）。
+///
+/// 镜像在虚拟机磁盘文件里，和快照同理没有宿主路径：`categories::docker`
+/// 造（体积走 `ScanTarget::size_hint`），`scanner` 跳过称重，`cleaner`
+/// 取出引用参数路由到 `docker image rm`。余文**不做二次解析**——repo
+/// 可含斜杠和冒口（`ghcr.io/o/img:1.0`）、镜像 ID 含 `sha256:` 前缀，
+/// 靠前缀一刀切再整段取回最稳。
+const DOCKER_PREFIX: &str = "docker://image/";
+
 /// 由快照名造虚拟路径。
 pub fn snapshot_path(name: &str) -> PathBuf {
     PathBuf::from(format!("{SNAPSHOT_PREFIX}{name}"))
 }
 
+/// 由 rmi 引用参数造 Docker 镜像虚拟路径。
+pub fn docker_image_path(rmi_ref: &str) -> PathBuf {
+    PathBuf::from(format!("{DOCKER_PREFIX}{rmi_ref}"))
+}
+
 /// 是否是虚拟路径——即不该拿去做任何文件系统调用的目标。
 pub fn is_virtual_path(path: &Path) -> bool {
-    path.to_string_lossy().starts_with(SNAPSHOT_PREFIX)
+    let s = path.to_string_lossy();
+    s.starts_with(SNAPSHOT_PREFIX) || s.starts_with(DOCKER_PREFIX)
 }
 
 /// 取回虚拟路径里的快照名，不是快照路径则为 `None`。
 pub fn snapshot_name(path: &Path) -> Option<String> {
     path.to_string_lossy()
         .strip_prefix(SNAPSHOT_PREFIX)
+        .map(str::to_string)
+}
+
+/// 取回虚拟路径里的 rmi 引用参数，不是 Docker 镜像路径则为 `None`。
+pub fn docker_rmi_ref(path: &Path) -> Option<String> {
+    path.to_string_lossy()
+        .strip_prefix(DOCKER_PREFIX)
         .map(str::to_string)
 }
 
@@ -131,11 +154,24 @@ mod tests {
         );
     }
 
+    /// 构造与解析必须是一对：cleaner 拿 `docker_rmi_ref` 的结果直接喂给
+    /// `docker image rm`。引用参数里的斜杠、冒口（注册表仓库）、
+    /// `sha256:` 前缀都不能被切掉。
+    #[test]
+    fn docker_path_round_trips() {
+        for rmi_ref in ["nginx:1.25", "ghcr.io/owner/img:1.0", "a1b2c3d4e5f6"] {
+            let p = docker_image_path(rmi_ref);
+            assert!(is_virtual_path(&p));
+            assert_eq!(docker_rmi_ref(&p).as_deref(), Some(rmi_ref));
+        }
+    }
+
     #[test]
     fn real_paths_are_not_virtual() {
         let p = Path::new("/Users/me/Library/Caches");
         assert!(!is_virtual_path(p));
         assert_eq!(snapshot_name(p), None);
+        assert_eq!(docker_rmi_ref(p), None);
     }
 
     #[test]

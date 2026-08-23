@@ -117,13 +117,14 @@ fn scan_fixed_inner(
         })
         .filter_map(|t| {
             let started = std::time::Instant::now();
-            // 虚拟路径：大小未知（APFS 快照是 COW 的），用 0 占位
+            // 虚拟路径不走文件系统：APFS 快照是 COW 的取不到体积，记 0；
+            // Docker 镜像在发现阶段就带上了真实体积（size_hint）。
             if is_virtual_path(&t.path) {
                 return Some((
                     ScanItem {
                         path: t.path.clone(),
                         label: t.label.clone(),
-                        size: 0,
+                        size: t.size_hint.unwrap_or(0),
                         file_count: 0,
                         category: t.category,
                         last_modified: 0,
@@ -576,6 +577,7 @@ mod tests {
             label: Text::same("t"),
             category: CategoryId::UserTemp,
             recommended: true,
+            size_hint: None,
         };
         #[cfg(windows)]
         let targets = [mk(r"C:\a"), mk(r"C:\b"), mk(r"D:\c"), mk(r"\\unc\share")];
@@ -636,6 +638,7 @@ mod tests {
             label: Text::same("link"),
             category: CategoryId::UserTemp,
             recommended: true,
+            size_hint: None,
         }];
 
         let cats = scan_fixed(&targets, &AtomicBool::new(true));

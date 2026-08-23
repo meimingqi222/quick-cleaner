@@ -4,7 +4,7 @@ use crate::core::cleaner::{
     clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot,
 };
 use crate::core::i18n::{bilingual, Text};
-use crate::core::model::fmt_size;
+use crate::core::model::{fmt_size, is_virtual_path};
 use crate::core::safety::is_protected;
 use crate::ui::components::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
@@ -151,10 +151,18 @@ impl crate::ui::Root {
             totals,
             bilingual(|l| tr_status_deleting_n(l, n)),
             move |p| clean_targets(&targets, p),
-            move |this, _report, snap, cx| {
+            move |this, report, snap, cx| {
+                // 虚拟路径（快照/Docker 镜像）不在文件系统上，exists() 恒为
+                // false，只能按清理报告判定成败——否则 rmi/tmutil 失败会被
+                // 误报成成功，条目从界面上消失，用户下次重扫才发现没删掉。
+                let reported_failed: Vec<&std::path::Path> =
+                    report.failed.iter().filter_map(|f| f.as_path()).collect();
                 let failed: Vec<PathBuf> = completed_targets
                     .iter()
                     .filter(|target| {
+                        if is_virtual_path(&target.path) {
+                            return reported_failed.contains(&target.path.as_path());
+                        }
                         if target.remove_dir {
                             target.path.exists()
                         } else {
@@ -173,10 +181,14 @@ impl crate::ui::Root {
 
                 // 同步更新磁盘透镜的 SizeTree：垃圾清理删掉的路径
                 //（缓存、临时文件、构建产物）在磁盘透镜里也会显示，
-                // 不局部扣减的话切过去看还是旧大小。
+                // 不局部扣减的话切过去看还是旧大小。虚拟路径不在树里，跳过。
                 let deleted: Vec<PathBuf> = completed_targets
                     .iter()
-                    .filter(|target| target.remove_dir && !target.path.exists())
+                    .filter(|target| {
+                        target.remove_dir
+                            && !is_virtual_path(&target.path)
+                            && !target.path.exists()
+                    })
                     .map(|target| target.path.clone())
                     .collect();
                 this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
