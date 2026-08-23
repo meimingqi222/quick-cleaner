@@ -125,6 +125,29 @@ pub(crate) fn remove_stale_delta(volume: &VolumeId) {
 /// base 只 mmap + 校验一次；delta 缺失或无效时直接用 base 的 header 统计，
 /// 绝不能二次加载（那会让启动耗时翻倍）。
 pub fn load_index(volume: &VolumeId) -> Option<LoadedIndex> {
+    let mut loaded = load_index_raw(volume)?;
+    heal_data_volume_mirror(volume, &mut loaded);
+    Some(loaded)
+}
+
+/// 旧索引自愈：修复前 walk 会把 `/System/Volumes/Data` 镜像一并收录，
+/// 用户树在索引里存在两份（firmlink 两侧各一），删除类事件只落在其中
+/// 一份上，另一份成了僵尸（搜索还能搜到已删目录、两个入口大小不一）。
+/// 加载时把镜像子树整条移除，计数随 `remove_path` 一并扣减。新索引
+/// （walk 已剪枝）里找不到该节点，这一步是零开销空操作；被治好的树
+/// 在下一次落盘时自然固化。
+fn heal_data_volume_mirror(volume: &VolumeId, loaded: &mut LoadedIndex) {
+    if volume.mount_point() != std::path::Path::new("/") {
+        return;
+    }
+    let mirror = std::path::PathBuf::from("/System/Volumes/Data");
+    if loaded.scan.tree.find_node_by_path(&mirror).is_some() {
+        loaded.scan.remove_path(&mirror);
+        crate::log!("索引自愈：已移除 /System/Volumes/Data 镜像子树（firmlink 重复侧）");
+    }
+}
+
+fn load_index_raw(volume: &VolumeId) -> Option<LoadedIndex> {
     let path = index_path(volume)?;
     let delta_path = index_delta_path(volume);
     if let Some(dp) = delta_path {
@@ -1356,5 +1379,113 @@ mod tests {
                 "search {q:?}: clean(0 overrides) {clean_ms:.1} ms, dirty(5000) {dirty_ms:.1} ms"
             );
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mirror_heal_tests {
+    use super::*;
+    use crate::platform::macos::disk_tree::{SizeTree, TreeIndexEntry};
+
+    fn entry(parent: u32, name: &str, is_dir: bool, size: u64) -> TreeIndexEntry {
+        TreeIndexEntry {
+            parent,
+            name: name.to_string(),
+            is_dir,
+            size,
+            used: true,
+            mtime: 0,
+        }
+    }
+
+    /// 带镜像的迷你索引：/Users/me/a.txt（真实侧）+
+    /// /System/Volumes/Data/Users/me/b.txt（firmlink 镜像侧）。
+    fn loaded_with_mirror(mount: &str) -> LoadedIndex {
+        let vol = VolumeId::from_mount_point(PathBuf::from(mount));
+        let entries = vec![
+            entry(0, "/", true, 0),
+            entry(0, "Users", true, 0),
+            entry(1, "me", true, 0),
+            entry(2, "a.txt", false, 100),
+            entry(0, "System", true, 0),
+            entry(4, "Volumes", true, 0),
+            entry(5, "Data", true, 0),
+            entry(6, "Users", true, 0),
+            entry(7, "me", true, 0),
+            entry(8, "b.txt", false, 50),
+        ];
+        let tree = SizeTree::from_compact(vol.clone(), entries);
+        LoadedIndex {
+            scan: ScanResult {
+                volume: vol,
+                total_size: tree.size_of(tree.root()),
+                file_count: tree.file_count_of(tree.root()),
+                dir_count: 8,
+                dirs: Vec::new(),
+                tree,
+                elapsed_ms: 0,
+                records_read: 10,
+                records_expected: 10,
+                mft_run_bytes: 0,
+                ext_records: 0,
+                ext_data_merged: 0,
+                hard_links: 0,
+                unique_size: 0,
+                unique_files: 0,
+            },
+            last_event_id: 0,
+        }
+    }
+
+    /// 自愈只移除镜像子树：真实侧保留、计数与树聚合同步扣减。
+    #[test]
+    fn mirror_subtree_removed_with_counts_decremented() {
+        let vol = VolumeId::from_mount_point(PathBuf::from("/"));
+        let mut li = loaded_with_mirror("/");
+        let (before_total, before_files) = (li.scan.total_size, li.scan.file_count);
+        assert_eq!(before_total, 150);
+        assert_eq!(before_files, 2);
+
+        heal_data_volume_mirror(&vol, &mut li);
+
+        assert!(li
+            .scan
+            .tree
+            .find_node_by_path(&PathBuf::from("/Users/me/a.txt"))
+            .is_some());
+        assert!(li
+            .scan
+            .tree
+            .find_node_by_path(&PathBuf::from("/System/Volumes/Data"))
+            .is_none());
+        // /System/Volumes 本身保留（Preboot / VM / Update 还在它下面）
+        assert!(li
+            .scan
+            .tree
+            .find_node_by_path(&PathBuf::from("/System/Volumes"))
+            .is_some());
+        assert_eq!(li.scan.total_size, 100);
+        assert_eq!(li.scan.file_count, 1);
+        assert_eq!(li.scan.tree.size_of(li.scan.tree.root()), 100);
+    }
+
+    /// 非根卷不做自愈；已治愈的树再跑一遍是零副作用空操作。
+    #[test]
+    fn heal_skips_other_volumes_and_is_idempotent() {
+        let data_vol = VolumeId::from_mount_point(PathBuf::from("/System/Volumes/Data"));
+        let mut li = loaded_with_mirror("/System/Volumes/Data");
+        heal_data_volume_mirror(&data_vol, &mut li);
+        assert!(li
+            .scan
+            .tree
+            .find_node_by_path(&PathBuf::from("/System/Volumes/Data"))
+            .is_some());
+
+        let root_vol = VolumeId::from_mount_point(PathBuf::from("/"));
+        let mut li2 = loaded_with_mirror("/");
+        heal_data_volume_mirror(&root_vol, &mut li2);
+        let (t, f) = (li2.scan.total_size, li2.scan.file_count);
+        heal_data_volume_mirror(&root_vol, &mut li2);
+        assert_eq!((li2.scan.total_size, li2.scan.file_count), (t, f));
     }
 }

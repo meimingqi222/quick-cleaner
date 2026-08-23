@@ -21,6 +21,25 @@ use std::os::raw::{c_char, c_double, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// 把数据卷镜像路径折叠回正规路径。
+///
+/// macOS 的 `/` 是合成根，`/Users` 等顶层目录经 firmlink 指向数据卷；
+/// 同一批文件因此有 `/Users/…` 和 `/System/Volumes/Data/Users/…` 两个
+/// 路径形态，FSEvents 两种都可能报。统一折叠成前者，增量刷新才不会
+/// 在索引里找到（或建立）镜像侧的节点——walk 已经不再收录镜像子树，
+/// 事件再以镜像形态进来就会凭空造出第二份。
+pub(crate) fn canonicalize_event_path(path: &Path) -> PathBuf {
+    const MIRROR: &str = "/System/Volumes/Data";
+    let s = path.to_string_lossy();
+    if s == MIRROR {
+        PathBuf::from("/")
+    } else if let Some(rest) = s.strip_prefix(&format!("{MIRROR}/")) {
+        PathBuf::from("/").join(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// FSEvents 回放结果。
 #[derive(Debug)]
 pub struct Changes {
@@ -259,6 +278,14 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
         crate::log!("  ... 共 {} 条变更路径（仅显示前 10 条）", paths.len());
     }
 
+    // 镜像路径折叠 + 去重：同一变更可能以两种形态各报一次。
+    let mut paths: Vec<PathBuf> = paths
+        .iter()
+        .map(|p| canonicalize_event_path(p))
+        .collect();
+    paths.sort();
+    paths.dedup();
+
     Some(Changes {
         paths,
         last_event_id: latest,
@@ -289,5 +316,43 @@ mod tests {
         let id = current_event_id();
         let result = changes_since(Path::new("/tmp"), id);
         assert!(result.is_some(), "FSEvents 应能从当前水位建立回放流");
+    }
+}
+
+#[cfg(test)]
+mod canonicalize_tests {
+    use super::canonicalize_event_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn mirror_paths_fold_to_canonical_form() {
+        assert_eq!(
+            canonicalize_event_path(Path::new(
+                "/System/Volumes/Data/Users/me/Library/Caches/x"
+            )),
+            PathBuf::from("/Users/me/Library/Caches/x")
+        );
+        // 镜像根自身折叠为卷根
+        assert_eq!(
+            canonicalize_event_path(Path::new("/System/Volumes/Data")),
+            PathBuf::from("/")
+        );
+    }
+
+    #[test]
+    fn plain_paths_pass_through_untouched() {
+        assert_eq!(
+            canonicalize_event_path(Path::new("/Users/me/a.txt")),
+            PathBuf::from("/Users/me/a.txt")
+        );
+        // 前缀相似但不是镜像的路径不能误折
+        assert_eq!(
+            canonicalize_event_path(Path::new("/System/Volumes/Preboot/x")),
+            PathBuf::from("/System/Volumes/Preboot/x")
+        );
+        assert_eq!(
+            canonicalize_event_path(Path::new("/System/Volumes/DataBase")),
+            PathBuf::from("/System/Volumes/DataBase")
+        );
     }
 }

@@ -461,6 +461,9 @@ struct RawEntry {
 /// 这是 M2 的核心入口。`root` 是要扫描的根目录路径，
 /// `volume` 是卷标识（用于 `ScanResult` 和 `SizeTree`）。
 /// `live` 是取消标志。
+/// 数据卷在合成根下的镜像挂载点（firmlink 的另一端）。
+const DATA_VOLUME_MIRROR: &str = "/System/Volumes/Data";
+
 pub fn scan_root(
     root: &Path,
     volume: VolumeId,
@@ -698,6 +701,16 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
         let mut local_names = Vec::new();
         let mut raw_entries: Vec<RawEntry> = Vec::with_capacity(entries.len());
         for entry in &entries {
+            // 数据卷镜像整条剪掉：/ 是合成根，/Users、/Applications 等经
+            // firmlink 已在顶层收录过一遍，/System/Volumes/Data 下是同一
+            // 批文件的第二份入口——走进去等于把整棵用户树索引两次（统计
+            // 翻倍、搜索结果成对出现）。Preboot / VM / Update 是真正独立
+            // 的内容，不受影响。旧索引里已存在的镜像子树由 load_index
+            // 的自愈逻辑移除。
+            if entry.is_dir && dir.join(&entry.name).as_path() == Path::new(DATA_VOLUME_MIRROR)
+            {
+                continue;
+            }
             if entry.is_dir {
                 collector.dir_count.fetch_add(1, Ordering::Relaxed);
             } else if entry.is_reg {
