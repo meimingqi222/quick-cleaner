@@ -421,6 +421,9 @@ pub struct DiskState {
     pub volume: VolumeId,
     pub tab: DiskTab,
     pub path: Vec<u32>,
+    /// 面包屑是否展开为全部层级。折叠态只显示「首段 + … + 末两段」，
+    /// 深路径下说不清自己在哪；点「…」切换。
+    pub crumbs_expanded: bool,
     /// 磁盘透镜的勾选状态（含继承与局部排除），实现见 `core::disk`
     pub sel: DiskSelectionState,
     pub space: Option<(u64, u64)>,

@@ -7,6 +7,7 @@ use crate::core::disk::{Node, ScanResult};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::cards::card;
+use crate::ui::components::path_tooltip;
 use crate::ui::components::donut::{render_donut, DonutSegment};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -202,8 +203,10 @@ pub(super) fn render_left_lens_pane(
 /// 右侧：智能层级与文件列表浏览器
 /// 面包屑导航。
 ///
-/// 路径深了会中间省略——单行自适应，小窗口下也不折行，否则整条工具栏
-/// 会被挤变形。
+/// 折叠态只显示「首段 + … + 末两段」，深路径（如 ~/Library/Application
+/// Support 有六层）下说不清自己在哪，也认不出相邻层级——把「…」做成
+/// 可点击的展开开关，展开后显示全部层级；每段 hover 有到该层为止的
+/// 完整路径提示，末段（当前位置）提示完整绝对路径。
 pub(super) fn render_breadcrumbs(
     root: &Root,
     scan: &ScanResult,
@@ -213,7 +216,6 @@ pub(super) fn render_breadcrumbs(
     let tree = &scan.tree;
     let depth = root.disk.path.len();
 
-    // 面包屑导航（单行自适应，防止小窗口折行挤压）
     let mut crumbs = div()
         .flex()
         .items_center()
@@ -224,7 +226,8 @@ pub(super) fn render_breadcrumbs(
 
     let max_display_crumbs = 3;
     let path_len = root.disk.path.len();
-    let display_indices: Vec<(usize, u32)> = if path_len <= max_display_crumbs {
+    let expanded = root.disk.crumbs_expanded || path_len <= max_display_crumbs;
+    let display_indices: Vec<(usize, u32)> = if expanded {
         root.disk.path.iter().copied().enumerate().collect()
     } else {
         let mut list = vec![(0, root.disk.path[0])];
@@ -234,22 +237,49 @@ pub(super) fn render_breadcrumbs(
         list
     };
 
-    let mut had_ellipsis = false;
-    for &(i, idx) in &display_indices {
+    // 逐段累积路径：每段的提示是「从根到这一层」的完整路径。
+    let mount = tree.volume().mount_point().to_path_buf();
+    let mut acc = mount.clone();
+
+    for (pos, &(i, idx)) in display_indices.iter().enumerate() {
         let is_root = idx == tree.root();
         let last = i + 1 == depth;
+        if pos > 0 && !is_root {
+            acc = acc.join(tree.name_of(idx));
+        }
+        let tooltip_text = acc.to_string_lossy().to_string();
         let crumb_name = if is_root {
             match lang {
                 Language::Zh => format!("{}: 根目录", tree.volume()),
                 Language::En => format!("{}: Root", tree.volume()),
             }
         } else {
-            truncate(&tree.name_of(idx), 12)
+            truncate(&tree.name_of(idx), 16)
         };
 
-        if path_len > max_display_crumbs && i > 0 && !had_ellipsis {
-            had_ellipsis = true;
-            crumbs = crumbs.child(div().px_1().text_xs().text_color(rgb(OUTLINE)).child("… ›"));
+        // 折叠时第二段之前插入可点击的「…」：hover 显示完整路径，
+        // 点击展开全部层级。
+        if pos == 1 && !expanded {
+            crumbs = crumbs
+                .child(
+                    div()
+                        .id("crumb-expand")
+                        .px_2()
+                        .py(px(2.))
+                        .rounded_md()
+                        .text_xs()
+                        .flex_none()
+                        .cursor_pointer()
+                        .text_color(rgb(PRIMARY))
+                        .hover(|h| h.bg(rgb(SURF_HIGH)))
+                        .child("…")
+                        .tooltip(path_tooltip(&tooltip_text))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.disk.crumbs_expanded = true;
+                            cx.notify();
+                        })),
+                )
+                .child(div().text_xs().text_color(rgb(OUTLINE)).child("›"));
         }
 
         crumbs = crumbs.child(
@@ -268,6 +298,7 @@ pub(super) fn render_breadcrumbs(
                     d.text_color(rgb(PRIMARY)).hover(|h| h.bg(rgb(SURF_HIGH)))
                 })
                 .child(crumb_name)
+                .tooltip(path_tooltip(&tooltip_text))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.disk.path.truncate(i + 1);
                     cx.notify();
@@ -276,6 +307,27 @@ pub(super) fn render_breadcrumbs(
         if !last {
             crumbs = crumbs.child(div().text_xs().text_color(rgb(OUTLINE)).child("›"));
         }
+    }
+
+    // 展开态且层级确实很多时，末尾给个收起开关，别让长路径常驻挤占工具栏。
+    if expanded && path_len > max_display_crumbs {
+        crumbs = crumbs.child(
+            div()
+                .id("crumb-collapse")
+                .px_2()
+                .py(px(2.))
+                .rounded_md()
+                .text_xs()
+                .flex_none()
+                .cursor_pointer()
+                .text_color(rgb(OUTLINE))
+                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                .child("‹ 收起")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.disk.crumbs_expanded = false;
+                    cx.notify();
+                })),
+        );
     }
 
     crumbs

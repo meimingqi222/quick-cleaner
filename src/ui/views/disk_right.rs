@@ -7,6 +7,7 @@ use crate::ui::components::buttons::small_button;
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::*;
+use crate::ui::components::path_tooltip;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::views::DiskTab;
@@ -244,6 +245,56 @@ pub(super) fn render_right_browser_pane(
                 }),
         );
 
+    // 当前位置完整路径：面包屑折叠时它是唯一可靠的「我在哪」线索。
+    // 只在目录树视图显示（大文件榜跨目录，没有单一位置）。超宽不换行、
+    // hover 出全文，右侧一键复制。
+    let path_bar = drillable.then(|| {
+        let full = root
+            .current_disk_full_path()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let (copy_label, copied_status) = match lang {
+            Language::Zh => ("复制路径", crate::core::i18n::Text::new("路径已复制", "Path copied")),
+            Language::En => ("Copy path", crate::core::i18n::Text::new("路径已复制", "Path copied")),
+        };
+        let full_for_copy = full.clone();
+        div()
+            .id("disk-full-path-bar")
+            .px_4()
+            .py(px(4.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgba(OUTLINE_VAR, 0.3))
+            .bg(rgb(SURF))
+            .child(
+                div()
+                    .id("disk-full-path")
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .whitespace_nowrap()
+                    .child(full)
+                    .tooltip(path_tooltip(&full_for_copy)),
+            )
+            .child(
+                div()
+                    .id("disk-copy-path-btn")
+                    .flex_none()
+                    .child(small_button(copy_label.to_string(), SURF_HIGH, TEXT, true))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            full_for_copy.clone(),
+                        ));
+                        this.status = copied_status.clone();
+                        cx.notify();
+                    })),
+            )
+    });
+
     card()
         .flex_1()
         .min_w(px(0.))
@@ -251,6 +302,7 @@ pub(super) fn render_right_browser_pane(
         .flex()
         .flex_col()
         .child(top_bar)
+        .children(path_bar)
         .child(list_header)
         .child(
             div()
@@ -356,6 +408,9 @@ fn render_lens_row_name(
                 this.enter_disk_node(idx, cx);
             }))
         })
+        // 树视图行只显示名字；hover 出完整路径，深层级下不再猜「这是
+        // 哪个 Library / 哪个 JetBrains」。
+        .tooltip(path_tooltip(&path_str))
         .into_any_element()
 }
 

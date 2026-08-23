@@ -193,6 +193,7 @@ impl Root {
                 volume: disk_volume,
                 tab: DiskTab::Tree,
                 path: vec![crate::core::disk::ROOT_NODE],
+                crumbs_expanded: false,
                 sel: DiskSelectionState::new(),
                 space: disk_space,
                 volume_spaces: volume_spaces.clone(),
