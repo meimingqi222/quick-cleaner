@@ -573,12 +573,17 @@ pub(super) fn refresh_macos_index(
         let parent_idx = match scan.tree.find_node_by_path(parent_path) {
             Some(parent) => parent,
             None => {
+                // 父目录不在树中：多为 SIP/权限保护目录（如
+                // /private/var/db/searchparty），walk 本就读不进去、索引里
+                // 天然没有，这类事件永远放不进树。跳过这一个子树、继续
+                // 合并其余——实测曾因这一条路径放弃整个增量、回退 80 秒
+                // 全量扫描，代价完全不成比例。
                 crate::log!(
-                    "refresh_macos_index: 父目录 {} 不在树中，放弃增量更新 {}",
+                    "refresh_macos_index: 父目录 {} 不在树中，跳过子树 {}（多为 SIP/权限保护目录）",
                     parent_path.display(),
                     sr.root.display()
                 );
-                return None;
+                continue;
             }
         };
 
