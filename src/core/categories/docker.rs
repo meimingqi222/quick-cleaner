@@ -16,13 +16,13 @@ pub(super) fn push_docker_targets(t: &mut Vec<ScanTarget>) {
     }
     let container_refs = docker::list_container_refs();
     for junk in docker::select_docker_junk(&images, &container_refs) {
+        // chars 而不是字节切片：ID 来自外部进程输出，多字节字符落在
+        // 切片边界会 panic，这里跑在主线程。
+        let short_id: String = junk.image.id.chars().take(12).collect();
         let label = match junk.kind {
             JunkKind::Dangling => Text::new(
-                format!("悬空镜像 {}（构建残留）", &junk.image.id[..junk.image.id.len().min(12)]),
-                format!(
-                    "Dangling image {} (build residue)",
-                    &junk.image.id[..junk.image.id.len().min(12)]
-                ),
+                format!("悬空镜像 {short_id}（构建残留）"),
+                format!("Dangling image {short_id} (build residue)"),
             ),
             JunkKind::OldVersion => Text::new(
                 format!("{}:{}（旧版本）", junk.image.repository, junk.image.tag),

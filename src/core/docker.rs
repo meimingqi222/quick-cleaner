@@ -16,7 +16,7 @@ const NONE: &str = "<none>";
 
 /// 用 `|` 分隔而不是官方文档惯用的 `\t`：Go 模板里的转义序列依赖 docker
 /// 的预处理，管道符没有这层不确定性，镜像名/标签也不可能包含它。
-const IMAGES_FORMAT: &str = "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}";
+const IMAGES_FORMAT: &str = "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Digest}}|{{.Size}}";
 
 /// `docker images` 的一行。
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +25,9 @@ pub struct DockerImage {
     pub id: String,
     pub repository: String,
     pub tag: String,
+    /// 仓库摘要（`sha256:...`）。本地构建的镜像为 `<none>`。按摘要拉取/
+    /// 创建的引用形态是 `repo@digest`，匹配容器引用时要用到。
+    pub digest: String,
     /// 从 "187MB" 这类人读大小解析出的字节。
     pub size: u64,
 }
@@ -52,14 +55,22 @@ impl DockerJunk {
     ///
     /// 带标签的用 `repo:tag` 而不是镜像 ID：同一镜像 ID 常挂多个标签
     /// （`nginx:stable` 与 `nginx:1.24` 往往同 ID），按 ID 删要么报错、
-    /// 要么 `--force` 连用户没勾选的标签一起摘掉。悬空镜像没有可用的
-    /// 名称引用，只能按 ID。
+    /// 要么 `--force` 连用户没勾选的标签一起摘掉。
+    ///
+    /// 没有标签的行（`<none>`）分两种：
+    /// - 真悬空镜像：`repo` 也是 `<none>`，没有可用的名称引用，只能按 ID。
+    /// - 按摘要拉取的镜像：`repo` 正常但 `tag` 是 `<none>`（官方文档：
+    ///   digest 拉取不带标签），`repo:<none>` 不是合法引用。这种优先用
+    ///   `repo@sha256:...`（digest 列有值），只在 digest 确实缺失时才
+    ///   退回按 ID——否则与同 ID 的其它在用标签冲突，rmi 会报错。
     pub fn rmi_ref(&self) -> String {
-        if self.image.repository == NONE {
-            self.image.id.clone()
-        } else {
-            format!("{}:{}", self.image.repository, self.image.tag)
+        if self.image.tag == NONE {
+            if self.image.repository != NONE && self.image.digest != NONE {
+                return format!("{}@{}", self.image.repository, self.image.digest);
+            }
+            return self.image.id.clone();
         }
+        format!("{}:{}", self.image.repository, self.image.tag)
     }
 }
 
@@ -122,7 +133,8 @@ pub fn parse_images(stdout: &str) -> Vec<DockerImage> {
     let mut out = Vec::new();
     for line in stdout.lines() {
         let mut fields = line.split('|');
-        let (Some(id), Some(repository), Some(tag), Some(size)) = (
+        let (Some(id), Some(repository), Some(tag), Some(digest), Some(size)) = (
+            fields.next(),
             fields.next(),
             fields.next(),
             fields.next(),
@@ -137,6 +149,7 @@ pub fn parse_images(stdout: &str) -> Vec<DockerImage> {
             id: id.trim_start_matches("sha256:").to_string(),
             repository: repository.to_string(),
             tag: tag.to_string(),
+            digest: digest.to_string(),
             size: parse_size(size),
         });
     }
@@ -178,25 +191,39 @@ fn version_tag(tag: &str) -> Option<Vec<u64>> {
 ///
 /// 旧版本与未引用都只对「未被任何容器引用」的镜像生效——被停止容器
 /// 占着的镜像删不掉（rmi 会报错），在发现阶段就拦掉，不放进列表。
+/// 引用状态按镜像 ID 传播：同一镜像常有多行（带 tag 行 + 摘要行，或
+/// 同 ID 多 tag），任何一行命中容器引用，整个镜像都算在用。
 /// 按 `rmi_ref` 去重：同一个标签只能生成一个条目，否则虚拟路径重复
 /// 会让按路径去重的选中集互相串。
 pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> Vec<DockerJunk> {
+    let referenced_ids: HashSet<&str> = images
+        .iter()
+        .filter(|img| is_referenced(img, container_refs))
+        .map(|img| img.id.as_str())
+        .collect();
+    let in_use =
+        |image: &DockerImage, refs: &[String]| -> bool {
+            referenced_ids.contains(image.id.as_str()) || is_referenced(image, refs)
+        };
     let mut junk: Vec<DockerJunk> = Vec::new();
     let mut taken: HashSet<String> = HashSet::new();
 
     for image in images {
-        if image.repository != NONE || is_referenced(image, container_refs) {
+        if image.repository != NONE || in_use(image, container_refs) {
             continue;
         }
         let item = DockerJunk {
             image: image.clone(),
             kind: JunkKind::Dangling,
         };
-        taken.insert(item.rmi_ref());
-        junk.push(item);
+        if taken.insert(item.rmi_ref()) {
+            junk.push(item);
+        }
     }
 
     // 同仓库分组，版本号标签多于一个时保留最新的，其余未引用的报旧版本。
+    // 并列的最大版本组（"22.04" 与 "22.4" 解析出同一向量）全保留——
+    // 同一版本的两种写法，标谁旧都不对，只标记严格更旧的。
     let mut by_repo: HashMap<&str, Vec<&DockerImage>> = HashMap::new();
     for image in images {
         if image.repository != NONE {
@@ -215,8 +242,9 @@ pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> 
             continue;
         }
         versioned.sort_by_key(|(_, v)| v.clone());
-        for (image, _) in &versioned[..versioned.len() - 1] {
-            if is_referenced(image, container_refs) {
+        let newest = versioned.last().unwrap().1.clone();
+        for (image, v) in &versioned {
+            if *v == newest || in_use(image, container_refs) {
                 continue;
             }
             let item = DockerJunk {
@@ -230,8 +258,14 @@ pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> 
     }
 
     // 剩下的未引用标签（含各仓库的最新版、latest、alpine 这类变体）。
+    // TAG 为 <none> 的摘要行不报：它与同镜像的带 tag 行是同一份数据的
+    // 两条引用，都报的话类目合计按镜像体积重复计账，实际最多释放一次
+    // （`rmi_ref` 对这种行返回 repo@digest，留作未来按引用粒度记账后开启）。
     for image in images {
-        if image.repository == NONE || is_referenced(image, container_refs) {
+        if image.repository == NONE
+            || image.tag == NONE
+            || in_use(image, container_refs)
+        {
             continue;
         }
         let item = DockerJunk {
@@ -246,8 +280,9 @@ pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> 
 }
 
 /// 容器引用匹配。容器列表的 IMAGE 列可能是 `repo:tag`、省略了
-/// `:latest` 的裸仓库名，或镜像名被摘掉后退化的镜像 ID（长短皆可能）。
-/// 宁可多匹配（少报可清理）也不误删正在使用的镜像。
+/// `:latest` 的裸仓库名、按摘要创建的 `repo@sha256:...`，或镜像名被
+/// 摘掉后退化的镜像 ID（长短皆可能）。宁可多匹配（少报可清理）也不
+/// 误删正在使用的镜像。
 fn is_referenced(image: &DockerImage, container_refs: &[String]) -> bool {
     container_refs.iter().any(|r| {
         let r = r.trim();
@@ -258,6 +293,10 @@ fn is_referenced(image: &DockerImage, container_refs: &[String]) -> bool {
             return true;
         }
         if image.tag == "latest" && r == image.repository {
+            return true;
+        }
+        // 按摘要拉取/创建的引用形态（官方文档 docker image rm 一节）
+        if image.digest != NONE && r == format!("{}@{}", image.repository, image.digest) {
             return true;
         }
         let r_hex = r.strip_prefix("sha256:").unwrap_or(r);
@@ -276,20 +315,23 @@ mod tests {
             id: id.to_string(),
             repository: repo.to_string(),
             tag: tag.to_string(),
+            digest: String::new(),
             size,
         }
     }
 
-    /// docker 实际输出的形态（管道分隔 + <none> 悬空行 + 注册表长仓库名）。
+    /// docker 实际输出的形态（管道分隔 + <none> 悬空行 + 注册表长仓库名
+    /// + 摘要列：本地构建为 <none>，拉取的为 sha256:...）。
     #[test]
     fn parse_images_handles_real_output() {
-        let stdout = "a1b2c3d4e5f6|nginx|1.27|187MB\n\
-                      f6e5d4c3b2a1|<none>|<none>|823kB\n\
-                      001122334455|ghcr.io/owner/img|1.0|1.24GB\n\
+        let stdout = "a1b2c3d4e5f6|nginx|1.27|sha256:cbbf2f9a99b4|187MB\n\
+                      f6e5d4c3b2a1|<none>|<none>|<none>|823kB\n\
+                      001122334455|ghcr.io/owner/img|1.0|<none>|1.24GB\n\
                       \n\
                       garbage line without pipes\n";
         let images = parse_images(stdout);
         assert_eq!(images.len(), 3);
+        assert_eq!(images[0].digest, "sha256:cbbf2f9a99b4");
         assert_eq!(images[1].repository, "<none>");
         assert_eq!(images[1].size, 823_000);
         assert_eq!(images[2].repository, "ghcr.io/owner/img");
@@ -415,5 +457,91 @@ mod tests {
         let junk = select_docker_junk(&images, &[]);
         let refs: HashSet<String> = junk.iter().map(|j| j.rmi_ref()).collect();
         assert_eq!(refs.len(), junk.len());
+    }
+
+    /// 按摘要拉取的镜像 TAG 为 <none>（官方文档行为）：不生成条目——
+    /// `repo:<none>` 不是合法删除引用，按 ID 删在镜像还挂着其它引用时
+    /// 会报错。
+    #[test]
+    fn digest_pulled_rows_are_skipped() {
+        let images = [DockerImage {
+            id: "aaa1aaa1aaa1".into(),
+            repository: "nginx".into(),
+            tag: "<none>".into(),
+            digest: "sha256:cbbf2f9a99b4".into(),
+            size: 100,
+        }];
+        assert!(select_docker_junk(&images, &[]).is_empty());
+    }
+
+    /// 按摘要创建的容器 IMAGE 列是 `repo@sha256:...`；引用状态要按镜像
+    /// ID 传播到同镜像的带 tag 行（签名拉取会产生同 ID 两行）。
+    #[test]
+    fn digest_container_refs_propagate_to_sibling_rows() {
+        let images = [
+            img("aaa1aaa1aaa1", "nginx", "1.27", 100),
+            DockerImage {
+                id: "aaa1aaa1aaa1".into(),
+                repository: "nginx".into(),
+                tag: "<none>".into(),
+                digest: "sha256:cbbf2f9a99b4".into(),
+                size: 100,
+            },
+        ];
+        let refs = vec!["nginx@sha256:cbbf2f9a99b4".to_string()];
+        assert!(select_docker_junk(&images, &refs).is_empty());
+    }
+
+    /// "22.04" 与 "22.4" 解析出同一版本向量：并列的最大版本组全保留，
+    /// 不允许靠列表顺序任选一个标"旧版本"。
+    #[test]
+    fn tied_version_spellings_are_all_kept() {
+        let images = [
+            img("aaa1aaa1aaa1", "ubuntu", "22.4", 1),
+            img("aaa2aaa2aaa2", "ubuntu", "24.04", 1),
+            img("aaa3aaa3aaa3", "ubuntu", "22.04", 1),
+        ];
+        let junk = select_docker_junk(&images, &[]);
+        let old: Vec<String> = junk
+            .iter()
+            .filter(|j| j.kind == JunkKind::OldVersion)
+            .map(|j| j.rmi_ref())
+            .collect();
+        // 只有 22.x 组整体旧于 24.04；组内两种写法都不是"旧版本"
+        // （顺序按版本排序：22.4 与 22.04 向量相等，稳定排序保持列表序）
+        assert_eq!(old, vec!["ubuntu:22.4", "ubuntu:22.04"]);
+    }
+
+    /// rmi_ref 对 TAG=<none> 的行：有 digest 就用 repo@sha256:...，绝不
+    /// 拼出非法的 repo:<none>；digest 缺失才回退按 ID。
+    #[test]
+    fn rmi_ref_uses_digest_for_untagged_rows() {
+        let item = DockerJunk {
+            image: DockerImage {
+                id: "aaa1aaa1aaa1".into(),
+                repository: "nginx".into(),
+                tag: "<none>".into(),
+                digest: "sha256:cbbf2f9a99b4".into(),
+                size: 100,
+            },
+            kind: JunkKind::Unreferenced,
+        };
+        assert_eq!(item.rmi_ref(), "nginx@sha256:cbbf2f9a99b4");
+    }
+
+    /// digest 缺失（本地构建的镜像）才回退按 ID。
+    #[test]
+    fn rmi_ref_falls_back_to_id_without_digest() {
+        let item = DockerJunk {
+            image: DockerImage {
+                id: "aaa1aaa1aaa1".into(),
+                repository: "nginx".into(),
+                tag: "<none>".into(),
+                digest: NONE.to_string(),
+                size: 100,
+            },
+            kind: JunkKind::Unreferenced,
+        };
+        assert_eq!(item.rmi_ref(), "aaa1aaa1aaa1");
     }
 }
