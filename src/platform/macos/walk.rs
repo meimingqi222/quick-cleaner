@@ -660,6 +660,66 @@ fn scan_root_inner(
     ))
 }
 
+/// 一批枚举结果的整理产物。
+struct PreparedBatch {
+    entries: Vec<RawEntry>,
+    names: Vec<u8>,
+    /// 待入队子目录（路径 + 在 `entries` 里的位置），调用方加上 commit
+    /// 返回的 `entry_base` 才是全局下标。
+    subdirs: Vec<(PathBuf, u32)>,
+    dir_count: u64,
+    file_count: u64,
+    total_size: u64,
+}
+
+/// 把一个目录枚举出的一批条目整理成提交格式（纯函数，便于单测）。
+///
+/// 数据卷镜像在这层剪掉：不进条目、不进队列、不进统计——收录它等于
+/// 把整棵用户树索引两遍。**子目录下标必须是它在 `entries` 里的实际
+/// 位置**：剪掉条目后这个位置和 enumerate 的下标不再一致，用错会把
+/// 整棵子树嫁接到无关条目上——父链出现"文件下挂目录"，加载校验
+/// 拒绝，索引每次启动都被判无效而全量重建。
+fn prepare_batch(dir: &Path, dir_idx: u32, entries: Vec<DirEntry>) -> PreparedBatch {
+    let mut out = PreparedBatch {
+        entries: Vec::with_capacity(entries.len()),
+        names: Vec::new(),
+        subdirs: Vec::new(),
+        dir_count: 0,
+        file_count: 0,
+        total_size: 0,
+    };
+    for entry in entries {
+        // 数据卷镜像整条剪掉：/ 是合成根，/Users、/Applications 等经
+        // firmlink 已在顶层收录过一遍，/System/Volumes/Data 下是同一
+        // 批文件的第二份入口。Preboot / VM / Update 是真正独立的内容，
+        // 不受影响。旧索引里已存在的镜像子树由 load_index 的自愈移除。
+        if entry.is_dir && dir.join(&entry.name).as_path() == Path::new(DATA_VOLUME_MIRROR) {
+            continue;
+        }
+        if entry.is_dir {
+            out.dir_count += 1;
+        } else if entry.is_reg {
+            out.total_size += entry.size;
+            out.file_count += 1;
+        }
+        let name_off = out.names.len() as u32;
+        out.names.extend_from_slice(entry.name.as_bytes());
+        if entry.is_dir {
+            out.subdirs
+                .push((dir.join(&entry.name), out.entries.len() as u32));
+        }
+        out.entries.push(RawEntry {
+            parent: dir_idx,
+            name_off,
+            name_len: entry.name.len() as u16,
+            is_dir: entry.is_dir,
+            size: if entry.is_dir { 0 } else { entry.size },
+            mtime: entry.mtime.min(u32::MAX as u64) as u32,
+        });
+    }
+    out
+}
+
 /// 工作线程主循环：取目录 → 枚举 → 推子目录 → 重复。
 ///
 /// 每个从队列取出的项包含目录路径和该目录在 entries 数组中的下标。
@@ -697,51 +757,22 @@ fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
         let entries = enumerate_dir(fd);
         unsafe { libc::close(fd) };
 
-        let mut new_dirs: Vec<(PathBuf, u32)> = Vec::new();
-        let mut local_names = Vec::new();
-        let mut raw_entries: Vec<RawEntry> = Vec::with_capacity(entries.len());
-        for entry in &entries {
-            // 数据卷镜像整条剪掉：/ 是合成根，/Users、/Applications 等经
-            // firmlink 已在顶层收录过一遍，/System/Volumes/Data 下是同一
-            // 批文件的第二份入口——走进去等于把整棵用户树索引两次（统计
-            // 翻倍、搜索结果成对出现）。Preboot / VM / Update 是真正独立
-            // 的内容，不受影响。旧索引里已存在的镜像子树由 load_index
-            // 的自愈逻辑移除。
-            if entry.is_dir && dir.join(&entry.name).as_path() == Path::new(DATA_VOLUME_MIRROR)
-            {
-                continue;
-            }
-            if entry.is_dir {
-                collector.dir_count.fetch_add(1, Ordering::Relaxed);
-            } else if entry.is_reg {
-                collector
-                    .total_size
-                    .fetch_add(entry.size, Ordering::Relaxed);
-                collector.file_count.fetch_add(1, Ordering::Relaxed);
-            }
-            let name_off = local_names.len() as u32;
-            local_names.extend_from_slice(entry.name.as_bytes());
-            raw_entries.push(RawEntry {
-                parent: dir_idx,
-                name_off,
-                name_len: entry.name.len() as u16,
-                is_dir: entry.is_dir,
-                size: if entry.is_dir { 0 } else { entry.size },
-                mtime: entry.mtime.min(u32::MAX as u64) as u32,
-            });
-        }
+        let batch = prepare_batch(&dir, dir_idx, entries);
+        collector.dir_count.fetch_add(batch.dir_count, Ordering::Relaxed);
+        collector
+            .file_count
+            .fetch_add(batch.file_count, Ordering::Relaxed);
+        collector
+            .total_size
+            .fetch_add(batch.total_size, Ordering::Relaxed);
 
         // 提交批数据（内存或溢写），拿到本批首条目的全局下标
+        let mut raw_entries = batch.entries;
+        let local_names = batch.names;
         let entry_base = collector.commit(&mut raw_entries, &local_names);
-        for (i, entry) in entries.iter().enumerate() {
-            if entry.is_dir {
-                new_dirs.push((dir.join(&entry.name), entry_base + i as u32));
-            }
-        }
-
-        for (path, idx) in new_dirs {
+        for (path, rel) in batch.subdirs {
             if live.load(Ordering::Relaxed) {
-                wq.push(path, idx);
+                wq.push(path, entry_base + rel);
             }
         }
 
@@ -1053,6 +1084,63 @@ fn build_size_tree_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：镜像剪枝后子目录队列下标必须与实际提交位置对齐。
+    ///
+    /// 旧实现镜像只从 raw_entries 里跳过，入队下标却用 enumerate 的
+    /// 原始下标——剪掉一个，同批后续目录全部偏移，整棵子树嫁接到无关
+    /// 条目上（文件下挂目录），索引校验拒载，每次启动都全量重建。
+    #[test]
+    fn prune_keeps_subdir_indices_aligned() {
+        let dir = Path::new("/System/Volumes");
+        let mk = |name: &str, is_dir: bool, size: u64| DirEntry {
+            name: name.to_string(),
+            is_dir,
+            is_reg: !is_dir,
+            size,
+            mtime: 0,
+        };
+        // readdir 顺序任意；镜像放最前，后面跟同批目录与文件
+        let entries = vec![
+            mk("Data", true, 0), // 数据卷镜像，应剪掉
+            mk("Preboot", true, 0),
+            mk("VM", true, 0),
+            mk("somefile", false, 123),
+            mk("Update", true, 0),
+        ];
+        let batch = prepare_batch(dir, 7, entries);
+
+        // 镜像不进条目、不进队列、不进统计
+        assert_eq!(batch.entries.len(), 4);
+        assert!(!batch.subdirs.iter().any(|(p, _)| p.ends_with("Data")));
+        assert_eq!(batch.dir_count, 3);
+        assert_eq!(batch.file_count, 1);
+        assert_eq!(batch.total_size, 123);
+        assert!(batch.entries.iter().all(|e| e.parent == 7));
+
+        // 每个入队目录的下标 == 它在提交条目里的位置（含镜像之后的前移）
+        for (path, idx) in &batch.subdirs {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let pos = batch
+                .entries
+                .iter()
+                .position(|e| {
+                    let s = String::from_utf8_lossy(
+                        &batch.names[e.name_off as usize..e.name_off as usize + e.name_len as usize],
+                    );
+                    s == name
+                })
+                .expect("入队目录必须在条目里");
+            assert_eq!(*idx, pos as u32, "{name} 的队列下标必须等于实际提交位置");
+        }
+        // VM 排在镜像之后，旧实现会把它的下标算成 2（错误），正确值是 1
+        let vm = batch
+            .subdirs
+            .iter()
+            .find(|(p, _)| p.ends_with("VM"))
+            .unwrap();
+        assert_eq!(vm.1, 1);
+    }
 
     #[test]
     fn scan_indexes_nested_files() {
