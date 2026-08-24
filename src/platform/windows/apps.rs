@@ -1166,99 +1166,250 @@ pub fn open_in_default_app(path: &std::path::Path) {
     }
 }
 
+/// 卸载命令指向的可执行文件主名（小写、不含扩展名）。
+///
+/// `winget uninstall …`、`MsiExec.exe /X{…}` 这类没有真实路径的命令，
+/// [`split_command`] 会退回第一段，这里再剥掉目录和扩展名。
+fn command_file_stem(cmd: &str) -> String {
+    let (exe, _) = split_command(cmd);
+    let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe.as_str());
+    file.rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(file)
+        .to_ascii_lowercase()
+}
+
+/// 这些是命令行宿主，不是软件自己的卸载向导。
+///
+/// 不能拿它们当 `wait_until_finished` 的进程名：本机随时可能另有
+/// `cmd` / `powershell` / `winget` 在跑，会空等直到 30 分钟超时。
+fn is_generic_host_stem(stem: &str) -> bool {
+    matches!(
+        stem,
+        "cmd"
+            | "powershell"
+            | "pwsh"
+            | "winget"
+            | "scoop"
+            | "choco"
+            | "chocolatey"
+            | "msiexec"
+            | "conhost"
+            | "explorer"
+    )
+}
+
+/// 需要走 `cmd /c` 才能正确解析的卸载命令。
+///
+/// winget / powershell / 批处理没有独立的 GUI 卸载器，Windows 的
+/// 「程序和功能」也是把 `UninstallString` 当一行命令丢给 cmd。
+/// 自己 `CreateProcess(winget, …)` 在提权进程里经常踩 App Execution
+/// Alias，命令闪一下就退出，软件还在列表里。
+fn needs_cmd_shell(cmd: &str) -> bool {
+    let stem = command_file_stem(cmd);
+    if is_generic_host_stem(&stem) {
+        return true;
+    }
+    let (exe, _) = split_command(cmd);
+    let lower = exe.to_ascii_lowercase();
+    lower.ends_with(".bat") || lower.ends_with(".cmd") || lower.ends_with(".ps1")
+}
+
+/// 这一支没有需要用户看的进度或确认，把 cmd 黑框藏掉。
+///
+/// powershell / 批处理经常带 `pause`、`Read-Host`，藏掉窗口会永远卡住。
+fn hide_shell_window(cmd: &str) -> bool {
+    matches!(
+        command_file_stem(cmd).as_str(),
+        "msiexec" | "winget" | "scoop" | "choco" | "chocolatey"
+    )
+}
+
+fn has_cli_token(cmd: &str, flags: &[&str]) -> bool {
+    let lower = cmd.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    flags.iter().any(|f| tokens.iter().any(|t| t == f))
+}
+
+/// winget / choco 默认会交互确认。从 GUI 拉起时 stdin 对不上 TTY，
+/// 命令「执行完」其实是取消或直接退出，登记项还在，列表就不会刷新。
+fn prepare_uninstall_cmd(cmd: &str, app: &InstalledApp) -> String {
+    let mut out = cmd.trim().to_string();
+    match command_file_stem(&out).as_str() {
+        "winget" => {
+            if !has_cli_token(&out, &["--scope"]) {
+                match app.registry_root {
+                    AppRegRoot::Hkcu => out.push_str(" --scope user"),
+                    AppRegRoot::Hklm | AppRegRoot::Hklm32 => out.push_str(" --scope machine"),
+                    AppRegRoot::SystemApp => {}
+                }
+            }
+            if !has_cli_token(&out, &["--disable-interactivity"]) {
+                out.push_str(" --disable-interactivity");
+            }
+            if !has_cli_token(&out, &["--accept-source-agreements"]) {
+                out.push_str(" --accept-source-agreements");
+            }
+            if !has_cli_token(&out, &["--silent", "-h"]) {
+                out.push_str(" --silent");
+            }
+        }
+        "choco" | "chocolatey" => {
+            if !has_cli_token(&out, &["-y", "--yes"]) {
+                out.push_str(" -y");
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// 用户范围的包管理器卸载必须降权。
+///
+/// 本程序会 UAC 自提权。winget 在管理员进程里卸载 HKCU 包会直接返回
+/// `0x8A15007D`（ADMIN_CONTEXT_ACTION_PROHIBITED），命令「跑完了」软件还在。
+fn should_run_unelevated(cmd: &str, app: &InstalledApp) -> bool {
+    app.registry_root == AppRegRoot::Hkcu
+        && matches!(
+            command_file_stem(cmd).as_str(),
+            "winget" | "scoop" | "choco" | "chocolatey"
+        )
+}
+
+fn install_location_gone(app: &InstalledApp) -> bool {
+    let Some(loc) = app.install_location.as_ref() else {
+        return false;
+    };
+    if is_system_root_dir(loc) {
+        return false;
+    }
+    crate::core::safety::norm(loc).len() > 3 && !loc.exists()
+}
+
 /// 运行软件官方卸载向导并等待其退出
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
-    let cmd = app
+    let raw = app
         .quiet_uninstall_string
         .as_ref()
         .or(app.uninstall_string.as_ref())
         .ok_or_else(|| "该软件未提供有效的卸载命令行".to_string())?;
+    let cmd = prepare_uninstall_cmd(raw, app);
 
-    use std::os::windows::process::CommandExt;
-    {
-        let t0 = std::time::Instant::now();
-        crate::log!("开始卸载「{}」，命令行: {cmd}", app.name);
-        let mut child = if cmd.to_lowercase().contains("msiexec") {
-            // cmd.exe 是 console 程序，不给 CREATE_NO_WINDOW 就会弹一个黑框
-            // 杵在卸载向导旁边。这里只借 cmd 做命令行解析，本来就没有输出可看。
-            // 只对这一支加：另一支起的是软件自带的卸载器，其中少数是控制台
-            // 程序且会显示进度，不该替用户把它藏掉。
-            std::process::Command::new("cmd")
-                .raw_arg(format!("/c {cmd}"))
-                .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
-                .spawn()
-                .map_err(|e| format!("启动卸载程序失败: {e}"))?
-        } else {
-            // split_command 能正确处理没加引号的带空格路径。按空格切的老办法
-            // 会把 `C:\Program Files\X\unins000.exe` 截成 `C:\Program`，
-            // 本机 145 款软件里有 24 款会因此直接卸载失败。
-            let (exe, args) = split_command(cmd);
-            if exe.is_empty() {
-                return Err("无效的卸载命令".into());
-            }
-            let mut c = std::process::Command::new(&exe);
-            for arg in &args {
-                c.arg(arg);
-            }
-            c.spawn()
-                .map_err(|e| format!("启动卸载程序失败（{exe}）: {e}"))?
-        };
+    let t0 = std::time::Instant::now();
+    crate::log!("开始卸载「{}」，命令行: {cmd}", app.name);
 
-        let status = child
+    let hidden = hide_shell_window(&cmd);
+    let mut unelevated = should_run_unelevated(raw, app);
+    if unelevated {
+        crate::log!(
+            "「{}」是用户范围的命令行卸载，降权到桌面用户执行",
+            app.name
+        );
+    }
+
+    let code = if needs_cmd_shell(&cmd) {
+        let mut code =
+            crate::platform::windows::process::run_cmd_and_wait(&cmd, hidden, unelevated)?;
+        // 误判成机器范围、或降权失败回退到当前权限时，winget 会回这个码。
+        // 再降权跑一次，避免命令闪一下就结束、列表里还挂着。
+        if code == crate::platform::windows::process::WINGET_ADMIN_CONTEXT_PROHIBITED
+            && !unelevated
+            && crate::platform::windows::security::is_elevated()
+        {
+            crate::log!("winget 拒绝在管理员上下文卸载用户范围的包，改为降权重试");
+            unelevated = true;
+            code = crate::platform::windows::process::run_cmd_and_wait(&cmd, hidden, true)?;
+        }
+        crate::log!("卸载命令退出码 {code:#010x}（降权={unelevated}）");
+        code
+    } else {
+        // split_command 能正确处理没加引号的带空格路径。按空格切的老办法
+        // 会把 `C:\Program Files\X\unins000.exe` 截成 `C:\Program`，
+        // 本机 145 款软件里有 24 款会因此直接卸载失败。
+        let (exe, args) = split_command(&cmd);
+        if exe.is_empty() {
+            return Err("无效的卸载命令".into());
+        }
+        let mut c = std::process::Command::new(&exe);
+        for arg in &args {
+            c.arg(arg);
+        }
+        let status = c
+            .spawn()
+            .map_err(|e| format!("启动卸载程序失败（{exe}）: {e}"))?
             .wait()
             .map_err(|e| format!("等待卸载程序退出失败: {e}"))?;
-        if !status.success() {
-            return Err(format!("卸载程序退出异常：{status}"));
+        status.code().map(|c| c as u32).unwrap_or(1)
+    };
+    let status_ok = code == 0;
+
+    // child.wait() 返回不代表卸载完成。绝大多数安装器会把自己复制到
+    // 临时目录、以管理员身份重启，然后原进程立刻退出——于是这里马上
+    // 就返回了，而卸载向导才刚弹出来，残留清理界面就会和它撞在一起。
+    //
+    // 真正的判据是相关进程是否还活着：映像路径在安装目录内的，或者与
+    // 卸载器同名的（Inno 会把 unins000.exe 复制成 unins000.tmp，
+    // 扩展名变了但主名不变）。
+    // 安装目录若是 Program Files 这类公共骨架目录，就不能拿来当判据——
+    // 那样会把一堆无关进程都算成「还在卸载」，一直等到超时。
+    let install_dir = app
+        .install_location
+        .as_ref()
+        .filter(|p| !is_system_root_dir(p))
+        .map(|p| crate::core::safety::norm(p))
+        .filter(|s| s.len() > 3)
+        .unwrap_or_default();
+    let stem = command_file_stem(raw);
+    let uninstaller_stem = if is_generic_host_stem(&stem) {
+        String::new()
+    } else {
+        stem
+    };
+
+    crate::platform::windows::process::wait_until_finished(
+        &install_dir,
+        &uninstaller_stem,
+        // 提权重启需要点时间，给足宽限期再判定
+        std::time::Duration::from_secs(5),
+        // 大型软件卸载可能很久；超时只是兜底，不会一直卡住界面
+        std::time::Duration::from_secs(30 * 60),
+    );
+
+    // 卸载器进程退出（甚至返回 0）不代表卸载成功：取消向导、外层
+    // bootstrapper 提前退出都可能留下原登记项。以最初枚举到的精确
+    // 注册表键为最终判据，给异步收尾留一个很短的落盘窗口。
+    //
+    // winget / scoop 这类命令行卸载经常把文件删干净却忘了 ARP 登记项，
+    // 或登记项要过一会儿才掉。安装目录已经没了就视为卸成功，残留对话框
+    // 会带上还在的登记项让用户清掉——否则命令跑完列表里还挂着这款软件。
+    for _ in 0..50 {
+        if !is_app_registered(app) {
+            crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
+            return Ok(());
         }
-
-        // child.wait() 返回不代表卸载完成。绝大多数安装器会把自己复制到
-        // 临时目录、以管理员身份重启，然后原进程立刻退出——于是这里马上
-        // 就返回了，而卸载向导才刚弹出来，残留清理界面就会和它撞在一起。
-        //
-        // 真正的判据是相关进程是否还活着：映像路径在安装目录内的，或者与
-        // 卸载器同名的（Inno 会把 unins000.exe 复制成 unins000.tmp，
-        // 扩展名变了但主名不变）。
-        // 安装目录若是 Program Files 这类公共骨架目录，就不能拿来当判据——
-        // 那样会把一堆无关进程都算成「还在卸载」，一直等到超时。
-        let install_dir = app
-            .install_location
-            .as_ref()
-            .filter(|p| !is_system_root_dir(p))
-            .map(|p| crate::core::safety::norm(p))
-            .filter(|s| s.len() > 3)
-            .unwrap_or_default();
-        let uninstaller_stem = split_command(cmd)
-            .0
-            .rsplit(['\\', '/'])
-            .next()
-            .and_then(|f| f.rsplit_once('.').map(|(s, _)| s.to_lowercase()))
-            .unwrap_or_default();
-
-        crate::platform::windows::process::wait_until_finished(
-            &install_dir,
-            &uninstaller_stem,
-            // 提权重启需要点时间，给足宽限期再判定
-            std::time::Duration::from_secs(5),
-            // 大型软件卸载可能很久；超时只是兜底，不会一直卡住界面
-            std::time::Duration::from_secs(30 * 60),
-        );
-
-        // 卸载器进程退出（甚至返回 0）不代表卸载成功：取消向导、外层
-        // bootstrapper 提前退出都可能留下原登记项。以最初枚举到的精确
-        // 注册表键为最终判据，给异步收尾留一个很短的落盘窗口。
-        for _ in 0..50 {
-            if !is_app_registered(app) {
-                crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
-                return Ok(());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        if install_location_gone(app) {
+            crate::log!(
+                "卸载「{}」结束（安装目录已消失，登记项仍在），耗时 {:?}",
+                app.name,
+                t0.elapsed()
+            );
+            return Ok(());
         }
-
-        Err(format!(
-            "卸载程序已退出，但「{}」仍在已安装软件中",
-            app.name
-        ))
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+
+    if !status_ok {
+        if code == crate::platform::windows::process::WINGET_ADMIN_CONTEXT_PROHIBITED {
+            return Err(
+                "winget 拒绝在管理员权限下卸载当前用户安装的软件，降权执行仍失败".into(),
+            );
+        }
+        return Err(format!("卸载程序退出异常：exit code: {code:#x}"));
+    }
+    Err(format!(
+        "卸载程序已退出，但「{}」仍在已安装软件中",
+        app.name
+    ))
 }
 
 fn is_app_registered(app: &InstalledApp) -> bool {
@@ -1396,6 +1547,165 @@ mod tests {
                     || pot.install_location.is_some()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod uninstall_cli {
+    use super::*;
+    use crate::core::apps::{AppRegRoot, InstalledApp};
+
+    fn dummy_app(root: AppRegRoot) -> InstalledApp {
+        InstalledApp {
+            id: "x".into(),
+            name: "x".into(),
+            version: "1".into(),
+            publisher: "p".into(),
+            last_used_date: None,
+            last_used_raw: 0,
+            install_date: None,
+            install_date_raw: 0,
+            install_location: None,
+            display_icon: None,
+            uninstall_string: None,
+            quiet_uninstall_string: None,
+            estimated_size: 0,
+            registry_root: root,
+            registry_subpath: String::new(),
+            is_system_component: false,
+            uninstaller_missing: false,
+        }
+    }
+
+    #[test]
+    fn command_stem_of_cli_uninstallers() {
+        assert_eq!(
+            command_file_stem(
+                "winget uninstall --product-code charmbracelet.crush_Microsoft.Winget.Source_8wekyb3d8bbwe"
+            ),
+            "winget"
+        );
+        assert_eq!(command_file_stem("MsiExec.exe /X{ABC}"), "msiexec");
+        assert_eq!(
+            command_file_stem(r#"powershell -c "& 'C:\x\uninstall.ps1' -PauseOnError""#),
+            "powershell"
+        );
+        assert_eq!(
+            command_file_stem(r"C:\Gone\unins000.exe /SILENT"),
+            "unins000"
+        );
+    }
+
+    #[test]
+    fn generic_hosts_are_not_uninstaller_stems() {
+        assert!(is_generic_host_stem("winget"));
+        assert!(is_generic_host_stem("cmd"));
+        assert!(is_generic_host_stem("powershell"));
+        assert!(is_generic_host_stem("msiexec"));
+        assert!(!is_generic_host_stem("unins000"));
+        assert!(!is_generic_host_stem("crush"));
+    }
+
+    #[test]
+    fn cli_uninstallers_go_through_cmd() {
+        assert!(needs_cmd_shell(
+            "winget uninstall --product-code charmbracelet.crush_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        ));
+        assert!(needs_cmd_shell("MsiExec.exe /X{ABC}"));
+        assert!(needs_cmd_shell(
+            r#"powershell -c "& 'C:\Users\me\.bun\uninstall.ps1' -PauseOnError""#
+        ));
+        assert!(!needs_cmd_shell(r"C:\Gone\unins000.exe /SILENT"));
+    }
+
+    #[test]
+    fn hide_window_for_winget_not_powershell() {
+        assert!(hide_shell_window("winget uninstall --id Foo"));
+        assert!(hide_shell_window("MsiExec.exe /X{ABC}"));
+        assert!(!hide_shell_window("powershell -c uninstall"));
+        assert!(!hide_shell_window(r"C:\Gone\unins000.exe /SILENT"));
+    }
+
+    #[test]
+    fn winget_gets_noninteractive_flags_and_user_scope() {
+        let app = dummy_app(AppRegRoot::Hkcu);
+        let out = prepare_uninstall_cmd(
+            "winget uninstall --product-code charmbracelet.crush_Microsoft.Winget.Source_8wekyb3d8bbwe",
+            &app,
+        );
+        assert!(out.contains("--disable-interactivity"));
+        assert!(out.contains("--accept-source-agreements"));
+        assert!(out.contains("--silent"));
+        assert!(out.contains("--scope user"));
+        assert!(out.starts_with("winget uninstall --product-code charmbracelet.crush_Microsoft.Winget.Source_8wekyb3d8bbwe"));
+    }
+
+    #[test]
+    fn winget_machine_scope_for_hklm() {
+        let app = dummy_app(AppRegRoot::Hklm);
+        let out = prepare_uninstall_cmd("winget uninstall --id Foo", &app);
+        assert!(out.contains("--scope machine"));
+        assert!(!out.contains("--scope user"));
+    }
+
+    #[test]
+    fn winget_does_not_duplicate_existing_flags() {
+        let app = dummy_app(AppRegRoot::Hkcu);
+        let raw = "winget uninstall --id Foo --silent --disable-interactivity --accept-source-agreements --scope user";
+        let out = prepare_uninstall_cmd(raw, &app);
+        assert_eq!(out.matches("--silent").count(), 1);
+        assert_eq!(out.matches("--disable-interactivity").count(), 1);
+        assert_eq!(out.matches("--scope").count(), 1);
+        assert_eq!(out.matches("--accept-source-agreements").count(), 1);
+    }
+
+    #[test]
+    fn choco_gets_yes_flag() {
+        let app = dummy_app(AppRegRoot::Hklm);
+        let out = prepare_uninstall_cmd("choco uninstall foo", &app);
+        assert!(out.ends_with(" -y"));
+        let already = prepare_uninstall_cmd("choco uninstall foo -y", &app);
+        assert_eq!(already, "choco uninstall foo -y");
+    }
+
+    #[test]
+    fn user_scope_winget_must_drop_elevation() {
+        let hkcu = dummy_app(AppRegRoot::Hkcu);
+        let hklm = dummy_app(AppRegRoot::Hklm);
+        assert!(should_run_unelevated(
+            "winget uninstall --product-code charmbracelet.crush_Microsoft.Winget.Source_8wekyb3d8bbwe",
+            &hkcu
+        ));
+        assert!(!should_run_unelevated(
+            "winget uninstall --product-code restic.restic_Microsoft.Winget.Source_8wekyb3d8bbwe",
+            &hklm
+        ));
+        assert!(!should_run_unelevated(
+            r#""C:\Program Files\Foo\unins000.exe" /SILENT"#,
+            &hkcu
+        ));
+        assert!(!should_run_unelevated("MsiExec.exe /X{ABC}", &hkcu));
+    }
+
+    #[test]
+    fn gui_uninstaller_is_left_alone() {
+        let app = dummy_app(AppRegRoot::Hklm);
+        let raw = r#""C:\Program Files\Foo\unins000.exe" /SILENT"#;
+        assert_eq!(prepare_uninstall_cmd(raw, &app), raw);
+        assert!(!needs_cmd_shell(raw));
+    }
+
+    #[test]
+    fn install_location_gone_ignores_missing_and_protected() {
+        let mut app = dummy_app(AppRegRoot::Hkcu);
+        assert!(!install_location_gone(&app));
+
+        app.install_location = Some(PathBuf::from(r"C:\"));
+        assert!(!install_location_gone(&app));
+
+        let gone = std::env::temp_dir().join("quick-cleaner-never-existed-install-dir");
+        app.install_location = Some(gone);
+        assert!(install_location_gone(&app));
     }
 }
 

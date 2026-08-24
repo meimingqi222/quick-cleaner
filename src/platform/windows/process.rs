@@ -218,9 +218,368 @@ fn terminate_pid(pid: DWORD) -> bool {
     }
 }
 
+/// winget 对「管理员进程卸载用户范围的包」返回这个码。
+pub const WINGET_ADMIN_CONTEXT_PROHIBITED: u32 = 0x8A15_007D;
+
+/// 跑一条命令并等待退出，返回进程退出码。
+///
+/// `unelevated` 为真时，如果当前进程已经 UAC 提权，会用桌面用户（资源
+/// 管理器）的令牌把命令降权再跑。本程序启动时会自提权，而 winget 拒绝在
+/// 管理员上下文里动用户范围的包（`0x8A15007D`），不降权的话命令「执行完」
+/// 软件还在。
+pub fn run_cmd_and_wait(cmdline: &str, hidden: bool, unelevated: bool) -> Result<u32, String> {
+    if unelevated && super::security::is_elevated() {
+        run_as_desktop_user(cmdline, hidden)
+    } else {
+        run_as_current(cmdline, hidden)
+    }
+}
+
+fn run_as_current(cmdline: &str, hidden: bool) -> Result<u32, String> {
+    use std::os::windows::process::CommandExt;
+    let mut c = std::process::Command::new("cmd");
+    c.raw_arg(format!("/c {cmdline}"));
+    if hidden {
+        c.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
+    }
+    let status = c
+        .status()
+        .map_err(|e| format!("启动卸载程序失败: {e}"))?;
+    Ok(status.code().map(|c| c as u32).unwrap_or(1))
+}
+
+fn run_as_desktop_user(cmdline: &str, hidden: bool) -> Result<u32, String> {
+    enable_impersonate_privilege();
+    let token = desktop_user_token()?;
+    // SAFETY: token 来自 OpenProcessToken / TokenLinkedToken，非空；本函数
+    // 所有出口都 CloseHandle。CreateProcessWithTokenW 的命令行缓冲必须可变
+    // （API 会原地改），wide 以 NUL 结尾且活到调用返回。
+    let code = unsafe { create_process_with_token(token, cmdline, hidden) };
+    unsafe {
+        CloseHandle(token);
+    }
+    code
+}
+
+/// `CreateProcessWithTokenW` 要求调用方持有 `SeImpersonatePrivilege`。
+/// 管理员令牌里通常有这个特权，但可能是禁用状态，这里打开再继续。
+fn enable_impersonate_privilege() {
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
+    use winapi::um::securitybaseapi::AdjustTokenPrivileges;
+    use winapi::um::winbase::LookupPrivilegeValueW;
+    use winapi::um::winnt::{
+        LUID, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    let name: Vec<u16> = std::ffi::OsStr::new("SeImpersonatePrivilege")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: name 以 NUL 结尾；令牌句柄打开成功才用，出口关闭。
+    // 打不开或调整失败都不致命——后面 CreateProcessWithTokenW 会给出明确错误。
+    unsafe {
+        let mut luid = LUID {
+            LowPart: 0,
+            HighPart: 0,
+        };
+        if LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) == 0 {
+            return;
+        }
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        ) == 0
+        {
+            return;
+        }
+        let mut tp: TOKEN_PRIVILEGES = std::mem::zeroed();
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        AdjustTokenPrivileges(
+            token,
+            FALSE,
+            &mut tp,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        CloseHandle(token);
+    }
+}
+
+fn desktop_user_token() -> Result<winapi::um::winnt::HANDLE, String> {
+    if let Some(h) = explorer_token() {
+        return Ok(h);
+    }
+    linked_limited_token().ok_or_else(|| {
+        "无法获取桌面用户令牌（资源管理器进程打不开，当前进程也没有关联的受限令牌）".to_string()
+    })
+}
+
+fn session_of(pid: DWORD) -> Option<DWORD> {
+    let mut session = 0;
+    // SAFETY: session 是本地 DWORD，ProcessIdToSessionId 只写入这一格。
+    let ok = unsafe { winapi::um::processthreadsapi::ProcessIdToSessionId(pid, &mut session) };
+    if ok != 0 {
+        Some(session)
+    } else {
+        None
+    }
+}
+
+fn explorer_token() -> Option<winapi::um::winnt::HANDLE> {
+    let my_session = session_of(std::process::id());
+    let mut fallback: Option<DWORD> = None;
+    for p in list_processes() {
+        if p.exe_name != "explorer.exe" || p.pid == 0 {
+            continue;
+        }
+        if my_session.is_some() && session_of(p.pid) == my_session {
+            if let Some(h) = open_primary_token(p.pid) {
+                return Some(h);
+            }
+        } else if fallback.is_none() {
+            fallback = Some(p.pid);
+        }
+    }
+    fallback.and_then(open_primary_token)
+}
+
+fn open_primary_token(pid: DWORD) -> Option<winapi::um::winnt::HANDLE> {
+    use winapi::um::securitybaseapi::DuplicateTokenEx;
+    use winapi::um::winnt::{
+        SecurityImpersonation, TokenPrimary, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_SESSIONID,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
+    };
+    // SAFETY: 进程/令牌句柄只在打开成功后使用，失败路径和函数出口都关闭。
+    // DuplicateTokenEx 产出的主令牌交给调用方，由调用方 CloseHandle。
+    unsafe {
+        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if proc.is_null() {
+            return None;
+        }
+        let mut existing = std::ptr::null_mut();
+        let opened = winapi::um::processthreadsapi::OpenProcessToken(
+            proc,
+            TOKEN_DUPLICATE | TOKEN_QUERY,
+            &mut existing,
+        );
+        CloseHandle(proc);
+        if opened == 0 || existing.is_null() {
+            return None;
+        }
+        let mut primary = std::ptr::null_mut();
+        let ok = DuplicateTokenEx(
+            existing,
+            TOKEN_QUERY
+                | TOKEN_DUPLICATE
+                | TOKEN_ASSIGN_PRIMARY
+                | TOKEN_ADJUST_DEFAULT
+                | TOKEN_ADJUST_SESSIONID,
+            std::ptr::null_mut(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        );
+        CloseHandle(existing);
+        if ok == 0 || primary.is_null() {
+            None
+        } else {
+            Some(primary)
+        }
+    }
+}
+
+fn linked_limited_token() -> Option<winapi::um::winnt::HANDLE> {
+    use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
+    use winapi::um::securitybaseapi::{DuplicateTokenEx, GetTokenInformation};
+    use winapi::um::winnt::{
+        SecurityImpersonation, TokenLinkedToken, TokenPrimary, TOKEN_ADJUST_DEFAULT,
+        TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
+        TOKEN_LINKED_TOKEN,
+    };
+    // SAFETY: 当前进程令牌打开失败就返回；GetTokenInformation 写入本地
+    // TOKEN_LINKED_TOKEN，得到的 LinkedToken 再复制成主令牌后立刻关掉。
+    unsafe {
+        let mut elevated = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut elevated) == 0 {
+            return None;
+        }
+        let mut linked: TOKEN_LINKED_TOKEN = std::mem::zeroed();
+        let mut size: DWORD = 0;
+        let ok = GetTokenInformation(
+            elevated,
+            TokenLinkedToken,
+            &mut linked as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_LINKED_TOKEN>() as DWORD,
+            &mut size,
+        );
+        CloseHandle(elevated);
+        if ok == 0 || linked.LinkedToken.is_null() {
+            return None;
+        }
+        let mut primary = std::ptr::null_mut();
+        let dup = DuplicateTokenEx(
+            linked.LinkedToken,
+            TOKEN_QUERY
+                | TOKEN_DUPLICATE
+                | TOKEN_ASSIGN_PRIMARY
+                | TOKEN_ADJUST_DEFAULT
+                | TOKEN_ADJUST_SESSIONID,
+            std::ptr::null_mut(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        );
+        CloseHandle(linked.LinkedToken);
+        if dup == 0 || primary.is_null() {
+            None
+        } else {
+            Some(primary)
+        }
+    }
+}
+
+unsafe fn create_process_with_token(
+    token: winapi::um::winnt::HANDLE,
+    cmdline: &str,
+    hidden: bool,
+) -> Result<u32, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::um::processthreadsapi::{
+        GetExitCodeProcess, PROCESS_INFORMATION, STARTUPINFOW,
+    };
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winbase::{
+        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, STARTF_USESHOWWINDOW, INFINITE,
+    };
+    use winapi::um::winuser::SW_HIDE;
+
+    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let cmd_exe = format!("{sys}\\System32\\cmd.exe");
+    let app: Vec<u16> = std::ffi::OsStr::new(&cmd_exe)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut cl: Vec<u16> = std::ffi::OsStr::new(&format!("cmd.exe /c {cmdline}"))
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut si: STARTUPINFOW = std::mem::zeroed();
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as DWORD;
+    if hidden {
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE as u16;
+    }
+    let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+    let mut flags: DWORD = CREATE_UNICODE_ENVIRONMENT;
+    if hidden {
+        flags |= CREATE_NO_WINDOW;
+    }
+
+    // 用桌面用户自己的环境块：LOCALAPPDATA / PATH 都是他的。
+    // 传 NULL 会继承本进程（管理员）的环境，winget 就会去管理员
+    // 的包索引里找，用户范围的 crush 仍然「找不到」。
+    let mut env: winapi::shared::minwindef::LPVOID = std::ptr::null_mut();
+    let has_env = CreateEnvironmentBlock(&mut env, token, 0) != 0;
+
+    // SAFETY: app / cl 以 NUL 结尾且活到调用返回；cl 按约定可变。
+    // env 由 CreateEnvironmentBlock 分配，调用返回后 Destroy。
+    // 成功后关闭线程句柄，进程句柄等到 Wait 之后再关。
+    let ok = CreateProcessWithTokenW(
+        token,
+        0,
+        app.as_ptr(),
+        cl.as_mut_ptr(),
+        flags,
+        if has_env {
+            env
+        } else {
+            std::ptr::null_mut()
+        },
+        std::ptr::null(),
+        &mut si,
+        &mut pi,
+    );
+    if has_env && !env.is_null() {
+        DestroyEnvironmentBlock(env);
+    }
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(format!("降权启动卸载程序失败: {err}"));
+    }
+    if !pi.hThread.is_null() {
+        CloseHandle(pi.hThread);
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    let mut code: DWORD = 1;
+    let _ = GetExitCodeProcess(pi.hProcess, &mut code);
+    CloseHandle(pi.hProcess);
+    Ok(code)
+}
+
+// winapi 0.3 的 winbase 特性把 CreateProcessWithTokenW 放在可选绑定里，
+// 有的 feature 组合编不出来。签名与 SDK 一致，在此手动声明。
+#[link(name = "userenv")]
+extern "system" {
+    fn CreateEnvironmentBlock(
+        lpenvironment: *mut winapi::shared::minwindef::LPVOID,
+        htoken: winapi::um::winnt::HANDLE,
+        binherit: winapi::shared::minwindef::BOOL,
+    ) -> winapi::shared::minwindef::BOOL;
+    fn DestroyEnvironmentBlock(
+        lpenvironment: winapi::shared::minwindef::LPVOID,
+    ) -> winapi::shared::minwindef::BOOL;
+}
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn CreateProcessWithTokenW(
+        htoken: winapi::um::winnt::HANDLE,
+        dwlogonflags: DWORD,
+        lpapplicationname: winapi::um::winnt::LPCWSTR,
+        lpcommandline: winapi::um::winnt::LPWSTR,
+        dwcreationflags: DWORD,
+        lpenvironment: winapi::shared::minwindef::LPVOID,
+        lpcurrentdirectory: winapi::um::winnt::LPCWSTR,
+        lpstartupinfo: winapi::um::processthreadsapi::LPSTARTUPINFOW,
+        lpprocessinformation: winapi::um::processthreadsapi::LPPROCESS_INFORMATION,
+    ) -> winapi::shared::minwindef::BOOL;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cmd_exit_zero_returns_zero() {
+        let code = run_cmd_and_wait("exit 0", true, false).expect("run cmd");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn unelevated_exit_zero_returns_zero() {
+        let code = run_cmd_and_wait("exit 0", true, true).expect("run unelevated");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn desktop_token_can_spawn_cmd() {
+        if !crate::platform::windows::security::is_elevated() {
+            return;
+        }
+        enable_impersonate_privilege();
+        let token = desktop_user_token().expect("desktop user token");
+        let result = unsafe { create_process_with_token(token, "exit 0", true) };
+        unsafe {
+            CloseHandle(token);
+        }
+        assert_eq!(result.expect("spawn with desktop token"), 0);
+    }
 
     #[test]
     fn terminate_under_empty_dirs_is_noop() {

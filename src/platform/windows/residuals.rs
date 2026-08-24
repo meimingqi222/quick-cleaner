@@ -71,6 +71,37 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// 公共目录 / 骨架文件夹的归一化名。拿它们做反向包含匹配会把桌面、
+/// 开始菜单根目录整棵当成某软件的残留。
+fn is_generic_folder_name(normed: &str) -> bool {
+    matches!(
+        normed,
+        "desktop"
+            | "documents"
+            | "downloads"
+            | "pictures"
+            | "videos"
+            | "music"
+            | "public"
+            | "users"
+            | "programs"
+            | "startup"
+            | "startmenu"
+            | "windows"
+            | "system"
+            | "system32"
+            | "temp"
+            | "tmp"
+            | "appdata"
+            | "programdata"
+            | "programfiles"
+            | "programfilesx86"
+            | "commonfiles"
+            | "common"
+            | "shared"
+    )
+}
+
 fn sanitize_token(s: &str) -> String {
     s.trim()
         .chars()
@@ -139,15 +170,26 @@ impl Ctx {
     }
 
     /// 候选名字是否与软件名相近。
+    ///
+    /// 只认两种方向：候选包含完整软件名（`同花顺远航版` 对上 `同花顺`），
+    /// 或软件名包含候选——但候选必须够长，且不是 Desktop / Programs 这种
+    /// 公共目录名。否则 `Remote Desktop Manager` 会把整个
+    /// `C:\Users\Public\Desktop` 报成残留。
     fn name_matches(&self, candidate: &str) -> bool {
         if !self.name_is_matchable() {
             return false;
         }
         let c = norm(candidate);
-        if c.chars().count() < 3 {
+        let c_len = c.chars().count();
+        if c_len < 3 {
             return false;
         }
-        c.contains(&self.name_norm) || self.name_norm.contains(&c)
+        if c.contains(&self.name_norm) {
+            return true;
+        }
+        self.name_norm.contains(&c)
+            && c_len * 2 >= self.name_norm.chars().count()
+            && !is_generic_folder_name(&c)
     }
 
     /// 候选文本里是否出现了安装目录路径（命令行、ImagePath 之类）。
@@ -515,7 +557,11 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         if !seen.insert(crate::core::safety::norm(&root)) {
             continue;
         }
+        // min_depth(1)：搜索根本身（桌面、开始菜单\Programs）不是残留。
+        // WalkDir 默认会把起点也枚举出来，`Public\Desktop` 的文件名是
+        // Desktop，会被「Remote Desktop Manager」这种名字误伤。
         for entry in walkdir::WalkDir::new(&root)
+            .min_depth(1)
             .max_depth(4)
             .into_iter()
             .flatten()
@@ -1453,6 +1499,23 @@ mod tests {
         assert!(specific.name_matches("同花顺"));
         assert!(specific.name_matches("同花顺远航版"));
         assert!(!specific.name_matches("Steam"));
+
+        // 短名对长名：候选是软件名的实质前缀，仍然认
+        let long = Ctx::new(&app("同花顺远航版", "浙江核新同花顺"));
+        assert!(long.name_matches("同花顺"));
+    }
+
+    #[test]
+    fn remote_desktop_manager_does_not_claim_desktop() {
+        let app = Ctx::new(&app("Remote Desktop Manager", "Devolutions"));
+        assert!(app.name_is_matchable());
+        assert!(app.name_matches("Remote Desktop Manager"));
+        assert!(app.name_matches("Remote Desktop Manager 2024"));
+        assert!(!app.name_matches("Desktop"));
+        assert!(!app.name_matches("Remote"));
+        assert!(!app.name_matches("Manager"));
+        assert!(!app.name_matches("Public"));
+        assert!(!app.name_matches("Programs"));
     }
 
     #[test]

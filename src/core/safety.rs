@@ -63,6 +63,21 @@ const HOME_EXACT: &[&str] = &[
     "\\music",
 ];
 
+/// 相对 `%PUBLIC%`（通常是 `C:\Users\Public`）、目录本身不能删的路径。
+///
+/// 公共桌面不是某款软件的残留。`Remote Desktop Manager` 这类名字一旦
+/// 走反向包含匹配，整棵 `Public\Desktop` 都会被列出来等着删。
+const PUBLIC_EXACT: &[&str] = &[
+    "",
+    "\\desktop",
+    "\\documents",
+    "\\downloads",
+    "\\pictures",
+    "\\videos",
+    "\\music",
+    "\\libraries",
+];
+
 /// 相对**用户 profile 根**、目录本身不能删但内容可以清的路径。
 ///
 /// 用「profile 根 + 相对路径」而不是简单的尾部匹配：后者会把随便哪个目录
@@ -92,6 +107,8 @@ struct Guards {
     /// 名本身就是本地化的，企业环境还可能整体挪到网络盘。
     /// 见 `platform::windows::real_user_known_folders`。
     known_folders: Vec<String>,
+    /// 归一化后的 `%PUBLIC%`，如 `c:\users\public`。Windows 专有。
+    public: Option<String>,
     /// macOS「自身禁止」档：`~`、`~/Library`、`~/Library/Application Support`
     /// 三个目录**本身**的归一化路径。对齐 Windows 对 AppData 骨架的处理——
     /// 骨架自保、内容照常可清（旧版 IDE 数据、卸载残留都住在这里面）。
@@ -115,6 +132,14 @@ fn guards() -> &'static Guards {
         #[cfg(not(windows))]
         let known_folders = Vec::new();
 
+        #[cfg(windows)]
+        let public = std::env::var("PUBLIC")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| norm_str(&s));
+        #[cfg(not(windows))]
+        let public = None;
+
         #[cfg(target_os = "macos")]
         let macos_self_banned = dirs::home_dir()
             .map(|h| {
@@ -136,6 +161,7 @@ fn guards() -> &'static Guards {
             home: dirs::home_dir().map(|h| norm(&h)),
             orig_home,
             known_folders,
+            public,
             #[cfg(target_os = "macos")]
             macos_self_banned,
         }
@@ -319,6 +345,15 @@ pub fn is_protected(path: &Path) -> bool {
 
     if check_home(&g.home) || check_home(&g.orig_home) {
         return true;
+    }
+
+    if let Some(public) = &g.public {
+        if at_or_under(&lower, public) {
+            let rest = &lower[public.len()..];
+            if PUBLIC_EXACT.contains(&rest) {
+                return true;
+            }
+        }
     }
 
     // ---- 已知文件夹（可能被 OneDrive / 组策略重定向到任意位置）----
@@ -716,5 +751,20 @@ mod tests {
         assert!(is_system_root_dir(Path::new("C:\\Program Files (x86)")));
         assert!(is_system_root_dir(Path::new("C:\\Users")));
         assert!(!is_system_root_dir(Path::new("C:\\Users\\me")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn public_desktop_is_not_an_app_residual() {
+        let public = std::env::var("PUBLIC").unwrap_or_else(|_| r"C:\Users\Public".into());
+        let desktop = Path::new(&public).join("Desktop");
+        assert!(
+            is_protected(&desktop),
+            "{} 是公共桌面，不能当残留删",
+            desktop.display()
+        );
+        assert!(is_protected(Path::new(&public)));
+        // 公共桌面上某软件自己的快捷方式目录仍可清
+        assert!(!is_protected(&desktop.join("Remote Desktop Manager")));
     }
 }

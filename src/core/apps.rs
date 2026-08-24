@@ -826,10 +826,14 @@ pub fn is_safe_app_token(name: &str) -> bool {
 /// `C:\Program`，于是卸载直接跑不起来——本机 145 款软件里有 24 款中招。
 ///
 /// Windows 自己的处理办法是：从左往右逐段拼接，第一个「拼出来确实存在
-/// 的文件」就是可执行文件，其余算参数。带引号的路径按引号切，最省事。
+/// 的**文件**」就是可执行文件，其余算参数。带引号的路径按引号切，最省事。
 ///
-/// `exists` 注入是为了可测试——生产用 [`split_command`]。
-pub fn split_command_with(cmd: &str, exists: impl Fn(&str) -> bool) -> (String, Vec<String>) {
+/// 这里必须认文件、不能认目录：`C:\Program Files (x86)\pdfcvt\uninstall.exe`
+/// 的前缀 `C:\Program Files` 是真实存在的文件夹，当成 exe 去 `CreateProcess`
+/// 会直接「拒绝访问」，卸载窗口永远弹不出来。
+///
+/// `is_file` 注入是为了可测试——生产用 [`split_command`]。
+pub fn split_command_with(cmd: &str, is_file: impl Fn(&str) -> bool) -> (String, Vec<String>) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return (String::new(), Vec::new());
@@ -845,7 +849,7 @@ pub fn split_command_with(cmd: &str, exists: impl Fn(&str) -> bool) -> (String, 
             // 一定以 .exe/.bat 之类收尾，把参数也包进来的则不会。
             // 只用「文件是否存在」判断不行——卸载器真的丢失时也会落到
             // 错误分支，把好好的路径切碎。
-            if exists(exe) || ends_with_executable_ext(exe) {
+            if is_file(exe) || ends_with_executable_ext(exe) {
                 return (exe.to_string(), parse_cmd_line(rest[end + 1..].trim()));
             }
         }
@@ -856,7 +860,7 @@ pub fn split_command_with(cmd: &str, exists: impl Fn(&str) -> bool) -> (String, 
     let tokens: Vec<&str> = cmd.split(' ').filter(|t| !t.is_empty()).collect();
     for take in 1..=tokens.len() {
         let candidate = tokens[..take].join(" ");
-        if exists(&candidate) {
+        if is_file(&candidate) {
             let args = tokens[take..].iter().map(|s| s.to_string()).collect();
             return (candidate, args);
         }
@@ -880,9 +884,9 @@ fn ends_with_executable_ext(s: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
-/// [`split_command_with`] 的生产版本：用真实文件系统判断存在性。
+/// [`split_command_with`] 的生产版本：只认文件，目录不算命中。
 pub fn split_command(cmd: &str) -> (String, Vec<String>) {
-    split_command_with(cmd, |p| std::path::Path::new(p).exists())
+    split_command_with(cmd, |p| std::path::Path::new(p).is_file())
 }
 
 /// 解析命令行参数
@@ -1222,6 +1226,38 @@ mod command_tests {
         let (exe, args) = split_command_with(r"C:\Foo.exe bar --flag", |p| p == short || p == long);
         assert_eq!(exe, short);
         assert_eq!(args, vec!["bar", "--flag"]);
+    }
+
+    /// `C:\Program Files` 这个目录永远在。生产路径用 `is_file`，
+    /// 所以即使用回调模拟「目录和 exe 都存在」，调用方也必须只把文件
+    /// 报成真——`split_command` 的包装就是这么做的。
+    #[test]
+    fn directory_prefix_must_not_win_over_the_real_exe() {
+        let cmd = r"C:\Program Files (x86)\pdfcvt\uninstall.exe";
+        let real = r"C:\Program Files (x86)\pdfcvt\uninstall.exe";
+        let (exe, args) = split_command_with(cmd, |p| p == real);
+        assert_eq!(exe, real);
+        assert!(args.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unquoted_program_files_x86_is_not_a_directory() {
+        let cmd = r"C:\Program Files (x86)\pdfcvt\uninstall.exe";
+        let (exe, args) = split_command(cmd);
+        assert_ne!(
+            exe,
+            r"C:\Program Files",
+            "不能把卸载命令截成 Program Files 目录"
+        );
+        assert!(
+            !std::path::Path::new(&exe).is_dir(),
+            "解析出的可执行文件不能是目录: {exe}"
+        );
+        if std::path::Path::new(cmd).is_file() {
+            assert_eq!(exe, cmd);
+            assert!(args.is_empty());
+        }
     }
 
     /// 带空格的路径不存在时不能误判：应退回第一段，而不是把整行当路径。
