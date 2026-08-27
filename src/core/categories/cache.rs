@@ -273,18 +273,17 @@ const REBUILDABLE_HOME_CACHE_DIRS: &[(&str, &str, &str)] = &[
     ("gopls", "gopls 缓存", "gopls cache"),
 ];
 
-/// `~/Library/Caches` 下已被更具体的目标认领的顶层目录。
+/// `~/Library/Caches` 下已被**整目录**认领的顶层目录。
 ///
-/// 这些名字必须和上面 BrowserCache / PackageCache / AiAgents 目标里用的
-/// 顶层段一致，否则会和 `push_user_cache_dirs` 重复计数。
-/// `Google` 覆盖 `Google/Chrome`；`claude-cli-nodejs` / `Zed` 等覆盖
-/// `LOCAL_AGENT_DIRS` 里对应的条目。
+/// 这些名字必须和上面 BrowserCache / PackageCache 目标里用的顶层段一致：
+/// `scan_fixed_inner` 逐目标独立称重后相加、不做嵌套去重，父子同时入表会让
+/// 展示体积凭空翻倍。
 ///
-/// 更新器目录（`*-updater`、`*.ShipIt`）**不在**这张表里：它们由
-/// `push_user_cache_dirs` 探测内容认领，按名字登记反而会漏掉新应用。
+/// 只登记「整个目录就是一个目标」的名字。目标只是某几个孩子的，进下面那张
+/// `PARTIALLY_CLAIMED_USER_CACHE_DIRS`——在这里整目录跳过，会让没被认领的
+/// 兄弟子项既不进表也不展示。
 #[cfg(target_os = "macos")]
 const CLAIMED_USER_CACHE_DIRS: &[&str] = &[
-    "Google",
     "com.apple.Safari",
     "Microsoft Edge",
     "Homebrew",
@@ -304,11 +303,21 @@ const CLAIMED_USER_CACHE_DIRS: &[&str] = &[
     "node-gyp",
     "pip",
     "typescript",
-    // ---- LOCAL_AGENT_DIRS 里的目录名，避免与 AiAgents 双算 ----
-    "claude-cli-nodejs",
-    "amp",
-    "Zed",
-    "WorkBuddy",
+];
+
+/// 顶层目录里只有部分子项是目标：`(父目录, 已入表的孩子)`。
+///
+/// 父目录仍然不能入表（会和孩子的体积双算），但它的**其余孩子必须入表**——
+/// 否则那些子项在界面上彻底隐身，用户既看不见也清不掉。`Google` 是最典型的
+/// 一个：`browser.rs` 只认领 `Google/Chrome`，而 GoogleUpdater 的下载目录就
+/// 躺在它的兄弟位置上。
+#[cfg(target_os = "macos")]
+const PARTIALLY_CLAIMED_USER_CACHE_DIRS: &[(&str, &[&str])] = &[
+    ("Google", &["Chrome"]),
+    ("claude-cli-nodejs", &["Cache"]),
+    ("amp", &["logs", "traces"]),
+    ("Zed", &["logs", "hang_traces"]),
+    ("WorkBuddy", &["logs"]),
 ];
 
 /// 把 `~/Library/Caches` 的顶层子目录逐个加为清理目标，跳过已被认领的。
@@ -337,14 +346,21 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
             continue;
         }
         let dir = entry.path();
+        // 该父目录里已由更具体规则认领走的孩子（普通目录为空）。父目录不能
+        // 入表（会和孩子的体积双算），但其余孩子必须入表，否则它们隐身。
+        let claimed = PARTIALLY_CLAIMED_USER_CACHE_DIRS
+            .iter()
+            .find(|(parent, _)| *parent == name)
+            .map(|(_, kids)| *kids)
+            .unwrap_or_default();
         let stem = super::updater::display_stem(&name);
         // 签名判定是按第三方更新器的产物形态做的，对 Apple 守护进程的目录
         // 没有意义：上面那张敏感表只列了确认危险的，其余 `com.apple.*` 并不
         // 因此安全，所以一律不探测、只展示。
         let hit = !name.starts_with("com.apple.")
             && super::updater::push_updater_artifacts(t, &dir, &stem);
-        if hit {
-            push_residual_children(t, &dir, &name);
+        if hit || !claimed.is_empty() {
+            push_residual_children(t, &dir, &name, claimed);
             continue;
         }
         // `~/Library/Caches` 是约定上的缓存位置，但第三方软件并不总遵守：
@@ -359,14 +375,17 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
     }
 }
 
-/// 被拆开的目录里剩下的顶层子项：形态仍然分不清，逐个整项展示、不默认勾选。
+/// 父目录没能入表时，把它的顶层子项逐个补进目标表：形态仍然分不清，只展示、
+/// 不默认勾选。`skip` 是已经由别的规则认领走的孩子，不能重复入表。
 ///
-/// 父目录已经因为「命中签名 + 有子项入表」而不能再次入表（`scan_fixed_inner`
-/// 逐目标独立称重后相加、不做嵌套去重），这些子项不列出来就等于从界面上消失
-/// 了——`Cache.db` 这类占着目录里最大一块体积的东西尤其不该被藏掉。
+/// 两种拆分共用这条路：内容命中更新包签名（`updater.rs`），以及父目录只被
+/// 部分认领（`PARTIALLY_CLAIMED_USER_CACHE_DIRS`）。共同前提是父目录本身不能
+/// 入表——`scan_fixed_inner` 逐目标独立称重后相加、不做嵌套去重，父子同时入表
+/// 会让体积翻倍。但**兄弟不该为父目录的缺席陪葬**：`Cache.db` 这类占着目录里
+/// 最大一块体积的东西，不列出来就等于从界面上消失。
 #[cfg(target_os = "macos")]
-fn push_residual_children(t: &mut Vec<ScanTarget>, dir: &Path, name: &str) {
-    for child in super::updater::residual_children(dir) {
+fn push_residual_children(t: &mut Vec<ScanTarget>, dir: &Path, name: &str, skip: &[&str]) {
+    for child in super::updater::residual_children(dir, skip) {
         t.push(target_with_recommendation(
             dir.join(&child),
             format!("~/Library/Caches/{name}/{child}"),

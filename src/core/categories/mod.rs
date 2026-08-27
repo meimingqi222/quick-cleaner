@@ -802,6 +802,62 @@ mod tests {
         .unwrap();
     }
 
+    /// 只被部分认领的父目录：其余孩子必须入表。
+    ///
+    /// `browser.rs` 只认领 `Google/Chrome`，而旧写法把 `Google` 整个跳过，于是
+    /// 兄弟子项（GoogleUpdater 的下载目录那一类）在界面上彻底隐身——看不见也
+    /// 清不掉，比「不默认勾选」更糟。规范说得很清楚：展示不是成本，隐藏才是。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn partially_claimed_parent_still_shows_its_other_children() {
+        let root = std::env::temp_dir().join(format!("qc_partial_claim_{}", std::process::id()));
+        let caches = root.join("Library/Caches");
+        let google = caches.join("Google");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(google.join("Chrome/Default")).unwrap();
+        std::fs::create_dir_all(google.join("Software Update")).unwrap();
+        std::fs::create_dir_all(caches.join("Zed/logs")).unwrap();
+        std::fs::write(caches.join("Zed/ranges.txt"), b"x").unwrap();
+        std::fs::write(caches.join("Zed/update.zip"), b"pkg").unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
+
+        let sibling = google.join("Software Update");
+        let target = targets
+            .iter()
+            .find(|t| t.path == sibling)
+            .expect("未被认领的兄弟子项隐身了");
+        assert_eq!(target.category, CategoryId::UserTemp);
+        assert!(!target.recommended, "认不出它是什么，只能展示不能预选");
+        assert!(paths.contains(&&caches.join("Zed/ranges.txt")));
+        // 部分认领的目录也吃更新包探测：叶子进「应用更新包」，不会因为父目录
+        // 被特殊对待就降级成展示项
+        assert_eq!(
+            targets
+                .iter()
+                .find(|t| t.path == caches.join("Zed/update.zip"))
+                .map(|t| t.category),
+            Some(CategoryId::UpdaterPackages)
+        );
+
+        // 已入表的孩子和父目录本身都不能再进来：父子/同名都会双算体积
+        for forbidden in [
+            google.clone(),
+            google.join("Chrome"),
+            caches.join("Zed"),
+            caches.join("Zed/logs"),
+        ] {
+            assert!(
+                !paths.contains(&&forbidden),
+                "{:?} 已经由更具体的规则认领，重复入表会双算",
+                forbidden
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Apple 自己的目录不做探测。
     ///
     /// 签名表是按第三方更新器的产物形态做的，对系统守护进程没有意义；而

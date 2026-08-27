@@ -120,19 +120,24 @@ pub(super) fn push_updater_artifacts(t: &mut Vec<ScanTarget>, dir: &Path, stem: 
     true
 }
 
-/// 该目录顶层里**不属于**更新包产物的子项，由调用方作为「分不清」的一项展示。
+/// 该目录顶层里既**不属于**更新包产物、也不在 `skip` 里的子项，由调用方作为
+/// 「分不清」的一项展示。
+///
+/// `skip` 让这条路也能服务「父目录只被部分认领」的场景（见
+/// `PARTIALLY_CLAIMED_USER_CACHE_DIRS`）：那些孩子已由别的规则入表，再列一次
+/// 就是双算。更新包拆分用不上它，传 `&[]`。
 ///
 /// 只在 macOS 上用得上：那里 `<app>` 按定义就是应用的缓存命名空间，拆开后
 /// 剩下的子项仍然值得单独一览。Windows 的 `%LOCALAPPDATA%/<app>-updater`
 /// 不是缓存命名空间，残留就是应用自己的状态，不下钻。
 #[cfg(target_os = "macos")]
-pub(super) fn residual_children(dir: &Path) -> Vec<String> {
+pub(super) fn residual_children(dir: &Path, skip: &[&str]) -> Vec<String> {
     let Some(children) = top_level(dir) else {
         return Vec::new();
     };
     children
         .into_iter()
-        .filter(|(name, kind)| !is_updater_artifact(name, *kind))
+        .filter(|(name, kind)| !is_updater_artifact(name, *kind) && !skip.contains(&name.as_str()))
         .map(|(name, _)| name)
         .collect()
 }
