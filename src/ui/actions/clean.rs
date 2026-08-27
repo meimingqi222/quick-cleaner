@@ -128,9 +128,35 @@ impl crate::ui::Root {
         if self.clean.running || !self.junk.scanned {
             return;
         }
+        // 被占用的目标一律跳过并取消勾选：勾选可能是在占用检测结果
+        // 合并之前就做下的（那时条目还是「推荐」），不能只依赖勾选态。
+        // macOS 允许删除正被打开的文件，不拦的话应用会在已消失的路径上
+        // 继续写，删了等于没删干净还埋雷。
+        let busy: std::collections::HashSet<PathBuf> = self
+            .junk
+            .items()
+            .filter(|i| i.busy.is_some())
+            .map(|i| i.path.clone())
+            .collect();
+        let dropped_busy = if busy.is_empty() {
+            0
+        } else {
+            let dropped = self.junk.selected.intersection(&busy).count();
+            for p in &busy {
+                self.junk.selected.remove(p);
+            }
+            dropped
+        };
+
         let attempted = self.selected_paths();
         if attempted.is_empty() {
-            self.status = bilingual(|l| tr_status_nothing_selected(l).to_string());
+            self.status = bilingual(|l| {
+                if dropped_busy > 0 {
+                    tr_status_all_busy(l, dropped_busy)
+                } else {
+                    tr_status_nothing_selected(l).to_string()
+                }
+            });
             cx.notify();
             return;
         }
@@ -185,9 +211,7 @@ impl crate::ui::Root {
                 let deleted: Vec<PathBuf> = completed_targets
                     .iter()
                     .filter(|target| {
-                        target.remove_dir
-                            && !is_virtual_path(&target.path)
-                            && !target.path.exists()
+                        target.remove_dir && !is_virtual_path(&target.path) && !target.path.exists()
                     })
                     .map(|target| target.path.clone())
                     .collect();
@@ -206,10 +230,15 @@ impl crate::ui::Root {
                 let fails = this.clean.last_failed.len();
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
-                    if fails > 0 {
+                    let base = if fails > 0 {
                         tr_status_clean_done_partial(l, files, &size, fails)
                     } else {
                         tr_status_clean_done(l, files, &size)
+                    };
+                    if dropped_busy > 0 {
+                        format!("{base} · {}", tr_busy_skipped(l, dropped_busy))
+                    } else {
+                        base
                     }
                 });
             },

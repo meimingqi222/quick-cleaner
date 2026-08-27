@@ -38,6 +38,7 @@ pub(super) fn discover_via_walk_roots(
                 category: hit.marker.category,
                 last_modified: acc.2,
                 recommended: false,
+                busy: None,
             }
         })
         .filter(|item| item.size > 0)

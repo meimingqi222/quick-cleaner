@@ -52,6 +52,15 @@ impl crate::ui::Root {
         cx.notify();
 
         let targets = all_targets();
+        // 占用检测与扫描并发跑：它只做两次子进程调用（lsof + ps），不依赖
+        // 扫描结果，只需要目标路径表。克隆一份路径给检测任务，扫描继续
+        // 持有原表。结果在扫描完成后等待并合并——首屏不等它，最坏情况
+        // 只是徽标比列表晚零点几秒出现。
+        let busy_paths: Vec<std::path::PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
+        let detect = cx
+            .background_executor()
+            .spawn(async move { crate::core::inuse::detect(&busy_paths) });
+
         // 提权时先解析目标最集中的那个卷的 $MFT，阶段一在树上查表而不是
         // 遍历目录。看着是给首屏多加了一步，实测反而更快：本机 MFT 解析
         // 3.3 秒，而遍历要 4.1~4.9 秒——阶段一的瓶颈是 `go\pkg\mod`、
@@ -123,6 +132,28 @@ impl crate::ui::Root {
                     this.start_discovery(gen, prescanned, cx);
                 }
                 cx.notify();
+            })
+            .ok();
+
+            // 首屏已经出去、发现式扫描也已启动，现在才等占用检测结果
+            // （与扫描并发，lsof 本机实测十几秒，全部被上面两步掩盖）。
+            // gen 对不上说明用户已经重新扫描，这份结果属于上一轮，丢弃。
+            let busy = detect.await;
+            this.update(cx, |this, cx| {
+                if this.junk.gen != gen || !this.junk.scanned {
+                    return;
+                }
+                let was_recommended = this.junk.selection_is_recommended();
+                let n = crate::core::inuse::apply_busy(&mut this.junk.categories, &busy);
+                // 被占用的条目刚被降级出「推荐」集合：如果用户的勾选态
+                // 原本就停在推荐上，跟着刷新一次；自定义勾选则不动，
+                // 由清理入口兜底跳过。
+                if n > 0 && was_recommended {
+                    this.junk.select_recommended();
+                }
+                if n > 0 {
+                    cx.notify();
+                }
             })
             .ok();
         }));

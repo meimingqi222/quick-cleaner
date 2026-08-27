@@ -8,6 +8,7 @@ mod helpers;
 #[cfg(target_os = "macos")]
 mod macos;
 mod system;
+mod updater;
 
 use crate::core::i18n::{Language, Text};
 use std::path::PathBuf;
@@ -47,6 +48,10 @@ pub enum CategoryId {
     UserCache,
     BrowserCache,
     PackageCache,
+    /// 应用更新器（electron-updater / Squirrel.Mac）留在缓存目录里的更新包。
+    /// 条目靠探测目录顶层内容得到，不按应用名登记，所以同一目录里只有更新包
+    /// 叶子进这一类，形态不明的子项仍然只是展示项。
+    UpdaterPackages,
     Logs,
     RecycleBin,
     Thumbnails,
@@ -68,12 +73,13 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
-    pub const ALL: [CategoryId; 16] = [
+    pub const ALL: [CategoryId; 17] = [
         CategoryId::SystemTemp,
         CategoryId::UserTemp,
         CategoryId::UserCache,
         CategoryId::BrowserCache,
         CategoryId::PackageCache,
+        CategoryId::UpdaterPackages,
         CategoryId::Logs,
         CategoryId::RecycleBin,
         CategoryId::Thumbnails,
@@ -89,9 +95,29 @@ impl CategoryId {
 
     /// 扫描完成后是否默认勾选。
     ///
-    /// "推荐清理"只能包含明确标为 Safe 的类别。Caution 即使通常可以
-    /// 重建，也可能让用户丢失离线缓存、下载成本或废纸篓中的恢复机会，
-    /// 必须由用户主动勾选。
+    /// 规范：**一个目标可以被默认勾选，必须同时满足三条**——
+    ///
+    /// 1. **认得出**：有内容签名或明确的所有者证据说明这类文件就是它声称的
+    ///    用途。目录名不算证据——本仓库曾按应用名列更新器目录，实测 6 个名字
+    ///    里 5 个在机器上不存在，而真实存在的 4 个一个都没被列到。
+    /// 2. **最坏情况能界定**：删除的代价止于「重新下载 / 重新生成」。只要可能
+    ///    损失凭据、密钥、登录态、未提交改动、唯一副本（崩溃报告、待上传的诊
+    ///    断包）、或内网里根本没有上游可拉的东西（`~/.m2`、`go/pkg/mod`、
+    ///    `~/.gradle/caches`），这条就不成立。
+    /// 3. **不在事务中间**：所有权程序可能正在用或马上要用它就不行。用年龄门
+    ///    （`helpers::is_older_than`）判定，代价只是让「刚刚下好的东西」这一
+    ///    轮不动，仍然整项展示。
+    ///
+    /// 任何一条不成立：**照样展示给用户**，只是不预选。展示不是成本，隐藏才
+    /// 是——一个目标不进表，用户既看不见也清不掉。
+    ///
+    /// 类别只是这三条的缺省表达，判定单位始终是单个目标（见 `ScanTarget::
+    /// recommended`）。所以同一类别里可以同时有 `PackageCache` 的公共 registry
+    /// 缓存（三条都成立）和 `go/pkg/mod`（第 2 条不成立）。
+    ///
+    /// 这条规范会推翻直觉，两处已知例子：应用更新包看着像「正在用的东西」但
+    /// 三条都成立；整个 `~/Library/Logs` 看着就是日志，实际是一个目标覆盖 N 个
+    /// 所有者、里面躺着 `OneDrive/…/general.keystore` 和 `DiagnosticReports`。
     pub fn default_selected(&self) -> bool {
         self.safety() == Safety::Safe
     }
@@ -124,6 +150,9 @@ impl CategoryId {
             self,
             CategoryId::DevBuild | CategoryId::DevWorktrees | CategoryId::IosBackup
                 | CategoryId::OldIdeData
+                // 更新包是暂存产物：留一个空的 `pending/` 或
+                // `update.<随机串>/` 纯粹是垃圾，更新器下次自己重建。
+                | CategoryId::UpdaterPackages
                 // 快照是整条虚拟路径即目标；不走 remove_dir 分支的话会被
                 // clean_dir_contents 当普通目录跳过，tmutil 根本执行不到。
                 | CategoryId::LocalSnapshots
@@ -155,6 +184,7 @@ impl CategoryId {
                 CategoryId::UserCache => "应用缓存",
                 CategoryId::BrowserCache => "浏览器缓存",
                 CategoryId::PackageCache => "包管理缓存",
+                CategoryId::UpdaterPackages => "应用更新包",
                 CategoryId::Logs => "日志与崩溃转储",
                 CategoryId::RecycleBin => "回收站 / 废纸篓",
                 CategoryId::Thumbnails => "缩略图缓存",
@@ -173,6 +203,7 @@ impl CategoryId {
                 CategoryId::UserCache => "Application Cache",
                 CategoryId::BrowserCache => "Browser Cache",
                 CategoryId::PackageCache => "Package Manager Cache",
+                CategoryId::UpdaterPackages => "Application Update Packages",
                 CategoryId::Logs => "Logs & Crash Dumps",
                 CategoryId::RecycleBin => "Recycle Bin / Trash",
                 CategoryId::Thumbnails => "Thumbnail Cache",
@@ -195,6 +226,7 @@ impl CategoryId {
             CategoryId::UserCache => "📂",
             CategoryId::BrowserCache => "🌐",
             CategoryId::PackageCache => "📦",
+            CategoryId::UpdaterPackages => "⬆️",
             CategoryId::Logs => "📝",
             CategoryId::RecycleBin => "♻️",
             CategoryId::Thumbnails => "🖼",
@@ -222,6 +254,9 @@ impl CategoryId {
                 CategoryId::UserCache => "应用明确存放在缓存目录中的可重建数据",
                 CategoryId::BrowserCache => "Chrome / Edge / Safari 等浏览器的缓存数据",
                 CategoryId::PackageCache => "npm / pnpm / cargo / go 等包管理器缓存",
+                CategoryId::UpdaterPackages => {
+                    "已下载的更新包与更新器暂存，删了最多多下一次更新，不丢任何数据"
+                }
                 CategoryId::Logs => "系统与应用日志、崩溃转储",
                 CategoryId::RecycleBin => "回收站/废纸篓中已删除的文件",
                 CategoryId::Thumbnails => "系统缩略图缓存，可安全重建",
@@ -250,6 +285,9 @@ impl CategoryId {
                 CategoryId::UserCache => "Rebuildable data stored in application cache directories",
                 CategoryId::BrowserCache => "Cache files from Chrome, Edge, Firefox, Safari",
                 CategoryId::PackageCache => "Caches from npm, pnpm, Cargo, Go, pip, etc.",
+                CategoryId::UpdaterPackages => {
+                    "Downloaded update packages and updater staging; costs a re-download, loses no data"
+                }
                 CategoryId::Logs => "System and application event logs and crash dumps",
                 CategoryId::RecycleBin => "Deleted files in Recycle Bin or Trash",
                 CategoryId::Thumbnails => "System thumbnail cache, safe to rebuild",
@@ -293,9 +331,19 @@ impl CategoryId {
             // Service Worker、IndexedDB、Cookie 等状态数据已明确排除，剩余项
             // 只有 HTTP/代码/着色器缓存和已完成的崩溃报告。
             CategoryId::BrowserCache => Safety::Safe,
-            // 只收可重新下载或生成的包缓存；本地 Maven 仓库和泛 ~/.cache
-            // 不再归入此类。
+            // 类目级 Safe 是缺省值，不是保证。这一类里既有公共 registry 的本机
+            // 镜像（npm、pip、uv、cargo…），也有 `go/pkg/mod`、`~/.gradle/caches`、
+            // `~/.nuget/packages` 这种可能握着一份私有构件的唯一副本——后者按
+            // 规范第 2 条逐个降级，判据写在 `cache.rs`。
             CategoryId::PackageCache => Safety::Safe,
+            // 内容按签名判定，只可能是更新器的下载产物：唯一代价是重新下载。
+            // 「刚下完、马上要装」的窗口由目标级年龄门挡住（updater.rs），
+            // 不达标的叶子照样列出但不预选，所以类目级默认勾选不会撞上
+            // 正在进行换版。
+            CategoryId::UpdaterPackages => Safety::Safe,
+            // Safe 的前提是每个目标都还像日志。整目录一个目标做不到这一点，
+            // 所以 `~/Library/Logs` 按顶层子目录展开，非日志的条目各自降级
+            // （`system::push_log_dir_targets`）。
             CategoryId::Logs => Safety::Safe,
             CategoryId::RecycleBin => Safety::Caution,
             CategoryId::Thumbnails => Safety::Safe,
@@ -392,6 +440,7 @@ pub(super) fn target_with_size(
 
 #[cfg(test)]
 mod tests {
+    use super::cache::push_home_cache_targets;
     #[cfg(target_os = "macos")]
     use super::cache::push_user_cache_dirs;
     use super::dev::{
@@ -402,6 +451,8 @@ mod tests {
     use super::helpers::is_broken_launch_agent;
     #[cfg(target_os = "macos")]
     use super::macos::push_group_container_caches;
+    #[cfg(target_os = "macos")]
+    use super::system::push_log_dir_targets;
     use super::*;
 
     /// 扫描目标之间不能有父子嵌套。
@@ -638,6 +689,280 @@ mod tests {
             assert_eq!(target.category, CategoryId::UserTemp);
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 混装目录按内容拆开：更新包叶子进「应用更新包」，形态不明的子项各自
+    /// 作为展示项入表，父目录不得再次入表。
+    ///
+    /// 本机对应物是 `~/Library/Caches/com.google.antigravity`——同一个目录里
+    /// 既有 URLCache 的 `Cache.db`，又有 electron-updater 的 `pending/` 和
+    /// `update.zip`。整目录只能取一个默认值，注定错判。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn mixed_cache_dir_is_split_by_content() {
+        let root = std::env::temp_dir().join(format!("qc_mixed_cache_{}", std::process::id()));
+        let caches = root.join("Library/Caches");
+        let mixed = caches.join("com.example.mixedapp");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(mixed.join("pending")).unwrap();
+        std::fs::write(mixed.join("pending/app.zip"), b"pkg").unwrap();
+        std::fs::write(mixed.join("update.zip"), b"pkg").unwrap();
+        std::fs::write(mixed.join("current.blockmap"), b"bm").unwrap();
+        std::fs::write(mixed.join("Cache.db"), b"db").unwrap();
+        std::fs::create_dir_all(mixed.join("fsCachedData")).unwrap();
+        // 没命中签名的目录：仍然整目录一项，不下钻
+        std::fs::create_dir_all(caches.join("example.plainapp/state")).unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
+
+        for leaf in ["pending", "update.zip", "current.blockmap"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == mixed.join(leaf))
+                .unwrap_or_else(|| panic!("更新包叶子 {leaf} 没有入表"));
+            assert_eq!(
+                target.category,
+                CategoryId::UpdaterPackages,
+                "{leaf} 归类错了"
+            );
+        }
+        for residual in ["Cache.db", "fsCachedData"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == mixed.join(residual))
+                .unwrap_or_else(|| panic!("拆开后 {residual} 不该从界面上消失"));
+            assert_eq!(target.category, CategoryId::UserTemp);
+            assert!(!target.recommended, "{residual} 形态不明，不能默认勾选");
+        }
+        assert!(!paths.contains(&&mixed), "父目录入了表，会和子项双算体积");
+
+        let plain = caches.join("example.plainapp");
+        assert!(paths.contains(&&plain), "未命中签名的目录仍应整目录展示");
+        assert!(
+            !paths.contains(&&plain.join("state")),
+            "没拆开的目录不该下钻"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 年龄门：刚下完的更新包只展示、不预选，滞留够久的才预选。
+    ///
+    /// Squirrel.Mac 换版时把暂存内容拷去 `/Applications`，此刻删掉它等于让
+    /// 一次正在进行的更新倒退；而 mtime 早就停住的目录说明那次事务要么完成
+    /// 要么被放弃，留在盘上的纯粹是垃圾。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn fresh_update_package_is_not_preselected() {
+        let root = std::env::temp_dir().join(format!("qc_updater_age_{}", std::process::id()));
+        let caches = root.join("Library/Caches");
+        let _ = std::fs::remove_dir_all(&root);
+        for (app, days) in [("example.staleapp", 30u64), ("example.freshapp", 0)] {
+            let dir = caches.join(app);
+            std::fs::create_dir_all(&dir).unwrap();
+            let pkg = dir.join("update.zip");
+            std::fs::write(&pkg, b"pkg").unwrap();
+            if days > 0 {
+                backdate(&pkg, days);
+            }
+        }
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let recommended = |app: &str| {
+            targets
+                .iter()
+                .find(|t| t.path == caches.join(app).join("update.zip"))
+                .map(|t| t.recommended)
+        };
+        assert_eq!(
+            recommended("example.staleapp"),
+            Some(true),
+            "滞留 30 天的更新包该预选"
+        );
+        assert_eq!(
+            recommended("example.freshapp"),
+            Some(false),
+            "刚下完的更新包必须仍然展示，但不能预选"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 把文件的 mtime 往前挪 `days` 天。
+    ///
+    /// std 只能这样改已打开文件的修改时间，改不了目录，所以年龄门只在文件
+    /// 叶子上验；目录叶子走同一把 `helpers::is_older_than`，逻辑没有分叉。
+    #[cfg(target_os = "macos")]
+    fn backdate(path: &std::path::Path, days: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400),
+        )
+        .unwrap();
+    }
+
+    /// Apple 自己的目录不做探测。
+    ///
+    /// 签名表是按第三方更新器的产物形态做的，对系统守护进程没有意义；而
+    /// `is_sensitive_apple_cache` 只列了确认危险的那些，其余 `com.apple.*`
+    /// 并不因此就算安全。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn apple_owned_cache_dirs_are_never_probed() {
+        let root = std::env::temp_dir().join(format!("qc_apple_cache_{}", std::process::id()));
+        let caches = root.join("Library/Caches");
+        let daemon = caches.join("com.apple.ExampleDaemon");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(daemon.join("pending")).unwrap();
+        std::fs::write(daemon.join("pending/payload.zip"), b"pkg").unwrap();
+        std::fs::write(daemon.join("update.zip"), b"pkg").unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+
+        assert!(
+            !targets
+                .iter()
+                .any(|t| t.category == CategoryId::UpdaterPackages),
+            "com.apple.* 目录被探测了"
+        );
+        let target = targets
+            .iter()
+            .find(|t| t.path == daemon)
+            .expect("com.apple.* 目录仍应整项展示");
+        assert_eq!(target.category, CategoryId::UserTemp);
+        assert!(!target.recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/.cache` 里确认能重建的包缓存不能和认不出的目录混在一个桶里。
+    ///
+    /// uv 的缓存按 XDG 落在 `~/.cache/uv`，官方就有 `uv cache clean`，删了
+    /// 只是重下一遍——原来只有 `opencode` 被特判，其余一律 UserTemp 不勾，
+    /// 机器上 1 GB 出头的 uv 缓存就这么躺在需要手动勾选的那一堆里。
+    #[test]
+    fn rebuildable_home_cache_dirs_are_package_cache() {
+        let root = std::env::temp_dir().join(format!("qc_home_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["uv", "pip", "some-tool-nobody-heard-of"] {
+            std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
+        }
+
+        let mut targets = Vec::new();
+        push_home_cache_targets(&mut targets, &root);
+
+        for name in ["uv", "pip"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == root.join(".cache").join(name))
+                .unwrap_or_else(|| panic!("~/.cache/{name} 没有入表"));
+            assert_eq!(
+                target.category,
+                CategoryId::PackageCache,
+                "~/.cache/{name} 归类错了"
+            );
+            assert!(target.recommended);
+        }
+        let unknown = targets
+            .iter()
+            .find(|t| t.path == root.join(".cache").join("some-tool-nobody-heard-of"))
+            .expect("表外的目录仍应展示");
+        assert_eq!(unknown.category, CategoryId::UserTemp);
+        assert!(!unknown.recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/Library/Logs` 按顶层子目录展开，黑名单里那几个不预选。
+    ///
+    /// 整目录一个目标等于把 N 个互不相干的所有者打包，用户只能全选或全不选；
+    /// 实机那里躺着 `OneDrive/…/general.keystore` 和当天的崩溃报告。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn logs_are_split_by_owner_and_hazards_stay_unpreselected() {
+        let root = std::env::temp_dir().join(format!("qc_logs_{}", std::process::id()));
+        let logs = root.join("Library/Logs");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(logs.join("Notion")).unwrap();
+        std::fs::create_dir_all(logs.join("DiagnosticReports")).unwrap();
+        std::fs::create_dir_all(logs.join("com.apple.CloudTelemetry")).unwrap();
+        std::fs::create_dir_all(logs.join("OneDrive/Personal")).unwrap();
+        std::fs::write(logs.join("OneDrive/Personal/general.keystore"), b"k").unwrap();
+        std::fs::write(logs.join("warp.log"), b"log").unwrap();
+        // 实机 `~/Library/Logs` 顶层真有这些：SQLite 的 telemetry 缓存与它的
+        // 事务侧文件，名字在 Logs 里但不是日志。
+        std::fs::write(logs.join("telemetryCache.otc"), b"sqlite").unwrap();
+        std::fs::write(logs.join("telemetryCache.otc-wal"), b"w").unwrap();
+        // 名字不在黑名单里，但内容说明它正被某个进程当数据库用
+        std::fs::create_dir_all(logs.join("Telemetry")).unwrap();
+        std::fs::write(logs.join("Telemetry/state.otc"), b"sqlite").unwrap();
+        std::fs::write(logs.join("Telemetry/state.otc-wal"), b"w").unwrap();
+
+        let mut targets = Vec::new();
+        push_log_dir_targets(&mut targets, &logs);
+        let entry = |rel: &str| targets.iter().find(|t| t.path == logs.join(rel));
+
+        assert_eq!(entry("Notion").map(|t| t.recommended), Some(true));
+        assert_eq!(
+            entry("warp.log").map(|t| t.recommended),
+            Some(true),
+            "顶层散落的单个日志也是目标，不能因为拆分反而漏掉"
+        );
+        for hazard in ["DiagnosticReports", "OneDrive", "com.apple.CloudTelemetry"] {
+            let target = entry(hazard).unwrap_or_else(|| panic!("{hazard} 仍然要展示"));
+            assert_eq!(
+                target.category,
+                CategoryId::Logs,
+                "{hazard} 该留在日志类目里"
+            );
+            assert!(!target.recommended, "{hazard} 不只有日志，不能预选");
+        }
+        for stray in ["telemetryCache.otc", "telemetryCache.otc-wal"] {
+            let target = entry(stray).expect("散落的非日志文件仍要展示");
+            assert!(
+                !target.recommended,
+                "{stray} 不是日志，不能因为住在 Logs 里就被默认删掉"
+            );
+        }
+        // 名字表之外的第二道关口：按内容判定
+        let telemetry = entry("Telemetry").expect("内容探测不该把目录从表里抹掉");
+        assert!(
+            !telemetry.recommended,
+            "顶层有 SQLite 事务侧文件的目录正被进程使用，不能预选"
+        );
+        assert!(
+            targets.iter().all(|t| t.path != logs),
+            "整目录一个目标会让用户无法分别决定"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 可能只在本机有一份的包缓存不默认勾选，公共 registry 的镜像照旧。
+    ///
+    /// 判据写在 `cache.rs`：这个目录是公共 registry 的本机镜像，还是本机某份
+    /// 产物的唯一副本。`~/.m2/repository` 早就按这条排除了，`go/pkg/mod` 和
+    /// `~/.gradle/caches` 没有理由例外。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn single_copy_package_caches_are_not_preselected() {
+        let home = dirs::home_dir().expect("测试需要真实 HOME");
+        let targets = all_targets();
+        let entry = |rel: &str| targets.iter().find(|t| t.path == home.join(rel));
+
+        for rel in ["go/pkg/mod", ".gradle/caches"] {
+            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 仍然要展示"));
+            assert_eq!(target.category, CategoryId::PackageCache);
+            assert!(!target.recommended, "{rel} 可能只有本机一份，不能预选");
+        }
+        for rel in [
+            ".npm/_cacache",
+            ".cargo/registry",
+            "Library/Caches/Homebrew",
+            "Library/Caches/go-build",
+        ] {
+            let target = entry(rel).expect("公共 registry 镜像照旧入表");
+            assert!(target.recommended, "{rel} 删了最坏只是重下，该预选");
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -12,6 +12,7 @@ mod disk_selection;
 pub mod docker;
 pub mod fs_query;
 pub mod i18n;
+pub mod inuse;
 pub mod log;
 pub mod model;
 pub mod safety;

@@ -1,9 +1,10 @@
 //! 扫描目标辅助函数：文件年龄判断、损坏 LaunchAgent 检测、敏感 Apple 缓存识别
 
-#[cfg(target_os = "macos")]
 use std::path::Path;
 
-#[cfg(target_os = "macos")]
+/// 路径（目录或文件）的最后修改时间是否已超过 `age`。
+///
+/// 读不到元数据时返回 `false`——判定依据不足就不默认勾选。
 pub(super) fn is_older_than(path: &Path, age: std::time::Duration) -> bool {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -36,6 +37,47 @@ pub(super) fn is_broken_launch_agent(plist: &Path) -> bool {
     program.is_absolute()
         && std::fs::symlink_metadata(program)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// 名字叫 Logs 的目录里，已知不只有日志的顶层条目。
+///
+/// 判据来自实机枚举 `~/Library/Logs`：
+/// - `OneDrive/Personal/general.keystore`、`OneDrive/ListSync/Common/general.keystore`
+///   —— 密钥库，不是日志
+/// - `DiagnosticReports/`、`CrashReporter/` —— 崩溃与诊断报告，用户报 bug 时
+///   常常只有这一份副本
+/// - `com.apple.*` —— 系统遥测目录，认不出所有者（`CloudTelemetry` 那套在
+///   `~/Library/Caches` 里本来就在敏感表上）
+///
+/// 名字黑名单会腐烂（更新器那张表就是前车之鉴），所以这条只当兜底；判定
+/// 「是不是活数据库」走下面的内容探测，不依赖名字。
+///
+/// 这些不能默认勾选，但仍然整项展示：看见再决定是用户的权利，不是我们的。
+#[cfg(target_os = "macos")]
+pub(super) fn is_not_just_logs(name: &str) -> bool {
+    const NOT_LOGS_EXACT: &[&str] = &["DiagnosticReports", "CrashReporter", "OneDrive"];
+    NOT_LOGS_EXACT.contains(&name) || name.starts_with("com.apple.")
+}
+
+/// 目录是否正被某个进程当成数据库使用。
+///
+/// SQLite 的 `-wal`/`-shm` 只在有连接时存在，正常关闭会被删掉；见到就说明
+/// 此刻有进程握着它。实机 `~/Library/Logs/OneDrive/` 顶层就有
+/// `syncReporterTelemetryCache.otc` 和它的 `-wal`/`-shm`——一个叫 Logs 的
+/// 目录里住着活动数据库，只看目录名必然误判。
+///
+/// 只看顶层一层：这些伴随文件和库文件本身永远同目录，再深没有意义。
+#[cfg(target_os = "macos")]
+pub(super) fn holds_live_database(dir: &Path) -> bool {
+    const MARKERS: &[&str] = &["-wal", "-shm", ".otc", ".sqlite", ".sqlite3", ".db"];
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        // 读不动就等于看不清，按「不满足第 1 条」处理。
+        return true;
+    };
+    rd.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        MARKERS.iter().any(|marker| name.ends_with(marker))
+    })
 }
 
 /// `~/Library/Caches` 下不应被默认清理的 Apple 系统服务缓存。

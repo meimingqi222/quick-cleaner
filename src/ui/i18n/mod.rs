@@ -563,6 +563,22 @@ pub fn tr_status_nothing_selected(lang: Language) -> &'static str {
     }
 }
 
+/// 勾选的目标全部处于占用状态时，替代「没有勾选」的提示。
+pub fn tr_status_all_busy(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个勾选项正在被应用使用，已取消勾选"),
+        Language::En => format!("{count} selected items are in use and were unchecked"),
+    }
+}
+
+/// 完成状态里追加的「跳过了几个占用项」。
+pub fn tr_busy_skipped(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("已跳过 {count} 个正在使用的项目"),
+        Language::En => format!("skipped {count} in-use items"),
+    }
+}
+
 pub fn tr_status_deleting_n(lang: Language, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在永久删除 {count} 项…"),

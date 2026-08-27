@@ -61,6 +61,7 @@ pub(super) fn collect_tree_and_build_items(
                 category: marker.category,
                 last_modified: 0,
                 recommended: false,
+                busy: None,
             })
         })
         .collect()

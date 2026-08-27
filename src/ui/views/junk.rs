@@ -32,6 +32,7 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
         CategoryId::UserCache => icon_sparkle(fg, size),
         CategoryId::BrowserCache => icon_dashboard(fg, size),
         CategoryId::PackageCache => icon_apps(fg, size),
+        CategoryId::UpdaterPackages => icon_apps(fg, size),
         CategoryId::Logs => icon_clock(fg, size),
         CategoryId::RecycleBin => icon_trash(fg, size),
         CategoryId::Thumbnails => icon_sparkle(fg, size),
@@ -55,6 +56,18 @@ const LIST_MAX_H: f32 = 420.0;
 ///
 /// 用 `uniform_list` 而不是把所有行塞进容器：条目数可达上千，全量渲染
 /// 会让整页滚动掉到个位数帧率。`uniform_list` 只构造视口内的那十几行。
+/// 展开区行渲染要用的数据快照：`(序号, 路径, 标签, 截断路径, 文件数,
+/// 体积, 占用徽标(文案, 是否应用级))`。
+type ItemRowData = (
+    usize,
+    std::path::PathBuf,
+    String,
+    String,
+    u64,
+    u64,
+    Option<(String, bool)>,
+);
+
 fn render_category_items(
     root: &Root,
     summary: &crate::core::scanner::CategorySummary,
@@ -94,9 +107,14 @@ fn render_category_items(
             };
             // 先把这一段要用的数据拷出来，避免在 cx.listener 闭包里继续借用 this。
             // 双语标签在这里就按当前语言定下来，行渲染不必再认识 Text。
-            let rows: Vec<(usize, std::path::PathBuf, String, String, u64, u64)> = range
+            let rows: Vec<ItemRowData> = range
                 .filter_map(|i| {
                     let item = summary.items.get(i)?;
+                    let busy = item
+                        .busy
+                        .as_ref()
+                        .and_then(|b| b.badge())
+                        .map(|(text, app_level)| (text.get(lang).to_string(), app_level));
                     Some((
                         i,
                         item.path.clone(),
@@ -104,15 +122,16 @@ fn render_category_items(
                         truncate(&item.path.to_string_lossy(), 70),
                         item.file_count,
                         item.size,
+                        busy,
                     ))
                 })
                 .collect();
 
             rows.into_iter()
-                .map(|(i, path, label, path_text, file_count, size)| {
+                .map(|(i, path, label, path_text, file_count, size, busy)| {
                     let checked = this.junk.selected.contains(&path);
                     item_row(
-                        i, path, label, path_text, file_count, size, checked, lang, cx,
+                        i, path, label, path_text, file_count, size, busy, checked, lang, cx,
                     )
                 })
                 .collect()
@@ -163,6 +182,7 @@ fn item_row(
     path_text: String,
     file_count: u64,
     size: u64,
+    busy: Option<(String, bool)>,
     checked: bool,
     lang: Language,
     cx: &mut Context<Root>,
@@ -201,10 +221,24 @@ fn item_row(
                 .flex_col()
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(TEXT))
-                        .child(label),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT))
+                                .child(label),
+                        )
+                        // 占用徽标：应用级是橙色提示，纯系统占用偏阻断语义用红色
+                        .children(busy.map(|(text, app_level)| {
+                            if app_level {
+                                badge(text, CAUTION_CONTAINER, CAUTION)
+                            } else {
+                                badge(text, ERROR_CONTAINER, ERROR)
+                            }
+                        })),
                 )
                 .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text)),
         )
@@ -380,11 +414,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let (heading_title, heading_sub) = match lang {
         Language::Zh => (
             "智能清理",
-            "可重建的应用、浏览器与包管理缓存默认已勾选；临时数据与开发产物需手动勾选",
+            "可重建的应用、浏览器、包管理与应用更新包缓存默认已勾选；临时数据与开发产物需手动勾选",
         ),
         Language::En => (
             "Smart Clean",
-            "Rebuildable app, browser and package caches are selected; temp data and dev builds require manual selection",
+            "Rebuildable app, browser, package-manager and update-package caches are selected; temp data and dev builds require manual selection",
         ),
     };
 

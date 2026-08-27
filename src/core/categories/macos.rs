@@ -134,9 +134,7 @@ fn select_old_versions(names: &[String]) -> Vec<(String, &'static str, (u32, u32
     let parsed: Vec<(usize, &'static str, (u32, u32))> = names
         .iter()
         .enumerate()
-        .filter_map(|(i, n)| {
-            parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v))
-        })
+        .filter_map(|(i, n)| parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v)))
         .collect();
     let mut out = Vec::new();
     for &(i, family, version) in &parsed {
@@ -363,7 +361,10 @@ pub(super) fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) 
         // Logs 子目录
         let logs = group_dir.join("Library/Logs");
         if logs.is_dir() {
-            t.push(target(
+            // 和上面 Caches 同一条判据：App Group 的容器名经常不含产品名，
+            // 认不出所有者就无从界定「删了最坏会怎样」（规范第 1 条）。
+            // 密码管理器的日志目录可能带会话线索，只展示、不默认勾选。
+            t.push(target_with_recommendation(
                 logs,
                 Text::new(
                     format!("组容器日志 · {}", entry.file_name().to_string_lossy()),
@@ -373,6 +374,7 @@ pub(super) fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) 
                     ),
                 ),
                 CategoryId::Logs,
+                false,
             ));
         }
     }
@@ -484,12 +486,10 @@ mod old_ide_tests {
         ]));
         // 两个旧版 IntelliJ 都该列出，最新的 2026.2 与解析不出的不算
         assert_eq!(out.len(), 2);
-        assert!(out
-            .iter()
-            .any(|(n, f, v)| n == "IntelliJIDEA2025.2" && *f == "IntelliJ IDEA" && *v == (2025, 2)));
-        assert!(out
-            .iter()
-            .any(|(n, _, _)| n == "IntelliJIDEA2024.3"));
+        assert!(out.iter().any(|(n, f, v)| n == "IntelliJIDEA2025.2"
+            && *f == "IntelliJ IDEA"
+            && *v == (2025, 2)));
+        assert!(out.iter().any(|(n, _, _)| n == "IntelliJIDEA2024.3"));
         // 只有一个版本的产品（PyCharm2024.3）没有更新版本，不列
         assert!(!out.iter().any(|(n, _, _)| n.starts_with("PyCharm")));
     }

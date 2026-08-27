@@ -22,6 +22,9 @@ pub struct ScanItem {
     pub last_modified: u64,
     /// 是否由“推荐清理”默认勾选。必须由具体规则决定，不能只看分类。
     pub recommended: bool,
+    /// 占用状态（应用正在运行 / 有进程打开其中文件）。扫描后由 `inuse`
+    /// 检测异步回填，回填时会把被占用的条目降级 `recommended`。
+    pub busy: Option<crate::core::inuse::Busy>,
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +132,7 @@ fn scan_fixed_inner(
                         category: t.category,
                         last_modified: 0,
                         recommended: t.recommended,
+                        busy: None,
                     },
                     started.elapsed(),
                 ));
@@ -145,6 +149,7 @@ fn scan_fixed_inner(
                             category: t.category,
                             last_modified: newest,
                             recommended: t.recommended,
+                            busy: None,
                         },
                         started.elapsed(),
                     )
@@ -656,6 +661,7 @@ mod tests {
             category: cat,
             last_modified: 0,
             recommended: cat.default_selected(),
+            busy: None,
         }
     }
 

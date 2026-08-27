@@ -520,6 +520,7 @@ mod tests {
             category: cat,
             last_modified: 0,
             recommended: cat.default_selected(),
+            busy: None,
         }
     }
 

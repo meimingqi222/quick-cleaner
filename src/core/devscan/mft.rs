@@ -57,6 +57,7 @@ pub(super) fn discover_via_mft(
                 // 展示价值（构建产物的时间戳随时在变）。
                 last_modified: 0,
                 recommended: false,
+                busy: None,
             });
         }
     }

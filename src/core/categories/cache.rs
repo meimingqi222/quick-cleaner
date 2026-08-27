@@ -48,10 +48,14 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("rustup 下载缓存", "rustup downloads"),
             CategoryId::PackageCache,
         ));
-        t.push(target(
+        // GOPRIVATE / 自建 proxy 拉下来的私有模块也落在这里，内网机器上删了
+        // 可能没有上游可拉——与下面 `~/.m2/repository` 同一条判据（规范第 2 条），
+        // 类别照旧是包缓存，只是不预选。
+        t.push(target_with_recommendation(
             home.join("go\\pkg\\mod"),
             Text::new("go module 缓存", "go module cache"),
             CategoryId::PackageCache,
+            false,
         ));
         t.push(target(
             local.join("go-build"),
@@ -63,20 +67,32 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("bun 缓存", "bun cache"),
             CategoryId::PackageCache,
         ));
-        t.push(target(
+        // 同 go module 缓存：企业私有仓的构件可能只有本机有过。
+        t.push(target_with_recommendation(
             home.join(".gradle\\caches"),
             Text::new("gradle 缓存", "gradle cache"),
             CategoryId::PackageCache,
+            false,
         ));
-        t.push(target(
+        // 私有 feed（Azure Artifacts、ProGet、内部 NuGet 源）下的包常常只有
+        // 本机有过——同 go module / gradle 的判据。
+        t.push(target_with_recommendation(
             home.join(".nuget\\packages"),
             Text::new("nuget 包缓存", "nuget package cache"),
             CategoryId::PackageCache,
+            false,
         ));
-        // ~/.m2/repository 可能包含仅在本机 mvn install 的私有构件，不能
-        // 当作可重新下载的缓存推荐清理。
+        // 包缓存这条线的分界（规范第 2 条）：**这个目录是公共 registry 的本机
+        // 镜像，还是本机某份产物的唯一副本？**
+        // - 只是镜像：npm `_cacache`、pip、uv、cargo registry、bun、rustup、
+        //   Homebrew、typescript、node-gyp。删了最坏是重新下载，可以预选。
+        // - 常是唯一副本：`~/.m2/repository`（`mvn install` 的私有构件直接写
+        //   进这个目录）、go module 缓存、`~/.gradle/caches`、`~/.nuget/packages`
+        //   ——这几个生态里「只在内网有、上游根本没有」是日常而不是例外，不预选。
+        //   npm 私服和私有 cargo registry 也能构造出同样情形，所以这条界线是按
+        //   普遍性下的判断，不是机械推导出来的；要挪动谁，得给出新的证据。
         // ~/.cache 里既有纯下载缓存，也可能有工具状态。按顶层子目录拆开，
-        // 才能只推荐已确认可重建的 OpenCode 缓存，同时保留其他项目供审阅。
+        // 才能只推荐已确认可重建的缓存，同时保留其他项目供审阅。
         push_home_cache_targets(t, home);
         t.push(target(
             local.join("uv\\cache"),
@@ -109,10 +125,12 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("rustup 缓存", "rustup cache"),
             CategoryId::PackageCache,
         ));
-        t.push(target(
+        // 私有模块的唯一副本，同 Windows 分支：不预选。
+        t.push(target_with_recommendation(
             home.join("go/pkg/mod"),
             Text::new("go 缓存", "go cache"),
             CategoryId::PackageCache,
+            false,
         ));
         push_home_cache_targets(t, home);
         t.push(target(
@@ -137,11 +155,13 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             ));
         }
 
-        // 包管理器补充
-        t.push(target(
+        // 包管理缓存补充
+        // 私有仓构件的唯一副本，同 Windows 分支：不预选。
+        t.push(target_with_recommendation(
             home.join(".gradle/caches"),
             Text::new("Gradle 缓存", "Gradle cache"),
             CategoryId::PackageCache,
+            false,
         ));
         t.push(target(
             home.join("Library/pnpm/store"),
@@ -217,6 +237,15 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
                 CategoryId::AiAgents,
                 true,
             ));
+        } else if let Some((_, zh, en)) = REBUILDABLE_HOME_CACHE_DIRS
+            .iter()
+            .find(|(key, _, _)| *key == name)
+        {
+            t.push(target(
+                entry.path(),
+                Text::new(*zh, *en),
+                CategoryId::PackageCache,
+            ));
         } else {
             t.push(target_with_recommendation(
                 entry.path(),
@@ -228,12 +257,31 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     }
 }
 
+/// 按 XDG 约定落在 `~/.cache` 下、能重新下载或就地重建的缓存。
+///
+/// 判据和 `~/Library/Caches` 里那张表一致：工具自带 `cache clean` /
+/// `cache purge` 一类子命令，或删掉后下一次构建自己长回来。表外的
+/// 目录仍然整项展示，只是不默认勾选。
+const REBUILDABLE_HOME_CACHE_DIRS: &[(&str, &str, &str)] = &[
+    ("uv", "uv 缓存", "uv cache"),
+    ("pip", "pip 缓存", "pip cache"),
+    ("pypoetry", "Poetry 缓存", "Poetry cache"),
+    ("pre-commit", "pre-commit 缓存", "pre-commit cache"),
+    ("node-gyp", "node-gyp 缓存", "node-gyp cache"),
+    ("typescript", "TypeScript 缓存", "TypeScript cache"),
+    ("go-build", "Go 构建缓存", "Go build cache"),
+    ("gopls", "gopls 缓存", "gopls cache"),
+];
+
 /// `~/Library/Caches` 下已被更具体的目标认领的顶层目录。
 ///
 /// 这些名字必须和上面 BrowserCache / PackageCache / AiAgents 目标里用的
 /// 顶层段一致，否则会和 `push_user_cache_dirs` 重复计数。
 /// `Google` 覆盖 `Google/Chrome`；`claude-cli-nodejs` / `Zed` 等覆盖
 /// `LOCAL_AGENT_DIRS` 里对应的条目。
+///
+/// 更新器目录（`*-updater`、`*.ShipIt`）**不在**这张表里：它们由
+/// `push_user_cache_dirs` 探测内容认领，按名字登记反而会漏掉新应用。
 #[cfg(target_os = "macos")]
 const CLAIMED_USER_CACHE_DIRS: &[&str] = &[
     "Google",
@@ -261,15 +309,14 @@ const CLAIMED_USER_CACHE_DIRS: &[&str] = &[
     "amp",
     "Zed",
     "WorkBuddy",
-    "cursor-updater",
-    "antigravity-updater",
-    "@genieworkbuddy-desktop-updater",
-    "@makadesktop-updater",
-    "@zcodedesktop-updater",
-    "adspower_global-updater",
 ];
 
 /// 把 `~/Library/Caches` 的顶层子目录逐个加为清理目标，跳过已被认领的。
+///
+/// 分成三步判定，而不是一律丢进同一个桶：
+/// 1. 内容命中更新包签名 → 按子项拆开，更新包叶子可默认勾选；
+/// 2. 没命中 → 整目录作为「分不清」的一项展示，不预选；
+/// 3. `com.apple.*` → 不做探测，见下方说明。
 #[cfg(target_os = "macos")]
 pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
     let Ok(rd) = std::fs::read_dir(cache) else {
@@ -289,12 +336,40 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
         if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
+        let dir = entry.path();
+        let stem = super::updater::display_stem(&name);
+        // 签名判定是按第三方更新器的产物形态做的，对 Apple 守护进程的目录
+        // 没有意义：上面那张敏感表只列了确认危险的，其余 `com.apple.*` 并不
+        // 因此安全，所以一律不探测、只展示。
+        let hit = !name.starts_with("com.apple.")
+            && super::updater::push_updater_artifacts(t, &dir, &stem);
+        if hit {
+            push_residual_children(t, &dir, &name);
+            continue;
+        }
         // `~/Library/Caches` 是约定上的缓存位置，但第三方软件并不总遵守：
         // JetBrains 在这里放 LocalHistory/fileHistory，ms-playwright 也可能放
         // 带登录态的 MCP 浏览器 Profile。未知目录只展示，不能默认勾选。
         t.push(target_with_recommendation(
-            entry.path(),
+            dir,
             format!("~/Library/Caches/{name}"),
+            CategoryId::UserTemp,
+            false,
+        ));
+    }
+}
+
+/// 被拆开的目录里剩下的顶层子项：形态仍然分不清，逐个整项展示、不默认勾选。
+///
+/// 父目录已经因为「命中签名 + 有子项入表」而不能再次入表（`scan_fixed_inner`
+/// 逐目标独立称重后相加、不做嵌套去重），这些子项不列出来就等于从界面上消失
+/// 了——`Cache.db` 这类占着目录里最大一块体积的东西尤其不该被藏掉。
+#[cfg(target_os = "macos")]
+fn push_residual_children(t: &mut Vec<ScanTarget>, dir: &Path, name: &str) {
+    for child in super::updater::residual_children(dir) {
+        t.push(target_with_recommendation(
+            dir.join(&child),
+            format!("~/Library/Caches/{name}/{child}"),
             CategoryId::UserTemp,
             false,
         ));

@@ -195,6 +195,10 @@ pub(super) const ROAMING_AGENT_APPS: &[&str] = &[
 /// 子目录为空表示整个目录都是缓存；中英一致的条目两列写同一个字符串。
 ///
 /// Windows 上根是 `%LOCALAPPDATA%`，macOS 上是 `~/Library/Caches`。
+///
+/// electron-updater 的更新包目录不在这里：它们的处置和普通缓存不同（要按
+/// 子项拆开、还要过年龄门），两平台都由 `updater::push_updater_dirs_under`
+/// / `push_user_cache_dirs` 探测内容认领，按名字登记反而会漏掉新应用。
 pub(super) const LOCAL_AGENT_DIRS: &[(&str, &[&str], &str, &str)] = &[
     (
         "claude-cli-nodejs",
@@ -205,32 +209,6 @@ pub(super) const LOCAL_AGENT_DIRS: &[(&str, &[&str], &str, &str)] = &[
     ("amp", &["logs", "traces"], "Amp", "Amp"),
     ("Zed", &["logs", "hang_traces"], "Zed", "Zed"),
     ("WorkBuddy", &["logs"], "WorkBuddy", "WorkBuddy"),
-    ("cursor-updater", &[], "Cursor 更新包", "Cursor updates"),
-    (
-        "antigravity-updater",
-        &[],
-        "Antigravity 更新包",
-        "Antigravity updates",
-    ),
-    (
-        "@genieworkbuddy-desktop-updater",
-        &[],
-        "WorkBuddy 更新包",
-        "WorkBuddy updates",
-    ),
-    ("@makadesktop-updater", &[], "Maka 更新包", "Maka updates"),
-    (
-        "@zcodedesktop-updater",
-        &[],
-        "zCode 更新包",
-        "zCode updates",
-    ),
-    (
-        "adspower_global-updater",
-        &[],
-        "AdsPower 更新包",
-        "AdsPower updates",
-    ),
 ];
 
 /// VS Code 系编辑器里 AI 插件的全局存储（会话缓存都存这儿）。
@@ -329,6 +307,15 @@ pub(super) fn push_ai_agent_targets(
                 ));
             }
         }
+    }
+
+    // electron-updater 的更新包目录：展开 `%LOCALAPPDATA%` 一层逐个探内容。
+    // 不再按应用名列清单——那张 6 个名字的表实测只剩 1 个命中，而真实存在的
+    // 4 个一个都没列到。macOS 侧由 `push_user_cache_dirs` 探测
+    // `~/Library/Caches`，两边共用同一套签名。
+    #[cfg(windows)]
+    {
+        super::updater::push_updater_dirs_under(t, local);
     }
 
     // 明确限定到可重建叶子，避免把整个工具状态目录当缓存清掉。
