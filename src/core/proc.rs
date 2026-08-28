@@ -139,6 +139,7 @@ pub fn call_with_timeout<T: Send + 'static>(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn collects_stdout_and_exit_status() {
         let run = run_with_timeout("/bin/echo", &["hello"], Duration::from_secs(5))
@@ -148,6 +149,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "hello");
     }
 
+    #[cfg(unix)]
     #[test]
     fn nonzero_exit_is_reported_but_not_an_error() {
         let run = run_with_timeout("/bin/sh", &["-c", "exit 3"], Duration::from_secs(5))
@@ -188,6 +190,7 @@ mod tests {
 
     /// 超时必须返回 `None`（= 测不出），而不是返回一个 `ok: false` 的空结果
     /// ——后者会被调用方误读成「命令正常跑完、什么都没找到」。
+    #[cfg(unix)]
     #[test]
     fn timeout_returns_none() {
         let start = Instant::now();
@@ -201,6 +204,7 @@ mod tests {
     }
 
     /// 子进程输出远超管道缓冲区时不能死锁——这正是要单独起读线程的原因。
+    #[cfg(unix)]
     #[test]
     fn large_output_does_not_deadlock() {
         let run = run_with_timeout(

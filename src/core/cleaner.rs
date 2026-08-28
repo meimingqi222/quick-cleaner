@@ -561,9 +561,6 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         report.record(dir, CleanResult::Skipped);
         return report;
     }
-    // 父目录此刻的身份——上面这次 symlink_metadata 已经付过成本了，
-    // 顺带存一份不算额外开销。
-    let parent_identity = TargetIdentity::from_metadata(&md);
 
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -576,6 +573,13 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
             return report;
         }
     };
+
+    // 父目录身份在 read_dir **之后**取：TOCTOU 防护的窗口是「看到子项」到
+    // 「删子项」之间，read_dir 本身不是威胁。Windows 上 read_dir 可能改变
+    // 目录的元数据（如分配大小），在 read_dir 之前取的快照会因此误判。
+    let parent_identity = std::fs::symlink_metadata(dir)
+        .ok()
+        .and_then(|md| TargetIdentity::from_metadata(&md));
 
     // 连同每个子项自己的身份一起收集：`DirEntry::metadata()` 是 lstat
     // 语义（不穿透子项自身的符号链接，跟上面 `symlink_metadata` 一致），
