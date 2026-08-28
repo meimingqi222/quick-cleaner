@@ -45,11 +45,17 @@ winres = "0.1.12"
 # macOS 上不会出现这个可执行文件。
 [features]
 mftscan = []
+fseprobe = []
 
 [[example]]
 name = "mftscan"
 path = "examples/mftscan.rs"
 required-features = ["mftscan"]
+
+[[example]]
+name = "fseprobe"
+path = "examples/fseprobe.rs"
+required-features = ["fseprobe"]
 
 [package.metadata.bundle]
 name = "QuickCleaner"

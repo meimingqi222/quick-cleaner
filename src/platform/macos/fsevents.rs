@@ -40,6 +40,33 @@ pub(crate) fn canonicalize_event_path(path: &Path) -> PathBuf {
     }
 }
 
+/// 事件是否要求重扫它携带的那个路径。
+///
+/// 三个 flag 语义相同：「这个路径下面的明细我丢了，你自己重扫」，作用域是
+/// 事件携带的路径，不是整个卷。按 Apple 文档 `UserDropped` / `KernelDropped`
+/// 总是伴随 `MustScanSubDirs` 出现；返回哪个名字只影响日志措辞。
+fn subtree_rescan_reason(flags: FSEventStreamEventFlags) -> Option<&'static str> {
+    if flags & kFSEventStreamEventFlagMustScanSubDirs != 0 {
+        Some("MustScanSubDirs")
+    } else if flags & kFSEventStreamEventFlagUserDropped != 0 {
+        Some("UserDropped")
+    } else if flags & kFSEventStreamEventFlagKernelDropped != 0 {
+        Some("KernelDropped")
+    } else {
+        None
+    }
+}
+
+/// 这条事件是不是在说「整个卷都要重扫」：它要求重扫的路径正好是被监听的根。
+///
+/// 两侧都先折叠镜像形态再比——FSEvents 可能把卷根报成 `/System/Volumes/Data`，
+/// 而调用方比对 `must_rescan` 时用的是折叠后的形态（`volume.mount_point()`）。
+/// 两边形态不一致就会漏判，回放白跑一趟。
+fn is_root_rescan(flags: FSEventStreamEventFlags, event_path: &str, canonical_root: &Path) -> bool {
+    subtree_rescan_reason(flags).is_some()
+        && canonicalize_event_path(Path::new(event_path)) == canonical_root
+}
+
 /// FSEvents 回放结果。
 #[derive(Debug)]
 pub struct Changes {
@@ -56,19 +83,30 @@ pub struct Changes {
     /// 当成普通变更根重扫。
     pub must_rescan: Vec<PathBuf>,
     pub last_event_id: u64,
-    /// 整个卷的水位不再可信，必须全量重建（`EventIdsWrapped` / `RootChanged`）。
+    /// 整个卷的水位不再可信，必须全量重建（`EventIdsWrapped` / `RootChanged`，
+    /// 以及「被监听的根自己需要整棵重扫」——那等价于整盘，见
+    /// [`changes_since`] 里对 `RootMustScanSubDirs` 的处理）。
     pub requires_full_scan: bool,
     /// 触发 `requires_full_scan` 的 flag 名称，用于日志诊断。
     pub full_scan_reason: Option<&'static str>,
     /// 过滤掉的自家缓存目录事件数。
     pub filtered_cache_events: usize,
     /// 收到的原始事件总数（过滤前）。
+    ///
+    /// 注意：`requires_full_scan` 因「根自己要重扫」置位时，回放是被提前
+    /// 截断的，这里是**截断处的部分计数**，不是本次历史的事件总量。
     pub raw_event_count: usize,
 }
 
 struct Collector {
     events: Vec<(PathBuf, FSEventStreamEventFlags)>,
     history_done: bool,
+    /// 被监听的根，**已折叠成正规形态**。用它认出「根自己需要整棵重扫」
+    /// 这种等价全量的信号。折叠在建 `Collector` 时做一次：回调可能被调用
+    /// 上千次，每次重算就是每次多分配一个 `PathBuf`。
+    canonical_root: PathBuf,
+    /// 回调已经看到根自己带了重扫 flag。置位后排空循环立刻停下。
+    root_must_rescan: bool,
 }
 
 // CoreFoundation 中的当前运行循环模式调用。fsevent-sys 4.x 没有导出它，
@@ -103,7 +141,20 @@ extern "C" fn event_callback(
         if !path_ptr.is_null() {
             let path = unsafe { CStr::from_ptr(path_ptr) };
             if let Ok(path) = path.to_str() {
-                collector.events.push((PathBuf::from(path), flags));
+                // 根自己要重扫 == 整盘要重扫，增量路径无事可做。这条信号在
+                // 回调里就能认出来，剩下的几十万个事件不用再收——收完也是
+                // 整包丢掉，实测一次回放 39s 全花在排空上，一个路径都没用。
+                //
+                // 置位之后连收都不收：本批剩下的事件同样是要整包丢的，
+                // 每条还要白分配一个 `PathBuf`。
+                if !collector.root_must_rescan
+                    && is_root_rescan(flags, path, &collector.canonical_root)
+                {
+                    collector.root_must_rescan = true;
+                }
+                if !collector.root_must_rescan {
+                    collector.events.push((PathBuf::from(path), flags));
+                }
             }
         }
 
@@ -144,6 +195,10 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     let mut collector = Collector {
         events: Vec::new(),
         history_done: false,
+        // 根可能在事件里以镜像形态出现（`/System/Volumes/Data`），两边都归
+        // 一后再比，和调用方最终比对 `must_rescan` 用的形态保持一致。
+        canonical_root: canonicalize_event_path(root),
+        root_must_rescan: false,
     };
     let context = FSEventStreamContext {
         version: 0,
@@ -190,7 +245,7 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     // 历史事件需要运行当前线程的 run loop 才会进入 callback。没有事件时
     // 不能无限等待，因此设置一个有限上限；超时不代表数据正确，直接要求全扫。
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !collector.history_done && Instant::now() < deadline {
+    while !collector.history_done && !collector.root_must_rescan && Instant::now() < deadline {
         let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, 1) };
         // kCFRunLoopRunFinished / kCFRunLoopRunStopped 都意味着本轮没有更多源。
         if result == 1 && since == fsevent_sys::kFSEventStreamEventIdSinceNow {
@@ -198,20 +253,70 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
         }
     }
 
-    unsafe {
-        FSEventStreamFlushSync(stream);
-    }
-    let latest = unsafe { FSEventStreamGetLatestEventId(stream) };
+    let history_done = collector.history_done;
+    let root_must_rescan = collector.root_must_rescan;
+    let raw_event_count = collector.events.len();
+    // 历史回放没等到 `HistoryDone` 就到点了，下面会返回 `None`。
+    let timed_out = since != fsevent_sys::kFSEventStreamEventIdSinceNow && !history_done;
+
+    // 这两条路径都不会把 `latest` 交给任何人：根重扫走 `requires_full_scan`，
+    // 超时直接 `None`，调用方一律转全量、用 `full_macos_scan` 自己的
+    // checkpoint。所以 `FlushSync` 和 `GetLatestEventId` 一起跳过——
+    //
+    // `FlushSync` 不是免费的：它会把 pending 事件再逼出一批，回调继续为每
+    // 条分配路径，而这些同样是要整包丢的。实测一次间隔 2.9 小时的整盘回放，
+    // 30s 超时之后还在 `FlushSync` 里堵了 12.6s（42.7s → 30.1s）。
+    //
+    // 水位填 `since`，即「一步都没推进」。回放是被主动截断的，后面的历史
+    // 根本没看过；填 `GetLatestEventId`（已投递到的位置）会让那段未回放的
+    // 历史被静默跳过。今天两种填法都不出错，填 `since` 是为了哪天有人在这
+    // 条分支上持久化它时，最坏也只是白重放一遍。
+    let latest = if root_must_rescan || timed_out {
+        since
+    } else {
+        unsafe {
+            FSEventStreamFlushSync(stream);
+        }
+        unsafe { FSEventStreamGetLatestEventId(stream) }
+    };
+
     unsafe {
         FSEventStreamStop(stream);
         FSEventStreamInvalidate(stream);
         FSEventStreamRelease(stream);
     }
 
-    let history_done = collector.history_done;
-    let raw_event_count = collector.events.len();
+    // 根自己要重扫 == 整盘重扫，`refresh_macos_index` 只会原样退回，收上来
+    // 的路径一个也用不上。走 `requires_full_scan` 这条既有通道，调用方会带
+    // 原因地转全量重建。
+    //
+    // 能省多少取决于第一条根重扫事件在流里的位置：内核在历史不足时把它作
+    // 为首条投递就几乎全省，散落在中间就只省后半截。实测一次回放 39s，日
+    // 志里 33 条根事件散布在 27 万条中间——所以下面要打出「已收 N 事件」，
+    // 那是量化这一步到底省了多少的唯一依据，别当成固定收益。
+    //
+    // `last_event_id` 在这条路径上是 `since`（一步未推进），理由见上。
+    //
+    // 必须在下面的 history_done 超时判定之前返回：提前收尾时 history_done
+    // 自然还是 false，落到超时分支会退化成 `None`，反而丢掉诊断原因。
+    if root_must_rescan {
+        crate::log!(
+            "FSEvents: 卷根 {} 需整棵重扫，放弃回放（已收 {} 事件）转全量",
+            root.display(),
+            raw_event_count
+        );
+        return Some(Changes {
+            paths: Vec::new(),
+            must_rescan: Vec::new(),
+            last_event_id: latest,
+            requires_full_scan: true,
+            full_scan_reason: Some("RootMustScanSubDirs"),
+            filtered_cache_events: 0,
+            raw_event_count,
+        });
+    }
 
-    if since != fsevent_sys::kFSEventStreamEventIdSinceNow && !history_done {
+    if timed_out {
         crate::log!(
             "FSEvents: 历史回放超时（30s 未收到 HistoryDone），since={}，原始事件 {}",
             since,
@@ -234,15 +339,7 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
             continue;
         }
         // 作用域是**这一个路径**的 flag：只要求重扫该子树。
-        let subtree_reason = if flags & kFSEventStreamEventFlagMustScanSubDirs != 0 {
-            Some("MustScanSubDirs")
-        } else if flags & kFSEventStreamEventFlagUserDropped != 0 {
-            Some("UserDropped")
-        } else if flags & kFSEventStreamEventFlagKernelDropped != 0 {
-            Some("KernelDropped")
-        } else {
-            None
-        };
+        let subtree_reason = subtree_rescan_reason(flags);
         if let Some(reason) = subtree_reason {
             crate::log!("  FSEvents 子树需重扫（{}）: {}", reason, path.display());
             must_rescan.push(canonicalize_event_path(&path));
@@ -322,6 +419,54 @@ mod tests {
     #[test]
     fn current_event_id_is_nonzero_on_macos() {
         assert!(current_event_id() > 0);
+    }
+
+    #[test]
+    fn rescan_flags_are_recognized_and_others_are_not() {
+        assert_eq!(
+            subtree_rescan_reason(kFSEventStreamEventFlagMustScanSubDirs),
+            Some("MustScanSubDirs")
+        );
+        // UserDropped / KernelDropped 按 Apple 文档总伴随前者，实测也单独出现过
+        assert_eq!(
+            subtree_rescan_reason(kFSEventStreamEventFlagUserDropped),
+            Some("UserDropped")
+        );
+        assert_eq!(
+            subtree_rescan_reason(kFSEventStreamEventFlagKernelDropped),
+            Some("KernelDropped")
+        );
+        // 普通变更与「历史回放结束」都不是重扫信号
+        assert_eq!(subtree_rescan_reason(0), None);
+        assert_eq!(
+            subtree_rescan_reason(kFSEventStreamEventFlagHistoryDone),
+            None
+        );
+    }
+
+    /// 卷根的两种形态都要认出来，否则回放白跑：FSEvents 可能把根报成
+    /// 镜像路径 `/System/Volumes/Data`，而调用方比对用的是折叠后的 `/`。
+    #[test]
+    fn root_rescan_detected_in_both_path_forms() {
+        let root = canonicalize_event_path(Path::new("/"));
+        assert!(is_root_rescan(
+            kFSEventStreamEventFlagMustScanSubDirs,
+            "/",
+            &root
+        ));
+        assert!(is_root_rescan(
+            kFSEventStreamEventFlagMustScanSubDirs,
+            "/System/Volumes/Data",
+            &root
+        ));
+        // 子目录要重扫只影响那一棵子树，不是整盘
+        assert!(!is_root_rescan(
+            kFSEventStreamEventFlagMustScanSubDirs,
+            "/Users/foo",
+            &root
+        ));
+        // 根上来的普通变更（权限、mtime）不算重扫
+        assert!(!is_root_rescan(0, "/", &root));
     }
 
     #[test]

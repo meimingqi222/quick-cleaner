@@ -138,7 +138,14 @@ pub(super) fn load_or_build_macos_index_for(
                 scan.records_read,
                 last_event_id
             );
-            refresh_cached_macos_index(root, label, scan, last_event_id, live)?
+            refresh_cached_macos_index(
+                root,
+                label,
+                scan,
+                last_event_id,
+                live,
+                RefreshBudget::Interactive,
+            )?
         }
         None => load_or_build_macos_index_for_uncached(root, label, live)?,
     };
@@ -149,8 +156,107 @@ pub(super) fn load_or_build_macos_index_for(
             last_event_id,
         });
         spawn_prune_orphan_indexes(&scan.volume);
+        spawn_watermark_ticker();
     }
     Some(scan)
+}
+
+/// 空转期间定时把事件水位往前推，别让它旧到掉进悬崖。
+///
+/// 索引只在用户打开磁盘透镜 / 搜索 / 垃圾扫描时才刷新（见本模块三个调用
+/// 方），进程空转几小时水位就在原地不动。实测（本机，`/`，用
+/// `cargo run --example fseprobe --features fseprobe`）回放耗时对事件 ID
+/// 间隔近似线性，约 **2 秒 / 百万事件 ID**：
+///
+/// | 空转 | 事件 ID 差 | 回放耗时 | 结果 |
+/// |---|---|---|---|
+/// | 0 | 0 | 12.8ms | 正常 |
+/// | 25 分钟 | 1.48M | 2.84s | 正常增量 |
+/// | 1 小时 | 3.48M | 6.68s | 正常增量 |
+/// | 2 小时 | 6.98M | 14.4s | 正常增量 |
+/// | 2.9 小时 | 20.7M | 撞上 30s 超时 | 退化成 ~57s 整盘重建 |
+///
+/// 一次实测的 96.9 秒磁盘透镜就是最后那行：空转近 3 小时，回放超时，转全量。
+/// 15 分钟一轮把间隔钉在 ~2 秒量级，离 30s 超时和内核历史丢弃都还很远。
+#[cfg(not(windows))]
+const WATERMARK_TICK: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// 启动水位推进线程，每进程一次。
+///
+/// 只在**已经有一份索引**之后启动——没有索引时无水位可推，更不该由后台
+/// 线程去触发首次全量扫描。因此挂在 `load_or_build_macos_index_for` 成功
+/// 之后，和 `spawn_prune_orphan_indexes` 同一个位置。
+#[cfg(not(windows))]
+fn spawn_watermark_ticker() {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(WATERMARK_TICK);
+        advance_cached_watermark();
+    });
+}
+
+/// 推进一次进程内缓存索引的水位。
+///
+/// 三条自我约束，缺一条这个线程就会变成用户的负担而不是帮助：
+///
+/// 1. **拿不到构建锁就跳过本轮**。用户发起的扫描正在跑时不去抢，等下一轮。
+/// 2. **没有缓存索引就跳过**。首次全量扫描只能由用户的动作触发。
+/// 3. **`RefreshBudget::Background`**：增量走不通就放弃，不在后台跑整盘重建。
+///
+/// 反过来，本轮真的在跑时，用户此刻发起扫描会等这次回放结束——这不是退化：
+/// 那份回放的钱他自己也要付，而且付完还要再加一次整盘重建。
+#[cfg(not(windows))]
+fn advance_cached_watermark() {
+    let Ok(_build_guard) = INDEX_BUILD_LOCK.try_lock() else {
+        crate::log!("水位推进：构建锁被占用（用户扫描进行中），跳过本轮");
+        return;
+    };
+    let cached = CACHED_ROOT_INDEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|c| (c.mount.clone(), c.scan.clone(), c.last_event_id));
+    let Some((mount, scan, last_event_id)) = cached else {
+        return;
+    };
+
+    let live = AtomicBool::new(true);
+    let t0 = std::time::Instant::now();
+    let Some((scan, advanced)) = refresh_cached_macos_index(
+        &mount,
+        "整盘",
+        scan,
+        last_event_id,
+        &live,
+        RefreshBudget::Background,
+    ) else {
+        return;
+    };
+    if advanced == last_event_id {
+        return;
+    }
+    crate::log!(
+        "水位推进：{} → {}（{} 条记录，耗时 {:?}）",
+        last_event_id,
+        advanced,
+        scan.records_read,
+        t0.elapsed()
+    );
+    let mut slot = CACHED_ROOT_INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    // 期间用户可能换了卷或重建过索引，只在还是同一份时才写回。
+    if slot
+        .as_ref()
+        .is_some_and(|c| c.mount == mount && c.last_event_id == last_event_id)
+    {
+        *slot = Some(CachedRootIndex {
+            mount,
+            scan,
+            last_event_id: advanced,
+        });
+    }
 }
 
 /// 每进程回收一次过期索引，放后台线程，不挡扫描。
@@ -212,6 +318,7 @@ fn load_or_build_macos_index_for_uncached(
             std::sync::Arc::new(loaded.scan),
             loaded.last_event_id,
             live,
+            RefreshBudget::Interactive,
         );
     }
 
@@ -232,6 +339,17 @@ fn load_or_build_macos_index_for_uncached(
     Some((std::sync::Arc::new(scan), checkpoint))
 }
 
+/// 整盘重建的预算：谁在要这份索引，决定增量走不通时能不能就地重扫。
+#[cfg(not(windows))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefreshBudget {
+    /// 用户正在等结果。增量走不通就当场整盘重建——慢，但必须给出答案。
+    Interactive,
+    /// 后台定时推进。增量走不通就放弃本轮，绝不背着用户跑一次 57s 的整盘
+    /// 重建：那笔账本来就该记在用户真正打开界面的那一次上。
+    Background,
+}
+
 /// 校验并刷新一份进程内缓存。即使没有路径变化，也要持久化推进后的水位。
 #[cfg(not(windows))]
 fn refresh_cached_macos_index(
@@ -240,9 +358,45 @@ fn refresh_cached_macos_index(
     scan: std::sync::Arc<crate::core::disk::ScanResult>,
     last_event_id: u64,
     live: &AtomicBool,
+    budget: RefreshBudget,
+) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
+    let changes = crate::platform::macos::fsevents::changes_since(root, last_event_id);
+    apply_replayed_changes(root, label, scan, last_event_id, live, budget, changes)
+}
+
+/// 拿到回放结果之后的决策部分。
+///
+/// 和 [`refresh_cached_macos_index`] 分开，是为了让「预算」这条判断可测：
+/// `changes_since` 要真实的 FSEvents 流，四条支路里哪条把后台线程放进了整盘
+/// 重建，靠跑真流是复现不出来的，只能把 `Changes` 直接喂进来。
+#[cfg(not(windows))]
+pub(super) fn apply_replayed_changes(
+    root: &Path,
+    label: &str,
+    scan: std::sync::Arc<crate::core::disk::ScanResult>,
+    last_event_id: u64,
+    live: &AtomicBool,
+    budget: RefreshBudget,
+    changes: Option<crate::platform::macos::fsevents::Changes>,
 ) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
     let volume = scan.volume.clone();
-    match crate::platform::macos::fsevents::changes_since(root, last_event_id) {
+    // 四条「增量走不通」的支路原本各自展开一遍整盘重建，收敛到这里：加预算
+    // 判定时只有一个地方要改，也就不会漏掉某一条支路把后台线程放进全量扫描。
+    let rebuild = |reason: &str| -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
+        if budget == RefreshBudget::Background {
+            crate::log!(
+                "{} 后台推进放弃本轮（{}），整盘重建留给下次交互",
+                label,
+                reason
+            );
+            return None;
+        }
+        crate::log!("{} {}，整盘重建", label, reason);
+        let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
+        Some((std::sync::Arc::new(scan), checkpoint))
+    };
+
+    match changes {
         Some(changes)
             if !changes.requires_full_scan
                 && changes.paths.is_empty()
@@ -261,27 +415,14 @@ fn refresh_cached_macos_index(
                     spawn_save_index(volume, refreshed.clone(), changes.last_event_id);
                     Some((refreshed, changes.last_event_id))
                 }
-                None => {
-                    crate::log!("{} 索引增量更新失败，回退全量扫描", label);
-                    let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
-                    Some((std::sync::Arc::new(scan), checkpoint))
-                }
+                None => rebuild("索引增量更新失败"),
             }
         }
-        Some(changes) => {
-            crate::log!(
-                "进程内 {} 索引需要全量重建：原因={:?}",
-                label,
-                changes.full_scan_reason
-            );
-            let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
-            Some((std::sync::Arc::new(scan), checkpoint))
-        }
-        None => {
-            crate::log!("进程内 {} 索引水位不可回放，执行一致性重扫", label);
-            let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
-            Some((std::sync::Arc::new(scan), checkpoint))
-        }
+        Some(changes) => rebuild(&format!(
+            "索引需要全量重建：原因={:?}",
+            changes.full_scan_reason
+        )),
+        None => rebuild("索引水位不可回放"),
     }
 }
 

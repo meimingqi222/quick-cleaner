@@ -799,6 +799,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// 后台水位推进绝不能背着用户跑整盘重建：那是 57 秒的 CPU 和磁盘，
+    /// 用户没点任何东西。四条「增量走不通」的支路都必须原地放弃。
+    ///
+    /// 反过来，用户在等结果的那次（`Interactive`）必须照旧重建——这里只
+    /// 断言后台侧，交互侧真跑一次全量扫描的代价不适合放进单测。
+    #[cfg(not(windows))]
+    #[test]
+    fn background_watermark_advance_never_triggers_full_rebuild() {
+        use crate::core::devscan::macos::{apply_replayed_changes, RefreshBudget};
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_background_budget");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("a.bin"), vec![b'x'; 1024]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let scan = std::sync::Arc::new(walk::scan_root(&base, volume, &live).unwrap());
+
+        let full_scan_demanded = Changes {
+            paths: Vec::new(),
+            must_rescan: Vec::new(),
+            last_event_id: 9,
+            requires_full_scan: true,
+            full_scan_reason: Some("EventIdsWrapped"),
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+        for (case, changes) in [
+            ("回放要求整盘重建", Some(full_scan_demanded)),
+            ("水位不可回放", None),
+        ] {
+            assert!(
+                apply_replayed_changes(
+                    &base,
+                    "测试",
+                    scan.clone(),
+                    1,
+                    &live,
+                    RefreshBudget::Background,
+                    changes,
+                )
+                .is_none(),
+                "{case}：后台预算下必须放弃本轮，而不是就地整盘重建"
+            );
+        }
+
+        // 没有变更时后台照样推进水位——这正是这个线程存在的意义。
+        let quiet = Changes {
+            paths: Vec::new(),
+            must_rescan: Vec::new(),
+            last_event_id: 7,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 0,
+        };
+        let (_, advanced) = apply_replayed_changes(
+            &base,
+            "测试",
+            scan,
+            7, // 与 last_event_id 相等：不触发落盘，只验证水位如实返回
+            &live,
+            RefreshBudget::Background,
+            Some(quiet),
+        )
+        .expect("无变更时应原样复用索引并返回推进后的水位");
+        assert_eq!(advanced, 7);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// 唯一的例外：卷根自己被标记为需重扫，局部重扫就等于全量，
     /// 老老实实回退，别绕一圈做同样的事。
     #[cfg(not(windows))]
