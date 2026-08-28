@@ -618,14 +618,6 @@ pub fn tr_status_all_busy(lang: Language, count: usize) -> String {
     }
 }
 
-/// 完成状态里追加的「跳过了几个占用项」。
-pub fn tr_busy_skipped(lang: Language, count: usize) -> String {
-    match lang {
-        Language::Zh => format!("已跳过 {count} 个正在使用的项目"),
-        Language::En => format!("skipped {count} in-use items"),
-    }
-}
-
 pub fn tr_status_deleting_n(lang: Language, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在清理 {count} 项…"),
@@ -644,14 +636,14 @@ pub fn tr_status_clean_done_partial(
     lang: Language,
     files: u64,
     size: &str,
-    skipped: usize,
+    unresolved: usize,
 ) -> String {
     match lang {
-        Language::Zh => {
-            format!("清理完成：已删除 {files} 个文件，释放 {size}（{skipped} 项被占用已跳过）")
-        }
+        Language::Zh => format!(
+            "部分清理完成：已删除 {files} 个文件，释放 {size}（{unresolved} 个目标未能清理）"
+        ),
         Language::En => format!(
-            "Cleanup complete — {files} files deleted, {size} freed ({skipped} skipped, in use)"
+            "Cleanup partially complete — {files} files deleted, {size} freed ({unresolved} targets could not be cleaned)"
         ),
     }
 }
@@ -885,10 +877,8 @@ pub fn tr_category_empty(lang: Language) -> &'static str {
 
 pub fn tr_last_clean_skipped(lang: Language, count: usize) -> String {
     match lang {
-        Language::Zh => format!("上次清理有 {count} 处项目被占用或受系统保护而跳过"),
-        Language::En => {
-            format!("{count} items were skipped last time — in use or system-protected")
-        }
+        Language::Zh => format!("上次清理有 {count} 个目标未能清理"),
+        Language::En => format!("{count} targets could not be cleaned last time"),
     }
 }
 

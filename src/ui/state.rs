@@ -181,7 +181,13 @@ impl JunkState {
     }
 
     fn selected_items(&self) -> impl Iterator<Item = &ScanItem> {
-        self.items().filter(|i| self.selected.contains(&i.path))
+        // 固定扫描与发现式扫描理论上不该产出同一路径，但 UI 边界不能把
+        // 这条假设当删除授权：一旦两条规则重叠，同一路径会被清理两次、
+        // 体积也会双算，失败横幅里还会出现两行完全相同的路径。
+        // selected 本身按路径存，铺平类目时也按路径只取第一条。
+        let mut seen = HashSet::new();
+        self.items()
+            .filter(move |i| self.selected.contains(&i.path) && seen.insert(i.path.clone()))
     }
 
     /// 某个类目的勾选态：全选 / 部分 / 未选。
@@ -764,6 +770,25 @@ mod tests {
             // 接上之前只断言得了 remove_dir。现在补齐名实。
             assert_eq!(t.disposal, cat.disposal());
         }
+    }
+
+    #[test]
+    fn duplicate_scan_paths_are_selected_only_once() {
+        let mut j = junk_fixture();
+        let path = PathBuf::from(r"C:\shared\cache");
+        let first = j.categories[0].category;
+        let second = j.categories[1].category;
+        j.categories[0].items = vec![item(&path.to_string_lossy(), first, 10, 2)];
+        j.categories[0].total_size = 10;
+        j.categories[1].items = vec![item(&path.to_string_lossy(), second, 10, 2)];
+        j.categories[1].total_size = 10;
+        j.select_every();
+
+        assert_eq!(j.selected_count(), 1);
+        assert_eq!(j.selected_size(), 10);
+        assert_eq!(j.selected_paths(), vec![path.clone()]);
+        assert_eq!(j.selected_targets().len(), 1);
+        assert_eq!(j.selected_targets()[0].path, path);
     }
 
     /// `selected_targets()` 必须把 `ScanItem::identity` 原样搬进

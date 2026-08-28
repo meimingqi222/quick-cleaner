@@ -2,6 +2,8 @@
 
 use super::{has_sibling, item_label, Marker, MARKERS, SKIP_DIRS};
 use crate::core::scanner::ScanItem;
+#[cfg(windows)]
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -20,7 +20,7 @@ use crate::core::apps::{
     is_safe_app_token, split_command, AppRegRoot, Confidence, InstalledApp, ResidualItem,
     ResidualKind, ResidualScanResult, ResidualSource,
 };
-use crate::core::cleaner::{clean_path, CleanFailure, CleanProgress, CleanReport};
+use crate::core::cleaner::{CleanFailure, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
 use crate::platform::windows::apps::dir_or_file_size;
 use crate::platform::windows::registry::{

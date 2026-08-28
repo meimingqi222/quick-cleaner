@@ -1,8 +1,8 @@
 //! 清理执行动作：垃圾清理、路径清理、取消清理
 
 use crate::core::cleaner::{
-    clean_arbitrary_items, clean_targets, ArbitraryTarget, CleanProgress, CleanReport,
-    CleanSnapshot,
+    clean_arbitrary_items, clean_targets, ArbitraryTarget, CleanFailure, CleanProgress,
+    CleanReport, CleanSnapshot, CleanTarget,
 };
 use crate::core::i18n::{bilingual, Text};
 use crate::core::model::{fmt_size, is_virtual_path};
@@ -171,34 +171,32 @@ impl crate::ui::Root {
             bilingual(|l| tr_status_deleting_n(l, n)),
             move |p| clean_targets(&targets, p),
             move |this, report, snap, cx| {
-                // 虚拟路径（快照/Docker 镜像）不在文件系统上，exists() 恒为
-                // false，只能按清理报告判定成败——否则 rmi/tmutil 失败会被
-                // 误报成成功，条目从界面上消失，用户下次重扫才发现没删掉。
-                let reported_failed: Vec<&std::path::Path> =
-                    report.failed.iter().filter_map(|f| f.as_path()).collect();
-                let still_there: Vec<PathBuf> = completed_targets
-                    .iter()
-                    .filter(|target| {
-                        if is_virtual_path(&target.path) {
-                            return reported_failed.contains(&target.path.as_path());
-                        }
-                        if target.remove_dir {
-                            target.path.exists()
-                        } else {
-                            std::fs::read_dir(&target.path)
-                                .map(|mut entries| entries.next().is_some())
-                                .unwrap_or_else(|_| target.path.exists())
-                        }
-                    })
-                    .map(|target| target.path.clone())
-                    .collect();
-                // 还在磁盘上 ≠ 失败：白名单/保护路径是策略跳过，条目留在列表
-                // 里好让用户看见，但不能进失败清单、也不能说「部分失败」。
-                let failed: Vec<PathBuf> = still_there
-                    .iter()
-                    .filter(|p| !report.was_skipped(p))
-                    .cloned()
-                    .collect();
+                // 以本次清理报告为准，不再用“目录清理后仍非空”倒推失败。
+                // 缓存目录通常会被正在运行的应用瞬间重建；那是清理之后产生
+                // 的新内容，不代表刚才没删掉。反过来，remove_dir=false 的
+                // 目标会把失败记在具体孩子上，要映射回列表中的父目标。
+                let failed = reported_targets(&completed_targets, &report.failed);
+                let mut still_there = failed.clone();
+                append_unique(
+                    &mut still_there,
+                    reported_targets(&completed_targets, &report.skipped_items),
+                );
+                append_unique(
+                    &mut still_there,
+                    reported_targets(&completed_targets, &report.manual),
+                );
+
+                // 用户主动停止时，循环后半段的目标没有进入 CleanReport；只有
+                // 这个场景保留磁盘后置检查，避免把尚未处理的条目从列表移除。
+                if snap.cancelled {
+                    append_unique(
+                        &mut still_there,
+                        completed_targets
+                            .iter()
+                            .filter(|target| target_has_cleanable_contents(target))
+                            .map(|target| target.path.clone()),
+                    );
+                }
                 this.clean.last_failed = failed.clone();
                 this.clean.last_failed_files = snap.failed;
 
@@ -228,17 +226,13 @@ impl crate::ui::Root {
                 }
 
                 let fails = this.clean.last_failed.len();
+                let unresolved = fails + dropped_busy;
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
-                    let base = if fails > 0 {
-                        tr_status_clean_done_partial(l, files, &size, fails)
+                    if unresolved > 0 {
+                        tr_status_clean_done_partial(l, files, &size, unresolved)
                     } else {
                         tr_status_clean_done(l, files, &size)
-                    };
-                    if dropped_busy > 0 {
-                        format!("{base} · {}", tr_busy_skipped(l, dropped_busy))
-                    } else {
-                        base
                     }
                 });
 
@@ -320,10 +314,54 @@ fn drop_busy_from_selection(
     dropped
 }
 
+/// 把清理器报告的具体失败叶子映射回 UI 中用户勾选的顶层目标。
+fn reported_targets(targets: &[CleanTarget], items: &[CleanFailure]) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    targets
+        .iter()
+        .filter(|target| {
+            items.iter().filter_map(CleanFailure::as_path).any(|path| {
+                path == target.path
+                    || (!target.remove_dir && path.starts_with(target.path.as_path()))
+            })
+        })
+        .filter(|target| seen.insert(target.path.clone()))
+        .map(|target| target.path.clone())
+        .collect()
+}
+
+fn append_unique(paths: &mut Vec<PathBuf>, more: impl IntoIterator<Item = PathBuf>) {
+    let mut seen: std::collections::HashSet<PathBuf> = paths.iter().cloned().collect();
+    paths.extend(more.into_iter().filter(|path| seen.insert(path.clone())));
+}
+
+fn target_has_cleanable_contents(target: &CleanTarget) -> bool {
+    if is_virtual_path(&target.path) {
+        return true;
+    }
+    if target.remove_dir {
+        return target.path.exists();
+    }
+    std::fs::read_dir(&target.path)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or_else(|_| target.path.exists())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::cleaner::Disposal;
     use std::collections::HashSet;
+
+    fn clean_target(path: &str, remove_dir: bool) -> CleanTarget {
+        CleanTarget {
+            path: PathBuf::from(path),
+            remove_dir,
+            size_hint: None,
+            disposal: Disposal::Permanent,
+            identity: None,
+        }
+    }
 
     #[test]
     fn drop_busy_from_selection_removes_and_counts() {
@@ -353,5 +391,27 @@ mod tests {
         let dropped = drop_busy_from_selection(&mut selected, &HashSet::new());
         assert_eq!(dropped, 0);
         assert!(selected.contains(&PathBuf::from("/a")));
+    }
+
+    #[test]
+    fn child_failure_maps_to_content_only_parent_once() {
+        let targets = vec![
+            clean_target("/cache", false),
+            clean_target("/cache", false),
+            clean_target("/whole", true),
+        ];
+        let failures = vec![CleanFailure::Path(PathBuf::from("/cache/nested/file"))];
+
+        assert_eq!(
+            reported_targets(&targets, &failures),
+            vec![PathBuf::from("/cache")]
+        );
+    }
+
+    #[test]
+    fn successful_but_recreated_target_is_not_reported_as_failed() {
+        let targets = vec![clean_target("/cache", false)];
+
+        assert!(reported_targets(&targets, &[]).is_empty());
     }
 }

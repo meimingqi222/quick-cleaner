@@ -28,7 +28,9 @@
 use crate::core::i18n::{bilingual, Text};
 use crate::core::scanner::CategorySummary;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 use std::collections::HashSet;
@@ -156,11 +158,11 @@ pub enum SpotCheck {
 /// 会被漏掉。`+D` 比精确查询贵，因此仍分批并受超时保护；超时按 Unknown
 /// 拒删，不会为了速度退回不完整的精确匹配。
 ///
-/// macOS 用 lsof 定点复检。其他平台没有句柄级打开文件检测，退化为：
-/// 对**文件**再问一次 [`crate::core::safety::is_live_database`]（必须主库
-/// + 伴随文件才算活库）。目录不在这里拦——目录级「顶层任意 .db」过宽，
-/// 会把整棵缓存根判成 Busy；嵌套活库由 `delete_tree` 的家族闸门兜底。
-/// 已经消失的路径判 Clear。
+/// macOS 用 lsof 定点复检。其他平台没有句柄级打开文件检测，退化为以下
+/// 规则：对**文件**再问一次 [`crate::core::safety::is_live_database`]（必须
+/// 主库 + 伴随文件才算活库）；目录不在这里拦——目录级「顶层任意 .db」
+/// 过宽，会把整棵缓存根判成 Busy，嵌套活库由 `delete_tree` 的家族闸门
+/// 兜底；已经消失的路径判 Clear。
 pub fn spot_check(paths: &[PathBuf]) -> HashMap<PathBuf, SpotCheck> {
     #[cfg(target_os = "macos")]
     {
