@@ -12,6 +12,7 @@ pub mod dock;
 pub mod elevate;
 pub mod fsevents;
 pub mod index_v7;
+pub mod permission_drop;
 pub mod plist;
 pub mod residuals;
 pub mod tcc;

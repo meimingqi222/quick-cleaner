@@ -1116,6 +1116,31 @@ pub fn tr_fda_check_failed(lang: Language) -> &'static str {
     }
 }
 
+/// 拖拽授权面板：图标条上的名字。
+///
+/// 刻意不用 app 的显示名而用固定串——面板出现时用户正盯着系统设置的列表，
+/// 图标条上的字要和他松手之后列表里新出现的那一行对得上。
+pub fn tr_fda_drop_chip(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "QuickCleaner",
+        Language::En => "QuickCleaner",
+    }
+}
+
+pub fn tr_fda_drop_line1(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "把左边的图标拖进上方的列表",
+        Language::En => "Drag the icon on the left into the list above",
+    }
+}
+
+pub fn tr_fda_drop_line2(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "松手即完成授权，无需再点开关",
+        Language::En => "Drop it there to grant access — no switch to flip",
+    }
+}
+
 // ---- 文件搜索 ----
 
 pub fn tr_search_heading(lang: Language) -> &'static str {

@@ -710,9 +710,8 @@ pub fn render_fda_onboarding_modal(
                                                 tr_fda_btn_open_settings(lang).to_string(),
                                                 true,
                                             ))
-                                            .on_click(cx.listener(|_this, _, _, _cx| {
-                                                #[cfg(target_os = "macos")]
-                                                crate::platform::macos::open_full_disk_access_settings();
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_fda_settings(cx);
                                             })),
                                     ),
                             ),

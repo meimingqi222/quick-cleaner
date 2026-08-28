@@ -65,6 +65,9 @@ pub struct Root {
     pub elevated: bool,
     pub confirm: Option<ConfirmRequest>,
     pub tick_task: Option<Task<()>>,
+    /// 拖拽授权面板的看护任务：负责跟着系统设置窗口重新定位、
+    /// 以及授权一旦到手就立刻收起面板。仅 macOS 有意义。
+    pub fda_drop_task: Option<Task<()>>,
     pub anim_phase: usize,
     /// 搜索框光标闪烁状态（true=显示，false=隐藏）
     pub cursor_blink_visible: bool,
@@ -136,6 +139,7 @@ impl Root {
             elevated: is_elevated(),
             confirm: None,
             tick_task: None,
+            fda_drop_task: None,
             anim_phase: 0,
             cursor_blink_visible: true,
             cursor_blink_task: None,
@@ -333,6 +337,9 @@ impl Root {
     /// 就触发首次扫描——启动时为了不触发 TCC 弹窗刻意跳过了，这里补上。
     pub fn close_fda_guide(&mut self, cx: &mut Context<Self>) {
         self.show_fda_onboarding = false;
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::permission_drop::hide();
+        self.fda_drop_task = None;
         if !self.junk.scanned && !self.junk.scanning && !self.clean.running {
             self.start_scan(cx);
         } else {
@@ -347,6 +354,108 @@ impl Root {
         cx.notify();
     }
 
+    /// 打开「完全磁盘访问」设置页，并浮出拖拽授权面板。
+    ///
+    /// 光把设置页打开，用户还剩三步要自己摸索：找 `+` 号、在文件选择器里翻到
+    /// 我们的 .app、回列表里找对开关。面板把三步压成「拖一下」。
+    pub fn open_fda_settings(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::macos::open_full_disk_access_settings();
+            self.start_fda_drop_helper(cx);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = cx;
+    }
+
+    /// 浮出拖拽面板，并起一个看护任务。
+    ///
+    /// 任务要做两件事，都做不了「一次性」：
+    ///
+    /// - **重新定位**：`open` 是异步的，系统设置的窗口通常要 0.5~2 秒才出现，
+    ///   之后用户还可能把它拖走。头十几秒里持续跟贴，之后就不折腾了。
+    /// - **收面板**：拖进去、过完 Touch ID 之后，用户不该还得回来点一次
+    ///   「重新检查」。轮询到权限到手就自己收起面板并重扫。
+    #[cfg(target_os = "macos")]
+    fn start_fda_drop_helper(&mut self, cx: &mut Context<Self>) {
+        // 从终端跑的裸二进制没有 .app bundle。此时 TCC 的责任进程是终端，
+        // 把我们的二进制拖进列表不会有任何效果——不如不显示这个面板，
+        // 让用户走原来的文字引导。
+        let Some(bundle) = crate::platform::macos::enclosing_app_bundle() else {
+            return;
+        };
+        let lang = self.language;
+
+        /// 看护任务的心跳。150ms 是为了「同步出现」——系统设置窗口一冒头，
+        /// 下一拍就把面板贴上去，人眼看着就是俩一起出来的。
+        const TICK: Duration = Duration::from_millis(150);
+        /// 等设置窗口最多等这么久（约 3 秒）。超时就用兜底位置显示，
+        /// 总比用户点了「打开系统设置」之后什么都没等到强。
+        const FALLBACK_AFTER_TICKS: u32 = 20;
+        /// 头 12 秒持续跟贴：窗口出现之后用户还可能把它拖到别处。
+        const REPOSITION_TICKS: u32 = 80;
+        /// 权限探测比定位贵（要真的去 open 几个受保护路径），降频到约 600ms。
+        const PERMISSION_CHECK_EVERY: u32 = 4;
+        /// 最多看护 5 分钟，之后用户多半已经走开了。
+        const MAX_TICKS: u32 = 2000;
+
+        self.fda_drop_task = Some(cx.spawn(async move |this, cx| {
+            for tick in 0..MAX_TICKS {
+                cx.background_executor().timer(TICK).await;
+                // update 的闭包跑在主线程上，AppKit 调用只能放这里面。
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        if !this.show_fda_onboarding {
+                            crate::platform::macos::permission_drop::hide();
+                            return false;
+                        }
+                        if tick % PERMISSION_CHECK_EVERY == 0
+                            && crate::platform::macos::has_full_disk_access()
+                        {
+                            crate::platform::macos::permission_drop::hide();
+                            this.on_fda_granted(cx);
+                            return false;
+                        }
+                        // 面板还没露面时一直试；露面之后只在跟贴窗口期内继续。
+                        let visible = crate::platform::macos::permission_drop::is_visible();
+                        if !visible || tick < REPOSITION_TICKS {
+                            show_fda_drop_panel(
+                                &bundle,
+                                lang,
+                                tick >= FALLBACK_AFTER_TICKS,
+                            );
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+            this.update(cx, |this, _| {
+                crate::platform::macos::permission_drop::hide();
+                this.fda_drop_task = None;
+            })
+            .ok();
+        }));
+    }
+
+    /// 权限到手之后的收尾，按钮检查和面板自动检测共用。
+    #[cfg(target_os = "macos")]
+    fn on_fda_granted(&mut self, cx: &mut Context<Self>) {
+        self.fda_status = true;
+        self.show_fda_onboarding = false;
+        self.status = bilingual(|l| tr_fda_check_success(l).to_string());
+        // 无论之前是否扫过，获得 FDA 后都（重新）触发一次扫描：
+        // 首次启动时为了不触发 TCC 弹窗跳过了扫描，这里补上；
+        // 已扫过的话则重新扫以扫出刚解锁的 Safari 缓存等。
+        if !self.junk.scanning && !self.clean.running {
+            self.start_scan(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
     /// 重新检查完全磁盘访问权限。
     pub fn check_fda_permission(&mut self, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
@@ -354,14 +463,7 @@ impl Root {
             let granted = crate::platform::macos::has_full_disk_access();
             self.fda_status = granted;
             if granted {
-                self.show_fda_onboarding = false;
-                self.status = bilingual(|l| tr_fda_check_success(l).to_string());
-                // 无论之前是否扫过，获得 FDA 后都（重新）触发一次扫描：
-                // 首次启动时为了不触发 TCC 弹窗跳过了扫描，这里补上；
-                // 已扫过的话则重新扫以扫出刚解锁的 Safari 缓存等。
-                if !self.junk.scanning && !self.clean.running {
-                    self.start_scan(cx);
-                }
+                self.on_fda_granted(cx);
             } else {
                 self.status = bilingual(|l| tr_fda_check_failed(l).to_string());
                 cx.notify();
@@ -809,4 +911,23 @@ impl Render for Root {
 
         root.into_any_element()
     }
+}
+
+
+/// 按当前语言组装文案并浮出（或重新定位）拖拽授权面板。
+///
+/// 放在 `impl` 外面是因为看护任务的闭包里也要调它，而那里拿不到 `&self`
+/// ——面板的内容只取决于语言和 bundle 路径，本来也不需要整个 App 状态。
+#[cfg(target_os = "macos")]
+fn show_fda_drop_panel(bundle: &Path, lang: Language, allow_fallback: bool) -> bool {
+    use crate::platform::macos::permission_drop::{self, DropHelperText};
+    permission_drop::show(
+        bundle,
+        &DropHelperText {
+            app_name: tr_fda_drop_chip(lang),
+            line1: tr_fda_drop_line1(lang),
+            line2: tr_fda_drop_line2(lang),
+        },
+        allow_fallback,
+    )
 }
