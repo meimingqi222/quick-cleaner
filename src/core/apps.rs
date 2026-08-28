@@ -618,6 +618,29 @@ fn residual_identity(kind: &ResidualKind) -> Option<crate::core::model::TargetId
     }
 }
 
+/// 残留扫描时发现的「软件仍被占用」证据：运行中的进程、launchd 里仍
+/// 登记的任务。只提示不阻断——活库删除有 cleaner 的 live-database 闸门
+/// 兜底，但用户该在点「彻底清除」**之前**就知道为什么数据库类残留删不掉。
+///
+/// 实测案例（iStat Menus 7）：卸载后 gui 域的 KeepAlive 代理把进程反复
+/// 拉起，HTTPStorages 里的「主库+伴随文件」每次清理都命中闸门，用户把
+/// 同一个失败重试了五轮——缺的就是这块证据。
+#[derive(Clone, Debug, Default)]
+pub struct ResidualOccupancy {
+    /// 仍在运行的进程（`pid 命令行摘要`）。
+    pub processes: Vec<String>,
+    /// launchd 用户域里仍登记**且未被禁用**的任务标签（无论此刻是否在跑
+    /// ——登记着就随时可能被拉起）。已禁用的如实不报：不会自启，报了会
+    /// 把「一切已收拾干净」的用户吓唬错。
+    pub launchd_labels: Vec<String>,
+}
+
+impl ResidualOccupancy {
+    pub fn is_occupied(&self) -> bool {
+        !self.processes.is_empty() || !self.launchd_labels.is_empty()
+    }
+}
+
 /// 关联残留深度扫描结果
 #[derive(Clone, Debug, Default)]
 pub struct ResidualScanResult {
@@ -626,6 +649,9 @@ pub struct ResidualScanResult {
     pub app_id: String,
     pub items: Vec<ResidualItem>,
     pub total_file_size: u64,
+    /// 扫描时刻的进程/launchd 占用证据。空证据 = 没测到占用或当前平台
+    /// 未实现探测，两种情况都不拦清理。
+    pub occupancy: ResidualOccupancy,
 }
 
 /// 清理残留之后，这款软件还该不该留在「已安装」列表里。

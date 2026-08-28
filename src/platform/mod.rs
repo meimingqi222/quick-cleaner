@@ -44,6 +44,10 @@ macro_rules! platform_contract {
             let _: fn(&AtomicBool) -> Vec<InstalledApp> = list_installed_apps;
             let _: fn(&InstalledApp) -> Result<(), String> = run_uninstaller_and_wait;
             let _: fn(&InstalledApp) -> ResidualScanResult = scan_residuals;
+            // 残留扫描的进程占用探测：macOS 上活库删除失败的原因用户看不
+            // 懂（闸门拒的，不是系统报错），必须在扫描时给出证据。Windows
+            // 文件锁自带系统错误原因，占位实现即可。
+            let _: fn(&InstalledApp) -> crate::core::apps::ResidualOccupancy = detect_occupancy;
             let _: fn(&[ResidualItem], &CleanProgress) -> CleanReport = clean_residuals;
             let _: fn(Vec<ResidualItem>) -> Vec<ResidualItem> = verify_residuals;
             let _: fn(&Path) = reveal_in_explorer;
@@ -88,8 +92,8 @@ pub mod windows;
 /// 确实需要单平台能力时，得写 `platform::windows::...` 并自己加 `#[cfg]`，
 /// 一眼能看出这是平台分支而不是通用接口。
 pub use windows::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_system_language, empty_trash,
-    get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_occupancy, detect_system_language,
+    empty_trash, get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
     move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
     run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
 };
@@ -100,8 +104,8 @@ platform_contract!();
 pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_system_language, empty_trash,
-    get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_occupancy, detect_system_language,
+    empty_trash, get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
     move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
     run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
 };
@@ -156,13 +160,16 @@ pub mod fallback {
         ResidualScanResult {
             app_name: app.name.clone(),
             app_id: app.id.clone(),
-            items: Vec::new(),
-            total_file_size: 0,
+            ..Default::default()
         }
     }
 
     pub fn clean_residuals(_items: &[ResidualItem], _prog: &CleanProgress) -> CleanReport {
         CleanReport::default()
+    }
+
+    pub fn detect_occupancy(_app: &InstalledApp) -> crate::core::apps::ResidualOccupancy {
+        crate::core::apps::ResidualOccupancy::default()
     }
 
     pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {

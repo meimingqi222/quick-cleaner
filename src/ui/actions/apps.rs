@@ -2,14 +2,14 @@
 
 use crate::core::apps::{
     app_gone_after_residual_clean, residual_clean_follow_up, InstalledApp, ResidualItem,
-    ResidualScanResult,
+    ResidualOccupancy, ResidualScanResult,
 };
 use crate::core::cleaner::{CleanFailure, CleanProgress};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
 use crate::platform::{
-    clean_residuals, list_installed_apps, run_uninstaller_and_wait, scan_residuals,
-    verify_residuals,
+    clean_residuals, detect_occupancy, list_installed_apps, run_uninstaller_and_wait,
+    scan_residuals, verify_residuals,
 };
 use crate::ui::components::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
@@ -170,22 +170,27 @@ impl crate::ui::Root {
             // 2. 运行官方卸载程序并等它退出
             uninstall.set_phase(UninstallPhase::Removing);
             let result = run_uninstaller_and_wait(&uninst_target);
-            // 3. 复核：只留下卸载程序没清掉的
+            // 3. 复核：只留下卸载程序没清掉的；占用证据按「此刻」采集，
+            //    不能用卸载前的快照——官方卸载器可能顺手杀掉了代理进程，
+            //    拿旧证据弹「仍在运行」会把用户吓唬错。
             uninstall.set_phase(UninstallPhase::Verifying);
-            let remaining = if result.is_ok() {
-                verify_residuals(pre.items)
+            let (remaining, occupancy) = if result.is_ok() {
+                (
+                    verify_residuals(pre.items),
+                    detect_occupancy(&uninst_target),
+                )
             } else {
-                Vec::new()
+                (Vec::new(), ResidualOccupancy::default())
             };
             let minimum = Duration::from_millis(900);
             if let Some(wait) = minimum.checked_sub(shown_at.elapsed()) {
                 std::thread::sleep(wait);
             }
-            (result, remaining)
+            (result, remaining, occupancy)
         });
 
         self.residual.task = Some(cx.spawn(async move |this, cx| {
-            let (result, remaining) = work.await;
+            let (result, remaining, occupancy) = work.await;
             this.update(cx, |this, cx| {
                 this.residual.scanning = false;
                 this.residual.uninstall = None;
@@ -203,6 +208,7 @@ impl crate::ui::Root {
                     app_id: app_id.clone(),
                     items: remaining,
                     total_file_size: total,
+                    occupancy,
                 };
                 let (count, size) = (res.items.len(), fmt_size(res.total_file_size));
                 this.status = bilingual(|l| {
@@ -239,9 +245,14 @@ impl crate::ui::Root {
         cx.notify();
 
         let target = app.clone();
-        let scan = cx
-            .background_executor()
-            .spawn(async move { scan_residuals(&target) });
+        let scan = cx.background_executor().spawn(async move {
+            // 占用探测要 fork `ps`/`launchctl`，卸载流程的预扫描用不上
+            // 它（那边卸载完会重新采集），所以由调用方按需补上，不塞进
+            // `scan_residuals` 让每个调用方都白跑一遍。
+            let mut res = scan_residuals(&target);
+            res.occupancy = detect_occupancy(&target);
+            res
+        });
 
         self.residual.task = Some(cx.spawn(async move |this, cx| {
             let res = scan.await;
@@ -397,6 +408,9 @@ impl crate::ui::Root {
                         app_id: res.app_id.clone(),
                         items: follow.retry_items,
                         total_file_size,
+                        // 重试弹窗沿用本次会话的占用证据：清理刚失败过，
+                        // 进程大概率还在，这条提示正是失败的原因说明。
+                        occupancy: res.occupancy,
                     });
                 }
 

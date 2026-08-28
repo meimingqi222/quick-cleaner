@@ -28,7 +28,7 @@ pub use disk::{
     relaunch_as_admin_if_needed, scan_volume,
 };
 pub use dock::set_dock_icon;
-pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
+pub use residuals::{clean_residuals, detect_occupancy, scan_residuals, verify_residuals};
 pub use trash::{empty_trash, is_system_trash, move_to_trash};
 
 // TCC 渐进式增强：UI 用这些函数检测和引导完全磁盘访问授权

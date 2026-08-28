@@ -18,7 +18,7 @@
 
 use crate::core::apps::{
     is_safe_app_token, split_command, AppRegRoot, Confidence, InstalledApp, ResidualItem,
-    ResidualKind, ResidualScanResult, ResidualSource,
+    ResidualKind, ResidualOccupancy, ResidualScanResult, ResidualSource,
 };
 use crate::core::cleaner::{CleanFailure, CleanProgress, CleanReport};
 use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
@@ -335,6 +335,10 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
         app_id: app.id.clone(),
         items,
         total_file_size,
+        // 空占用证据：Windows 暂不做进程探测。文件被进程锁住时删除会带
+        // 着系统错误直接失败，原因已经到了用户面前，不像 macOS 活库闸门
+        // 那样需要额外解释「为什么拒」。
+        ..Default::default()
     }
 }
 
@@ -1278,6 +1282,13 @@ fn dedup_items(items: &mut Vec<ResidualItem>) {
         }
     }
     *items = kept;
+}
+
+/// 进程占用探测的 Windows 占位实现。文件被进程锁住时，Windows 的删除
+/// 会带着系统错误（sharing violation）直接失败，原因已经到了用户面前，
+/// 不像 macOS 活库闸门那样需要额外解释「为什么拒」。
+pub fn detect_occupancy(_app: &InstalledApp) -> ResidualOccupancy {
+    ResidualOccupancy::default()
 }
 
 /// 复核候选残留是否仍然存在，丢弃已经消失的。

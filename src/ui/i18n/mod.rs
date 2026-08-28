@@ -597,6 +597,57 @@ pub fn tr_exclusions_empty(lang: Language) -> &'static str {
     }
 }
 
+/// 残留弹窗的占用警示标题（有进程证据：确实在跑）。放在列表上方、
+/// 用户点「彻底清除」之前——等删除失败再看日志就晚了。
+pub fn tr_residual_occupied_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "该应用的后台仍在运行，数据库类残留会删除失败",
+        Language::En => {
+            "Background processes are still running — database residue will fail to delete"
+        }
+    }
+}
+
+/// 占用警示标题的另一种证据形态：没有活进程、只有未禁用的 launchd
+/// 登记。此刻删库不拦，但清完登录就回来——用「仍在运行」的标题会
+/// 把用户吓唬错。
+pub fn tr_residual_registered_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "该应用仍登记着开机自启项（当前未在运行），残留清理后可能随登录回归",
+        Language::En => {
+            "Launch-at-login items are still registered (not currently running) — residue may return at next login"
+        }
+    }
+}
+
+/// 占用警示的补救指引（对应 [`tr_residual_occupied_title`]：有活进程，
+/// 退出应用就能让闸门放行）。
+pub fn tr_residual_occupied_advice(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "请先彻底退出该应用（含菜单栏常驻与后台代理），再重新清理",
+        Language::En => {
+            "Quit the app completely (menu bar and background agents included), then clean again"
+        }
+    }
+}
+
+/// 补救指引的另一种形态（对应 [`tr_residual_registered_title`]）：没有活
+/// 进程，退出应用解决不了任何事——登记项得从登录项里摘掉才不会回来。
+pub fn tr_residual_registered_advice(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "退出应用不会移除开机自启项：到「系统设置 → 通用 → 登录项」里把它移除，再重新清理",
+        Language::En => "Quitting the app won't remove a login item — remove it in System Settings → General → Login Items, then clean again",
+    }
+}
+
+/// 占用警示里「launchd 登记项」分组的前缀。
+pub fn tr_residual_launchd_group(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "launchd 仍有登记（可能开机自启）",
+        Language::En => "Still registered with launchd (may start at login)",
+    }
+}
+
 pub fn tr_status_residual_cleaning(lang: Language, name: &str, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在彻底清除「{name}」的 {count} 项残留…"),

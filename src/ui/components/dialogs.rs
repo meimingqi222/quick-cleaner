@@ -1,8 +1,8 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
-use crate::core::apps::InstalledApp;
+use crate::core::apps::{InstalledApp, ResidualOccupancy};
 use crate::core::i18n::Language;
-use crate::core::model::{fmt_size, Check};
+use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
@@ -136,6 +136,84 @@ pub fn render_confirm_dialog(
                         ),
                 ),
         )
+}
+
+/// 残留弹窗顶部的占用警示条。扫描时发现该应用的进程/launchd 任务仍在，
+/// 就在用户点「彻底清除」之前把因果讲清楚：数据库类残留删除必然失败，
+/// 出路取决于证据强度（见下面的分支）。样式用「应用级占用」的橙色（与
+/// junk 列表的 busy 徽标同一语义），不用红色——这是提示不是错误。
+fn render_occupancy_banner(occ: &ResidualOccupancy, lang: Language) -> gpui::AnyElement {
+    // 两种证据强度，标题和补救指引必须成对换：有活进程是「删除会失败」，
+    // 出路是退出应用；只有未禁用的 launchd 登记是「清完会回来」，此刻
+    // 并不拦截删除，而退出应用也解决不了——得从登录项里摘掉。
+    let (title, advice) = if occ.processes.is_empty() {
+        (
+            tr_residual_registered_title(lang),
+            tr_residual_registered_advice(lang),
+        )
+    } else {
+        (
+            tr_residual_occupied_title(lang),
+            tr_residual_occupied_advice(lang),
+        )
+    };
+    let mut evidence: Vec<String> = occ
+        .processes
+        .iter()
+        .take(3)
+        .map(|p| format!("· {}", truncate(p, 78)))
+        .collect();
+    if !occ.launchd_labels.is_empty() {
+        let sep = if lang == Language::Zh { "、" } else { ", " };
+        let labels = occ
+            .launchd_labels
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(sep);
+        evidence.push(format!("· {}：{}", tr_residual_launchd_group(lang), labels));
+    }
+    let hidden = occ.processes.len().saturating_sub(3) + occ.launchd_labels.len().saturating_sub(3);
+    if hidden > 0 {
+        evidence.push(match lang {
+            Language::Zh => format!("…以及另外 {hidden} 条"),
+            Language::En => format!("…and {hidden} more"),
+        });
+    }
+    // 补救指引和证据行同款样式、同一列缩进，就跟在证据后面一起渲染。
+    evidence.push(advice.to_string());
+
+    div()
+        .flex_none()
+        .p_3()
+        .rounded_lg()
+        .bg(rgb(CAUTION_CONTAINER))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon_sparkle(CAUTION, 14.))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(CAUTION))
+                        .child(title),
+                ),
+        )
+        .children(evidence.into_iter().map(|line| {
+            div()
+                .text_xs()
+                .text_color(rgb(CAUTION))
+                .pl(px(22.))
+                .child(line)
+        }))
+        .into_any_element()
 }
 
 pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl IntoElement> {
@@ -481,6 +559,13 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(modal_sub)),
                             ),
                     )
+                    // 占用警示：必须在「彻底清除」按钮之前出现，否则用户
+                    // 只会在失败日志里见到活数据库闸门的拒绝原因。
+                    // 没扫出残留时不显示——「无残留」和「会删除失败」
+                    // 同屏是自相矛盾的。
+                    .when(!is_empty && res.occupancy.is_occupied(), |d| {
+                        d.child(render_occupancy_banner(&res.occupancy, lang))
+                    })
                     .child(
                         div()
                             .id("resid-list-scroll")

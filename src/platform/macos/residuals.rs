@@ -9,12 +9,15 @@
 //! - 不删除用户数据、登录态、凭据等高风险内容
 
 use crate::core::apps::{
-    InstalledApp, ResidualItem, ResidualKind, ResidualScanResult, ResidualSource,
+    is_safe_app_token, InstalledApp, ResidualItem, ResidualKind, ResidualOccupancy,
+    ResidualScanResult, ResidualSource,
 };
 use crate::core::cleaner::{
     dispose, CleanFailure, CleanProgress, CleanReport, CleanResult, Disposal,
 };
+use crate::core::proc::run_with_timeout;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// 扫描应用卸载后的残留文件和目录。
 ///
@@ -25,8 +28,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
         return ResidualScanResult {
             app_name: app.name.clone(),
             app_id: app.id.clone(),
-            items: Vec::new(),
-            total_file_size: 0,
+            ..Default::default()
         };
     };
 
@@ -38,6 +40,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
             system_library: Path::new("/Library"),
             receipts: Path::new("/private/var/db/receipts"),
             darwin_cache: darwin_cache.as_deref(),
+            applications: Path::new("/Applications"),
         },
     )
 }
@@ -48,6 +51,10 @@ struct ScanRoots<'a> {
     system_library: &'a Path,
     receipts: &'a Path,
     darwin_cache: Option<&'a Path>,
+    /// 真·已安装应用目录（`/Applications`）。点目录归属判定要拿「还装着
+    /// 的别家软件」排除误收，测试必须能把它重定向成空目录，否则在这台
+    /// 机器上真装了同厂商软件时（如 Karabiner-Elements）测试就不密闭。
+    applications: &'a Path,
 }
 
 fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanResult {
@@ -187,7 +194,7 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
     }
 
     add_vendor_family(&mut items, &library, roots, &bundle_ids);
-    add_dotfile_configs(&mut items, home, app);
+    add_dotfile_configs(&mut items, home, roots.applications, app);
     add_system_extensions(&mut items, &bundle_ids);
 
     // 前面的传统精确路径和扩展 Bundle ID 扫描可能指向同一项，去重后重新统计。
@@ -219,7 +226,173 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
         app_id: app.id.clone(),
         items,
         total_file_size,
+        // 占位：真值由 `scan_residuals` 在文件扫描之外单独探测后覆盖。
+        ..Default::default()
     }
+}
+
+/// 检测这款软件是否仍被进程或 launchd 任务占用。两条只读证据链：
+///
+/// - `ps -axo pid=,args=`：命令行含 Bundle ID（大小写不敏感）或应用名
+///   （大小写敏感、词边界命中）。Unix 允许 unlink 正在执行的二进制，
+///   「卸载」不等于「退出」——应用删掉了，它的代理进程完全可能还活着，
+///   launchd KeepAlive 更是会把它反复拉起（iStat Menus 实测案例）。
+/// - `launchctl print gui/<uid>`：解析 `services` 摘要段与末尾 `disabled`
+///   段，取登记且未被禁用的任务标签，见 [`parse_launchd_registered`]。
+///
+/// 两条命令都走 [`crate::core::proc::run_with_timeout`]：它们跑在「用户
+/// 点了按钮正在等」的路径上，而 `launchctl print gui/<uid>` 要把整个 gui
+/// 域倒出来（本机实测 488 个任务），`Command::output()` 没有超时可言。
+///
+/// 探测失败（跑不起来、超时、`ps` 输出不可信）宁缺毋滥：返回空证据，
+/// 不猜。是否阻断清理由删除层的 live-database 闸门说了算，这里只负责让
+/// 用户看得懂。
+pub fn detect_occupancy(app: &InstalledApp) -> ResidualOccupancy {
+    // macOS 上 `registry_subpath` 存的是 CFBundleIdentifier（字段名来自
+    // Windows 的注册表子键）。这个平台差异只该在平台模块里知道，不能让
+    // 调用方去解码，所以入口收成 `&InstalledApp`。
+    let bundle_id_lower = app.registry_subpath.trim().to_ascii_lowercase();
+    let display_name = app.name.trim();
+    let mut occ = ResidualOccupancy::default();
+
+    if let Some(run) = run_with_timeout("/bin/ps", &["-axo", "pid=,args="], PROBE_TIMEOUT) {
+        // 空/截断/非零退出的 `ps` 是「测不出」，不是「没进程」，按
+        // `core::inuse` 同一套判据丢弃，免得半截记录被当成证据。
+        if crate::core::inuse::ps_output_is_usable(run.ok, &run.stdout) {
+            occ.processes = String::from_utf8_lossy(&run.stdout)
+                .lines()
+                .filter(|line| process_args_match(line, &bundle_id_lower, display_name))
+                .map(str::to_string)
+                .collect();
+        }
+    }
+
+    let uid = unsafe { libc::getuid() };
+    if let Some(run) = run_with_timeout(
+        "/bin/launchctl",
+        &["print", &format!("gui/{uid}")],
+        PROBE_TIMEOUT,
+    ) {
+        occ.launchd_labels =
+            parse_launchd_registered(&String::from_utf8_lossy(&run.stdout), &bundle_id_lower);
+    }
+
+    occ
+}
+
+/// 两条占用探测命令的超时。取值对齐 `core::inuse` 的 spot-check：用户正
+/// 在等扫描结果，宁可少一条证据也不能让进度条挂住。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `ps` 输出的一行是否指向这款软件。`bundle_id_lower` 必须已经小写——
+/// 它在整轮扫描里是常量，摊在每行上重复 `to_ascii_lowercase` 是白干。
+///
+/// Bundle ID 大小写不敏感匹配；应用名大小写敏感，且要求**词边界**命中
+/// （命中处两侧不能紧邻字母数字）——否则 "Mail" 会撞上 "MailMate"、
+/// "Code" 会撞上 "Encoded"，橙色警示条误报消耗的是信任。名字还要过
+/// [`crate::core::apps::is_safe_app_token`]（长度下限 + 通用词黑名单），
+/// 和残留扫描其余各处用同一把尺子，不另立一个只看长度的门槛。
+fn process_args_match(line: &str, bundle_id_lower: &str, display_name: &str) -> bool {
+    if !bundle_id_lower.is_empty() && contains_ignore_ascii_case(line, bundle_id_lower) {
+        return true;
+    }
+    let name = display_name.trim();
+    name.len() >= 4 && is_safe_app_token(name) && contains_as_word(line, name)
+}
+
+/// 不分配的 ASCII 大小写不敏感包含判断；`needle_lower` 必须已是小写。
+fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
+    let (hay, needle) = (haystack.as_bytes(), needle_lower.as_bytes());
+    !needle.is_empty()
+        && needle.len() <= hay.len()
+        && hay
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// 大小写敏感的「词边界」包含判断。
+fn contains_as_word(haystack: &str, needle: &str) -> bool {
+    haystack.match_indices(needle).any(|(start, _)| {
+        !haystack[..start].ends_with(|c: char| c.is_ascii_alphanumeric())
+            && !haystack[start + needle.len()..].starts_with(|c: char| c.is_ascii_alphanumeric())
+    })
+}
+
+/// 从带引号的 `"标签" => …` 行里取标签。
+fn quoted_label(line: &str) -> Option<String> {
+    let start = line.find('"')?;
+    let rest = &line[start + 1..];
+    let end = rest.find('"')?;
+    let label = &rest[..end];
+    (!label.is_empty()).then(|| label.to_string())
+}
+
+/// 从 `launchctl print gui/<uid>` 的输出里解析这款软件在 launchd 的驻留
+/// 证据，返回仍登记**且未被禁用**的任务标签。`needle` 必须已是小写。
+///
+/// 输出有两个相关段落，形状不同，取标签的方式必须分开：
+///
+/// - `services = {` 摘要段（域内全部已登记任务）：行形如
+///   `<pid> <上次退出状态> <标签>`，**不带引号**。首 token 是 pid（数字）
+///   或 `-`，标签取最后一个空白分隔 token。本机实测这个段有 488 个任务，
+///   旧解析器因要求引号整段漏掉。
+/// - 末尾 `disabled services = {` 段：行形如 `"标签" => enabled|disabled`。
+///   只对 `=> enabled` 报警——disabled 意味着不会自启，把它报成「后台
+///   仍在运行」会得出与事实相反的结论（iStat Menus 实测：两个任务均已
+///   disable、ps 零进程，旧解析器照样亮警示）。
+///
+/// 已登记但此刻 pid 为 0（未在跑）的也报：开机自启随时会把它拉起来，
+/// 用户该知道「清了还会回来」。
+fn parse_launchd_registered(output: &str, needle: &str) -> Vec<String> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut labels: Vec<String> = Vec::new();
+    // `None` = 不在关心的段落里；`Some(true)` = disabled 段。三种状态用一个
+    // 枚举值表示，免得两个 bool 之间出现「都为真」这种不存在的组合。
+    let mut section: Option<bool> = None;
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        match trimmed {
+            "services = {" => {
+                section = Some(false);
+                continue;
+            }
+            "disabled services = {" => {
+                section = Some(true);
+                continue;
+            }
+            "}" => {
+                section = None;
+                continue;
+            }
+            _ => {}
+        }
+        // 两个分支只负责「把标签抠出来」，命中判定与去重共用下面一条尾巴。
+        let label = match section {
+            // `"标签" => enabled|disabled`
+            Some(true) => trimmed
+                .contains("=> enabled")
+                .then(|| quoted_label(trimmed))
+                .flatten(),
+            // `<pid|-> <状态> <标签>`
+            Some(false) => {
+                let mut tokens = trimmed.split_whitespace();
+                let first = tokens.next().unwrap_or_default();
+                let is_pid = first == "-" || first.bytes().all(|b| b.is_ascii_digit());
+                // 至少三段才是一条记录：少了说明是表头或分隔行。
+                (is_pid && !first.is_empty() && tokens.clone().count() >= 2)
+                    .then(|| tokens.next_back().map(str::to_string))
+                    .flatten()
+            }
+            None => None,
+        };
+        let Some(label) = label else { continue };
+        if contains_ignore_ascii_case(&label, needle) && !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels
 }
 
 /// Electron / Sparkle / XPC 辅助进程用的目录名后缀。
@@ -782,10 +955,10 @@ fn dotdir_belongs_to_app(
 ///
 /// 用来否决点目录的前缀匹配：`~/.qoder` 到底属于正在卸载的「Qoder CN」还是
 /// 仍然装着的「QoderWork CN」，无法确定，那就谁都不算。
-fn other_installed_app_slugs(app: &InstalledApp, home: &Path) -> Vec<String> {
+fn other_installed_app_slugs(app: &InstalledApp, applications: &Path, home: &Path) -> Vec<String> {
     let self_slug = config_slug(&app.name);
     let mut slugs = Vec::new();
-    for root in [PathBuf::from("/Applications"), home.join("Applications")] {
+    for root in [applications.to_path_buf(), home.join("Applications")] {
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
@@ -805,7 +978,12 @@ fn other_installed_app_slugs(app: &InstalledApp, home: &Path) -> Vec<String> {
     slugs
 }
 
-fn add_dotfile_configs(items: &mut Vec<ResidualItem>, home: &Path, app: &InstalledApp) {
+fn add_dotfile_configs(
+    items: &mut Vec<ResidualItem>,
+    home: &Path,
+    applications: &Path,
+    app: &InstalledApp,
+) {
     // App 名和 Bundle ID 末段都可能是点目录用的名字：Karabiner-Elements 写的是
     // `~/.config/karabiner`，两边都不精确相等，只能按前缀包含来判定。
     let mut slugs = vec![config_slug(&app.name)];
@@ -819,7 +997,7 @@ fn add_dotfile_configs(items: &mut Vec<ResidualItem>, home: &Path, app: &Install
     if slugs.is_empty() {
         return;
     }
-    let other_apps = other_installed_app_slugs(app, home);
+    let other_apps = other_installed_app_slugs(app, applications, home);
 
     // 先把所有候选收齐再判定。前缀匹配要用到「同一批候选里有没有精确命中」
     // 这个信息，边遍历边决定拿不到。
@@ -1225,6 +1403,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
 
@@ -1296,6 +1475,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
         let certain: Vec<String> = result
@@ -1380,6 +1560,7 @@ mod tests {
                 system_library: &system_library,
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
 
@@ -1524,6 +1705,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
 
@@ -1642,6 +1824,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
 
@@ -1708,6 +1891,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                applications: &root.join("applications"),
             },
         );
 
@@ -1912,6 +2096,121 @@ mod tests {
         assert_eq!(
             parse_application_groups(entitlements),
             ["group.com.example.app", "group.com.example.shared"]
+        );
+    }
+
+    #[test]
+    fn process_args_match_uses_bundle_id_or_long_name() {
+        // Bundle ID：大小写不敏感也命中
+        assert!(process_args_match(
+            " 401 /Applications/iStat Menus.app/Contents/MacOS/agent COM.BJANGO.ISTATMENUS",
+            "com.bjango.istatmenus",
+            "iStat Menus",
+        ));
+        // 应用名：大小写敏感命中（binary 路径里没有 Bundle ID 的常见形态）
+        assert!(process_args_match(
+            " 402 /Applications/iStat Menus 7/Agent --flag",
+            "com.bjango.istatmenus",
+            "iStat Menus",
+        ));
+        // 短名（<4 字符）不参与匹配："Mail" 撞 "Gmail" 这类误报防不住
+        assert!(!process_args_match(
+            " 403 gmail-imap --fetch",
+            "com.other.app",
+            "Mail"
+        ));
+        // 无关行不命中
+        assert!(!process_args_match(
+            " 404 /usr/sbin/syslogd",
+            "com.bjango.istatmenus",
+            "iStat Menus",
+        ));
+    }
+
+    #[test]
+    fn launchd_parse_covers_services_section_and_ignores_disabled() {
+        // 形状取自真机 `launchctl print gui/<uid>`：services 摘要段不带
+        // 引号（<pid> <状态> <标签>），末尾 disabled 段才带引号。
+        let output = "\
+	services = {
+	   61288      - 	application.com.quickcleaner.app.269898235.269898241
+	       0      0 	com.bjango.istatmenus.helper
+	     727      - 	com.apple.syncdefaultsd
+	}
+	some other section = {
+	   1      - 	com.bjango.istatmenus.outside
+	}
+	disabled services = {
+		\"com.bjango.istatmenus.agent\" => disabled
+		\"com.bjango.istatmenus.status\" => disabled
+		\"com.bjango.istatmenus.updater\" => enabled
+	}
+";
+        let found = parse_launchd_registered(output, "com.bjango.istatmenus");
+        // services 段：登记即报（pid 0 也是登记着、随时会被拉起）
+        assert!(found.contains(&"com.bjango.istatmenus.helper".to_string()));
+        // 别的段落不误收
+        assert!(!found.contains(&"com.bjango.istatmenus.outside".to_string()));
+        // disabled 段：只有 => enabled 才报——把已禁用报成「仍在运行」
+        // 会得出与事实相反的结论
+        assert!(!found.contains(&"com.bjango.istatmenus.agent".to_string()));
+        assert!(!found.contains(&"com.bjango.istatmenus.status".to_string()));
+        assert!(found.contains(&"com.bjango.istatmenus.updater".to_string()));
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn process_name_match_requires_word_boundaries() {
+        // "Mail"（正好 4 字符）不得撞上 MailMate
+        assert!(!process_args_match(
+            " 403 /Applications/MailMate.app/Contents/MacOS/MailMate",
+            "com.other.app",
+            "Mail",
+        ));
+        // 自己的路径仍要命中：/Mail.app 和结尾 /Mail 都是词边界
+        assert!(process_args_match(
+            " 404 /Applications/Mail.app/Contents/MacOS/Mail",
+            "com.other.app",
+            "Mail",
+        ));
+        // "Code" 不撞 "Encoded"
+        assert!(!process_args_match(
+            " 405 Encoded --transcode file",
+            "com.other.app",
+            "Code",
+        ));
+    }
+
+    #[test]
+    fn detect_occupancy_finds_spawned_process_and_skips_unrelated() {
+        // 端到端：起一个命令行里带 Bundle ID 的进程，探测必须看见它。
+        // 前面垫一个 `true;` 防止 sh 把单命令 -c 优化成直接 exec——那样
+        // 注释会从 argv 里消失（实测踩过）。
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("true; sleep 30 # com.qc.occupancy.probe")
+            .spawn()
+            .expect("spawn probe process");
+        let found = detect_occupancy(&make_app("qc_occupancy_probe", "com.qc.occupancy.probe"));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            found
+                .processes
+                .iter()
+                .any(|p| p.contains("com.qc.occupancy.probe")),
+            "探测应看见刚起的进程，实际 {:?}",
+            found.processes
+        );
+        assert!(found.launchd_labels.is_empty(), "测试环境不该有登记任务");
+
+        // 无关应用：两条链都应为空
+        let none = detect_occupancy(&make_app("qc_nothing_here_app", "com.qc.nothing.here"));
+        assert!(
+            none.processes.is_empty() && none.launchd_labels.is_empty(),
+            "procs={:?} labels={:?}",
+            none.processes,
+            none.launchd_labels
         );
     }
 }

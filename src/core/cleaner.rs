@@ -395,7 +395,7 @@ fn delete_sqlite_family(members: Vec<(PathBuf, u64)>, p: &CleanProgress) -> usiz
     // 每个家族的位置再次 fail closed。
     if !companions.is_empty() && !main.is_empty() {
         for (path, _) in companions.iter().chain(main.iter()) {
-            note_delete_failure(path, &"命中活数据库家族保护（live-database），拒绝删除");
+            note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         }
         let blocked = companions.len() + main.len();
         p.failed.fetch_add(blocked as u64, Ordering::Relaxed);
@@ -488,6 +488,13 @@ fn note_delete_failure(path: &Path, err: &dyn std::fmt::Display) {
 static DELETE_FAILURES_LOGGED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// 活数据库闸门（[`crate::core::safety::is_live_database`]）拒绝删除时的
+/// 统一说明。必须写出「为什么拒」和「怎么办」：拒的是「主库与事务伴随
+/// 文件同时存在」这个活连接证据；出路是先彻底退出对应应用。实测教训
+/// （iStat Menus 残留）：只说「拒绝删除」，用户会把它当权限问题盲目
+/// 重试五轮——真正卡住的是 launchd KeepAlive 代理把进程秒拉起。
+pub(crate) const LIVE_DATABASE_REFUSAL: &str = "命中活数据库保护：目标里有正在使用的数据库文件（主库与事务伴随文件同时存在），对应应用或其后台代理可能仍在运行——先彻底退出该应用（含菜单栏常驻与后台代理）再清理";
+
 /// 清理单个路径本身（连同其内容）。
 ///
 /// 删除前依次过闸门，任何一道拦住都不会碰文件系统：
@@ -522,7 +529,7 @@ pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Skipped;
     }
     if crate::core::safety::is_live_database(path) {
-        note_delete_failure(path, &"命中活数据库家族保护（live-database），拒绝删除");
+        note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         return CleanResult::Failed;
     }
     delete_tree(path, p)
@@ -1100,7 +1107,7 @@ fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Skipped;
     }
     if crate::core::safety::is_live_database(path) {
-        note_delete_failure(path, &"命中活数据库家族保护（live-database），拒绝删除");
+        note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         return CleanResult::Failed;
     }
 

@@ -305,8 +305,12 @@ fn ps_snapshot() -> Option<Vec<ProcRecord>> {
 /// 出了问题；stdout 还必须以换行收尾，否则最后一行大概率是被截断的半截
 /// 记录。三条判据和 `looks_complete`（lsof 那边的完整性检查）是同一套
 /// 思路，只是换了个输出格式。
+///
+/// 残留扫描的进程占用探测（`platform::macos::residuals::detect_occupancy`）
+/// 用的是 `ps -axo pid=,args=`，字段不同但「输出可不可信」是同一个判断，
+/// 所以这里对 crate 内公开，不让它长出第二份拷贝。
 #[cfg(target_os = "macos")]
-fn ps_output_is_usable(status_success: bool, stdout: &[u8]) -> bool {
+pub(crate) fn ps_output_is_usable(status_success: bool, stdout: &[u8]) -> bool {
     status_success && !stdout.is_empty() && stdout.last() == Some(&b'\n')
 }
 
