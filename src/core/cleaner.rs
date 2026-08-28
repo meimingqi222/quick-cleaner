@@ -591,18 +591,31 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         })
         .collect();
 
-    let merged = children
-        .par_iter()
+    // 先串行做完所有叶子绑定复核，再并行删除：delete_tree 删完子目录内容
+    // 后会 remove_dir 子目录本身，改变父目录的 mtime。如果复核和删除交错在
+    // 并行线程里，一个线程删掉子目录 → 父目录 mtime 变化 → 另一个线程的
+    // 父目录 recheck 误判为「身份变了」而拒绝删除整批子项。
+    let checked: Vec<(&PathBuf, &Option<TargetIdentity>, bool)> = children
+        .iter()
         .map(|(c, child_identity)| {
+            let ok = !p.cancelled()
+                && leaf_binding_holds(dir, parent_identity, c, *child_identity);
+            (c, child_identity, ok)
+        })
+        .collect();
+
+    let merged = checked
+        .par_iter()
+        .map(|(c, _child_identity, binding_ok)| {
             let mut r = CleanReport::default();
-            if p.cancelled() {
-                r.record(c, CleanResult::Skipped);
+            if !binding_ok {
+                note_delete_failure(c, &"identity-changed");
+                r.failed.push(CleanFailure::Path((*c).clone()));
+                p.failed.fetch_add(1, Ordering::Relaxed);
                 return r;
             }
-            if !leaf_binding_holds(dir, parent_identity, c, *child_identity) {
-                note_delete_failure(c, &"identity-changed");
-                r.failed.push(CleanFailure::Path(c.clone()));
-                p.failed.fetch_add(1, Ordering::Relaxed);
+            if p.cancelled() {
+                r.record(c, CleanResult::Skipped);
                 return r;
             }
             r.record(c, clean_path(c, p));

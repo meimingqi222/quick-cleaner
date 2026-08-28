@@ -28,7 +28,7 @@
 use crate::core::i18n::{bilingual, Text};
 use crate::core::scanner::CategorySummary;
 use std::collections::HashMap;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
 

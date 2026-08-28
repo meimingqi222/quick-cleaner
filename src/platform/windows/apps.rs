@@ -1254,10 +1254,8 @@ fn prepare_uninstall_cmd(cmd: &str, app: &InstalledApp) -> String {
                 out.push_str(" --silent");
             }
         }
-        "choco" | "chocolatey" => {
-            if !has_cli_token(&out, &["-y", "--yes"]) {
-                out.push_str(" -y");
-            }
+        "choco" | "chocolatey" if !has_cli_token(&out, &["-y", "--yes"]) => {
+            out.push_str(" -y");
         }
         _ => {}
     }

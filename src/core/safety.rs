@@ -583,9 +583,10 @@ const MACOS_SYSTEM_COMPONENT_NAMES: &[&str] = &[
 pub fn is_elevated_residual_target(path: &Path) -> bool {
     // 符号链接会让「父目录在白名单里」这个判断失去意义：`/Library/Caches/x`
     // 可以指向任意位置，以 root 身份 rm -rf 过去就是任意文件删除。
+    // 路径不存在时不拦——删除本身就是 no-op，白名单判定只看路径字符串。
     match std::fs::symlink_metadata(path) {
-        Ok(md) if !md.file_type().is_symlink() => {}
-        _ => return false,
+        Ok(md) if md.file_type().is_symlink() => return false,
+        _ => {}
     }
     // 白名单目录里混着系统自己的东西：`/Library/Preferences/com.apple.*` 是
     // 登录窗口、SystemConfiguration 这类配置，`/Library/Application Support`
