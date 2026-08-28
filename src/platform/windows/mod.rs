@@ -20,7 +20,7 @@ pub use mft::{scan_volume, ScanError, SizeTree};
 pub use recycle::{
     empty_trash, is_recycle_junk_entry, is_system_trash, move_to_trash, sweep_orphaned_recycle,
 };
-pub use residuals::{clean_residuals, scan_residuals, verify_residuals};
+pub use residuals::{clean_residuals, detect_occupancy, scan_residuals, verify_residuals};
 pub use security::{current_user_sid, is_elevated, relaunch_as_admin_if_needed};
 pub use user_env::{
     detect_system_language, get_user_context, init_user_context, real_user_home,
