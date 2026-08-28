@@ -97,8 +97,7 @@ pub(super) struct Marker {
 /// 声明「我是缓存」——Python 3.8+ 的 `__pycache__`、Rust sccache、各类
 /// 应用缓存目录都是。自声明是比按名字猜更强的信号，且正是 Mole 用来
 /// 识别缓存目录的机制。
-pub(super) const CACHEDIR_SIGNATURE: &[u8] =
-    b"Signature: 8a477f597d28d172789f06886806bc55";
+pub(super) const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 
 /// CACHEDIR.TAG 命中用的伪 Marker。不进 [`MARKERS`] 表（`dir` 占位符
 /// 不参与名字匹配），只在三通道各自的 CACHEDIR 分支里显式引用。
@@ -731,6 +730,7 @@ mod tests {
         std::fs::remove_file(&deleted).unwrap();
         let changes = Changes {
             paths: vec![deleted.clone()],
+            must_rescan: Vec::new(),
             last_event_id: 1,
             requires_full_scan: false,
             full_scan_reason: None,
@@ -745,6 +745,140 @@ mod tests {
             "已删除文件不能残留在增量索引里"
         );
         assert_eq!(refreshed.file_count, 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `MustScanSubDirs` 是**按路径**给的：它说的是「这个目录下的明细我丢了」，
+    /// 不是「整个卷不可信」。带这种 flag 的路径必须像普通变更根一样被重扫，
+    /// 而且明细事件一条都没有时也得照样重扫——否则合并事件里的新增/删除会
+    /// 被整批漏掉。
+    #[cfg(not(windows))]
+    #[test]
+    fn must_rescan_path_is_refreshed_without_any_detail_event() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_must_rescan_subtree");
+        let noisy = base.join("noisy");
+        let vanished = noisy.join("gone.bin");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&noisy).unwrap();
+        std::fs::write(&vanished, vec![b'x'; 4096]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+        assert!(original.tree.find_node_by_path(&vanished).is_some());
+
+        // 合并事件之后发生的真实变化：一个文件没了，一个文件新增。
+        std::fs::remove_file(&vanished).unwrap();
+        let added = noisy.join("fresh.bin");
+        std::fs::write(&added, vec![b'y'; 8192]).unwrap();
+
+        // FSEvents 只给出被合并的目录，明细路径一条都没有。
+        let changes = Changes {
+            paths: Vec::new(),
+            must_rescan: vec![noisy.clone()],
+            last_event_id: 1,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live)
+            .expect("被合并的子树应能局部重扫，而不是回退全量");
+
+        assert!(
+            refreshed.tree.find_node_by_path(&vanished).is_none(),
+            "合并事件覆盖的删除必须反映到索引里"
+        );
+        assert!(
+            refreshed.tree.find_node_by_path(&added).is_some(),
+            "合并事件覆盖的新增必须反映到索引里"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 唯一的例外：卷根自己被标记为需重扫，局部重扫就等于全量，
+    /// 老老实实回退，别绕一圈做同样的事。
+    #[cfg(not(windows))]
+    #[test]
+    fn must_rescan_on_volume_root_falls_back_to_full_scan() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_must_rescan_root");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        std::fs::write(base.join("sub").join("a.bin"), vec![b'x'; 4096]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+
+        let changes = Changes {
+            paths: Vec::new(),
+            must_rescan: vec![base.clone()],
+            last_event_id: 1,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+        };
+        assert!(
+            refresh_macos_index(&volume, original, &changes, &live).is_none(),
+            "卷根需重扫时应回退全量，而不是把整棵树当成局部子树重扫"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 祖先折叠：后代根必须被祖先吸收掉，只重扫一次。
+    /// 这是把根计数阈值换成成本估算的前提——不折叠的话，一个热点目录下的
+    /// 几百个子目录会各算一次成本。
+    #[cfg(not(windows))]
+    #[test]
+    fn nested_change_roots_collapse_into_their_ancestor() {
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = std::env::temp_dir().join("qc_devscan_root_collapse");
+        let outer = base.join("a");
+        let inner = outer.join("b");
+        // 名字上是 `a` 的前缀延伸，但不是它的后代：不能被误折叠。
+        let sibling = base.join("a-x");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(inner.join("c.bin"), vec![b'x'; 4096]).unwrap();
+        std::fs::write(sibling.join("d.bin"), vec![b'y'; 4096]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let original = walk::scan_root(&base, volume.clone(), &live).unwrap();
+
+        std::fs::write(inner.join("e.bin"), vec![b'z'; 4096]).unwrap();
+        let changes = Changes {
+            paths: vec![inner.clone(), outer.clone(), sibling.clone()],
+            must_rescan: Vec::new(),
+            last_event_id: 1,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 3,
+        };
+        let refreshed = refresh_macos_index(&volume, original, &changes, &live)
+            .expect("嵌套变更根应折叠后增量更新");
+
+        // 折叠正确的话树不会被重复追加：每个文件仍然只出现一次。
+        assert!(refreshed
+            .tree
+            .find_node_by_path(&inner.join("e.bin"))
+            .is_some());
+        assert!(refreshed
+            .tree
+            .find_node_by_path(&sibling.join("d.bin"))
+            .is_some());
+        assert_eq!(refreshed.file_count, 3, "折叠失败会导致子树被重复追加");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -766,6 +900,7 @@ mod tests {
         let original_records = original.records_read;
         let changes = Changes {
             paths: vec![base.clone()],
+            must_rescan: Vec::new(),
             last_event_id: 2,
             requires_full_scan: false,
             full_scan_reason: None,
@@ -800,6 +935,7 @@ mod tests {
         let invalid = base.join(std::ffi::OsString::from_vec(b"invalid\0path".to_vec()));
         let changes = Changes {
             paths: vec![invalid],
+            must_rescan: Vec::new(),
             last_event_id: 3,
             requires_full_scan: false,
             full_scan_reason: None,
@@ -837,6 +973,7 @@ mod tests {
         let expected_size = std::fs::metadata(&changed).unwrap().blocks() * 512;
         let changes = Changes {
             paths: vec![changed.clone()],
+            must_rescan: Vec::new(),
             last_event_id: 1,
             requires_full_scan: false,
             full_scan_reason: None,

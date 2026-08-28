@@ -44,7 +44,19 @@ pub(crate) fn canonicalize_event_path(path: &Path) -> PathBuf {
 #[derive(Debug)]
 pub struct Changes {
     pub paths: Vec<PathBuf>,
+    /// 必须整棵重扫的子树。
+    ///
+    /// FSEvents 在某个目录下事件太多时会把它们合并成一条，给这条事件打上
+    /// `MustScanSubDirs`（`UserDropped` / `KernelDropped` 同理，二者按 Apple
+    /// 文档总是伴随前者出现）。这几个 flag 的语义都是「**这一个路径**下面
+    /// 的明细我丢了，你自己重扫」，作用域是事件携带的那个路径，不是整个卷。
+    /// 早先的实现把它们折叠成一个全局 `requires_full_scan` 并丢掉路径，一条
+    /// `/Library/Keychains` 的合并事件就能换来一次 60 秒以上的整盘重建；
+    /// 日志里 4 次全量重建全部来自这里。现在改成把路径收进来，交给增量刷新
+    /// 当成普通变更根重扫。
+    pub must_rescan: Vec<PathBuf>,
     pub last_event_id: u64,
+    /// 整个卷的水位不再可信，必须全量重建（`EventIdsWrapped` / `RootChanged`）。
     pub requires_full_scan: bool,
     /// 触发 `requires_full_scan` 的 flag 名称，用于日志诊断。
     pub full_scan_reason: Option<&'static str>,
@@ -212,6 +224,7 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     // 不代表用户文件发生变化，否则每次启动都会被自己的写盘操作触发重扫。
     let cache_dir = super::cache::cache_dir_path();
     let mut paths = Vec::new();
+    let mut must_rescan: Vec<PathBuf> = Vec::new();
     let mut requires_full_scan = false;
     let mut full_scan_reason: Option<&'static str> = None;
     let mut filtered_cache_events = 0usize;
@@ -220,25 +233,24 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
             filtered_cache_events += 1;
             continue;
         }
-        // 检测哪个 flag 触发了全量扫描
-        if flags & kFSEventStreamEventFlagMustScanSubDirs != 0 {
-            requires_full_scan = true;
-            if full_scan_reason.is_none() {
-                full_scan_reason = Some("MustScanSubDirs");
-            }
+        // 作用域是**这一个路径**的 flag：只要求重扫该子树。
+        let subtree_reason = if flags & kFSEventStreamEventFlagMustScanSubDirs != 0 {
+            Some("MustScanSubDirs")
+        } else if flags & kFSEventStreamEventFlagUserDropped != 0 {
+            Some("UserDropped")
+        } else if flags & kFSEventStreamEventFlagKernelDropped != 0 {
+            Some("KernelDropped")
+        } else {
+            None
+        };
+        if let Some(reason) = subtree_reason {
+            crate::log!("  FSEvents 子树需重扫（{}）: {}", reason, path.display());
+            must_rescan.push(canonicalize_event_path(&path));
         }
-        if flags & kFSEventStreamEventFlagUserDropped != 0 {
-            requires_full_scan = true;
-            if full_scan_reason.is_none() {
-                full_scan_reason = Some("UserDropped");
-            }
-        }
-        if flags & kFSEventStreamEventFlagKernelDropped != 0 {
-            requires_full_scan = true;
-            if full_scan_reason.is_none() {
-                full_scan_reason = Some("KernelDropped");
-            }
-        }
+
+        // 作用域是整个卷的 flag：水位本身不再可信，只能全量重建。
+        // EventIdsWrapped 表示事件 ID 空间回绕，任何已存水位都失去意义；
+        // RootChanged 表示被监听的根自己被移动/删除/替换，树的锚点没了。
         if flags & kFSEventStreamEventFlagEventIdsWrapped != 0 {
             requires_full_scan = true;
             if full_scan_reason.is_none() {
@@ -254,13 +266,17 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
         paths.push(path);
     }
 
+    must_rescan.sort();
+    must_rescan.dedup();
+
     crate::log!(
-        "FSEvents 回放完成：since={} → latest={}，原始 {} 事件，过滤缓存 {}，有效 {} 路径，full_scan={}({:?})，耗时 {:?}",
+        "FSEvents 回放完成：since={} → latest={}，原始 {} 事件，过滤缓存 {}，有效 {} 路径，子树重扫 {}，full_scan={}({:?})，耗时 {:?}",
         since,
         latest,
         raw_event_count,
         filtered_cache_events,
         paths.len(),
+        must_rescan.len(),
         requires_full_scan,
         full_scan_reason,
         t0.elapsed()
@@ -279,15 +295,13 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     }
 
     // 镜像路径折叠 + 去重：同一变更可能以两种形态各报一次。
-    let mut paths: Vec<PathBuf> = paths
-        .iter()
-        .map(|p| canonicalize_event_path(p))
-        .collect();
+    let mut paths: Vec<PathBuf> = paths.iter().map(|p| canonicalize_event_path(p)).collect();
     paths.sort();
     paths.dedup();
 
     Some(Changes {
         paths,
+        must_rescan,
         last_event_id: latest,
         requires_full_scan,
         full_scan_reason,
@@ -327,9 +341,7 @@ mod canonicalize_tests {
     #[test]
     fn mirror_paths_fold_to_canonical_form() {
         assert_eq!(
-            canonicalize_event_path(Path::new(
-                "/System/Volumes/Data/Users/me/Library/Caches/x"
-            )),
+            canonicalize_event_path(Path::new("/System/Volumes/Data/Users/me/Library/Caches/x")),
             PathBuf::from("/Users/me/Library/Caches/x")
         );
         // 镜像根自身折叠为卷根

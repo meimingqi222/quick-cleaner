@@ -21,7 +21,7 @@
 
 use crate::core::disk::{ScanResult, SizeTree, VolumeId};
 use crate::platform::macos::disk_tree::IndexMeta;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 缓存/索引文件所在目录，**不保证存在**。
@@ -116,6 +116,112 @@ pub(crate) fn remove_stale_delta(volume: &VolumeId) {
     if let Some(path) = index_delta_path(volume) {
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// 回收不再需要的索引文件。
+///
+/// 索引按挂载点命名（`scan-index-<挂载点 hex>.bin`），但从来没人删过旧的：
+/// 实测缓存目录里同时躺着 328 MB 的整盘索引和 230 MB 的 `~` 索引，后者自从
+/// 扫描口径改成整盘之后再没被读过。一个清理工具自己留着几百兆死缓存说不过去。
+///
+/// 两条判定，都以「删了最多损失一次重扫」为底线：
+///
+/// 1. **被现役索引覆盖**：挂载点是 `keep` 的严格后代，**且在同一个卷上**。
+///    `/` 的索引已经包含 `/Users/xxx` 的全部内容，那份子集索引永远不会再被
+///    加载。同卷判定不能省：路径意义上 `/Volumes/外置盘` 也是 `/` 的后代，
+///    但它是另一个文件系统，整盘索引并不覆盖它。macOS 的 firmlink 对 `stat`
+///    透明（`/` 与 `/Users` 的 `st_dev` 相同），所以设备号是可靠依据。
+/// 2. **太久没动**：超过 [`ORPHAN_MAX_AGE_DAYS`] 天没被写过。拔掉的外置盘、
+///    一次性的扫描根都归这类；真要再用，重扫一次即可。
+///
+/// 当前正在用的那份（`keep` 自己）和它的 delta 永远不动。
+pub(crate) fn prune_orphan_indexes(keep: &VolumeId) {
+    const ORPHAN_MAX_AGE_DAYS: u64 = 30;
+    let max_age_secs = ORPHAN_MAX_AGE_DAYS * 24 * 3600;
+
+    let Some(dir) = cache_dir_path() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let keep_mount = keep.mount_point().to_path_buf();
+    let now = now_epoch_secs();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // base 索引和它的 delta 一起判定、一起删，避免留下对不上 base 的 delta。
+        let Some(key) = name
+            .strip_prefix("scan-index-")
+            .and_then(|rest| rest.strip_suffix(".bin"))
+        else {
+            continue;
+        };
+        if key.ends_with(".delta") {
+            continue;
+        }
+        let Some(mount) = decode_mount_key(key) else {
+            continue;
+        };
+        if mount == keep_mount {
+            continue;
+        }
+
+        let covered = mount.starts_with(&keep_mount) && same_volume(&mount, &keep_mount);
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .is_some_and(|d| now.saturating_sub(d.as_secs()) > max_age_secs);
+        if !covered && !stale {
+            continue;
+        }
+
+        let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let reason = if covered {
+            "被现役索引覆盖"
+        } else {
+            "超期未用"
+        };
+        if std::fs::remove_file(&path).is_ok() {
+            crate::log!(
+                "回收索引 {}（{}，{:.1} MB）",
+                mount.display(),
+                reason,
+                bytes as f64 / (1024.0 * 1024.0)
+            );
+        }
+        let delta = dir.join(format!("scan-index-{key}.delta.bin"));
+        let _ = std::fs::remove_file(delta);
+    }
+}
+
+/// 两个路径是否落在同一个文件系统上。任一侧 `stat` 不到（路径已消失、
+/// 盘已拔掉）就返回 `false`——判不出来时按「不覆盖」处理，交给超期规则，
+/// 宁可多留一份索引，也不误删还在用的那份。
+fn same_volume(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev(),
+        _ => false,
+    }
+}
+
+/// 把索引文件名里的 hex 还原成挂载点路径，非法编码返回 `None`。
+fn decode_mount_key(key: &str) -> Option<PathBuf> {
+    if !key.len().is_multiple_of(2) || key.is_empty() {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(key.len() / 2);
+    for pair in key.as_bytes().chunks(2) {
+        let hex = std::str::from_utf8(pair).ok()?;
+        bytes.push(u8::from_str_radix(hex, 16).ok()?);
+    }
+    String::from_utf8(bytes).ok().map(PathBuf::from)
 }
 
 /// 从完整索引恢复运行时 `ScanResult`。
@@ -403,6 +509,71 @@ mod tests {
             unique_size: size,
             unique_files: 1,
         }
+    }
+
+    #[test]
+    fn orphan_prune_removes_covered_index_but_keeps_current() {
+        let _guard = isolate_cache_dir("orphan_prune");
+        let dir = cache_dir().unwrap();
+
+        // 用真实存在的目录：覆盖判定要 stat 设备号，虚构路径判不出同卷。
+        let base = std::env::temp_dir().join("qc_orphan_prune_base");
+        let nested = base.join("nested");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let keep = VolumeId::from_mount_point(base.clone());
+        let covered = VolumeId::from_mount_point(nested.clone());
+        // 路径上是 `/` 的后代，但不在同一个卷上，且并不存在——不该被当成覆盖。
+        let other = VolumeId::from_mount_point(PathBuf::from("/Volumes/qc-not-mounted"));
+        for volume in [&keep, &covered, &other] {
+            std::fs::write(index_path(volume).unwrap(), b"stub").unwrap();
+            std::fs::write(index_delta_path(volume).unwrap(), b"stub").unwrap();
+        }
+
+        prune_orphan_indexes(&keep);
+
+        assert!(index_path(&keep).unwrap().exists(), "现役索引不能被回收");
+        assert!(
+            index_delta_path(&keep).unwrap().exists(),
+            "现役索引的 delta 不能被回收"
+        );
+        assert!(
+            !index_path(&covered).unwrap().exists(),
+            "同卷且被现役索引包含的子集索引应被回收"
+        );
+        assert!(
+            !index_delta_path(&covered).unwrap().exists(),
+            "回收 base 时必须一并删掉它的 delta"
+        );
+        assert!(
+            index_path(&other).unwrap().exists(),
+            "判不出同卷的索引刚写过，应交给超期规则，不能立刻删"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mount_key_round_trips_through_the_file_name() {
+        for mount in ["/", "/Users/someone", "/Volumes/带中文 的盘"] {
+            let volume = VolumeId::from_mount_point(PathBuf::from(mount));
+            let path = {
+                let _guard = isolate_cache_dir("mount_key_round_trip");
+                index_path(&volume).unwrap()
+            };
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let key = name
+                .strip_prefix("scan-index-")
+                .and_then(|r| r.strip_suffix(".bin"))
+                .unwrap();
+            assert_eq!(decode_mount_key(key), Some(PathBuf::from(mount)));
+        }
+        // 非法编码不能 panic，也不能误判成某个挂载点
+        assert_eq!(decode_mount_key("zz"), None);
+        assert_eq!(decode_mount_key("abc"), None);
+        assert_eq!(decode_mount_key(""), None);
     }
 
     #[test]

@@ -148,8 +148,25 @@ pub(super) fn load_or_build_macos_index_for(
             scan: scan.clone(),
             last_event_id,
         });
+        spawn_prune_orphan_indexes(&scan.volume);
     }
     Some(scan)
+}
+
+/// 每进程回收一次过期索引，放后台线程，不挡扫描。
+///
+/// 挑在这里触发是因为此刻刚确定了「现役索引是哪一份」——回收判定正需要它
+/// 作为基准。只跑一次：这是纯粹的磁盘清理，重复扫缓存目录没有意义。
+#[cfg(not(windows))]
+fn spawn_prune_orphan_indexes(keep: &crate::core::disk::VolumeId) {
+    static PRUNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if PRUNED.set(()).is_err() {
+        return;
+    }
+    let keep = keep.clone();
+    std::thread::spawn(move || {
+        crate::platform::macos::cache::prune_orphan_indexes(&keep);
+    });
 }
 
 /// 树被就地修改（删除、增量更新）后，刷新进程内缓存。
@@ -226,7 +243,11 @@ fn refresh_cached_macos_index(
 ) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
     let volume = scan.volume.clone();
     match crate::platform::macos::fsevents::changes_since(root, last_event_id) {
-        Some(changes) if !changes.requires_full_scan && changes.paths.is_empty() => {
+        Some(changes)
+            if !changes.requires_full_scan
+                && changes.paths.is_empty()
+                && changes.must_rescan.is_empty() =>
+        {
             if changes.last_event_id > last_event_id {
                 spawn_save_index(volume, scan.clone(), changes.last_event_id);
             }
@@ -347,9 +368,22 @@ pub(super) fn refresh_macos_index(
     use crate::platform::macos::walk;
 
     let mount = volume.mount_point();
+
+    // 卷根自己被打上 MustScanSubDirs：整棵树都要重扫，等价于全量，直接回退。
+    // 除此之外的子树重扫路径和普通变更路径同等对待——下面的元数据判定会把
+    // 目录归进 roots（整棵重扫），文件归进就地更新，已消失的归进删除。
+    if changes.must_rescan.iter().any(|path| path == mount) {
+        crate::log!(
+            "refresh_macos_index: 卷根 {} 被标记为需重扫子树，等价全量，回退",
+            mount.display()
+        );
+        return None;
+    }
+
     let mut changed_paths: Vec<PathBuf> = changes
         .paths
         .iter()
+        .chain(changes.must_rescan.iter())
         .filter(|path| path.starts_with(mount))
         .cloned()
         .collect();
@@ -423,30 +457,77 @@ pub(super) fn refresh_macos_index(
         );
     }
 
-    roots.sort_by_key(|path| path.components().count());
+    // 祖先折叠：字典序下 `PathBuf` 按分量比较，祖先必定紧邻排在它全部后代
+    // 之前，且两者之间不会插进无关路径。于是只需和「上一个保留下来的根」比
+    // 一次，就能判定当前路径是否已被覆盖——O(n log n)，取代原先对 `covered`
+    // 全表扫描的 O(n²)。`Path::starts_with` 按分量比较，`/a/b` 不会误吞
+    // `/a-x`。
+    roots.sort();
     roots.dedup();
-    let mut covered = Vec::new();
-    roots.retain(|path| {
-        if covered
-            .iter()
-            .any(|parent: &PathBuf| path.starts_with(parent))
-        {
-            return false;
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(roots.len());
+    for path in roots {
+        if kept.last().is_some_and(|last| path.starts_with(last)) {
+            continue;
         }
-        covered.push(path.clone());
-        true
-    });
+        kept.push(path);
+    }
+    let roots = kept;
     crate::log!(
         "refresh_macos_index: {} 个原始路径 → 去重后 {} 个独立变更根",
-        changes.paths.len(),
+        changes.paths.len() + changes.must_rescan.len(),
         roots.len()
     );
 
-    // 太多彼此独立的变化目录时，重扫局部区域反而比一次完整扫描更慢。
-    if roots.len() > 512 {
+    // 局部重扫什么时候不划算？取决于要重扫多少**内容**，不是有多少个根。
+    //
+    // 原先卡的是根的个数（>512 放弃）。日志里四次触发全是 517/554/661/866
+    // ——全都贴着门槛，且绝大多数根是几十上百条记录的小目录：并行重扫它们
+    // 只要毫秒级，却换来一次 50~120 秒的整盘重建。现在改成按旧树里这些子树
+    // 的记录数估算成本，只有当重扫量逼近整棵树时（全量还顺带压实索引、重置
+    // 水位，更划算）才放弃。
+    //
+    // 树里查不到的根是新建目录，估不出体积，只能按 0 计入；`MAX_ROOTS` 因此
+    // 保留一个宽松的兜底上限，防止极端情况下并行调度本身成为瓶颈。
+    const MAX_ROOTS: usize = 20_000;
+    const REBUILD_RATIO: f64 = 0.20;
+    /// 比例低于这个绝对量时一律走增量。占比只在树足够大时才说明问题——
+    /// 一棵 4 条记录的测试树里重扫 1 条就是 25%，但那 1 条是微秒级的活，
+    /// 换成全量反而更贵。
+    const ALWAYS_INCREMENTAL_RECORDS: u64 = 50_000;
+    let total_records = scan.tree.file_count_of(scan.tree.root());
+    let mut estimated: u64 = 0;
+    let mut unknown_roots = 0usize;
+    for root in &roots {
+        match scan.tree.find_node_by_path(root) {
+            Some(node) => estimated = estimated.saturating_add(scan.tree.file_count_of(node)),
+            None => unknown_roots += 1,
+        }
+    }
+    let ratio = if total_records == 0 {
+        1.0
+    } else {
+        estimated as f64 / total_records as f64
+    };
+    crate::log!(
+        "refresh_macos_index: 重扫成本估算 {} / {} 条记录（{:.1}%），新建根 {} 个",
+        estimated,
+        total_records,
+        ratio * 100.0,
+        unknown_roots
+    );
+    if roots.len() > MAX_ROOTS {
         crate::log!(
-            "refresh_macos_index: 独立变更根 {} 个 > 512，放弃增量",
-            roots.len()
+            "refresh_macos_index: 独立变更根 {} 个 > {}，放弃增量",
+            roots.len(),
+            MAX_ROOTS
+        );
+        return None;
+    }
+    if estimated > ALWAYS_INCREMENTAL_RECORDS && ratio > REBUILD_RATIO {
+        crate::log!(
+            "refresh_macos_index: 重扫量占全树 {:.1}% > {:.0}%，全量更划算，放弃增量",
+            ratio * 100.0,
+            REBUILD_RATIO * 100.0
         );
         return None;
     }
