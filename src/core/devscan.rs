@@ -92,6 +92,41 @@ pub(super) struct Marker {
     pub(super) sibling_any: &'static [&'static str],
 }
 
+/// CACHEDIR.TAG 规范签名（<https://bford.info/cachedir/>）：文件必须以
+/// 这 43 字节开头，后面可跟任意注释。越来越多的工具会主动写这个文件
+/// 声明「我是缓存」——Python 3.8+ 的 `__pycache__`、Rust sccache、各类
+/// 应用缓存目录都是。自声明是比按名字猜更强的信号，且正是 Mole 用来
+/// 识别缓存目录的机制。
+pub(super) const CACHEDIR_SIGNATURE: &[u8] =
+    b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// CACHEDIR.TAG 命中用的伪 Marker。不进 [`MARKERS`] 表（`dir` 占位符
+/// 不参与名字匹配），只在三通道各自的 CACHEDIR 分支里显式引用。
+pub(super) static CACHEDIR_MARKER: Marker = Marker {
+    dir: "<cachedir>",
+    label_zh: "缓存目录（CACHEDIR.TAG）",
+    label_en: "Cache directory (CACHEDIR.TAG)",
+    category: CategoryId::DevBuild,
+    sibling_any: &[],
+};
+
+/// 目录里有没有一份**签名合法**的 `CACHEDIR.TAG`。
+///
+/// 签名验证是关键，不能只看文件存在：同名伪造（用户目录恰好放了个空
+/// 的 `CACHEDIR.TAG`）过不了签名关，而「把任意目录声明成缓存」正是
+/// 要防的误判。只读前 256 字节：签名在文件开头，后面是可选注释，
+/// 没必要读全文。读失败（权限、竞态删除）按「不是」处理——这只是
+/// 发现信号，判错的代价是多下钻一层，不是放行删除。
+pub(super) fn has_cachedir_tag(dir: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(dir.join("CACHEDIR.TAG")) else {
+        return false;
+    };
+    let mut buf = [0u8; 256];
+    let n = file.read(&mut buf).unwrap_or(0);
+    buf[..n].starts_with(CACHEDIR_SIGNATURE)
+}
+
 pub(super) const MARKERS: &[Marker] = &[
     // ---- Node / 前端 ----
     Marker {
@@ -471,6 +506,32 @@ mod tests {
     #[cfg(not(windows))]
     use macos::{collect_tree, refresh_macos_index};
     use walk::collect;
+
+    /// 签名验证是 CACHEDIR.TAG 判定的核心：文件不存在、空文件、内容
+    /// 伪造都不能算命中；只有以规范签名开头的才算。
+    #[test]
+    fn cachedir_tag_requires_valid_signature() {
+        let tmp = std::env::temp_dir().join("qc_cachedir_sig");
+        let dir = tmp.join("cache-dir");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 没有文件
+        assert!(!has_cachedir_tag(&dir));
+        // 空文件（同名伪造最常见的形状）
+        std::fs::write(dir.join("CACHEDIR.TAG"), b"").unwrap();
+        assert!(!has_cachedir_tag(&dir));
+        // 内容像但不是签名
+        std::fs::write(dir.join("CACHEDIR.TAG"), b"Signature: deadbeef\n").unwrap();
+        assert!(!has_cachedir_tag(&dir));
+        // 合法签名 + 注释（规范允许签名后跟任意注释）
+        let mut valid = CACHEDIR_SIGNATURE.to_vec();
+        valid.extend_from_slice(b"\n# managed by some tool");
+        std::fs::write(dir.join("CACHEDIR.TAG"), valid).unwrap();
+        assert!(has_cachedir_tag(&dir));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     /// 列表标签两种语言都要拼全：规则名跟着语言走，路径两边一样。
     #[test]

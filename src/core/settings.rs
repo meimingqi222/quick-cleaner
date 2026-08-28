@@ -42,6 +42,20 @@ pub struct Settings {
 
     /// macOS 专属：用户是否已勾选「不再提示完全磁盘访问权限引导」。
     pub macos_fda_dismissed: bool,
+
+    /// 用户白名单：「永远别碰这些路径」的绝对路径清单。
+    ///
+    /// 生效方式见 `core::whitelist` 模块头注释——合并进 `safety::is_protected`，
+    /// 所有删除通道（分类清理/手选/回收站）从删除层就不可绕过。这里只负责
+    /// 持久化；运行时的全局查询表由 `core::whitelist::reload` 装载。
+    pub whitelist: Vec<String>,
+
+    /// 上一次真实跑 `brew cleanup` 的 Unix 时间（秒）。
+    ///
+    /// 见 `core::brew`：这是节流依据，间隔不到 `brew::THROTTLE_DAYS` 天
+    /// 就不在列表里出现 brew 清理条目——dry-run 不是瞬时命令，每轮扫描
+    /// 都跑没有道理。只在真实清理成功后更新。
+    pub brew_cleanup_at: Option<i64>,
 }
 
 impl Default for Settings {
@@ -50,12 +64,17 @@ impl Default for Settings {
             language: crate::platform::detect_system_language(),
             delete_to_recycle_bin: false,
             macos_fda_dismissed: false,
+            whitelist: Vec::new(),
+            brew_cleanup_at: None,
         }
     }
 }
 
 impl Settings {
     /// 读取用户设置。文件不存在或解析失败时返回默认值（语言跟随系统）。
+    ///
+    /// 顺带把白名单装载进全局查询表——`load` 是启动时唯一的设置读取点，
+    /// 在这做就不需要调用方记得「读设置后还要刷新白名单」。
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
@@ -63,7 +82,9 @@ impl Settings {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        Self::merge_json(&text)
+        let settings = Self::merge_json(&text);
+        crate::core::whitelist::reload(&settings.whitelist);
+        settings
     }
 
     /// 把设置写回磁盘。尽力而为：写不进去（只读目录、磁盘满、权限不足）
@@ -111,15 +132,24 @@ impl Settings {
     }
 
     fn dir() -> Option<PathBuf> {
-        #[cfg(windows)]
-        {
-            // 锚定真实前台用户，不能用 dirs::config_dir()——见模块头注释
-            Some(crate::platform::windows::real_user_roaming_appdata().join(DIR_NAME))
-        }
-        #[cfg(not(windows))]
-        {
-            dirs::config_dir().map(|d| d.join(DIR_NAME))
-        }
+        config_dir()
+    }
+}
+
+/// 配置目录（`%APPDATA%\QuickCleaner\` / `~/Library/Application
+/// Support/QuickCleaner/`）。`pub(crate)`：`core::history` 的审计日志
+/// 放在与 settings.json 相同的目录，路径选择规则（Windows 锚定真实
+/// 前台用户、不用 dirs::config_dir()，见本模块头注释）必须共用一份，
+/// 不能各写一遍。
+pub(crate) fn config_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        // 锚定真实前台用户，不能用 dirs::config_dir()——见模块头注释
+        Some(crate::platform::windows::real_user_roaming_appdata().join(DIR_NAME))
+    }
+    #[cfg(not(windows))]
+    {
+        dirs::config_dir().map(|d| d.join(DIR_NAME))
     }
 }
 
@@ -133,6 +163,8 @@ mod tests {
             language: Language::En,
             delete_to_recycle_bin: true,
             macos_fda_dismissed: true,
+            whitelist: vec!["/tmp/keep-this".to_string()],
+            brew_cleanup_at: Some(1_700_000_000),
         };
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(Settings::merge_json(&text), s);

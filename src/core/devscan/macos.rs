@@ -53,6 +53,11 @@ pub(super) fn collect_tree_and_build_items(
                 return None;
             }
             let path = PathBuf::from(tree.path_of_with(idx, &mut cache));
+            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`，
+            // 见 `categories::mod`），删除时验的是根身份，所以这里值得
+            // 多付一次 stat 把身份取到——树上的聚合体积/计数不含
+            // Metadata，没法像 scanner::scan_fixed_inner 那样顺手拿。
+            let identity = crate::core::model::capture_identity(&path)?;
             Some(ScanItem {
                 label: item_label(marker, &path),
                 path,
@@ -62,6 +67,7 @@ pub(super) fn collect_tree_and_build_items(
                 last_modified: 0,
                 recommended: false,
                 busy: None,
+                identity: Some(identity),
             })
         })
         .collect()
@@ -659,7 +665,26 @@ pub(super) fn collect_tree(
             .find(|m| m.dir == lower && has_sibling(&files, m.sibling_any))
         {
             Some(marker) => out.push((child, marker)),
-            None => collect_tree(tree, child, depth + 1, max_depth, live, out),
+            None => {
+                // 名字没命中，看 child 的子项里有没有 CACHEDIR.TAG（树内
+                // 查名，无 IO）；有再读盘验签名——验签名的文件 IO 只发生
+                // 在树内已见信号时，避免给遍历热点路径加磁盘读。
+                let tagged = tree.child_indices(child).iter().any(|&grand| {
+                    tree.valid(grand)
+                        && !tree.is_dir(grand)
+                        && tree.entry_name(grand).eq_ignore_ascii_case("cachedir.tag")
+                });
+                if tagged {
+                    let mut cache: std::collections::HashMap<u32, String> =
+                        std::collections::HashMap::new();
+                    let path = std::path::PathBuf::from(tree.path_of_with(child, &mut cache));
+                    if super::has_cachedir_tag(&path) {
+                        out.push((child, &super::CACHEDIR_MARKER));
+                        continue;
+                    }
+                }
+                collect_tree(tree, child, depth + 1, max_depth, live, out)
+            }
         }
     }
 }

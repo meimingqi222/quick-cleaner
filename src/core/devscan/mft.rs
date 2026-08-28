@@ -47,6 +47,13 @@ pub(super) fn discover_via_mft(
                 continue;
             }
             let path = PathBuf::from(tree.path_of_with(idx.0, &mut cache));
+            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`），
+            // 删除时验的是根身份。MFT 树上的聚合体积/计数不含
+            // dev/ino/mtime，这里多付一次 stat 换身份——一个 hit 一次，
+            // 相对于本来就要做的 MFT 全盘解析可以忽略不计。
+            let Some(identity) = crate::core::model::capture_identity(&path) else {
+                continue;
+            };
             out.push(ScanItem {
                 label: item_label(idx.1, &path),
                 path,
@@ -58,6 +65,7 @@ pub(super) fn discover_via_mft(
                 last_modified: 0,
                 recommended: false,
                 busy: None,
+                identity: Some(identity),
             });
         }
     }
@@ -107,7 +115,26 @@ pub(super) fn collect_mft(
             .find(|m| m.dir == lower && has_sibling(&files, m.sibling_any))
         {
             Some(marker) => out.push((child, marker)),
-            None => collect_mft(tree, child, depth + 1, live, out),
+            None => {
+                // 名字没命中，看 child 的子项里有没有 CACHEDIR.TAG（树内
+                // 查名，无 IO）；有再读盘验签名——验签名只在树内已见信号
+                // 时发生，不给遍历热点路径加磁盘读。与 walk/macos 通道
+                // 保持完全一致的判定规则。
+                let tagged = tree.child_indices(child).iter().any(|&grand| {
+                    tree.valid(grand)
+                        && !tree.is_dir(grand)
+                        && tree.entry_name(grand).eq_ignore_ascii_case("cachedir.tag")
+                });
+                if tagged {
+                    let mut cache: HashMap<u32, String> = HashMap::new();
+                    let path = std::path::PathBuf::from(tree.path_of_with(child, &mut cache));
+                    if super::has_cachedir_tag(&path) {
+                        out.push((child, &super::CACHEDIR_MARKER));
+                        continue;
+                    }
+                }
+                collect_mft(tree, child, depth + 1, live, out)
+            }
         }
     }
 }

@@ -590,6 +590,7 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                     kind: ResidualKind::File(p.to_path_buf(), size),
                     confidence: conf,
                     source: ResidualSource::Shortcut,
+                    identity: crate::core::model::capture_identity(p),
                 });
             }
         }
@@ -694,6 +695,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                         Confidence::Possible
                     },
                     source: ResidualSource::StartupEntry,
+                    identity: None,
                 });
             }
         }
@@ -1111,6 +1113,7 @@ fn scan_scheduled_tasks(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 Confidence::Possible
             },
             source: ResidualSource::ScheduledTask,
+            identity: None,
         });
     }
 }
@@ -1250,10 +1253,12 @@ fn scan_uninstaller_leftover(app: &InstalledApp, ctx: &Ctx, out: &mut Vec<Residu
 
 fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source: ResidualSource) {
     let size = dir_or_file_size(&path);
+    let identity = crate::core::model::capture_identity(&path);
     out.push(ResidualItem {
         kind: ResidualKind::Directory(path, size),
         confidence: conf,
         source,
+        identity,
     });
 }
 
@@ -1349,7 +1354,18 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
         match &item.kind {
             ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => {
                 prog.note(path);
-                let res = clean_path(path, prog);
+                // 残留走回收站，不永久删（与 macOS 侧同一条理由，见
+                // `platform::macos::residuals::clean_residuals`）：判据是
+                // 「这个 app 已经不在任何位置装着了」，判错的代价是活应用
+                // 的配置与登录态，收益通常只有几十 MB。
+                //
+                // 注册表键值、计划任务、服务不走这条——它们没有回收站语义，
+                // 维持原来的直接删除。
+                let res = crate::core::cleaner::dispose(
+                    path,
+                    crate::core::cleaner::Disposal::RecycleBin,
+                    prog,
+                );
                 report.record(path, res);
             }
             ResidualKind::RegistryKey(root, subpath) => {

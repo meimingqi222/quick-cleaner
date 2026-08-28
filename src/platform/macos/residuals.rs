@@ -11,7 +11,9 @@
 use crate::core::apps::{
     InstalledApp, ResidualItem, ResidualKind, ResidualScanResult, ResidualSource,
 };
-use crate::core::cleaner::{clean_path, CleanFailure, CleanProgress, CleanReport, CleanResult};
+use crate::core::cleaner::{
+    dispose, CleanFailure, CleanProgress, CleanReport, CleanResult, Disposal,
+};
 use std::path::{Path, PathBuf};
 
 /// 扫描应用卸载后的残留文件和目录。
@@ -1022,11 +1024,37 @@ fn vendor_prefixes(bundle_ids: &[String]) -> Vec<String> {
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
     let mut elevated: Vec<PathBuf> = Vec::new();
+    let spot_paths: Vec<PathBuf> = items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    let spot = crate::core::inuse::spot_check(&spot_paths);
 
     for item in items {
         match &item.kind {
             ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => {
                 prog.note(path);
+                if matches!(
+                    spot.get(path),
+                    Some(
+                        crate::core::inuse::SpotCheck::Busy
+                            | crate::core::inuse::SpotCheck::Unknown
+                    )
+                ) {
+                    prog.failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    report.record(path, CleanResult::Failed);
+                    continue;
+                }
+                if !item.identity.is_some_and(|identity| identity.recheck(path)) {
+                    prog.failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    report.record(path, CleanResult::Failed);
+                    continue;
+                }
                 // `/Library` 白名单路径就算已经是 root 也不能走 `clean_path`：
                 // `is_protected` 会整棵挡住。攒起来走一次提权批次（root 下
                 // 跳过 osascript，仍套白名单）。
@@ -1034,7 +1062,12 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                     elevated.push(path.clone());
                     continue;
                 }
-                let res = clean_path(path, prog);
+                // 残留走废纸篓，不永久删。这是所有清理路径里「删错了最疼、
+                // 体积最小」的一条：判据是「这个 app 已经不在任何位置装着
+                // 了」，一旦判错，删掉的是活应用的配置、登录态、许可证，
+                // 而换来的通常只有几十 MB。缓存和构建产物维持永久删——那些
+                // 本来就该重建，进废纸篓只是把占用挪个地方。
+                let res = dispose(path, Disposal::RecycleBin, prog);
                 report.record(path, res);
             }
             ResidualKind::SystemExtension(team_id, bundle_id) => {
@@ -1091,6 +1124,9 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
             match &mut item.kind {
                 ResidualKind::File(path, size) | ResidualKind::Directory(path, size) => {
                     *size = super::apps::dir_size(path);
+                    // 卸载器可能合法地改写或重建了候选目录。旧快照属于卸载前
+                    // 的对象，不能拿来授权之后的删除；以本轮复核后的对象重拍。
+                    item.identity = crate::core::model::capture_identity(path);
                 }
                 _ => {}
             }
@@ -1825,6 +1861,27 @@ mod tests {
             id,
             Some(&[("TEAM".to_string(), "com.other.unrelated".to_string())])
         ));
+    }
+
+    #[test]
+    fn residual_cleanup_rejects_path_replaced_after_scan() {
+        let root = std::env::temp_dir().join("qc_residual_identity_swap");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("com.example.app.plist");
+        std::fs::write(&path, b"old residual").unwrap();
+        let item = ResidualItem::certain(
+            ResidualKind::File(path.clone(), 12),
+            ResidualSource::PreferenceFile,
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"new live configuration").unwrap();
+
+        let report = clean_residuals(&[item], &CleanProgress::default());
+        assert_eq!(report.failed, vec![CleanFailure::Path(path.clone())]);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new live configuration");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

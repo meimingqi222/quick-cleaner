@@ -19,16 +19,27 @@ pub(super) fn is_older_than(path: &Path, age: std::time::Duration) -> bool {
 /// `platform::macos::plist`——以前这里直接 `Command::new("plutil")`，
 /// 是领域层自己调外部进程。
 ///
-/// 另外去掉了原来先跑一次 `plutil -lint` 的预检：`-extract` 对语法非法的
-/// plist 本来就会失败，两条路都归到「读不出 Program」这个分支，结果完全
-/// 一样，但每个 plist 少 fork 一次进程。
+/// 整份 plist 只解析一次。解析成功后缺少 Program/ProgramArguments 才能
+/// 证明配置本身无可执行入口；文件读不动、语法损坏或 plutil 失败都属于
+/// “探测失败”，必须 fail closed，不能据此授权删除。
 #[cfg(target_os = "macos")]
 pub(super) fn is_broken_launch_agent(plist: &Path) -> bool {
-    use crate::platform::macos::plist::read_scalar;
-
-    let Some(program) =
-        read_scalar(plist, "Program").or_else(|| read_scalar(plist, "ProgramArguments.0"))
-    else {
+    let Some(value) = crate::platform::macos::plist::read_value(plist) else {
+        return false;
+    };
+    let program = value
+        .get("Program")
+        .and_then(serde_json::Value::as_str)
+        .filter(|program| !program.trim().is_empty())
+        .or_else(|| {
+            value
+                .get("ProgramArguments")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|arguments| arguments.first())
+                .and_then(serde_json::Value::as_str)
+                .filter(|program| !program.trim().is_empty())
+        });
+    let Some(program) = program else {
         return true;
     };
 
@@ -66,18 +77,13 @@ pub(super) fn is_not_just_logs(name: &str) -> bool {
 /// `syncReporterTelemetryCache.otc` 和它的 `-wal`/`-shm`——一个叫 Logs 的
 /// 目录里住着活动数据库，只看目录名必然误判。
 ///
-/// 只看顶层一层：这些伴随文件和库文件本身永远同目录，再深没有意义。
+/// 实现挪到了 `core::safety::holds_live_database`——删除路径
+/// （`cleaner::clean_path`）现在把同一份判据提升成删除级的硬拒绝，不能只
+/// 留在这里当展示层的默认勾选建议，两处必须是同一套逻辑。这里保留一层瘦
+/// 包装，调用点（`system.rs`）不用改。
 #[cfg(target_os = "macos")]
 pub(super) fn holds_live_database(dir: &Path) -> bool {
-    const MARKERS: &[&str] = &["-wal", "-shm", ".otc", ".sqlite", ".sqlite3", ".db"];
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        // 读不动就等于看不清，按「不满足第 1 条」处理。
-        return true;
-    };
-    rd.flatten().any(|e| {
-        let name = e.file_name().to_string_lossy().into_owned();
-        MARKERS.iter().any(|marker| name.ends_with(marker))
-    })
+    crate::core::safety::holds_live_database(dir)
 }
 
 /// `~/Library/Caches` 下不应被默认清理的 Apple 系统服务缓存。

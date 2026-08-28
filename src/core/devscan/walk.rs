@@ -28,9 +28,15 @@ pub(super) fn discover_via_walk_roots(
     // 体积测算同样并行，这是整轮里最花时间的一步。
     hits.par_iter()
         .filter(|_| live.load(Ordering::Relaxed))
-        .map(|hit| {
+        .filter_map(|hit| {
             let acc = measure_dir(&hit.path, live);
-            ScanItem {
+            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`），
+            // 删除时验的是根身份。`measure_dir` 只遍历子项称重，不会顺手
+            // 留一份根自己的 Metadata，这里多付一次 stat 换取该目标也能
+            // 享受身份防护——一个 hit 一次，相对于紧随其后的递归遍历
+            // 可以忽略不计。
+            let identity = crate::core::model::capture_identity(&hit.path)?;
+            Some(ScanItem {
                 label: item_label(hit.marker, &hit.path),
                 path: hit.path.clone(),
                 size: acc.0,
@@ -39,7 +45,8 @@ pub(super) fn discover_via_walk_roots(
                 last_modified: acc.2,
                 recommended: false,
                 busy: None,
-            }
+                identity: Some(identity),
+            })
         })
         .filter(|item| item.size > 0)
         .collect()
@@ -86,6 +93,12 @@ pub(super) fn collect(
             .find(|m| m.dir == lower && has_sibling(&file_names, m.sibling_any))
         {
             Some(marker) => out.push(Hit { path, marker }),
+            // 名字没命中，但目录自己声明了「我是缓存」（CACHEDIR.TAG
+            // 签名验证）——自声明比名字特征更强，见 devscan::CACHEDIR_SIGNATURE。
+            None if super::has_cachedir_tag(&path) => out.push(Hit {
+                path,
+                marker: &super::CACHEDIR_MARKER,
+            }),
             // 命中的目录不再下钻；没命中的继续往下找
             None => collect(&path, depth + 1, max_depth, live, out),
         }

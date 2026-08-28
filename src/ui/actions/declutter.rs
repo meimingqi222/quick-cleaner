@@ -1,6 +1,6 @@
 //! 文件整理的扫描与清理动作
 
-use crate::core::cleaner::{clean_arbitrary, CleanProgress, Disposal};
+use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget, CleanProgress, Disposal};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
 use crate::ui::views::DeclutterTab;
@@ -131,10 +131,11 @@ impl crate::ui::Root {
         });
         cx.notify();
 
+        let items: Vec<ArbitraryTarget> = paths.into_iter().map(ArbitraryTarget::capture).collect();
         let work = cx.background_executor().spawn(async move {
             // 废纸篓不释放空间，字节总量填 0：进度条上的「已释放」必须是真的。
-            let progress = CleanProgress::new(paths.len() as u64, 0);
-            let report = clean_arbitrary(&paths, Disposal::RecycleBin, &progress);
+            let progress = CleanProgress::new(items.len() as u64, 0);
+            let report = clean_arbitrary_items(&items, Disposal::RecycleBin, &progress);
             let failed: Vec<PathBuf> = report
                 .failed
                 .iter()

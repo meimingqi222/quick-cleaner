@@ -1,6 +1,6 @@
 //! 磁盘透镜动作：扫描、卷切换、磁盘清理
 
-use crate::core::cleaner::clean_arbitrary;
+use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget};
 use crate::core::disk::VolumeId;
 use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;
@@ -247,14 +247,18 @@ impl crate::ui::Root {
         }
         let total_size = self.disk_selected_size();
         let n = targets.len();
-        let to_clean = targets.clone();
+        let to_clean: Vec<ArbitraryTarget> = targets
+            .iter()
+            .cloned()
+            .map(ArbitraryTarget::capture)
+            .collect();
         let disposal = self.disposal();
 
         self.spawn_clean(
             (0, total_size),
             bilingual(|l| tr_status_batch_deleting(l, n)),
-            move |p| clean_arbitrary(&to_clean, disposal, p),
-            move |this, _report, snap, cx| {
+            move |p| clean_arbitrary_items(&to_clean, disposal, p),
+            move |this, report, snap, cx| {
                 this.clear_disk_selection();
 
                 let deleted: Vec<PathBuf> = targets
@@ -262,7 +266,10 @@ impl crate::ui::Root {
                     .filter(|target| !target.exists())
                     .cloned()
                     .collect();
-                let fails = targets.len().saturating_sub(deleted.len());
+                let fails = targets
+                    .iter()
+                    .filter(|target| target.exists() && !report.was_skipped(target))
+                    .count();
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
                     if fails == 0 {

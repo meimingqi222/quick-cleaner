@@ -45,8 +45,19 @@ pub(super) fn render_left_lens_pane(
         }
     } else {
         match lang {
-            Language::Zh => format!("{} 已扫描", fmt_size(scan.total_size)),
-            Language::En => format!("{} Scanned", fmt_size(scan.total_size)),
+            // 整卷总量必须用 `unique_size` 而不是 `total_size`。
+            //
+            // NTFS 上一个文件可以从多个目录被硬链接进来（WinSxS 组件存储
+            // 大量这么做），`total_size` 是**按路径的表观体积**——每个链接
+            // 位置各计一次，见 `mft_scanner` 里 `total_size += hard_link_size`。
+            // 那个口径对"这个目录占多大"是对的，但把它当整卷总量就会报出
+            // 一个超过磁盘实际占用的数字。`unique_size` 是同一次扫描里已经
+            // 算好的去重口径，直接用。
+            //
+            // macOS 侧两者恒等（`devscan::macos` 里 `unique_size = total_size`），
+            // 所以这里不需要 `#[cfg]` 分支。
+            Language::Zh => format!("{} 已扫描", fmt_size(scan.unique_size)),
+            Language::En => format!("{} Scanned", fmt_size(scan.unique_size)),
         }
     };
 

@@ -131,6 +131,13 @@ impl JunkState {
     }
 
     /// 勾选项连同各自的处置方式（整个删掉还是只清空内容）。
+    ///
+    /// 身份快照（`CleanTarget::identity`）只从 `ScanItem::identity` 原样
+    /// 搬运，**绝不在这里重新拍**——这个函数是用户点了「清理」之后、
+    /// 真正删除之前几毫秒才跑的转换，此刻拍快照只能证明「几毫秒前是
+    /// 这样」，盖不住扫描到点击之间那几十秒到几分钟的窗口。真正的快照
+    /// 必须来自扫描阶段（`scanner::scan_fixed_inner` / `devscan` 各通道），
+    /// 见 `ScanItem::identity` 的文档。
     pub fn selected_targets(&self) -> Vec<CleanTarget> {
         self.selected_items()
             .map(|i| {
@@ -138,9 +145,14 @@ impl JunkState {
                 // clean_path；clean_dir_contents 只适用于真实目录。
                 let is_file_or_link = std::fs::symlink_metadata(&i.path)
                     .is_ok_and(|md| md.is_file() || md.file_type().is_symlink());
-                // 虚拟路径（Docker 镜像）删除时不逐文件累计体积，把扫描
-                // 阶段的 size_hint 带下去，成功后一次性记账。
-                let size_hint = if crate::core::model::is_virtual_path(&i.path) {
+                // 虚拟路径（Docker 镜像/brew）与 owner command 路由的缓存
+                // （Go modcache / pnpm store）删除时不逐文件累计体积，把
+                // 扫描阶段的称重带下去做一次性记账。其余真实路径用不到
+                // 这个字段，保持 None。
+                let size_hint = if crate::core::model::is_virtual_path(&i.path)
+                    || crate::core::owner::is_go_modcache(&i.path)
+                    || crate::core::owner::is_pnpm_store(&i.path)
+                {
                     Some(i.size)
                 } else {
                     None
@@ -149,6 +161,8 @@ impl JunkState {
                     path: i.path.clone(),
                     remove_dir: i.category.removes_directory() || is_file_or_link,
                     size_hint,
+                    disposal: i.category.disposal(),
+                    identity: i.identity,
                 }
             })
             .collect()
@@ -521,6 +535,29 @@ mod tests {
             last_modified: 0,
             recommended: cat.default_selected(),
             busy: None,
+            identity: None,
+        }
+    }
+
+    /// 同 [`item`]，但带上一份真实的身份快照——用来测试
+    /// `selected_targets()` 是否老老实实把它原样搬进了 `CleanTarget`。
+    fn item_with_identity(
+        path: &Path,
+        cat: CategoryId,
+        size: u64,
+        files: u64,
+    ) -> ScanItem {
+        let identity = crate::core::model::capture_identity(path);
+        ScanItem {
+            path: path.to_path_buf(),
+            label: bilingual(|_| path.display().to_string()),
+            size,
+            file_count: files,
+            category: cat,
+            last_modified: 0,
+            recommended: cat.default_selected(),
+            busy: None,
+            identity,
         }
     }
 
@@ -546,11 +583,13 @@ mod tests {
                         item(r"C:\rec\a", recommended, 100, 3),
                         item(r"C:\rec\b", recommended, 200, 5),
                     ],
+                    partial: false,
                 },
                 CategorySummary {
                     category: opt_in,
                     total_size: 50,
                     items: vec![item(r"C:\opt\c", opt_in, 50, 1)],
+                    partial: false,
                 },
             ],
             scanned: true,
@@ -721,7 +760,51 @@ mod tests {
                 .expect("目标必须来自扫描结果")
                 .category;
             assert_eq!(t.remove_dir, cat.removes_directory());
+            // 这个测试名一直写着 per_category_disposal，但在 disposal 通道
+            // 接上之前只断言得了 remove_dir。现在补齐名实。
+            assert_eq!(t.disposal, cat.disposal());
         }
+    }
+
+    /// `selected_targets()` 必须把 `ScanItem::identity` 原样搬进
+    /// `CleanTarget::identity`，不多不少——这个函数跑在用户点「清理」
+    /// 之后的几毫秒里，绝不能在这里重新拍一次快照（那样只能证明「几毫秒
+    /// 前是这样」，盖不住扫描到点击之间那几十秒到几分钟的真实窗口）。
+    #[test]
+    fn selected_targets_carry_the_scan_time_identity_verbatim() {
+        let real = std::env::temp_dir().join("qc_ui_identity_carry_real");
+        std::fs::write(&real, b"scanned content").unwrap();
+        let scanned_identity = crate::core::model::capture_identity(&real);
+        assert!(scanned_identity.is_some(), "测试前提：文件必须能拍到身份");
+
+        let mut j = junk_fixture();
+        j.categories = vec![CategorySummary {
+            category: CategoryId::UserTemp,
+            total_size: 1,
+            items: vec![item_with_identity(&real, CategoryId::UserTemp, 1, 1)],
+        partial: false,
+        }];
+        j.select_every();
+
+        // 扫描之后、转换之前，内容被换掉——如果 selected_targets() 偷偷
+        // 重新拍了快照，这里就会拍到「换过之后」的身份，测试就发现不了
+        // 「必须原样搬运」这条规则被破坏。
+        std::fs::write(&real, b"replaced after scan, before clean").unwrap();
+
+        let targets = j.selected_targets();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].identity, scanned_identity,
+            "必须是扫描期那一份快照，不能是转换那一刻重新拍的"
+        );
+        // 佐证：转换那一刻重新拍的话，因为文件被替换了，会跟这份不一样
+        assert_ne!(
+            targets[0].identity,
+            crate::core::model::capture_identity(&real)
+        );
+
+        let _ = std::fs::remove_file(&real);
     }
 
     #[test]
@@ -733,6 +816,7 @@ mod tests {
             category: CategoryId::UserTemp,
             total_size: 1,
             items: vec![item(&path.to_string_lossy(), CategoryId::UserTemp, 1, 1)],
+        partial: false,
         }];
         j.select_every();
 

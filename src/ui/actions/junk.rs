@@ -178,14 +178,14 @@ impl crate::ui::Root {
             .spawn(async move { scan_discovered(&live, prescanned) });
 
         self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
-            let items = discover.await;
+            let (items, partial) = discover.await;
             this.update(cx, |this, cx| {
                 if this.junk.gen != gen {
                     return;
                 }
                 this.junk.discovering = false;
                 let was_recommended = this.junk.selection_is_recommended();
-                merge_discovered(&mut this.junk.categories, items);
+                merge_discovered(&mut this.junk.categories, items, partial);
                 if was_recommended {
                     this.junk.select_recommended();
                 }
@@ -213,14 +213,14 @@ impl crate::ui::Root {
             .spawn(async move { scan_discovered_arc(&live, prescanned) });
 
         self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
-            let items = discover.await;
+            let (items, partial) = discover.await;
             this.update(cx, |this, cx| {
                 if this.junk.gen != gen {
                     return;
                 }
                 this.junk.discovering = false;
                 let was_recommended = this.junk.selection_is_recommended();
-                merge_discovered(&mut this.junk.categories, items);
+                merge_discovered(&mut this.junk.categories, items, partial);
                 if was_recommended {
                     this.junk.select_recommended();
                 }

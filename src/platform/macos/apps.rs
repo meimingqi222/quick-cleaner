@@ -509,6 +509,112 @@ fn is_system_app(path: &Path) -> bool {
     path.starts_with("/System/")
 }
 
+/// `mdfind` 反查最多等多久。
+///
+/// Spotlight 正在重建索引时 `mdfind` 可以挂很久，而这个调用在「用户点了
+/// 清理残留正在等」的路径上。2 秒是「正常情况下绰绰有余、异常情况下不让
+/// 用户干等」的折中：本机正常返回在 100ms 量级。
+const MDFIND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 这个 bundle id 对应的应用，是不是还装在这台机器上的某个位置？
+///
+/// 这是残留清理的最后一道判据。残留扫描的整个前提是「这个 app 已经被卸载
+/// 了」，一旦这个前提是错的——用户把应用挪到了别的目录、或者卸载器其实没
+/// 卸干净、或者同一个 bundle id 还有另一份安装——那么"残留"就是活应用的
+/// 配置、登录态和许可证，删掉不可逆。
+///
+/// 三态，语义必须严格区分：
+/// - `Some(true)`：Spotlight 明确报告还有这个 bundle id 的安装 → **不许删**
+/// - `Some(false)`：`mdfind` 正常跑完、明确返回空 → 可以删
+/// - `None`：**测不出**（超时、命令起不来、非零退出）→ 按 `Some(true)`
+///   一样处理，不许删
+///
+/// `None` 必须 fail closed，理由是 Mole 踩过的坑：Spotlight 卡顿或索引不
+/// 全的时候，`mdfind` 会「正常返回一个空结果」，看起来跟"确实没装"一模
+/// 一样。
+///
+/// **退出码在这里靠不住**（本机实测）：`mdfind` 连查询串语法错误都返回
+/// exit 0，错误信息写到 stderr、stdout 留空。只看「exit 0 且 stdout 空」
+/// 就会把一次根本没执行的查询判成"应用已卸载"，然后放行删除——这正是要
+/// 防的那类 fail-open。所以判据是**三个条件同时成立**才算"确实没装"：
+/// 退出码为 0、stderr 为空、stdout 为空。
+///
+/// 结论**不缓存**：同理，一次「没装」的判断不能拿去复用，Spotlight 的索
+/// 引状态随时会变，而缓存会把一次偶然的空结果固化成后续所有删除的依据。
+/// 拼 `mdfind` 的查询串。
+///
+/// bundle id 用双引号包住，内部的反斜杠与引号都要转义。id 理论上不含这些
+/// 字符，但查询串是拼出来的——不转义就等于把外部输入直接塞进查询语法，
+/// 一个精心构造的 id 可以闭合引号再接上别的条件，把查询变成"匹配一切"或
+/// 者干脆让它语法错误。转义顺序必须是**先反斜杠后引号**，反过来会把刚插
+/// 入的转义反斜杠又转义一遍。
+fn mdfind_bundle_query(bundle_id: &str) -> String {
+    let escaped = bundle_id.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("kMDItemCFBundleIdentifier == \"{escaped}\"")
+}
+
+pub fn bundle_is_still_installed(bundle_id: &str) -> Option<bool> {
+    if bundle_id.trim().is_empty() {
+        // 没有 bundle id 就无从查证 → 测不出，交给调用方 fail closed。
+        return None;
+    }
+    let query = mdfind_bundle_query(bundle_id);
+    let run = crate::core::proc::run_with_timeout("/usr/bin/mdfind", &[&query], MDFIND_TIMEOUT)?;
+    if !run.ok {
+        return None;
+    }
+    if run.stderr.iter().any(|b| !b.is_ascii_whitespace()) {
+        // 查询根本没跑起来（语法错误、Spotlight 服务异常）。退出码是 0，
+        // 但这不是一个"没找到"的结论。
+        return None;
+    }
+    // stdout 有内容 = Spotlight 报告了至少一个安装位置 = 还装着。
+    // 这里**不能取反**：函数名和调用方约定的都是"是否仍然安装"。
+    if run.stdout.iter().any(|b| !b.is_ascii_whitespace()) {
+        return Some(true);
+    }
+
+    // 走到这里意味着「查不到 = 可以删」，是唯一会授权删除的分支，所以
+    // 多付一次哨兵查询来证明索引本身是活的。
+    //
+    // 需要这一步的原因，是调试这个函数时实测到的现象：Spotlight 索引被
+    // 关掉或尚未覆盖某个位置时，`mdfind` 对每个查询都干净地返回 exit 0 +
+    // 空 stdout + 空 stderr——和"这个应用确实卸载了"一模一样。没有哨兵的
+    // 话，一台关了索引的机器上这个检查会对**所有**应用返回"已卸载"，整道
+    // 防线静默失效，而且失效方向是放行删除。
+    //
+    // 哨兵查的是"这台机器上有没有任何应用包"。任何一台 macOS 都必然有一
+    // 堆，查不到就只可能是索引不可用，此时返回"测不出"让调用方 fail closed。
+    if !spotlight_index_is_usable() {
+        return None;
+    }
+    Some(false)
+}
+
+/// Spotlight 索引现在能不能用？
+///
+/// 判据是一条在任何 macOS 上都必定有结果的查询：机器上存在应用包。返回
+/// `false` 只说明"索引此刻答不了问题"，不说明机器上没有应用。
+fn spotlight_index_is_usable() -> bool {
+    let Some(run) = crate::core::proc::run_with_timeout(
+        "/usr/bin/mdfind",
+        &[
+            "-count",
+            "kMDItemContentType == \"com.apple.application-bundle\"",
+        ],
+        MDFIND_TIMEOUT,
+    ) else {
+        return false;
+    };
+    if !run.ok || run.stderr.iter().any(|b| !b.is_ascii_whitespace()) {
+        return false;
+    }
+    String::from_utf8_lossy(&run.stdout)
+        .trim()
+        .parse::<u64>()
+        .is_ok_and(|n| n > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,4 +655,76 @@ mod tests {
         assert!(parsed.1 > 0);
         assert!(parse_metadata_date("(null)").is_none());
     }
+
+    /// 空 bundle id 无从查证 → 必须是"测不出"，不能是"没装"。
+    #[test]
+    fn empty_bundle_id_is_unknown() {
+        assert_eq!(bundle_is_still_installed(""), None);
+        assert_eq!(bundle_is_still_installed("   "), None);
+    }
+
+    /// 机器上确实装着的应用必须被认出来。Safari 在系统卷上，任何 macOS
+    /// 都有，且在 `/Applications` 下（Spotlight 默认覆盖的位置）。
+    ///
+    /// 这条**故意写成硬断言**而不是"查不到就跳过"：查不到恰恰意味着这道
+    /// 防线在这台机器上失效了，那是需要看到的失败，不是可以忽略的环境差异。
+    #[test]
+    fn installed_bundle_id_is_detected() {
+        assert_eq!(
+            bundle_is_still_installed("com.apple.Safari"),
+            Some(true),
+            "Safari 装在 /Applications 下却没被认出来——这道防线已失效"
+        );
+    }
+
+    /// 不存在的 bundle id 必须得到明确的"没装"，否则残留清理永远被拦住。
+    #[test]
+    fn unknown_bundle_id_reports_gone() {
+        assert_eq!(
+            bundle_is_still_installed("com.quickcleaner.definitely-not-installed-xyz"),
+            Some(false)
+        );
+    }
+
+    /// 索引哨兵在一台正常的机器上必须报可用——否则上面那条"没装"的结论
+    /// 会被 fail closed 挡掉，残留清理功能整体不可用。
+    #[test]
+    fn spotlight_sentinel_reports_usable_on_a_normal_mac() {
+        assert!(
+            spotlight_index_is_usable(),
+            "哨兵查询报告 Spotlight 索引不可用"
+        );
+    }
+
+    /// 查询串构造必须把 id 完整转义掉，任何 id 都不能改变查询的结构。
+    ///
+    /// 这条防的是查询注入：一个含引号的 id 若不转义，可以闭合字符串再接
+    /// 上别的条件，把"查这一个 bundle"变成"匹配一切"（于是永远判定还装着，
+    /// 残留功能失效）或者语法错误（`mdfind` 对语法错误也返回 exit 0，
+    /// 见 `bundle_is_still_installed` 的文档）。
+    #[test]
+    fn query_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            mdfind_bundle_query("com.example.App"),
+            "kMDItemCFBundleIdentifier == \"com.example.App\""
+        );
+        // 引号被转义，没有提前闭合
+        assert_eq!(
+            mdfind_bundle_query("a\"b"),
+            "kMDItemCFBundleIdentifier == \"a\\\"b\""
+        );
+        // 反斜杠先转义，不会把后面引号的转义符再吃掉一层
+        assert_eq!(
+            mdfind_bundle_query("a\\b"),
+            "kMDItemCFBundleIdentifier == \"a\\\\b\""
+        );
+        // 注入尝试：闭合引号后接 OR 条件——转义后整体仍是一个字符串字面量
+        let injected = mdfind_bundle_query("x\" || kMDItemFSName == \"");
+        assert!(
+            !injected.contains("|| kMDItemFSName == \"\""),
+            "注入片段不该以裸语法出现：{injected}"
+        );
+    }
+
+
 }

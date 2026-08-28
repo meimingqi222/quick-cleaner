@@ -285,6 +285,7 @@ impl crate::ui::Root {
         // 用来读实际删掉的字节数——按预期值记账会在有删除失败时虚报释放量
         let progress = prog.clone();
         let app_name = res.app_name.clone();
+        let app_name_for_abort = res.app_name.clone();
         let cleaning_name = res.app_name.clone();
         let cleaning_count = items_to_clean.len();
         // 提取残留路径，用于清理后局部更新磁盘透镜
@@ -300,12 +301,53 @@ impl crate::ui::Root {
         self.start_tick(cx);
         cx.notify();
 
-        let clean = cx
-            .background_executor()
-            .spawn(async move { clean_residuals(&items_to_clean, &prog) });
+        // 中止时要把列表和勾选原样放回去，所以先留一份。
+        let restore = res.clone();
+        let restore_selected = selected_before.clone();
+        let app_id_for_check = res.app_id.clone();
+
+        let clean = cx.background_executor().spawn(async move {
+            // 删除边界的最后一道判据：这个 bundle 真的已经不在机器上了吗？
+            //
+            // 残留扫描的整个前提是「应用已被卸载」。前提错了——用户把应用
+            // 挪去了别的目录、卸载器其实没卸干净、或者同一个 bundle id 还
+            // 有第二份安装——那么这些"残留"就是活应用的配置、登录态和许可
+            // 证。这一道刻意放在真正删除之前的最后一跳，而不是扫描时：扫描
+            // 到用户点确认之间可能过去很久，期间应用完全可能被重新装上。
+            //
+            // macOS 专属：判据是 Spotlight 反查，Windows 没有等价物（它的
+            // 残留判定走注册表卸载登记项，是另一套证据），所以这里按仓库
+            // 约定写成显式的平台分支，而不是塞进 `platform` 门面契约。
+            #[cfg(target_os = "macos")]
+            {
+                match crate::platform::macos::apps::bundle_is_still_installed(&app_id_for_check) {
+                    Some(false) => {}
+                    // 明确还装着，或者根本测不出（超时/命令失败）——两种都
+                    // 不许删。`None` 必须 fail closed：Spotlight 索引不全时
+                    // 的空结果和"确实没装"长得一模一样。
+                    _ => return None,
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = &app_id_for_check;
+
+            Some(clean_residuals(&items_to_clean, &prog))
+        });
 
         self.residual.task = Some(cx.spawn(async move |this, cx| {
-            let report = clean.await;
+            let Some(report) = clean.await else {
+                this.update(cx, |this, cx| {
+                    this.residual.scanning = false;
+                    // 原样还原：一个字节都没删，列表和勾选不该丢。
+                    this.residual.result = Some(restore);
+                    this.residual.selected = restore_selected;
+                    this.status =
+                        bilingual(|l| tr_status_residual_still_installed(l, &app_name_for_abort));
+                    cx.notify();
+                })
+                .ok();
+                return;
+            };
             this.update(cx, |this, cx| {
                 this.residual.scanning = false;
                 let snap = progress.snapshot();
@@ -375,6 +417,17 @@ impl crate::ui::Root {
                         tr_status_residual_cleaned(l, &app_name, ok, &size)
                     }
                 });
+
+                // 同分类清理：残留（走废纸篓，但仍可能永久失败的授权路径）
+                // 也要留持久化审计，出问题时能对着应用名翻账。
+                crate::core::history::record(
+                    "residual_clean",
+                    &residual_paths,
+                    ok,
+                    report.skipped,
+                    fails + manual,
+                    snap.bytes,
+                );
                 cx.notify();
             })
             .ok();

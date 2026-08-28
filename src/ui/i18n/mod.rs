@@ -164,6 +164,17 @@ pub fn tr_batch_clear(lang: Language) -> &'static str {
     }
 }
 
+/// 发现式扫描的时间预算耗尽，这一类的统计不完整。
+///
+/// 文案要让用户明白「数字偏小」而不是「出错了」——扫到的都是真的，只是
+/// 可能还有没扫到的。体积旁边同时会显示 `≥` 前缀。
+pub fn tr_partial_scan(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "部分统计",
+        Language::En => "Partial",
+    }
+}
+
 pub fn tr_need_manual_select(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "需手动勾选",
@@ -498,6 +509,42 @@ pub fn tr_status_residual_none_selected(lang: Language) -> &'static str {
     }
 }
 
+/// 残留清理被最后一道判据挡下：这个应用看起来还装着（或者查不出来）。
+///
+/// 文案刻意不说「清理失败」——什么都没删，这是一次成功的拦截。用户需要
+/// 知道的是「为什么没动」和「接下来该怎么办」。
+pub fn tr_status_residual_still_installed(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => {
+            format!("已中止：「{name}」看起来仍安装在这台电脑上，未删除任何内容。请先完成卸载再清理残留")
+        }
+        Language::En => format!(
+            "Stopped: \"{name}\" still appears to be installed. Nothing was deleted — finish uninstalling it first"
+        ),
+    }
+}
+
+/// 条目行尾「永久排除」按钮的文案。
+pub fn tr_exclude(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "排除",
+        Language::En => "Exclude",
+    }
+}
+
+/// 永久排除完成后的状态行。说清两件事：现在起任何删除通道都会跳过它，
+/// 以及本次从列表里移走了几条已扫出的条目。
+pub fn tr_status_excluded(lang: Language, removed: usize) -> String {
+    match lang {
+        Language::Zh => {
+            format!("已加入排除清单，所有清理都会跳过此路径（已从列表移走 {removed} 条）")
+        }
+        Language::En => {
+            format!("Added to exclusions — all cleanup will skip this path ({removed} items removed from the list)")
+        }
+    }
+}
+
 pub fn tr_status_residual_cleaning(lang: Language, name: &str, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在彻底清除「{name}」的 {count} 项残留…"),
@@ -581,8 +628,8 @@ pub fn tr_busy_skipped(lang: Language, count: usize) -> String {
 
 pub fn tr_status_deleting_n(lang: Language, count: usize) -> String {
     match lang {
-        Language::Zh => format!("正在永久删除 {count} 项…"),
-        Language::En => format!("Permanently deleting {count} items…"),
+        Language::Zh => format!("正在清理 {count} 项…"),
+        Language::En => format!("Cleaning {count} items…"),
     }
 }
 
@@ -655,10 +702,21 @@ pub fn tr_status_batch_done_partial(lang: Language, size: &str, skipped: usize) 
 
 // ============================================================================
 // 确认对话框文案
-//
-// 本工具只做永久删除（不经回收站），所以这里的警告语是「删了就没了」。
-// 这条产品决定写在 README 的「删除语义」一节。
 // ============================================================================
+
+pub fn tr_confirm_clean_selected_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认清理选中项",
+        Language::En => "Confirm cleanup",
+    }
+}
+
+pub fn tr_confirm_clean_selected_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "缓存、临时文件和构建产物会永久删除；损坏登录项和旧版 IDE 数据会移入废纸篓。",
+        Language::En => "Caches, temporary files, and build artifacts are permanently deleted; broken login items and old IDE data are moved to Trash.",
+    }
+}
 
 pub fn tr_confirm_delete_selected_title(lang: Language) -> &'static str {
     match lang {

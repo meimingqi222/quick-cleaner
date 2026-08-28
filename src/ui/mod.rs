@@ -41,7 +41,7 @@ use crate::ui::views::{
 
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -275,6 +275,49 @@ impl Root {
     pub fn toggle_recycle_bin(&mut self, cx: &mut Context<Self>) {
         self.settings.delete_to_recycle_bin = !self.settings.delete_to_recycle_bin;
         self.settings.save();
+        cx.notify();
+    }
+
+    /// 把一个路径拉进用户白名单（「永久排除」），立刻生效并落盘。
+    ///
+    /// 三个动作缺一不可：
+    /// 1. 全局查询表（`core::whitelist`）更新——删除层从这一刻起就拦得住；
+    /// 2. `Settings` 持久化——重启后仍在；
+    /// 3. 从当前扫描结果和勾选集里移走——用户刚点了「排除」，界面就该立即
+    ///    反映，而不是等下一次扫描。父目录条目（`has_entry_under` 命中的）
+    ///    同步降级为默认不勾：这正是它们压着白名单条目的既有规则，见
+    ///    `scanner::scan_fixed_inner`。
+    ///
+    /// 状态栏文案如实告诉用户规则从哪起生效：已扫出的列表即时清，删除层
+    /// 的保护即刻生效，二者不依赖重扫。
+    pub fn exclude_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let list = crate::core::whitelist::add(path);
+        self.settings.whitelist = list;
+        self.settings.save();
+
+        self.junk.selected.remove(path);
+        let mut removed = 0usize;
+        for cat in &mut self.junk.categories {
+            let before = cat.items.len();
+            // retain_mut：被排除路径是条目祖先（含自身）整条移出；条目是被
+            // 排除路径的祖先（压着白名单条目）则原地降级默认不勾——与
+            // `scanner::scan_fixed_inner` 的嵌套规则一致。
+            cat.items.retain_mut(|i| {
+                if i.path.starts_with(path) {
+                    return false;
+                }
+                if path.starts_with(&i.path) && i.recommended {
+                    i.recommended = false;
+                    self.junk.selected.remove(&i.path);
+                }
+                true
+            });
+            removed += before - cat.items.len();
+            if cat.items.len() != before {
+                cat.total_size = cat.items.iter().map(|i| i.size).sum();
+            }
+        }
+        self.status = bilingual(|l| tr_status_excluded(l, removed));
         cx.notify();
     }
 

@@ -46,3 +46,5 @@ $RECYCLE.BIN/
 *~
 *.sublime-workspace
 *.sublime-project
+.workbuddy
+.apodex

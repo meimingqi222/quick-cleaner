@@ -432,10 +432,50 @@ pub(super) fn push_orphaned_editor_workspaces(
     }
 }
 
-/// VS Code 自己写入 `.obsolete` 的扩展版本已退出当前扩展集合，可以删除。
+/// VS Code 系编辑器的扩展目录根。
+///
+/// 这一族编辑器（VS Code 及其各家分叉）共用同一套扩展布局：
+/// `~/<根>/extensions/` 下每个扩展一个 `<发布者>.<名字>-<版本>` 目录，
+/// 同级一个 `.obsolete` JSON 记录已退役的版本。
+///
+/// 本机实测这六个都存在且都是这个布局（`.vscode` 50 个扩展、`.trae` 33、
+/// `.windsurf` 18、`.qoder` 15、`.kiro` 3、`.antigravity` 1）。以前这里
+/// 只写死了 `.vscode`，另外五个的 `.obsolete` 完全没人看——`.qoder` 一家
+/// 就攒了 39 条记录。不存在的根会被 `read` 失败直接跳过，多列几个的代价
+/// 只是一次失败的文件读取。
+const VSCODE_FAMILY_EXTENSION_ROOTS: &[(&str, &str)] = &[
+    (".vscode", "VS Code"),
+    (".vscode-insiders", "VS Code Insiders"),
+    (".cursor", "Cursor"),
+    (".windsurf", "Windsurf"),
+    (".trae", "Trae"),
+    (".qoder", "Qoder"),
+    (".kiro", "Kiro"),
+    (".antigravity", "Antigravity"),
+];
+
+/// 编辑器自己写入 `.obsolete` 的扩展版本已退出当前扩展集合，可以删除。
 /// 只信任清单中的单段目录名，并要求目录仍实际存在，避免把 JSON 内容当路径。
+///
+/// **为什么只信 `.obsolete`，不做注册表对账**：Mole 的
+/// `0207d72a` 给同一问题加了一套 reconciliation（拿 `extensions.json` 的
+/// keep-set 反查没人认领的目录），依据是 `.obsolete` 是「删除日志」而非
+/// 「清单」，为空或截断时旧目录无人认领。这个推理成立，但本机六个编辑器
+/// 实测下来 **孤儿目录为 0**（目录数与注册数一一对应，`.vscode` 50/50、
+/// `.trae` 33/33、`.windsurf` 18/18、`.qoder` 15/15），也就是说这些编辑器
+/// 自己收尾是干净的，对账能挖出来的东西是空集。
+///
+/// 那套对账要引入 keep-set 求并、`package.json` 大小写不敏感比对、编辑器
+/// 进程探测、以及一串「拿不准就整类跳过」的兜底——为一个实测收益为零的
+/// 场景付这些复杂度不划算。真正会产生孤儿的是「更新到一半被杀掉」这类
+/// 异常，等真见到再补，判据留在这里备查。
 pub(super) fn push_obsolete_vscode_extensions(t: &mut Vec<ScanTarget>, home: &Path) {
-    let root = home.join(".vscode/extensions");
+    for (dir, editor) in VSCODE_FAMILY_EXTENSION_ROOTS {
+        push_obsolete_extensions_for_root(t, &home.join(dir).join("extensions"), editor);
+    }
+}
+
+fn push_obsolete_extensions_for_root(t: &mut Vec<ScanTarget>, root: &Path, editor: &str) {
     let Ok(bytes) = std::fs::read(root.join(".obsolete")) else {
         return;
     };
@@ -458,11 +498,75 @@ pub(super) fn push_obsolete_vscode_extensions(t: &mut Vec<ScanTarget>, home: &Pa
         t.push(target_with_recommendation(
             path,
             Text::new(
-                format!("过期 VS Code 扩展 · {name}"),
-                format!("Obsolete VS Code extension · {name}"),
+                format!("过期 {editor} 扩展 · {name}"),
+                format!("Obsolete {editor} extension · {name}"),
             ),
             CategoryId::DevBuild,
             true,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `.obsolete` 里记着、但目录已经不在的条目不能进清理列表——那是
+    /// 已经清干净的历史记录，报给用户就是幽灵条目。本机 `.vscode` 的
+    /// 120 条记录**全部**属于这一类。
+    #[test]
+    fn obsolete_entries_without_directories_are_skipped() {
+        let tmp = std::env::temp_dir().join("qc_obsolete_ghost");
+        let root = tmp.join(".vscode/extensions");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(".obsolete"),
+            br#"{"pub.gone-1.0.0":true,"pub.here-2.0.0":true}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("pub.here-2.0.0")).unwrap();
+
+        let mut t = Vec::new();
+        push_obsolete_vscode_extensions(&mut t, &tmp);
+
+        assert_eq!(t.len(), 1, "只有目录还在的那条该进列表");
+        assert!(t[0].path.ends_with("pub.here-2.0.0"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 目录名里带路径分隔符的条目必须被拒——`.obsolete` 是 JSON，内容
+    /// 不可全信，把它当路径拼接就是目录穿越。
+    #[test]
+    fn obsolete_entries_with_path_separators_are_rejected() {
+        let tmp = std::env::temp_dir().join("qc_obsolete_traversal");
+        let root = tmp.join(".vscode/extensions");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".obsolete"), br#"{"../../evil":true}"#).unwrap();
+        std::fs::create_dir_all(tmp.join("evil")).unwrap();
+
+        let mut t = Vec::new();
+        push_obsolete_vscode_extensions(&mut t, &tmp);
+        assert!(t.is_empty(), "带 .. 的条目不该被当成目录名");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 覆盖面回归：VS Code 之外的分叉编辑器也要被扫到。以前这里写死了
+    /// `.vscode`，本机另外五个编辑器的 `.obsolete` 完全没人看。
+    #[test]
+    fn obsolete_scan_covers_vscode_forks_not_just_vscode() {
+        let tmp = std::env::temp_dir().join("qc_obsolete_forks");
+        let _ = std::fs::remove_dir_all(&tmp);
+        for dir in [".cursor", ".windsurf", ".trae", ".qoder"] {
+            let root = tmp.join(dir).join("extensions");
+            std::fs::create_dir_all(root.join("pub.ext-1.0.0")).unwrap();
+            std::fs::write(root.join(".obsolete"), br#"{"pub.ext-1.0.0":true}"#).unwrap();
+        }
+
+        let mut t = Vec::new();
+        push_obsolete_vscode_extensions(&mut t, &tmp);
+        assert_eq!(t.len(), 4, "四个分叉编辑器都该被扫到，实得 {}", t.len());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

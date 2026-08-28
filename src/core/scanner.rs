@@ -25,6 +25,19 @@ pub struct ScanItem {
     /// 占用状态（应用正在运行 / 有进程打开其中文件）。扫描后由 `inuse`
     /// 检测异步回填，回填时会把被占用的条目降级 `recommended`。
     pub busy: Option<crate::core::inuse::Busy>,
+    /// 扫描期拍下的目标身份快照，供清理前复验用（TOCTOU 防护，见
+    /// `core::model::TargetIdentity` 的文档）。
+    ///
+    /// 必须在这里（扫描阶段）捕获，绝不能挪到 `ui::state::JunkState::
+    /// selected_targets()` 里去拍——那个函数是用户点了「清理」之后、真正
+    /// 删除之前几毫秒才跑的 `ScanItem → CleanTarget` 转换，在那时拍快照
+    /// 等于拿自己几毫秒前的样子证明自己，完全盖不住扫描到点击之间那
+    /// 几十秒到几分钟的窗口——`selected_targets()` 只负责把这里存好的
+    /// 值原样搬运到 `CleanTarget::identity`。
+    ///
+    /// 虚拟目标没有文件系统身份，值为 `None`。真实目标只有成功取得身份
+    /// 才会进入扫描结果；探测失败不是删除授权。
+    pub identity: Option<crate::core::model::TargetIdentity>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +45,17 @@ pub struct CategorySummary {
     pub category: CategoryId,
     pub total_size: u64,
     pub items: Vec<ScanItem>,
+    /// 这一类的统计是不是**不完整**——发现式扫描的时间预算用完了，还没
+    /// 走遍所有目录就收工了。
+    ///
+    /// 存在的理由是不说谎。一个清理工具报出「可释放 12.3 GB」，用户默认
+    /// 这是全部；真相是「至少 12.3 GB，还有一部分没数完」的时候，不标出来
+    /// 就是在用一个精确的数字掩盖一个不精确的事实。标了之后用户至少知道
+    /// 再扫一次可能有更多。
+    ///
+    /// 只有发现式扫描（`CategoryId::is_discovered`）会置位——固定路径表
+    /// 是有限的几百个目标，不设预算。
+    pub partial: bool,
 }
 
 /// 一轮完整扫描：固定路径表 + 发现式扫描。
@@ -40,9 +64,9 @@ pub struct CategorySummary {
 /// 其中 90% 以上花在发现式扫描上。界面走 [`scan_fixed`] + [`scan_discovered`]
 /// 两阶段，先把秒级出结果的部分显示出来。这里保留一次性版本给命令行与测试用。
 pub fn scan_all(targets: &[ScanTarget], live: &AtomicBool) -> Vec<CategorySummary> {
-    let (mut cats, discovered) =
+    let (mut cats, (discovered, partial)) =
         rayon::join(|| scan_fixed(targets, live), || scan_discovered(live, None));
-    merge_discovered(&mut cats, discovered);
+    merge_discovered(&mut cats, discovered, partial);
     cats
 }
 
@@ -110,6 +134,12 @@ fn scan_fixed_inner(
     let measured: Vec<(ScanItem, std::time::Duration)> = targets
         .par_iter()
         .filter(|t| {
+            // 用户白名单条目直接不出现在列表里——「永远别碰」的意思就是
+            // 别让用户还有机会勾上。删除层有 is_protected 兜底，这里是
+            // 展示层的提前量。
+            if crate::core::whitelist::is_whitelisted(&t.path) {
+                return false;
+            }
             // 虚拟路径（APFS 本地快照）不走文件系统 exists() 检查
             if is_virtual_path(&t.path) {
                 return true;
@@ -120,6 +150,11 @@ fn scan_fixed_inner(
         })
         .filter_map(|t| {
             let started = std::time::Instant::now();
+            // 白名单条目的父目录：整树清理会连带碰被保护子项，删除层
+            // 虽然拦得住，但与其让用户看到一次「失败的清理」，不如默认
+            // 不勾（仍展示，仍可手动选）。嵌套语义见 core::whitelist。
+            let recommended =
+                t.recommended && !crate::core::whitelist::has_entry_under(&t.path);
             // 虚拟路径不走文件系统：APFS 快照是 COW 的取不到体积，记 0；
             // Docker 镜像在发现阶段就带上了真实体积（size_hint）。
             if is_virtual_path(&t.path) {
@@ -131,12 +166,23 @@ fn scan_fixed_inner(
                         file_count: 0,
                         category: t.category,
                         last_modified: 0,
-                        recommended: t.recommended,
+                        recommended,
                         busy: None,
+                        // 虚拟路径（APFS 快照/Docker 镜像）没有宿主文件
+                        // 系统身份，天生就是 None——下游按「没有快照」放行。
+                        identity: None,
                     },
                     started.elapsed(),
                 ));
             }
+            // 身份快照独立于称重单取一次：称重可能走 measure_via_tree
+            // （纯内存查表，不产生任何 stat）也可能走 measure_target 遍历
+            // （内部已经做过一次 symlink_metadata，但那次的 Metadata 没有
+            // 沿调用链传出来）。硬凑一条 Option<Metadata> 参数会牵连
+            // fs_query.rs 的查表通道，导致两条口径不一致的路径产出的
+            // ScanItem 一个有身份一个没有。独立取一次多一次系统调用，
+            // 相对于几百个固定目标可以忽略不计（真正贵的是递归遍历本身）。
+            let identity = crate::core::model::capture_identity(&t.path)?;
             engine
                 .measure_path(&t.path, live)
                 .map(|(size, files, newest)| {
@@ -148,8 +194,9 @@ fn scan_fixed_inner(
                             file_count: files,
                             category: t.category,
                             last_modified: newest,
-                            recommended: t.recommended,
+                            recommended,
                             busy: None,
+                            identity: Some(identity),
                         },
                         started.elapsed(),
                     )
@@ -265,16 +312,80 @@ pub fn dominant_volume(targets: &[ScanTarget]) -> Option<crate::core::disk::Volu
     count.into_iter().max_by_key(|&(_, n)| n).map(|(v, _)| v)
 }
 
+/// 发现式扫描的时间预算。
+///
+/// 本机实测这一步 28.2 秒（`scan_timing_profile`），固定路径表那条通道
+/// 只要 4.7 秒。定 4 分钟不是为了压缩正常情况的耗时——那会白白丢结果——
+/// 而是给「挂了网络卷 / home 目录异常巨大 / 某条路径退化成龟速」这类情况
+/// 一个上界。正常机器上永远不该碰到它；碰到了就说明真出事了，此时给用户
+/// 一份标着「部分统计」的结果，好过让扫描无限期挂着。
+const DISCOVERY_BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
+
+/// 在时间预算内跑 `f`，返回 `(结果, 预算是否耗尽)`。
+///
+/// 实现上不去改遍历函数的签名（`walk` / `measure_dir` / `devscan` 一整条
+/// 链都收 `&AtomicBool`，塞 deadline 进去要动十几处，还会让最热的递归多
+/// 一次时钟读取）。改成派生一个旗标：看门狗线程盯着预算和用户的取消旗标，
+/// 任一触发就把派生旗标翻掉，遍历侧原有的取消检查自然就停了。
+///
+/// `expired` 只在**预算耗尽**时置位——用户主动取消不算「统计不完整」，
+/// 那种情况下结果本来就不该展示。
+fn with_budget<T: Send>(
+    live: &AtomicBool,
+    budget: std::time::Duration,
+    f: impl FnOnce(&AtomicBool) -> T + Send,
+) -> (T, bool) {
+    let derived = AtomicBool::new(true);
+    let done = AtomicBool::new(false);
+    let expired = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = std::time::Instant::now() + budget;
+            loop {
+                if done.load(Ordering::Relaxed) {
+                    return;
+                }
+                if !live.load(Ordering::Relaxed) {
+                    // 用户取消：把取消传导下去，但不算预算耗尽。
+                    derived.store(false, Ordering::Relaxed);
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    expired.store(true, Ordering::Relaxed);
+                    derived.store(false, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        });
+        let out = f(&derived);
+        done.store(true, Ordering::Relaxed);
+        (out, expired.load(Ordering::Relaxed))
+    })
+}
+
 /// **第二阶段**：发现式扫描构建产物。
 ///
 /// 这些目录散落在用户所有代码目录里，位置不确定，只能靠全盘检索，
-/// 是整轮扫描里最贵的一步（本机冷缓存 25 秒量级）。放在第二阶段异步补齐。
+/// 是整轮扫描里最贵的一步（本机实测 28.2 秒）。放在第二阶段异步补齐。
+///
+/// 返回 `(条目, 是否因为预算耗尽而提前收工)`。第二个值最终落到
+/// [`CategorySummary::partial`]，界面据此如实告诉用户统计不完整。
 pub fn scan_discovered(
     live: &AtomicBool,
     prescanned: Option<crate::core::disk::ScanResult>,
-) -> Vec<ScanItem> {
+) -> (Vec<ScanItem>, bool) {
     let t0 = std::time::Instant::now();
-    let items = crate::core::devscan::discover(live, prescanned);
+    let (items, expired) = with_budget(live, DISCOVERY_BUDGET, |budget_live| {
+        crate::core::devscan::discover(budget_live, prescanned)
+    });
+    if expired {
+        crate::log!(
+            "阶段二 scan_discovered 预算耗尽（{:?}），结果按「部分统计」上报",
+            DISCOVERY_BUDGET
+        );
+    }
     let total: u64 = items.iter().map(|it| it.size).sum();
     crate::log!(
         "阶段二 scan_discovered 完成：{:?}，{} 条，合计 {}",
@@ -282,18 +393,28 @@ pub fn scan_discovered(
         items.len(),
         crate::core::model::fmt_size(total)
     );
-    items
+    (items, expired)
 }
 
 /// macOS 专用：接受 `Arc<ScanResult>` 的 scan_discovered 变体。
 /// 避免从 UI 层 clone 6.6M 条目的 ScanResult。
+///
+/// 返回值与 [`scan_discovered`] 同构：`(条目, 预算是否耗尽)`。
 #[cfg(not(windows))]
 pub fn scan_discovered_arc(
     live: &AtomicBool,
     prescanned: Option<std::sync::Arc<crate::core::disk::ScanResult>>,
-) -> Vec<ScanItem> {
+) -> (Vec<ScanItem>, bool) {
     let t0 = std::time::Instant::now();
-    let items = crate::core::devscan::discover_arc(live, prescanned);
+    let (items, expired) = with_budget(live, DISCOVERY_BUDGET, |budget_live| {
+        crate::core::devscan::discover_arc(budget_live, prescanned)
+    });
+    if expired {
+        crate::log!(
+            "阶段二 scan_discovered 预算耗尽（{:?}），结果按「部分统计」上报",
+            DISCOVERY_BUDGET
+        );
+    }
     let total: u64 = items.iter().map(|it| it.size).sum();
     crate::log!(
         "阶段二 scan_discovered 完成：{:?}，{} 条，合计 {}",
@@ -301,21 +422,35 @@ pub fn scan_discovered_arc(
         items.len(),
         crate::core::model::fmt_size(total)
     );
-    items
+    (items, expired)
 }
 
 /// 把第二阶段的结果并进已有的分类汇总。
 ///
 /// 合并前会剔除**已经不存在**的路径：第二阶段跑了几十秒，这期间用户完全
 /// 可能已经清掉了其中一些目录，把它们并进列表会显示成能清理却清不掉的幽灵条目。
-pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>) {
+pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>, partial: bool) {
     let mut by_cat: std::collections::HashMap<CategoryId, Vec<ScanItem>> =
         std::collections::HashMap::new();
-    for item in items.into_iter().filter(|it| it.path.exists()) {
+    for mut item in items.into_iter().filter(|it| {
+        // 同固定表：白名单条目不展示
+        it.path.exists() && !crate::core::whitelist::is_whitelisted(&it.path)
+    }) {
+        // 压着白名单条目的父目录降级默认勾选（发现式类目当前 recommended
+        // 全是 false，这行为将来引入推荐的发现式类目时兜底，不留例外）
+        item.recommended =
+            item.recommended && !crate::core::whitelist::has_entry_under(&item.path);
         by_cat.entry(item.category).or_default().push(item);
     }
 
     for cat in cats.iter_mut() {
+        // 预算耗尽要标在**所有**发现式类目上，而不只是这一轮碰巧收到条目
+        // 的那些。扫描是被从中间掐断的，一个类目「一条都没有」恰恰可能是
+        // 因为负责它的那段目录还没走到——那正是最需要告诉用户「这不是最终
+        // 结果」的情况。
+        if partial && cat.category.is_discovered() {
+            cat.partial = true;
+        }
         let Some(mut found) = by_cat.remove(&cat.category) else {
             continue;
         };
@@ -349,6 +484,9 @@ fn aggregate(results: Vec<ScanItem>) -> Vec<CategorySummary> {
             category: cat,
             total_size: total,
             items,
+            // 阶段一（固定路径表）不设时间预算，永远是完整统计。发现式
+            // 扫描的结果通过 `merge_discovered` 并进来时才可能置位。
+            partial: false,
         });
     }
     out
@@ -662,6 +800,7 @@ mod tests {
             last_modified: 0,
             recommended: cat.default_selected(),
             busy: None,
+            identity: None,
         }
     }
 
@@ -670,6 +809,7 @@ mod tests {
             total_size: items.iter().map(|i| i.size).sum(),
             category: cat,
             items,
+        partial: false,
         }
     }
 
@@ -836,6 +976,7 @@ mod tests {
                 category: c,
                 total_size: 0,
                 items: Vec::new(),
+            partial: false,
             })
             .collect()
     }
@@ -847,7 +988,7 @@ mod tests {
 
         let mut it = item(&dir.to_string_lossy(), 4096, CategoryId::DevBuild);
         it.path = dir.clone();
-        merge_discovered(&mut cats, vec![it]);
+        merge_discovered(&mut cats, vec![it], false);
 
         let dev = cats
             .iter()
@@ -875,7 +1016,7 @@ mod tests {
         let mut cats = empty_cats();
         let mut it = item("placeholder", 9999, CategoryId::DevBuild);
         it.path = gone;
-        merge_discovered(&mut cats, vec![it]);
+        merge_discovered(&mut cats, vec![it], false);
 
         let dev = cats
             .iter()
@@ -901,7 +1042,7 @@ mod tests {
 
         let mut again = item(&dir.to_string_lossy(), 1000, CategoryId::DevBuild);
         again.path = dir.clone();
-        merge_discovered(&mut cats, vec![again]);
+        merge_discovered(&mut cats, vec![again], false);
 
         let dev = cats
             .iter()
@@ -943,7 +1084,7 @@ mod tests {
         a.path = small.clone();
         let mut b = item(&big.to_string_lossy(), 5000, CategoryId::DevBuild);
         b.path = big.clone();
-        merge_discovered(&mut cats, vec![a, b]);
+        merge_discovered(&mut cats, vec![a, b], false);
 
         let dev = cats
             .iter()
@@ -955,5 +1096,92 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&small);
         let _ = std::fs::remove_dir_all(&big);
+    }
+
+    // ---- 2.4：发现式扫描的时间预算 ----
+
+    /// 预算够用时不该标 partial，派生旗标全程为真。
+    #[test]
+    fn budget_not_expired_when_work_finishes_in_time() {
+        let live = AtomicBool::new(true);
+        let (saw_live, expired) =
+            with_budget(&live, std::time::Duration::from_secs(30), |budget_live| {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                budget_live.load(Ordering::Relaxed)
+            });
+        assert!(saw_live, "预算没到，派生旗标必须还是 true");
+        assert!(!expired, "按时完成不该被标成部分统计");
+    }
+
+    /// 预算耗尽：派生旗标被翻掉（遍历侧据此收工），并如实报告 expired。
+    #[test]
+    fn budget_expiry_flips_derived_flag_and_reports() {
+        let live = AtomicBool::new(true);
+        let (saw_false, expired) =
+            with_budget(&live, std::time::Duration::from_millis(80), |budget_live| {
+                // 模拟一个不看时间、只看取消旗标的遍历
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while budget_live.load(Ordering::Relaxed) {
+                    if std::time::Instant::now() > deadline {
+                        return false; // 兜底，防止测试挂死
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                true
+            });
+        assert!(saw_false, "预算到点必须把派生旗标翻成 false");
+        assert!(expired, "预算耗尽必须报 expired");
+    }
+
+    /// 用户主动取消**不算**部分统计：那种情况下结果本来就不展示，
+    /// 标成「统计不完整」会把一次正常的取消说成异常。
+    #[test]
+    fn user_cancel_is_not_reported_as_partial() {
+        let live = AtomicBool::new(true);
+        let (_, expired) = with_budget(&live, std::time::Duration::from_secs(30), |budget_live| {
+            live.store(false, Ordering::Relaxed);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while budget_live.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        assert!(!expired, "用户取消不该被报成预算耗尽");
+    }
+
+    /// 预算耗尽要标在**所有**发现式类目上，包括这一轮一条都没收到的那些
+    /// ——「一条都没有」恰恰可能是因为负责它的目录还没走到。
+    #[test]
+    fn partial_marks_every_discovered_category_even_empty_ones() {
+        let mut cats = vec![
+            summary(CategoryId::DevBuild, vec![]),
+            summary(CategoryId::UserTemp, vec![]),
+        ];
+        merge_discovered(&mut cats, vec![], true);
+
+        let dev = cats
+            .iter()
+            .find(|c| c.category == CategoryId::DevBuild)
+            .unwrap();
+        let tmp = cats
+            .iter()
+            .find(|c| c.category == CategoryId::UserTemp)
+            .unwrap();
+        assert!(
+            CategoryId::DevBuild.is_discovered(),
+            "前提：DevBuild 是发现式类目"
+        );
+        assert!(dev.partial, "发现式类目即使没收到条目也要标 partial");
+        assert!(
+            !CategoryId::UserTemp.is_discovered() && !tmp.partial,
+            "固定路径表类目不设预算，永远不标 partial"
+        );
+    }
+
+    /// 没耗尽预算时不能凭空标 partial。
+    #[test]
+    fn no_partial_flag_when_budget_held() {
+        let mut cats = vec![summary(CategoryId::DevBuild, vec![])];
+        merge_discovered(&mut cats, vec![], false);
+        assert!(!cats[0].partial);
     }
 }

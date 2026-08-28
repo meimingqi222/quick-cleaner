@@ -1,6 +1,6 @@
 //! 智能清理视图与操作底栏 (CleanFlow 质感分层清理)
 
-use crate::core::categories::CategoryId;
+use crate::core::categories::{CategoryId, Safety};
 use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, small_button};
@@ -189,6 +189,7 @@ fn item_row(
 ) -> AnyElement {
     let dim = size == 0;
     let toggle_path = path.clone();
+    let exclude_target = path.clone();
 
     div()
         .id(SharedString::from(format!("item-{idx}")))
@@ -268,6 +269,26 @@ fn item_row(
             },
             !dim,
         ))
+        // 「永久排除」：把这个路径拉进用户白名单，从列表移走、任何清理
+        // 通道永远跳过。点击必须 stop_propagation——否则排除的同时会把
+        // 这条目当成普通点击勾选上，与「永远别碰」的意图恰好相反。
+        .child(
+            div()
+                .id(SharedString::from(format!("excl-{idx}")))
+                .flex_none()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .cursor_pointer()
+                .hover(|h| h.text_color(rgb(ERROR)).bg(rgba(0xdc2626, 0.10)))
+                .child(tr_exclude(lang))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.exclude_path(&exclude_target, cx);
+                })),
+        )
         .into_any_element()
 }
 
@@ -508,6 +529,15 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             safety_container(safety),
                                             safety_color(safety),
                                         ))
+                                    })
+                                    // 预算耗尽时如实说明这一类没数完，
+                                    // 否则一个精确的数字会掩盖不精确的事实
+                                    .when(summary.partial, |d| {
+                                        d.child(badge(
+                                            tr_partial_scan(lang).into(),
+                                            safety_container(Safety::Caution),
+                                            safety_color(Safety::Caution),
+                                        ))
                                     }),
                             )
                             .child(
@@ -527,7 +557,13 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .child(if root.junk.discovering && id.is_discovered() {
                                 String::from(tr_discovering(lang))
                             } else if size > 0 {
-                                fmt_size(size)
+                                // `≥`：预算耗尽时扫到的都是真的，只是可能
+                                // 还有没扫到的，数字只能算下界。
+                                if summary.partial {
+                                    format!("≥ {}", fmt_size(size))
+                                } else {
+                                    fmt_size(size)
+                                }
                             } else {
                                 String::from("0 B")
                             }),

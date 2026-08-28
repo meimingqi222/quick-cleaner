@@ -1,7 +1,8 @@
 //! 清理执行动作：垃圾清理、路径清理、取消清理
 
 use crate::core::cleaner::{
-    clean_arbitrary, clean_targets, CleanProgress, CleanReport, CleanSnapshot,
+    clean_arbitrary_items, clean_targets, ArbitraryTarget, CleanProgress, CleanReport,
+    CleanSnapshot,
 };
 use crate::core::i18n::{bilingual, Text};
 use crate::core::model::{fmt_size, is_virtual_path};
@@ -20,9 +21,9 @@ impl crate::ui::Root {
         }
         let lang = self.language;
         self.confirm = Some(ConfirmRequest {
-            title: tr_confirm_delete_title(lang).to_string(),
+            title: tr_confirm_clean_selected_title(lang).to_string(),
             body: tr_confirm_delete_msg(lang, count, &fmt_size(self.selected_size())),
-            detail: tr_confirm_no_recycle(lang).to_string(),
+            detail: tr_confirm_clean_selected_detail(lang).to_string(),
             kind: ConfirmKind::CleanSelected,
             app_data: false,
         });
@@ -138,15 +139,7 @@ impl crate::ui::Root {
             .filter(|i| i.busy.is_some())
             .map(|i| i.path.clone())
             .collect();
-        let dropped_busy = if busy.is_empty() {
-            0
-        } else {
-            let dropped = self.junk.selected.intersection(&busy).count();
-            for p in &busy {
-                self.junk.selected.remove(p);
-            }
-            dropped
-        };
+        let dropped_busy = drop_busy_from_selection(&mut self.junk.selected, &busy);
 
         let attempted = self.selected_paths();
         if attempted.is_empty() {
@@ -183,7 +176,7 @@ impl crate::ui::Root {
                 // 误报成成功，条目从界面上消失，用户下次重扫才发现没删掉。
                 let reported_failed: Vec<&std::path::Path> =
                     report.failed.iter().filter_map(|f| f.as_path()).collect();
-                let failed: Vec<PathBuf> = completed_targets
+                let still_there: Vec<PathBuf> = completed_targets
                     .iter()
                     .filter(|target| {
                         if is_virtual_path(&target.path) {
@@ -199,11 +192,18 @@ impl crate::ui::Root {
                     })
                     .map(|target| target.path.clone())
                     .collect();
+                // 还在磁盘上 ≠ 失败：白名单/保护路径是策略跳过，条目留在列表
+                // 里好让用户看见，但不能进失败清单、也不能说「部分失败」。
+                let failed: Vec<PathBuf> = still_there
+                    .iter()
+                    .filter(|p| !report.was_skipped(p))
+                    .cloned()
+                    .collect();
                 this.clean.last_failed = failed.clone();
                 this.clean.last_failed_files = snap.failed;
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
-                this.apply_clean_result(&attempted, &failed);
+                this.apply_clean_result(&attempted, &still_there);
 
                 // 同步更新磁盘透镜的 SizeTree：垃圾清理删掉的路径
                 //（缓存、临时文件、构建产物）在磁盘透镜里也会显示，
@@ -241,6 +241,18 @@ impl crate::ui::Root {
                         base
                     }
                 });
+
+                // 持久化审计：分类清理按类目决定永久删除或移入回收站，这行
+                // JSONL 是用户事后翻旧账的记录。目标清单取用户勾选的那一层，
+                // 与 cleaner::audit 的取舍一致。
+                crate::core::history::record(
+                    "category_clean",
+                    &attempted,
+                    report.ok,
+                    report.skipped,
+                    report.failed.len() + report.manual.len(),
+                    snap.bytes,
+                );
             },
             cx,
         );
@@ -251,17 +263,31 @@ impl crate::ui::Root {
         if self.clean.running {
             return;
         }
-        let target = path.clone();
+        let item = ArbitraryTarget::capture(path.clone());
         let shown = path.display().to_string();
         let disposal = self.disposal();
 
         self.spawn_clean(
             (0, size),
             bilingual(|l| tr_status_deleting_path(l, &shown)),
-            move |p| clean_arbitrary(std::slice::from_ref(&target), disposal, p),
-            move |this, _report, snap, cx| {
+            move |p| clean_arbitrary_items(std::slice::from_ref(&item), disposal, p),
+            move |this, report, snap, cx| {
                 let shown = path.display().to_string();
-                if path.exists() {
+                // 手选路径可能走回收站：用户自己的选择也留痕，且 disposal
+                // 影响成败判定（回收站不计 bytes），审计里要如实反映。
+                crate::core::history::record(
+                    "arbitrary_clean",
+                    std::slice::from_ref(&path),
+                    report.ok,
+                    report.skipped,
+                    report.failed.len(),
+                    snap.bytes,
+                );
+                if report.was_skipped(&path) {
+                    this.status = bilingual(|l| tr_protected_path(l, &shown));
+                    return;
+                }
+                if !report.failed.is_empty() || path.exists() {
                     this.status = bilingual(|l| tr_status_delete_failed(l, &shown));
                     return;
                 }
@@ -271,5 +297,61 @@ impl crate::ui::Root {
             },
             cx,
         );
+    }
+}
+
+/// 从已勾选集合里剔除全部被占用目标，返回被剔除的数量。
+///
+/// 抽成不依赖 `gpui::Context` 的纯函数，是为了能在不搭建 UI 测试脚手架
+/// 的情况下单测这条"老行为不能回归"的安全规则：勾选可能是在占用检测结果
+/// 合并之前就做下的（那时条目还是「推荐」），清理入口必须在执行前再筛
+/// 一遍，不能只信任勾选态。
+fn drop_busy_from_selection(
+    selected: &mut std::collections::HashSet<PathBuf>,
+    busy: &std::collections::HashSet<PathBuf>,
+) -> usize {
+    if busy.is_empty() {
+        return 0;
+    }
+    let dropped = selected.intersection(busy).count();
+    for p in busy {
+        selected.remove(p);
+    }
+    dropped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn drop_busy_from_selection_removes_and_counts() {
+        let mut selected: HashSet<PathBuf> = [
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/c"),
+        ]
+        .into_iter()
+        .collect();
+        // /z 被占用但压根没被勾选过：不该被计进 dropped
+        let busy: HashSet<PathBuf> = [PathBuf::from("/a"), PathBuf::from("/z")]
+            .into_iter()
+            .collect();
+
+        let dropped = drop_busy_from_selection(&mut selected, &busy);
+
+        assert_eq!(dropped, 1);
+        assert!(!selected.contains(&PathBuf::from("/a")));
+        assert!(selected.contains(&PathBuf::from("/b")));
+        assert!(selected.contains(&PathBuf::from("/c")));
+    }
+
+    #[test]
+    fn drop_busy_from_selection_empty_busy_is_noop() {
+        let mut selected: HashSet<PathBuf> = [PathBuf::from("/a")].into_iter().collect();
+        let dropped = drop_busy_from_selection(&mut selected, &HashSet::new());
+        assert_eq!(dropped, 0);
+        assert!(selected.contains(&PathBuf::from("/a")));
     }
 }

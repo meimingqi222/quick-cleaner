@@ -565,22 +565,29 @@ pub struct ResidualItem {
     pub confidence: Confidence,
     /// 这条是被哪个扫描器发现的
     pub source: ResidualSource,
+    /// 扫描/卸载后复核时的文件系统身份。注册表、任务和系统扩展没有路径，
+    /// 值为 `None`；真实路径清理时必须有快照且复验一致。
+    pub identity: Option<crate::core::model::TargetIdentity>,
 }
 
 impl ResidualItem {
     pub fn certain(kind: ResidualKind, source: ResidualSource) -> Self {
+        let identity = residual_identity(&kind);
         Self {
             kind,
             confidence: Confidence::Certain,
             source,
+            identity,
         }
     }
 
     pub fn possible(kind: ResidualKind, source: ResidualSource) -> Self {
+        let identity = residual_identity(&kind);
         Self {
             kind,
             confidence: Confidence::Possible,
             source,
+            identity,
         }
     }
 
@@ -599,6 +606,15 @@ impl ResidualItem {
             self.source.label_lang(lang),
             self.kind.display_label()
         )
+    }
+}
+
+fn residual_identity(kind: &ResidualKind) -> Option<crate::core::model::TargetIdentity> {
+    match kind {
+        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => {
+            crate::core::model::capture_identity(path)
+        }
+        _ => None,
     }
 }
 

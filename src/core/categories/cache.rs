@@ -138,6 +138,24 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("Homebrew 缓存", "Homebrew cache"),
             CategoryId::PackageCache,
         ));
+        // brew 的 owner command 清理：不只上面的下载缓存，还含旧版本
+        // keg、断链 Caskroom 残余——命令自己知道怎么安全收缩（见
+        // `core::brew`）。节流：距上次真实清理不足一周就不出现；dry-run
+        // 失败或没有可清内容也不出现（不出假条目）。体积是 brew 自己
+        // dry-run 给出的估算，不是逐文件称的。
+        if crate::core::brew::should_offer(
+            crate::core::settings::Settings::load().brew_cleanup_at,
+        ) {
+            if let Some((bytes, _files)) = crate::core::brew::cleanup_preview() {
+                t.push(ScanTarget {
+                    path: crate::core::brew::virtual_path(),
+                    label: Text::new("Homebrew 清理", "Homebrew cleanup"),
+                    category: CategoryId::PackageCache,
+                    recommended: CategoryId::PackageCache.default_selected(),
+                    size_hint: Some(bytes),
+                });
+            }
+        }
         for (name, zh, en) in [
             ("bun", "Bun 缓存", "Bun cache"),
             ("go-build", "Go 构建缓存", "Go build cache"),

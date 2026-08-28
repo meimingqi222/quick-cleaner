@@ -145,6 +145,32 @@ impl CategoryId {
     /// 但开发产物正相反：留一个空的 `.venv` 会让 Python 工具认成损坏的
     /// 虚拟环境，空的 `node_modules` 会让包管理器以为依赖已装好，空的
     /// worktree 目录纯粹是垃圾。这些必须整个删掉。
+    /// 该类目删除时走永久删除还是废纸篓/回收站。
+    ///
+    /// 默认永久删除：缓存、临时文件、构建产物本来就该重建，进废纸篓
+    /// 只是把占用从一个目录挪到另一个目录，用户还得再清一次。
+    ///
+    /// 例外是「删错了代价不对称」的类目——判据两条同时成立：
+    ///
+    /// 1. **误删的痛感远大于体积收益**：旧版 IDE 数据里躺着用户多年攒下
+    ///    的配置、快捷键、插件设置，认错版本号删掉就没了；而它通常只有
+    ///    几百 MB 到几个 GB。
+    /// 2. **体积不足以撑爆废纸篓**：这一条把 `IosBackup` 排除在外——单个
+    ///    备份动辄几十 GB，`recycle_path` 又刻意不往 `bytes` 上记账
+    ///    （「已释放 X」必须是真的释放了才算），进废纸篓的结果是用户看到
+    ///    「已释放 0 B」、磁盘一点没空出来，与他勾选这一项的目的直接相反。
+    ///
+    /// 注意 `BrokenLoginItems` 不在这里——它的 plist 早就在
+    /// `clean_targets` 里单独走 `move_to_trash` 了，那条分支先于本字段
+    /// 生效，这里不重复表达。
+    pub fn disposal(&self) -> crate::core::cleaner::Disposal {
+        use crate::core::cleaner::Disposal;
+        match self {
+            CategoryId::OldIdeData => Disposal::RecycleBin,
+            _ => Disposal::Permanent,
+        }
+    }
+
     pub fn removes_directory(&self) -> bool {
         matches!(
             self,
@@ -273,7 +299,7 @@ impl CategoryId {
                     "iTunes / Finder 创建的 iOS 设备完整备份，单个可达 100 GB+"
                 }
                 CategoryId::OldIdeData => {
-                    "Application Support 下 JetBrains 的按版本数据目录，当前版本之外的旧目录，永久删除"
+                    "Application Support 下 JetBrains 的按版本数据目录，当前版本之外的旧目录，移入废纸篓"
                 }
                 CategoryId::DockerImages => {
                     "悬空镜像、未被任何容器使用的镜像与同仓库旧版本标签，经 docker image rm 释放"
@@ -310,7 +336,7 @@ impl CategoryId {
                     "Full iOS device backups created by iTunes / Finder, can be 100 GB+ each"
                 }
                 CategoryId::OldIdeData => {
-                    "Per-version JetBrains data dirs under Application Support, excluding the newest, permanently deleted"
+                    "Per-version JetBrains data dirs under Application Support, excluding the newest, moved to Trash"
                 }
                 CategoryId::DockerImages => {
                     "Dangling images, tags unused by any container and old versions, freed via docker image rm"
@@ -1053,8 +1079,8 @@ mod tests {
             &plist("<key>ProgramArguments</key><array><string>tool-on-path</string></array>"),
         );
         let empty = write("empty.plist", &plist(""));
-        // 语法根本不合法的 plist。原来靠一次 `plutil -lint` 预检拦下，
-        // 现在预检去掉了，得确认它仍然被判为损坏（`-extract` 会失败）。
+        // 语法根本不合法意味着“探测失败”，不是“确认损坏”；不能因此把
+        // 一个可能只是无权读取/临时写到一半的系统 LaunchAgent 放进删除候选。
         let malformed = write("malformed.plist", "<plist><dict><key>Program");
 
         assert!(!is_broken_launch_agent(&valid));
@@ -1062,8 +1088,8 @@ mod tests {
         assert!(!is_broken_launch_agent(&relative));
         assert!(is_broken_launch_agent(&empty));
         assert!(
-            is_broken_launch_agent(&malformed),
-            "语法非法的 plist 必须判为损坏"
+            !is_broken_launch_agent(&malformed),
+            "语法非法只能判为探测失败，不能授权删除"
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1144,5 +1170,39 @@ mod tests {
                 t.path.display()
             );
         }
+    }
+
+    /// 处置方式是「删错了代价对称不对称」的表达，不是按类别大小拍脑袋。
+    /// 这个测试把两条判据都钉住，防止以后有人顺手把某个大类改成废纸篓。
+    #[test]
+    fn disposal_routes_only_asymmetric_cost_categories_to_trash() {
+        use crate::core::cleaner::Disposal;
+
+        // 旧版 IDE 数据：误删掉的是多年配置，体积却只有几百 MB 到几 GB。
+        assert_eq!(CategoryId::OldIdeData.disposal(), Disposal::RecycleBin);
+
+        // 缓存与构建产物：本来就该重建，进废纸篓只是把占用挪个地方。
+        for cat in [
+            CategoryId::UserCache,
+            CategoryId::BrowserCache,
+            CategoryId::PackageCache,
+            CategoryId::DevBuild,
+            CategoryId::SystemTemp,
+        ] {
+            assert_eq!(
+                cat.disposal(),
+                Disposal::Permanent,
+                "{cat:?} 是可重建产物，不该走废纸篓"
+            );
+        }
+
+        // iOS 备份是刻意的例外：单个备份动辄几十 GB，而 `recycle_path`
+        // 刻意不往 bytes 上记账，走废纸篓的结果是用户看到「已释放 0 B」、
+        // 磁盘一点没空出来，与他勾选这一项的目的直接相反。
+        assert_eq!(
+            CategoryId::IosBackup.disposal(),
+            Disposal::Permanent,
+            "iOS 备份体积过大，进废纸篓不释放空间，等于没清"
+        );
     }
 }
