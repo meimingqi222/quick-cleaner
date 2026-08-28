@@ -83,7 +83,14 @@ impl Settings {
             return Self::default();
         };
         let settings = Self::merge_json(&text);
-        crate::core::whitelist::reload(&settings.whitelist);
+        // 装载失败（锁异常）或有条目被丢弃（展开不了的 `~`）：如实记日志。
+        // 哑条目静默生效等于保护不存在，用户配了的路径没被保护却无人知晓。
+        if !crate::core::whitelist::reload(&settings.whitelist) {
+            crate::log!(
+                "白名单装载不完整：配置里有展开不了的条目或内部表不可写（{} 条配置）",
+                settings.whitelist.len()
+            );
+        }
         settings
     }
 

@@ -545,6 +545,58 @@ pub fn tr_status_excluded(lang: Language, removed: usize) -> String {
     }
 }
 
+/// 白名单变更失败（内部表不可写）时的状态行。设置未被改动——这句话的
+/// 关键是如实告知「没生效」，否则用户以为已排除、实际保护并不存在。
+pub fn tr_status_exclude_failed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "操作失败：内部状态异常，排除清单未被修改。请重启应用后重试",
+        Language::En => {
+            "Operation failed — internal state error, exclusions were not changed. Restart the app and try again"
+        }
+    }
+}
+
+/// 从排除清单移除一条后的状态行。被释放的路径要到下次扫描才重新出现，
+/// 必须说清，否则用户移除后看列表没变化会以为按钮没生效。
+pub fn tr_status_exclusion_removed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已移除该排除项，此路径将在下次扫描后按普通路径处理",
+        Language::En => "Removed from exclusions — this path will be scanned again next time",
+    }
+}
+
+/// 「排除清单」开关按钮的文案（带条目数）。
+pub fn tr_exclusions_toggle(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("排除清单 ({count})"),
+        Language::En => format!("Exclusions ({count})"),
+    }
+}
+
+/// 排除清单面板里每条目的「移除」按钮。
+pub fn tr_exclusion_remove(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移除",
+        Language::En => "Remove",
+    }
+}
+
+/// 排除清单面板的说明文字。
+pub fn tr_exclusions_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "这些路径不会被任何清理操作触碰",
+        Language::En => "These paths are never touched by any cleanup",
+    }
+}
+
+/// 排除清单为空时的占位文案。
+pub fn tr_exclusions_empty(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "还没有排除项。在下方列表里点击条目的「排除」即可加入",
+        Language::En => "No exclusions yet. Click \"Exclude\" on an item below to add one",
+    }
+}
+
 pub fn tr_status_residual_cleaning(lang: Language, name: &str, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在彻底清除「{name}」的 {count} 项残留…"),

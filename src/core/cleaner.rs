@@ -581,17 +581,19 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         .ok()
         .and_then(|md| TargetIdentity::from_metadata(&md));
 
-    // 连同每个子项自己的身份一起收集：`DirEntry::metadata()` 是 lstat
-    // 语义（不穿透子项自身的符号链接，跟上面 `symlink_metadata` 一致），
-    // 这次 read_dir 反正要发生，顺带存一份不产生新的系统调用。
+    // 连同每个子项自己的身份一起收集。用 `symlink_metadata` 而不是
+    // `DirEntry::metadata()`：后者在 Windows 上取的是 `FindNextFile` 的数据，
+    // 和 `recheck` 用的 `GetFileAttributesEx`（`symlink_metadata`）对目录
+    // 可能给出不同的 `len`，导致身份永远对不上。多一次系统调用，但保证
+    // 捕获和复核用同一个 API。
     let children: Vec<(PathBuf, Option<TargetIdentity>)> = entries
         .flatten()
         .map(|e| {
-            let identity = e
-                .metadata()
+            let path = e.path();
+            let identity = std::fs::symlink_metadata(&path)
                 .ok()
                 .and_then(|md| TargetIdentity::from_metadata(&md));
-            (e.path(), identity)
+            (path, identity)
         })
         .collect();
 

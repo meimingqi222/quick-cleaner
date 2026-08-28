@@ -79,6 +79,8 @@ pub struct Root {
     pub fda_status: bool,
     /// 是否展示完全磁盘访问权限引导模态弹窗。
     pub show_fda_onboarding: bool,
+    /// 智能清理页是否展开「排除清单」面板（查看/移除白名单条目）。
+    pub show_exclusions: bool,
 
     pub junk: JunkState,
     pub apps: AppsState,
@@ -146,6 +148,7 @@ impl Root {
             cursor_blink_wanted: false,
             fda_status,
             show_fda_onboarding,
+            show_exclusions: false,
 
             junk: JunkState {
                 categories: Vec::new(),
@@ -295,7 +298,13 @@ impl Root {
     /// 状态栏文案如实告诉用户规则从哪起生效：已扫出的列表即时清，删除层
     /// 的保护即刻生效，二者不依赖重扫。
     pub fn exclude_path(&mut self, path: &Path, cx: &mut Context<Self>) {
-        let list = crate::core::whitelist::add(path);
+        let Some(list) = crate::core::whitelist::add(path) else {
+            // 全局表拿不到（锁中毒）：这次排除没生效，绝不能把可能的空表
+            // 写回磁盘覆盖用户已有的保护清单。如实告知失败。
+            self.status = bilingual(|l| tr_status_exclude_failed(l).to_string());
+            cx.notify();
+            return;
+        };
         self.settings.whitelist = list;
         self.settings.save();
 
@@ -322,6 +331,21 @@ impl Root {
             }
         }
         self.status = bilingual(|l| tr_status_excluded(l, removed));
+        cx.notify();
+    }
+
+    /// 从白名单移除一条排除项（排除清单面板的「移除」按钮），立刻生效
+    /// 并落盘。被释放的路径要到下一次扫描才会重新出现在列表里——保护是
+    /// 删除层的，列表是扫描侧的快照，这里不替用户触发重扫。
+    pub fn remove_exclusion(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(list) = crate::core::whitelist::remove(path) else {
+            self.status = bilingual(|l| tr_status_exclude_failed(l).to_string());
+            cx.notify();
+            return;
+        };
+        self.settings.whitelist = list;
+        self.settings.save();
+        self.status = bilingual(|l| tr_status_exclusion_removed(l).to_string());
         cx.notify();
     }
 

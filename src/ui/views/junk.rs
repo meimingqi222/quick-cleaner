@@ -381,6 +381,86 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
         )
 }
 
+/// 「排除清单」面板：列出白名单条目并提供移除入口。
+///
+/// 「排除」只有单向入口时，误排除一次就得手改 settings.json——旧版本
+/// 写入的条目还可能是被压小写的路径，在 JSON 里都难以认领。这里给每条
+/// 一个「移除」按钮，保护表始终可逆。
+fn render_exclusions_panel(root: &Root, cx: &mut Context<Root>) -> AnyElement {
+    let lang = root.language;
+    let entries = &root.settings.whitelist;
+
+    let mut panel = card()
+        .p_4()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon_shield(MUTED, 14.))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(tr_exclusions_hint(lang)),
+                ),
+        );
+
+    if entries.is_empty() {
+        panel = panel.child(
+            div()
+                .text_sm()
+                .text_color(rgb(MUTED))
+                .py_2()
+                .child(tr_exclusions_empty(lang)),
+        );
+    } else {
+        for (idx, path) in entries.iter().enumerate() {
+            let target = std::path::PathBuf::from(path);
+            panel = panel.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(rgb(SURF_LOW))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(truncate(path, 90)),
+                    )
+                    // 移除只撤这一条（精确匹配）；被释放的路径要等下次扫描
+                    // 才重新出现在列表里，状态栏会说明。
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("wl-remove-{idx}")))
+                            .flex_none()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .cursor_pointer()
+                            .hover(|h| h.text_color(rgb(ERROR)).bg(rgba(0xdc2626, 0.10)))
+                            .child(tr_exclusion_remove(lang))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.remove_exclusion(&target, cx);
+                            })),
+                    ),
+            );
+        }
+    }
+    panel.into_any_element()
+}
+
 pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
     let total = root.total_cleanable();
@@ -453,6 +533,26 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .flex_1()
                 .min_w(px(0.))
                 .child(page_heading(heading_title, heading_sub)),
+        )
+        // 排除清单开关：保护表必须可查可撤，不然单向排除成了陷阱
+        .child(
+            div()
+                .id("exclusions-toggle")
+                .flex_none()
+                .child(small_button(
+                    tr_exclusions_toggle(lang, root.settings.whitelist.len()),
+                    if root.show_exclusions {
+                        PRIMARY_FIXED
+                    } else {
+                        SURF_LOW
+                    },
+                    if root.show_exclusions { PRIMARY } else { MUTED },
+                    true,
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.show_exclusions = !this.show_exclusions;
+                    cx.notify();
+                })),
         )
         .child(found);
 
@@ -691,6 +791,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .flex_col()
         .gap_5()
         .child(header)
+        .children(root.show_exclusions.then(|| render_exclusions_panel(root, cx)))
         .children(skipped_banner)
         .child(body)
         // 滚动条拖拽的 move/up 走窗口级监听：鼠标拖出滑块、拖出整页

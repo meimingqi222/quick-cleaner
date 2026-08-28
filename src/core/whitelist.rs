@@ -35,29 +35,49 @@
 //!
 //! `Settings.whitelist` 里存**展开后的绝对路径原文**（右键排除的条目本来
 //! 就是绝对路径；手改配置文件的用户请自行写绝对路径）。`~` 前缀在
-//! [`reload`] 时展开一次，之后只做归一化比对。
+//! [`reload`] 时展开一次。全局表同时保存归一化形态（比对用）和原文
+//! （写回 Settings 用）——归一化会折叠大小写，若只存归一化形态，写回
+//! 时就只能展示 `/users/...` 这种被压小写的路径。旧版本写下的已压小写
+//! 条目按原文照常生效，用户重新排除一次即可恢复正常大小写。
 
 use std::path::Path;
 use std::sync::RwLock;
 
-/// 归一化后的白名单条目。空表 = 没有用户白名单（行为与该模块不存在时
-/// 完全一致）。
-static ENTRIES: RwLock<Vec<String>> = RwLock::new(Vec::new());
+/// 一条白名单条目的两种形态。
+#[derive(Clone, Debug, PartialEq)]
+struct Entry {
+    /// 归一化形态，只用于比对。
+    norm: String,
+    /// 展开 `~` 后的原文（保留大小写与原生分隔符），写回 Settings 时用。
+    display: String,
+}
+
+/// 全局白名单表。空表 = 没有用户白名单（行为与该模块不存在时完全一致）。
+static ENTRIES: RwLock<Vec<Entry>> = RwLock::new(Vec::new());
 
 /// 把 Settings 里的原始字符串清单装载进全局表。启动时与每次修改后调用。
 ///
 /// `~` 前缀展开成用户主目录；展开不了（极罕见的主目录缺失）就丢弃该条
-/// 并如实返回 false——一条坏条目不该让整张表静默失明，但也没法凭空修。
+/// ——一条坏条目不该让整张表静默失明，但也没法凭空修。返回 false 表示
+/// 有条目被丢弃或装载失败，调用方应记日志而不是假装无事发生。
 pub fn reload(raw: &[String]) -> bool {
     let mut entries = Vec::with_capacity(raw.len());
+    let mut dropped = 0usize;
     for item in raw {
-        let expanded = expand_home(item);
-        entries.push(crate::core::safety::norm(Path::new(&expanded)));
+        let Some(expanded) = expand_home(item) else {
+            dropped += 1;
+            continue;
+        };
+        let norm = crate::core::safety::norm(Path::new(&expanded));
+        entries.push(Entry {
+            norm,
+            display: expanded,
+        });
     }
     match ENTRIES.write() {
         Ok(mut guard) => {
             *guard = entries;
-            true
+            dropped == 0
         }
         // poisoned 只发生在持锁线程 panic 时；这里没有可能 panic 的代码，
         // 但仍按「装载失败」如实上报，不假装成功。
@@ -68,40 +88,60 @@ pub fn reload(raw: &[String]) -> bool {
 /// 加入一条白名单（绝对路径），全局表立即生效。返回更新后的完整清单
 /// （展开后的绝对路径原文），调用方拿它写回 `Settings` 并 `save()`。
 ///
-/// 已存在的等价条目（归一化后相同）不重复添加。
-pub fn add(path: &Path) -> Vec<String> {
-    let expanded = expand_home(&path.to_string_lossy());
+/// 已存在的等价条目（归一化后相同）不重复添加。写锁拿不到（表已中毒）
+/// 时返回 None——调用方必须原样保留 `Settings.whitelist`，绝不能把一个
+/// 可能是空的清单写回磁盘覆盖用户的保护表。
+pub fn add(path: &Path) -> Option<Vec<String>> {
+    let expanded = expand_home(&path.to_string_lossy())?;
     let normalized = crate::core::safety::norm(Path::new(&expanded));
-    if let Ok(mut guard) = ENTRIES.write() {
-        if !guard.contains(&normalized) {
-            guard.push(normalized);
+    {
+        let mut guard = ENTRIES.write().ok()?;
+        if !guard.iter().any(|e| e.norm == normalized) {
+            guard.push(Entry {
+                norm: normalized,
+                display: expanded,
+            });
         }
     }
     current()
 }
 
-/// 当前清单（展开后的绝对路径原文，可直接序列化进 Settings）。
-pub fn current() -> Vec<String> {
-    match ENTRIES.read() {
-        Ok(guard) => guard
-            .iter()
-            .map(|normalized| restore_case(normalized))
-            .collect(),
-        Err(_) => Vec::new(),
+/// 移除一条白名单（归一化后精确匹配），全局表立即生效。返回更新后的
+/// 完整清单；语义同 [`add`]——写锁拿不到时返回 None，调用方不要动
+/// `Settings`。
+pub fn remove(path: &Path) -> Option<Vec<String>> {
+    let expanded = expand_home(&path.to_string_lossy())?;
+    let normalized = crate::core::safety::norm(Path::new(&expanded));
+    {
+        let mut guard = ENTRIES.write().ok()?;
+        guard.retain(|e| e.norm != normalized);
     }
+    current()
+}
+
+/// 当前清单（展开后的绝对路径原文，可直接序列化进 Settings）。
+///
+/// 表中毒时返回 None：此时「清单是什么」是未知的，调用方拿到的任何
+/// 替代值（包括空表）写回磁盘都可能销毁用户的保护表。
+pub fn current() -> Option<Vec<String>> {
+    let guard = ENTRIES.read().ok()?;
+    Some(guard.iter().map(|e| e.display.clone()).collect())
 }
 
 /// 这个路径（或它的任何子路径）是否被用户拉进了白名单。
 ///
 /// 条目自身和它的整个子树都受保护——用户排除的是「这个东西」，不管
 /// 清理器从哪个祖先路径递归进来。
+///
+/// 保护表必须 fail-closed：锁中毒时查不到内容，返回 true（把路径当作
+/// 受保护）最多损失一次清理，返回 false 则可能误删用户明令保护的东西。
 pub fn is_whitelisted(path: &Path) -> bool {
     let lower = crate::core::safety::norm(path);
     match ENTRIES.read() {
-        Ok(guard) => guard.iter().any(|entry| {
-            crate::core::safety::at_or_under(&lower, entry)
-        }),
-        Err(_) => false,
+        Ok(guard) => guard
+            .iter()
+            .any(|e| crate::core::safety::at_or_under(&lower, &e.norm)),
+        Err(_) => true,
     }
 }
 
@@ -109,23 +149,29 @@ pub fn is_whitelisted(path: &Path) -> bool {
 ///
 /// 供扫描侧把这类父目录从默认勾选里降级：整树清理会连带碰被保护子项，
 /// 删除层虽然会拦，但与其让用户看到「失败的清理」，不如默认不勾。
+/// 与 [`is_whitelisted`] 同理 fail-closed：查不了就当作压着条目，宁可
+/// 不默认勾选。
 pub fn has_entry_under(path: &Path) -> bool {
     let lower = crate::core::safety::norm(path);
     match ENTRIES.read() {
         Ok(guard) => guard
             .iter()
-            .any(|entry| crate::core::safety::at_or_under(entry, &lower)),
-        Err(_) => false,
+            .any(|e| crate::core::safety::at_or_under(&e.norm, &lower)),
+        Err(_) => true,
     }
 }
 
-/// 清空全局表。测试用——生产路径上白名单只增不清（用户要移除条目时
-/// 是「改完整清单后 reload」）。
+/// 清空全局表。测试用——生产路径上白名单的增删走 [`add`] / [`remove`]。
+///
+/// 测试可能故意毒化锁，poisoned 的锁恢复不出 `Ok`，只能 `into_inner`
+/// 硬取——测试进程里这是唯一能继续的方式。
 #[cfg(test)]
 pub(crate) fn clear() {
-    if let Ok(mut guard) = ENTRIES.write() {
-        guard.clear();
-    }
+    let mut guard = match ENTRIES.write() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clear();
 }
 
 /// 全局表是进程级单例，cargo test 默认并行跑——凡是用到本模块的测试
@@ -135,44 +181,18 @@ pub(crate) fn clear() {
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// `~` / `~/…` 展开为用户主目录；其余原样返回。
-fn expand_home(s: &str) -> String {
+/// `~` / `~/…` 展开为用户主目录；其余原样返回。展开不了（主目录缺失）
+/// 返回 None——调用方丢弃该条，绝不能把字面 `~/…` 当成有效路径存进去，
+/// 那会变成一条永不相配的哑条目。
+fn expand_home(s: &str) -> Option<String> {
     if s == "~" {
-        return dirs::home_dir()
-            .map(|h| h.to_string_lossy().into_owned())
-            .unwrap_or_else(|| s.to_string());
+        return dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
     }
     if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest).to_string_lossy().into_owned();
-        }
+        let home = dirs::home_dir()?;
+        return Some(home.join(rest).to_string_lossy().into_owned());
     }
-    s.to_string()
-}
-
-/// 归一化会折叠大小写和分隔符；写回 Settings 时保留一份「看起来正常」
-/// 的路径。归一化表把 `/` 统一成了 `\`，macOS 上展示得还原回来。
-fn restore_case(normalized: &str) -> String {
-    if cfg!(windows) {
-        restore_drive_letter(normalized)
-    } else {
-        normalized.replace('\\', "/")
-    }
-}
-
-/// Windows：归一化把盘符压成了小写（`C:\` → `c:\`），还原首字母大写。
-fn restore_drive_letter(normalized: &str) -> String {
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_lowercase() {
-        let mut out = normalized.to_string();
-        out.replace_range(
-            0..1,
-            &(bytes[0] as char).to_ascii_uppercase().to_string(),
-        );
-        out
-    } else {
-        normalized.to_string()
-    }
+    Some(s.to_string())
 }
 
 /// 用真实文件系统路径验证 add/reload 的往返一致性。
@@ -227,7 +247,63 @@ mod tests {
         // 同一路径的不同写法（尾斜杠）归一化后相同，不该出现两条
         let with_slash = PathBuf::from(format!("{}/", p.display()));
         let _ = add(&with_slash);
-        assert_eq!(current().len(), 1);
+        assert_eq!(current().expect("锁未中毒").len(), 1);
+        clear();
+    }
+
+    #[test]
+    fn add_preserves_original_case_and_roundtrips() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear();
+        // 归一化会折叠大小写，但写回 Settings 的必须是原文——旧实现会把
+        // 这里压成全小写，用户在配置文件里看到的路径面目全非。
+        let p = PathBuf::from(
+            std::env::temp_dir()
+                .join("Qc_Wl_Case/MixedPath")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let list = add(&p).expect("add 应成功");
+        assert_eq!(list, vec![p.to_string_lossy().into_owned()]);
+        assert_eq!(current().expect("锁未中毒"), list);
+        // 比对不受大小写影响
+        assert!(is_whitelisted(&p));
+        clear();
+    }
+
+    #[test]
+    fn remove_deletes_only_exact_entry() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear();
+        let parent = std::env::temp_dir().join("qc_wl_remove");
+        let child = parent.join("keep");
+        let _ = add(&parent);
+        let _ = add(&child);
+
+        let list = remove(&parent).expect("remove 应成功");
+        assert_eq!(list, vec![child.to_string_lossy().into_owned()]);
+        assert!(!is_whitelisted(&parent));
+        // 子条目不连带移除：用户只点名撤掉一条
+        assert!(is_whitelisted(&child));
+        // 移除不存在的条目也返回当前完整清单
+        assert_eq!(
+            remove(&parent).expect("remove 应成功"),
+            vec![child.to_string_lossy().into_owned()]
+        );
+        clear();
+    }
+
+    #[test]
+    fn reload_reports_success_and_plain_paths_roundtrip() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear();
+        let target = std::env::temp_dir().join("qc_wl_reload_ok");
+        assert!(reload(&[target.to_string_lossy().into_owned()]));
+        assert!(is_whitelisted(&target));
+        assert_eq!(
+            current().expect("锁未中毒"),
+            vec![target.to_string_lossy().into_owned()]
+        );
         clear();
     }
 
