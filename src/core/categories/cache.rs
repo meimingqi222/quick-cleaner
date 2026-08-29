@@ -38,9 +38,13 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             "pnpm cache",
             CategoryId::PackageCache,
         ));
+        // 只收下载来的 `.crate` 压缩包。`registry/src` 是解包树——rust-analyzer
+        // 跳转和离线构建读的都是它；`registry/index` 是注册表索引。整目录清空
+        // 会连后两者一起删（实测本机 cache 128M，而 src 1.0G + index 36M），
+        // 留下 src 时删 cache 不影响离线构建。
         t.push(target(
-            home.join(".cargo\\registry"),
-            Text::new("cargo registry 缓存", "cargo registry cache"),
+            home.join(".cargo\\registry\\cache"),
+            Text::new("cargo 下载缓存", "cargo download cache"),
             CategoryId::PackageCache,
         ));
         t.push(target(
@@ -48,14 +52,13 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("rustup 下载缓存", "rustup downloads"),
             CategoryId::PackageCache,
         ));
-        // GOPRIVATE / 自建 proxy 拉下来的私有模块也落在这里，内网机器上删了
-        // 可能没有上游可拉——与下面 `~/.m2/repository` 同一条判据（规范第 2 条），
-        // 类别照旧是包缓存，只是不预选。
-        t.push(target_with_recommendation(
-            home.join("go\\pkg\\mod"),
-            Text::new("go module 缓存", "go module cache"),
+        // 只删下载的模块 zip（`pkg/mod/cache`）。外面按域名解包的那些目录是
+        // 构建真正读取的内容，也是「上游 tag 被删后仅剩的一份」——留着它们，
+        // 删掉 zip 不影响离线构建，比整类不勾回收得多。
+        t.push(target(
+            home.join("go\\pkg\\mod\\cache"),
+            Text::new("go 下载缓存", "go download cache"),
             CategoryId::PackageCache,
-            false,
         ));
         t.push(target(
             local.join("go-build"),
@@ -84,13 +87,15 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         ));
         // 包缓存这条线的分界（规范第 2 条）：**这个目录是公共 registry 的本机
         // 镜像，还是本机某份产物的唯一副本？**
-        // - 只是镜像：npm `_cacache`、pip、uv、cargo registry、bun、rustup、
-        //   Homebrew、typescript、node-gyp。删了最坏是重新下载，可以预选。
-        // - 常是唯一副本：`~/.m2/repository`（`mvn install` 的私有构件直接写
-        //   进这个目录）、go module 缓存、`~/.gradle/caches`、`~/.nuget/packages`
-        //   ——这几个生态里「只在内网有、上游根本没有」是日常而不是例外，不预选。
-        //   npm 私服和私有 cargo registry 也能构造出同样情形，所以这条界线是按
-        //   普遍性下的判断，不是机械推导出来的；要挪动谁，得给出新的证据。
+        // 先试「切到下载缓存那一层」——绝大多数生态都把「下载的压缩包」和「解包
+        // 后构建真正读的东西」分在不同子目录：cargo 的 `registry/cache` vs
+        // `src`+`index`、go 的 `pkg/mod/cache` vs 按域名解包的目录。只删前者，
+        // 既回收了该回收的，又不动离线构建依赖的那份。
+        // 切不出安全子层的才整目录降级：`~/.m2/repository`（`mvn install` 的
+        // 私有构件直接写进读取路径）、`~/.gradle/caches`、`~/.nuget/packages`
+        // ——这几个生态里「只在内网有、上游根本没有」是日常而不是例外。
+        // npm 私服和私有 cargo registry 也能构造出同样情形，所以这条界线是按
+        // 普遍性下的判断，不是机械推导出来的；要挪动谁，得给出新的证据。
         // ~/.cache 里既有纯下载缓存，也可能有工具状态。按顶层子目录拆开，
         // 才能只推荐已确认可重建的缓存，同时保留其他项目供审阅。
         push_home_cache_targets(t, home);
@@ -115,9 +120,13 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("npm 缓存", "npm cache"),
             CategoryId::PackageCache,
         ));
+        // 只收下载来的 `.crate` 压缩包；`registry/src` 是解包树（rust-analyzer
+        // 与离线构建读的就是它），`registry/index` 是索引。实测本机 cache 128M，
+        // 而 src 1.0G + index 36M——整目录清空等于为 128M 删掉 1.1G。
+        // 留着 src 时删 cache 不影响离线构建。判据同 Windows 分支。
         t.push(target(
-            home.join(".cargo/registry"),
-            Text::new("cargo 缓存", "cargo cache"),
+            home.join(".cargo/registry/cache"),
+            Text::new("cargo 下载缓存", "cargo download cache"),
             CategoryId::PackageCache,
         ));
         t.push(target(
@@ -125,12 +134,13 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("rustup 缓存", "rustup cache"),
             CategoryId::PackageCache,
         ));
-        // 私有模块的唯一副本，同 Windows 分支：不预选。
-        t.push(target_with_recommendation(
-            home.join("go/pkg/mod"),
-            Text::new("go 缓存", "go cache"),
+        // 只删下载的模块 zip（`pkg/mod/cache`，实测本机 384M）。外面按域名解包
+        // 的目录是构建真正读取的内容，也是「上游 tag 被删后仅剩的一份」——留着
+        // 它们，删 zip 不影响离线构建。判据同 Windows 分支。
+        t.push(target(
+            home.join("go/pkg/mod/cache"),
+            Text::new("go 下载缓存", "go download cache"),
             CategoryId::PackageCache,
-            false,
         ));
         push_home_cache_targets(t, home);
         t.push(target(
@@ -181,11 +191,20 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             CategoryId::PackageCache,
             false,
         ));
-        t.push(target(
-            home.join("Library/pnpm/store"),
-            Text::new("pnpm store", "pnpm store"),
-            CategoryId::PackageCache,
-        ));
+        // pnpm 的 store 根随安装方式而变：`~/Library/pnpm/store` 或
+        // `~/.pnpm-store`。本机实测前者是 0B 空目录、后者才是真身（509M），
+        // 只登记前者等于让那 509M 完全不可见。两个都登记，不存在的那个会被
+        // 扫描阶段的 `exists()` 滤掉，没有代价。
+        for (dir, label) in [
+            (home.join("Library/pnpm/store"), "pnpm store (Library)"),
+            (home.join(".pnpm-store"), "pnpm store"),
+        ] {
+            t.push(target(
+                dir,
+                Text::new(label, "pnpm store"),
+                CategoryId::PackageCache,
+            ));
+        }
     }
 }
 
@@ -283,13 +302,20 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 const REBUILDABLE_HOME_CACHE_DIRS: &[(&str, &str, &str)] = &[
     ("uv", "uv 缓存", "uv cache"),
     ("pip", "pip 缓存", "pip cache"),
-    ("pypoetry", "Poetry 缓存", "Poetry cache"),
     ("pre-commit", "pre-commit 缓存", "pre-commit cache"),
     ("node-gyp", "node-gyp 缓存", "node-gyp cache"),
     ("typescript", "TypeScript 缓存", "TypeScript cache"),
     ("go-build", "Go 构建缓存", "Go build cache"),
     ("gopls", "gopls 缓存", "gopls cache"),
 ];
+
+// 明确不进上面那张表、只展示不预选的 `~/.cache` 子目录：
+//
+// `pypoetry` —— 里面除了下载缓存还住着 `virtualenvs/`，重建它是一次完整的
+// install 事务而不是"解包一下"；参考实现 Mole 也把 `pypoetry/virtualenvs`
+// 放进**恒常合并、用户覆盖不掉**的安全表（`base.sh` 的
+// `SAFETY_WHITELIST_PATTERNS`）。本机没有这个目录，无法确认纯下载子层的
+// 确切路径，所以按规范第 1 条整项降级，而不是凭印象切一个没验证过的路径。
 
 /// `~/Library/Caches` 下已被**整目录**认领的顶层目录。
 ///

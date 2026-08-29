@@ -1019,31 +1019,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// 可能只在本机有一份的包缓存不默认勾选，公共 registry 的镜像照旧。
+    /// 包缓存目标停在「下载缓存」这一层：解包树和索引不碰，父目录不入表。
     ///
-    /// 判据写在 `cache.rs`：这个目录是公共 registry 的本机镜像，还是本机某份
-    /// 产物的唯一副本。`~/.m2/repository` 早就按这条排除了，`go/pkg/mod` 和
-    /// `~/.gradle/caches` 没有理由例外。
+    /// 判据写在 `cache.rs`。收窄之前 `~/.cargo/registry` 是整目录清空，实测本机
+    /// 等于「为回收 128M 的 `.crate` 压缩包，顺手删掉 1.0G 解包树 + 36M 索引」，
+    /// 而解包树正是 rust-analyzer 跳转和离线构建要读的东西。反向那组断言才是
+    /// 这次收窄真正的契约：它们必须压根不是目标，而不是"目标是但不预选"。
     #[test]
     #[cfg(target_os = "macos")]
-    fn single_copy_package_caches_are_not_preselected() {
+    fn package_cache_targets_stop_at_the_download_cache() {
         let home = dirs::home_dir().expect("测试需要真实 HOME");
         let targets = all_targets();
         let entry = |rel: &str| targets.iter().find(|t| t.path == home.join(rel));
 
-        for rel in ["go/pkg/mod", ".gradle/caches"] {
-            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 仍然要展示"));
-            assert_eq!(target.category, CategoryId::PackageCache);
-            assert!(!target.recommended, "{rel} 可能只有本机一份，不能预选");
-        }
         for rel in [
             ".npm/_cacache",
-            ".cargo/registry",
+            ".cargo/registry/cache",
+            "go/pkg/mod/cache",
+            ".pnpm-store",
             "Library/Caches/Homebrew",
             "Library/Caches/go-build",
         ] {
-            let target = entry(rel).expect("公共 registry 镜像照旧入表");
+            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 应作为下载缓存入表"));
+            assert_eq!(target.category, CategoryId::PackageCache, "{rel} 归类错了");
             assert!(target.recommended, "{rel} 删了最坏只是重下，该预选");
+        }
+
+        // 私有仓的构件可能只有本机一份：展示，但不预选
+        let gradle = entry(".gradle/caches").expect("gradle 缓存仍然要展示");
+        assert!(!gradle.recommended, "gradle 可能只有本机一份，不能预选");
+
+        for rel in [
+            ".cargo/registry",
+            ".cargo/registry/src",
+            ".cargo/registry/index",
+            "go/pkg/mod",
+        ] {
+            assert!(
+                entry(rel).is_none(),
+                "{rel} 不该是清理目标——它是解包树或索引，不是下载缓存"
+            );
         }
     }
 
