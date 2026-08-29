@@ -218,7 +218,7 @@ mod tests {
     fn reload_then_is_whitelisted_covers_self_and_descendants() {
         let _guard = lock_for_test();
         clear();
-        let base = std::env::temp_dir().join(format!("{}_{}", "qc_wl_roundtrip", std::process::id()));
+        let base = crate::core::testing::fixture("qc_wl_roundtrip");
         let target = base.join("virtualenvs");
         let raw = vec![target.to_string_lossy().into_owned()];
         assert!(reload(&raw));
@@ -236,7 +236,7 @@ mod tests {
     fn has_entry_under_marks_ancestors_only() {
         let _guard = lock_for_test();
         clear();
-        let base = std::env::temp_dir().join(format!("{}_{}", "qc_wl_ancestor", std::process::id()));
+        let base = crate::core::testing::fixture("qc_wl_ancestor");
         let target = base.join("keep");
         assert!(reload(&[target.to_string_lossy().into_owned()]));
 
@@ -245,9 +245,9 @@ mod tests {
         assert!(has_entry_under(&target));
         // 条目自己和无关路径不是「压着条目」
         assert!(!has_entry_under(&target.join("child")));
-        assert!(!has_entry_under(
-            &std::env::temp_dir().join(format!("{}_{}", "qc_wl_unrelated", std::process::id()))
-        ));
+        assert!(!has_entry_under(&crate::core::testing::fixture(
+            "qc_wl_unrelated"
+        )));
         clear();
     }
 
@@ -255,7 +255,7 @@ mod tests {
     fn add_deduplicates_equivalent_entries() {
         let _guard = lock_for_test();
         clear();
-        let p = std::env::temp_dir().join(format!("{}_{}", "qc_wl_dedup", std::process::id()));
+        let p = crate::core::testing::fixture("qc_wl_dedup");
         let _ = add(&p);
         // 同一路径的不同写法（尾斜杠）归一化后相同，不该出现两条
         let with_slash = PathBuf::from(format!("{}/", p.display()));
@@ -288,7 +288,7 @@ mod tests {
     fn remove_deletes_only_exact_entry() {
         let _guard = lock_for_test();
         clear();
-        let parent = std::env::temp_dir().join(format!("{}_{}", "qc_wl_remove", std::process::id()));
+        let parent = crate::core::testing::fixture("qc_wl_remove");
         let child = parent.join("keep");
         let _ = add(&parent);
         let _ = add(&child);
@@ -310,7 +310,7 @@ mod tests {
     fn reload_reports_success_and_plain_paths_roundtrip() {
         let _guard = lock_for_test();
         clear();
-        let target = std::env::temp_dir().join(format!("{}_{}", "qc_wl_reload_ok", std::process::id()));
+        let target = crate::core::testing::fixture("qc_wl_reload_ok");
         assert!(reload(&[target.to_string_lossy().into_owned()]));
         assert!(is_whitelisted(&target));
         assert_eq!(

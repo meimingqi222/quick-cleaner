@@ -755,7 +755,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn open_file_marks_target_via_ancestors() {
-        let dir = std::env::temp_dir().join(format!("qc_inuse_{}", std::process::id()));
+        let dir = crate::core::testing::fixture("qc_inuse");
         let inner = dir.join("sub/deep/file.bin");
         std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
         std::fs::write(&inner, b"x").unwrap();
@@ -1022,11 +1022,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn spot_check_fallback_marks_live_database_file_busy_not_the_parent_dir() {
-        let base = std::env::temp_dir().join(format!(
-            "{}_{}",
-            "qc_spot_fallback_live_db",
-            std::process::id()
-        ));
+        let base = crate::core::testing::fixture("qc_spot_fallback_live_db");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let db = base.join("cache.db");
@@ -1060,8 +1056,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn spot_check_uses_recursive_lsof_for_directories() {
-        let base =
-            std::env::temp_dir().join(format!("{}_{}", "qc_spot_check_args", std::process::id()));
+        let base = crate::core::testing::fixture("qc_spot_check_args");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let file = base.join("one.bin");
@@ -1083,11 +1078,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn recursive_directories_do_not_share_a_spot_check_batch() {
-        let base = std::env::temp_dir().join(format!(
-            "{}_{}",
-            "qc_spot_check_batches",
-            std::process::id()
-        ));
+        let base = crate::core::testing::fixture("qc_spot_check_batches");
         let first = base.join("first");
         let second = base.join("second");
         let file = base.join("one.bin");

@@ -747,8 +747,7 @@ mod tests {
 
     #[test]
     fn fixed_file_target_reports_its_real_size() {
-        let path =
-            std::env::temp_dir().join(format!("{}_{}", "qc_scan_single_file", std::process::id()));
+        let path = crate::core::testing::file_path("qc_scan_single_file");
         std::fs::write(&path, b"metadata").unwrap();
         let live = AtomicBool::new(true);
 
@@ -768,8 +767,7 @@ mod tests {
     fn fixed_scan_rejects_symlink_root() {
         use std::os::unix::fs::symlink;
 
-        let root =
-            std::env::temp_dir().join(format!("{}_{}", "qc_scan_symlink_root", std::process::id()));
+        let root = crate::core::testing::fixture("qc_scan_symlink_root");
         let target = root.join("target");
         let link = root.join("link");
         let _ = std::fs::remove_dir_all(&root);
@@ -964,7 +962,7 @@ mod tests {
 
     /// 造一个真实存在的临时目录，供「合并前过滤已不存在的路径」那条规则用。
     fn real_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("qc_merge_{tag}_{}", std::process::id()));
+        let p = crate::core::testing::fixture(&format!("qc_merge_{tag}"));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -1009,11 +1007,7 @@ mod tests {
     /// 那些路径不能再并进列表，否则界面上会出现清不掉的幽灵条目。
     #[test]
     fn vanished_paths_are_dropped_on_merge() {
-        let gone = std::env::temp_dir().join(format!(
-            "{}_{}",
-            "qc_merge_definitely_not_here_8f21",
-            std::process::id()
-        ));
+        let gone = crate::core::testing::file_path("qc_merge_definitely_not_here_8f21");
         let _ = std::fs::remove_dir_all(&gone);
         assert!(!gone.exists());
 

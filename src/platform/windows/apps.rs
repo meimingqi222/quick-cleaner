@@ -1299,10 +1299,7 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
     let hidden = hide_shell_window(&cmd);
     let mut unelevated = should_run_unelevated(raw, app);
     if unelevated {
-        crate::log!(
-            "「{}」是用户范围的命令行卸载，降权到桌面用户执行",
-            app.name
-        );
+        crate::log!("「{}」是用户范围的命令行卸载，降权到桌面用户执行", app.name);
     }
 
     let code = if needs_cmd_shell(&cmd) {
@@ -1398,9 +1395,7 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
 
     if !status_ok {
         if code == crate::platform::windows::process::WINGET_ADMIN_CONTEXT_PROHIBITED {
-            return Err(
-                "winget 拒绝在管理员权限下卸载当前用户安装的软件，降权执行仍失败".into(),
-            );
+            return Err("winget 拒绝在管理员权限下卸载当前用户安装的软件，降权执行仍失败".into());
         }
         return Err(format!("卸载程序退出异常：exit code: {code:#x}"));
     }
@@ -1701,7 +1696,7 @@ mod uninstall_cli {
         app.install_location = Some(PathBuf::from(r"C:\"));
         assert!(!install_location_gone(&app));
 
-        let gone = std::env::temp_dir().join(format!("{}_{}", "quick-cleaner-never-existed-install-dir", std::process::id()));
+        let gone = crate::core::testing::file_path("quick-cleaner-never-existed-install-dir");
         app.install_location = Some(gone);
         assert!(install_location_gone(&app));
     }

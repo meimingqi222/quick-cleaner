@@ -153,9 +153,8 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         // `core::brew`）。节流：距上次真实清理不足一周就不出现；dry-run
         // 失败或没有可清内容也不出现（不出假条目）。体积是 brew 自己
         // dry-run 给出的估算，不是逐文件称的。
-        if crate::core::brew::should_offer(
-            crate::core::settings::Settings::load().brew_cleanup_at,
-        ) {
+        if crate::core::brew::should_offer(crate::core::settings::Settings::load().brew_cleanup_at)
+        {
             if let Some((bytes, _files)) = crate::core::brew::cleanup_preview() {
                 t.push(ScanTarget {
                     path: crate::core::brew::virtual_path(),

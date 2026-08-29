@@ -22,6 +22,7 @@ pub mod proc;
 pub mod safety;
 pub mod scanner;
 pub mod settings;
+pub(crate) mod testing;
 pub mod whitelist;
 
 pub use fs_query::{FSIndexEngine, FileIndexQuery, IndexedFile, QueryFilter};

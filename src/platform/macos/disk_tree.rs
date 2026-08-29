@@ -1,9 +1,8 @@
 //! macOS 磁盘空间分析后备实现（SizeTree / Node / ScanResult）
 
 use super::index_v7::{
-    delta_checksum, entries_as_bytes, finalize_checksum, index_checksum_bytes, pool_str,
-    push_name, MmapOut, MmapPool, NameInterner, V7Header, V7Layout, INDEX_V7_HEADER,
-    INDEX_V7_MAGIC,
+    delta_checksum, entries_as_bytes, finalize_checksum, index_checksum_bytes, pool_str, push_name,
+    MmapOut, MmapPool, NameInterner, V7Header, V7Layout, INDEX_V7_HEADER, INDEX_V7_MAGIC,
 };
 use crate::core::disk::VolumeId;
 use std::collections::HashMap;
@@ -837,8 +836,7 @@ impl SizeTree {
             .map(|m| m.name_len)
             .unwrap_or(0)
             .saturating_add(self.name_pool.len());
-        let layout =
-            V7Layout::names_trailing(used, mount.len(), label.len(), ca_len, pool_upper);
+        let layout = V7Layout::names_trailing(used, mount.len(), label.len(), ca_len, pool_upper);
 
         let tmp = path.with_extension("bin.tmp");
         let mut out = MmapOut::create(tmp, layout.len)?;
@@ -1322,7 +1320,8 @@ fn write_v7_file(
     }
     let mount = meta.mount.as_bytes();
     let label = meta.label.as_bytes();
-    let layout = V7Layout::names_inline(n, mount.len(), label.len(), name_pool.len(), child_at.len());
+    let layout =
+        V7Layout::names_inline(n, mount.len(), label.len(), name_pool.len(), child_at.len());
 
     let tmp = path.with_extension("bin.tmp");
     let mut out = MmapOut::create(tmp, layout.len)?;
@@ -2440,7 +2439,7 @@ mod v7_header_validation_tests {
     /// 它们本来就是同一棵树的两种落盘方式，差异只该出现在偏移上。
     #[test]
     fn inplace_and_streaming_writers_agree() {
-        let dir = std::env::temp_dir().join(format!("{}_{}", "qc_v7_equiv", std::process::id()));
+        let dir = crate::core::testing::fixture("qc_v7_equiv");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2488,7 +2487,7 @@ mod v7_header_validation_tests {
     /// 加载器的职责是校验不可信的磁盘数据，必须拒绝这种文件而不是照单全收。
     #[test]
     fn misaligned_csr_offsets_are_rejected() {
-        let dir = std::env::temp_dir().join(format!("{}_{}", "qc_v7_align", std::process::id()));
+        let dir = crate::core::testing::fixture("qc_v7_align");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

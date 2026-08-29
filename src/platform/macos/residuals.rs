@@ -2049,7 +2049,7 @@ mod tests {
 
     #[test]
     fn residual_cleanup_rejects_path_replaced_after_scan() {
-        let root = std::env::temp_dir().join(format!("{}_{}", "qc_residual_identity_swap", std::process::id()));
+        let root = crate::core::testing::fixture("qc_residual_identity_swap");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("com.example.app.plist");

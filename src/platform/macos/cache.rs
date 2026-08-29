@@ -463,9 +463,7 @@ pub(crate) fn isolate_cache_dir(test_name: &str) -> std::sync::MutexGuard<'stati
     // 测试二进制是常态（上一次运行没退干净、CI 并发、手工重跑）。不带 pid
     // 时它们指向同一个目录，一方的 `remove_dir_all` 会清掉另一方正在读的
     // 索引，症状是「应当能读出索引 NotFound」「现役索引不能被回收」。
-    let dir = std::env::temp_dir()
-        .join(format!("quick-cleaner-test-cache_{}", std::process::id()))
-        .join(test_name);
+    let dir = crate::core::testing::fixture("quick-cleaner-test-cache").join(test_name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时缓存目录失败");
     std::env::set_var("QUICKCLEANER_CACHE_DIR", &dir);
@@ -521,8 +519,7 @@ mod tests {
         let dir = cache_dir().unwrap();
 
         // 用真实存在的目录：覆盖判定要 stat 设备号，虚构路径判不出同卷。
-        let base =
-            std::env::temp_dir().join(format!("{}_{}", "qc_orphan_prune_base", std::process::id()));
+        let base = crate::core::testing::fixture("qc_orphan_prune_base");
         let nested = base.join("nested");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&nested).unwrap();
@@ -1158,11 +1155,7 @@ mod tests {
             .expect("pkg 应当存在");
         tree.remove_subtree_inplace(pkg);
 
-        let out = std::env::temp_dir().join(format!(
-            "{}_{}",
-            "qc-v7-streaming-out.bin",
-            std::process::id()
-        ));
+        let out = crate::core::testing::file_path("qc-v7-streaming-out.bin");
         let _ = std::fs::remove_file(&out);
         let meta = crate::platform::macos::disk_tree::IndexMeta {
             mount: volume.mount_point().to_string_lossy().into_owned(),
@@ -1478,7 +1471,7 @@ mod tests {
     fn streaming_compaction_memory_gate() {
         let volume = VolumeId::from_mount_point(PathBuf::from("/"));
         let real = index_path(&volume).expect("应当有索引路径");
-        let dir = std::env::temp_dir().join(format!("{}_{}", "qc-mem-gate", std::process::id()));
+        let dir = crate::core::testing::fixture("qc-mem-gate");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let copy = dir.join("index-copy.bin");

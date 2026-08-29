@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_fs_index_engine_live_walk() {
-        let temp_dir = std::env::temp_dir().join(format!("{}_{}", "qc_fs_query_test", std::process::id()));
+        let temp_dir = crate::core::testing::fixture("qc_fs_query_test");
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_a = temp_dir.join("file_a.txt");
         let file_b = temp_dir.join("file_b.txt");

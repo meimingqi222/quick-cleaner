@@ -244,7 +244,7 @@ mod tests {
             "scan_volume_does_not_return_not_ntfs",
         );
 
-        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_test_scan_vol_isolated", std::process::id()));
+        let tmp = crate::core::testing::fixture("qc_test_scan_vol_isolated");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("sub")).unwrap();
         std::fs::write(tmp.join("sub/test.bin"), b"12345").unwrap();

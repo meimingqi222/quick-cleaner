@@ -547,12 +547,7 @@ mod tests {
 
     /// 同 [`item`]，但带上一份真实的身份快照——用来测试
     /// `selected_targets()` 是否老老实实把它原样搬进了 `CleanTarget`。
-    fn item_with_identity(
-        path: &Path,
-        cat: CategoryId,
-        size: u64,
-        files: u64,
-    ) -> ScanItem {
+    fn item_with_identity(path: &Path, cat: CategoryId, size: u64, files: u64) -> ScanItem {
         let identity = crate::core::model::capture_identity(path);
         ScanItem {
             path: path.to_path_buf(),
@@ -797,7 +792,7 @@ mod tests {
     /// 前是这样」，盖不住扫描到点击之间那几十秒到几分钟的真实窗口）。
     #[test]
     fn selected_targets_carry_the_scan_time_identity_verbatim() {
-        let real = std::env::temp_dir().join(format!("{}_{}", "qc_ui_identity_carry_real", std::process::id()));
+        let real = crate::core::testing::file_path("qc_ui_identity_carry_real");
         std::fs::write(&real, b"scanned content").unwrap();
         let scanned_identity = crate::core::model::capture_identity(&real);
         assert!(scanned_identity.is_some(), "测试前提：文件必须能拍到身份");
@@ -807,7 +802,7 @@ mod tests {
             category: CategoryId::UserTemp,
             total_size: 1,
             items: vec![item_with_identity(&real, CategoryId::UserTemp, 1, 1)],
-        partial: false,
+            partial: false,
         }];
         j.select_every();
 
@@ -834,14 +829,14 @@ mod tests {
 
     #[test]
     fn selected_file_target_is_removed_as_a_file() {
-        let path = std::env::temp_dir().join(format!("{}_{}", "qc_ui_single_file_target", std::process::id()));
+        let path = crate::core::testing::file_path("qc_ui_single_file_target");
         std::fs::write(&path, b"x").unwrap();
         let mut j = junk_fixture();
         j.categories = vec![CategorySummary {
             category: CategoryId::UserTemp,
             total_size: 1,
             items: vec![item(&path.to_string_lossy(), CategoryId::UserTemp, 1, 1)],
-        partial: false,
+            partial: false,
         }];
         j.select_every();
 

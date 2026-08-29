@@ -947,8 +947,7 @@ mod tests {
     }
 
     fn temp_test_dir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("qc_safety_livedb_{tag}_{}", std::process::id()));
+        let dir = crate::core::testing::fixture(&format!("qc_safety_livedb_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -995,11 +994,7 @@ mod tests {
     /// 不能悄悄放行删除。
     #[test]
     fn live_database_fails_closed_when_unreadable() {
-        let missing = std::env::temp_dir().join(format!(
-            "{}_{}",
-            "qc_safety_livedb_does_not_exist_ever",
-            std::process::id()
-        ));
+        let missing = crate::core::testing::file_path("qc_safety_livedb_does_not_exist_ever");
         let _ = std::fs::remove_dir_all(&missing);
         assert!(
             is_live_database(&missing),

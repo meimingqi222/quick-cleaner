@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn ai_agent_recommendations_are_decided_per_target() {
-        let root = std::env::temp_dir().join(format!("qc_agent_rules_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_agent_rules");
         let home = root.join("home");
         let local = root.join("local");
         let roaming = root.join("roaming");
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn only_vscode_declared_obsolete_extensions_are_recommended() {
-        let root = std::env::temp_dir().join(format!("qc_obsolete_ext_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_obsolete_ext");
         let extensions = root.join(".vscode/extensions");
         let old = extensions.join("example.tool-1.0.0");
         let current = extensions.join("example.tool-2.0.0");
@@ -689,7 +689,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn unknown_and_group_container_caches_require_manual_selection() {
-        let root = std::env::temp_dir().join(format!("qc_ambiguous_cache_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_ambiguous_cache");
         let cache = root.join("Library/Caches");
         let group_cache =
             root.join("Library/Group Containers/TEAM.password-manager/Library/Caches");
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn mixed_cache_dir_is_split_by_content() {
-        let root = std::env::temp_dir().join(format!("qc_mixed_cache_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_mixed_cache");
         let caches = root.join("Library/Caches");
         let mixed = caches.join("com.example.mixedapp");
         let _ = std::fs::remove_dir_all(&root);
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn fresh_update_package_is_not_preselected() {
-        let root = std::env::temp_dir().join(format!("qc_updater_age_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_updater_age");
         let caches = root.join("Library/Caches");
         let _ = std::fs::remove_dir_all(&root);
         for (app, days) in [("example.staleapp", 30u64), ("example.freshapp", 0)] {
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn partially_claimed_parent_still_shows_its_other_children() {
-        let root = std::env::temp_dir().join(format!("qc_partial_claim_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_partial_claim");
         let caches = root.join("Library/Caches");
         let google = caches.join("Google");
         let _ = std::fs::remove_dir_all(&root);
@@ -892,7 +892,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn apple_owned_cache_dirs_are_never_probed() {
-        let root = std::env::temp_dir().join(format!("qc_apple_cache_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_apple_cache");
         let caches = root.join("Library/Caches");
         let daemon = caches.join("com.apple.ExampleDaemon");
         let _ = std::fs::remove_dir_all(&root);
@@ -925,7 +925,7 @@ mod tests {
     /// 机器上 1 GB 出头的 uv 缓存就这么躺在需要手动勾选的那一堆里。
     #[test]
     fn rebuildable_home_cache_dirs_are_package_cache() {
-        let root = std::env::temp_dir().join(format!("qc_home_cache_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_home_cache");
         let _ = std::fs::remove_dir_all(&root);
         for name in ["uv", "pip", "some-tool-nobody-heard-of"] {
             std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
@@ -962,7 +962,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn logs_are_split_by_owner_and_hazards_stay_unpreselected() {
-        let root = std::env::temp_dir().join(format!("qc_logs_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_logs");
         let logs = root.join("Library/Logs");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(logs.join("Notion")).unwrap();
@@ -1065,7 +1065,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn broken_launch_agent_requires_conclusive_evidence() {
-        let root = std::env::temp_dir().join(format!("{}_{}", "qc_broken_launch_agent_tests", std::process::id()));
+        let root = crate::core::testing::fixture("qc_broken_launch_agent_tests");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let write = |name: &str, body: &str| {

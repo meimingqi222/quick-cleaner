@@ -249,7 +249,7 @@ mod tests {
         use super::push_updater_dirs_under;
         use crate::core::categories::CategoryId;
 
-        let root = std::env::temp_dir().join(format!("qc_updater_roots_{}", std::process::id()));
+        let root = crate::core::testing::fixture("qc_updater_roots");
         let _ = std::fs::remove_dir_all(&root);
         let hit = root.join("brand-new-app-updater");
         std::fs::create_dir_all(hit.join("pending")).unwrap();
