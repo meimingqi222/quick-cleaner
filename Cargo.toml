@@ -18,6 +18,9 @@ serde_json = "1"
 chrono = "0.4"
 lz4_flex = "0.14.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# 状态监控页的 CPU / 内存 / 进程 / 网络采样。关掉默认特性只留需要的，
+# 否则会把用户枚举、磁盘枚举等一整套拉进编译。
+sysinfo = { version = "0.37", default-features = false, features = ["system", "network", "multithread"] }
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 展开里带着 `#[cfg(feature = "cargo-clippy")]`——那是
@@ -35,7 +38,7 @@ libc = "0.2"
 objc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi"] }
+winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
@@ -45,6 +48,10 @@ winres = "0.1.12"
 # macOS 上不会出现这个可执行文件。
 [features]
 mftscan = []
+hwprobe = []
+cdprobe = []
+fanprobe = []
+authprobe = []
 fseprobe = []
 
 [[example]]
@@ -76,3 +83,23 @@ opt-level = 2
 # 不会触发依赖重编译。
 [profile.dev.package.quick-cleaner]
 opt-level = 2
+
+[[example]]
+name = "hwprobe"
+path = "examples/hwprobe.rs"
+required-features = ["hwprobe"]
+
+[[example]]
+name = "cdprobe"
+path = "examples/cdprobe.rs"
+required-features = ["cdprobe"]
+
+[[example]]
+name = "fanprobe"
+path = "examples/fanprobe.rs"
+required-features = ["fanprobe"]
+
+[[example]]
+name = "authprobe"
+path = "examples/authprobe.rs"
+required-features = ["authprobe"]

@@ -1288,8 +1288,7 @@ mod command_tests {
         let cmd = r"C:\Program Files (x86)\pdfcvt\uninstall.exe";
         let (exe, args) = split_command(cmd);
         assert_ne!(
-            exe,
-            r"C:\Program Files",
+            exe, r"C:\Program Files",
             "不能把卸载命令截成 Program Files 目录"
         );
         assert!(

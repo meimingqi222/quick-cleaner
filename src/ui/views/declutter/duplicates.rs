@@ -4,10 +4,10 @@ use super::common::{
     render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
 };
 use super::DeclutterTab;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_files_duplicate};
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
@@ -322,15 +322,12 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                         .text_color(rgb(TEXT))
                                         .child(tr_declutter_duplicates_heading(lang)),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(tr_declutter_duplicates_summary(
-                                            lang,
-                                            state.duplicate_groups.len(),
-                                        )),
-                                ),
+                                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                    tr_declutter_duplicates_summary(
+                                        lang,
+                                        state.duplicate_groups.len(),
+                                    ),
+                                )),
                         )
                         .child(
                             div()

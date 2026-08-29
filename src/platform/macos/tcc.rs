@@ -29,7 +29,7 @@ pub fn is_tcc_denied(err: &std::io::Error) -> bool {
 /// 注意不能用 `metadata()` 探测：TCC 只拦 `open` / `readdir`，`stat` 照样成功，
 /// 用 `exists()` 判断会得到「看得见但打不开」的假阳性。
 pub fn has_full_disk_access() -> bool {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = super::user_env::user_home() else {
         return false;
     };
 

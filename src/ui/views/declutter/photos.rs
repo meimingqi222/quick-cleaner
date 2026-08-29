@@ -5,10 +5,10 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::i18n::Language;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_folder_large, icon_sparkle, icon_star};
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
@@ -727,37 +727,33 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         .text_xs()
                                         .text_color(rgb(MUTED))
                                         .child(tr_declutter_photos_subheading(lang)),
-                                )
+                                ),
                         )
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .id("btn-smart-select-photos")
-                                        .px_5()
-                                        .py_2()
-                                        .rounded_full()
-                                        .bg(rgb(SURF_HIGH))
-                                        .border_1()
-                                        .border_color(rgba(OUTLINE_VAR, 0.4))
-                                        .hover(|h| h.bg(rgb(SURF_LOW)))
-                                        .cursor_pointer()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(TEXT))
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(icon_sparkle(PRIMARY, 16.))
-                                        .child(tr_declutter_photos_smart_select(lang))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.declutter.auto_pick_best_photos();
-                                            cx.notify();
-                                        })),
-                                ),
+                            div().flex().items_center().gap_3().child(
+                                div()
+                                    .id("btn-smart-select-photos")
+                                    .px_5()
+                                    .py_2()
+                                    .rounded_full()
+                                    .bg(rgb(SURF_HIGH))
+                                    .border_1()
+                                    .border_color(rgba(OUTLINE_VAR, 0.4))
+                                    .hover(|h| h.bg(rgb(SURF_LOW)))
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(rgb(TEXT))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(icon_sparkle(PRIMARY, 16.))
+                                    .child(tr_declutter_photos_smart_select(lang))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.declutter.auto_pick_best_photos();
+                                        cx.notify();
+                                    })),
+                            ),
                         ),
                 )
                 .children(groups_view),

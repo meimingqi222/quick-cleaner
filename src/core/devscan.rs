@@ -328,7 +328,7 @@ pub(super) const CODE_ROOT_NAMES: &[&str] = &[
 pub fn code_roots() -> Vec<(PathBuf, usize)> {
     let mut roots: Vec<(PathBuf, usize)> = Vec::new();
 
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::platform::user_home() {
         for name in CODE_ROOT_NAMES {
             roots.push((home.join(name), NAMED_ROOT_DEPTH));
         }
@@ -337,7 +337,7 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
     }
 
     #[cfg(windows)]
-    for vol in crate::platform::windows::volume::list_volumes() {
+    for vol in crate::platform::list_volumes() {
         // VolumeId 的 Display 是 "C:"（带冒号），直接拼会得到 "C::\name"。
         // 取盘符再拼才是正确的 "C:\name"。
         if let Some(letter) = vol.drive_letter() {
@@ -412,7 +412,7 @@ fn discover_inner(
 ) -> Vec<ScanItem> {
     #[cfg(windows)]
     {
-        if crate::platform::windows::security::is_elevated() {
+        if crate::platform::is_elevated() {
             let t0 = std::time::Instant::now();
             let items = discover_via_mft(live, prescanned);
             crate::log!(

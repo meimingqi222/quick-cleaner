@@ -12,11 +12,11 @@ use std::path::Path;
 /// 清的是 `~/.Trash`——子串匹配会清掉用户没勾的本机废纸篓,还让外接卷自己
 /// 那份一个字节都没删。外接卷废纸篓走普通的「清空目录内容」路径即可。
 pub fn is_system_trash(path: &Path) -> bool {
-    dirs::home_dir().is_some_and(|home| path == home.join(".Trash"))
+    super::user_env::user_home().is_some_and(|home| path == home.join(".Trash"))
 }
 
 pub fn empty_trash(p: &CleanProgress) -> CleanReport {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = super::user_env::user_home() {
         let trash = home.join(".Trash");
         if trash.exists() {
             return clean_dir_contents(&trash, p);

@@ -35,8 +35,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
       # clippy 而不只是 rustc：registry.rs 那批「public fn 收裸指针却不是 unsafe」
       # 属于 deny 级 lint，cargo build/test 全绿也照样漏过去。
       - name: Clippy

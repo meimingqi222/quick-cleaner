@@ -64,6 +64,51 @@ impl std::fmt::Display for VolumeId {
     }
 }
 
+/// 目录空间统计。扫描机制可以因平台不同，结果模型保持一致。
+#[derive(Clone, Debug)]
+pub struct DirUsage {
+    pub path: String,
+    pub size: u64,
+    pub file_count: u64,
+}
+
+/// 磁盘树中供上层展示和选择的节点快照。
+#[derive(Clone, Debug)]
+pub struct Node {
+    pub idx: u32,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub file_count: u64,
+    pub own_size: u64,
+}
+
+/// 磁盘扫描失败原因。平台实现负责提供机制，错误形状由领域层统一。
+#[derive(Debug)]
+pub enum ScanError {
+    AccessDenied,
+    /// 当前卷不是扫描器要求的文件系统。
+    UnsupportedFilesystem(&'static str),
+    /// 当前编译目标没有磁盘树扫描实现。
+    UnsupportedPlatform,
+    Io(String),
+}
+
+impl std::fmt::Display for ScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScanError::AccessDenied => write!(f, "需要管理员权限读取磁盘"),
+            ScanError::UnsupportedFilesystem(expected) => {
+                write!(f, "文件系统不受支持（需要 {expected}）")
+            }
+            ScanError::UnsupportedPlatform => write!(f, "当前平台不支持磁盘树扫描"),
+            ScanError::Io(error) => write!(f, "读取失败：{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScanError {}
+
 /// 扫描用户内容时统一跳过的目录名（跨平台共享的**基表**）。
 ///
 /// 隐藏目录、构建产物、依赖缓存、系统骨架等不含用户自己的文件。
@@ -308,14 +353,13 @@ fn wildcard_match(text: &str, pattern: &[char]) -> bool {
 }
 
 #[cfg(windows)]
-pub use crate::platform::windows::mft::{
-    DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD as ROOT_NODE,
-};
+pub use crate::platform::windows::mft::{ScanResult, SizeTree, ROOT_RECORD as ROOT_NODE};
 
-#[cfg(not(windows))]
+// 本工具只支持 Windows 与 macOS：非 Windows 一律是 macOS 实现，
+// 没有 fallback 平台（历史上那个兜底门面已删除，不要恢复）。
+#[cfg(target_os = "macos")]
 pub use crate::platform::macos::disk_tree::{
-    DirUsage, Node, ScanError, ScanResult, SizeTree, TreeEntry, TreeIndexEntry, TreeSnapshotEntry,
-    ROOT_NODE,
+    ScanResult, SizeTree, TreeEntry, TreeIndexEntry, TreeSnapshotEntry, ROOT_NODE,
 };
 
 pub use super::disk_selection::DiskSelectionState;

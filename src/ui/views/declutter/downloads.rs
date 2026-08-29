@@ -5,10 +5,10 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::i18n::Language;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_downloads};
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
@@ -284,16 +284,36 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(OUTLINE))
-                                .child(div().flex_1().min_w(px(0.)).child(tr_declutter_col_name(lang)))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .child(tr_declutter_col_name(lang)),
+                                )
                                 .child(
                                     div()
                                         .flex_none()
                                         .flex()
                                         .items_center()
                                         .gap_8()
-                                        .child(div().w(px(70.)).text_center().child(tr_declutter_col_kind(lang)))
-                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_size(lang)))
-                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_downloaded(lang))),
+                                        .child(
+                                            div()
+                                                .w(px(70.))
+                                                .text_center()
+                                                .child(tr_declutter_col_kind(lang)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(100.))
+                                                .text_right()
+                                                .child(tr_declutter_col_size(lang)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(100.))
+                                                .text_right()
+                                                .child(tr_declutter_col_downloaded(lang)),
+                                        ),
                                 ),
                         )
                         .child(div().flex().flex_col().children(rows)),

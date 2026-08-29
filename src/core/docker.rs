@@ -201,10 +201,9 @@ pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> 
         .filter(|img| is_referenced(img, container_refs))
         .map(|img| img.id.as_str())
         .collect();
-    let in_use =
-        |image: &DockerImage, refs: &[String]| -> bool {
-            referenced_ids.contains(image.id.as_str()) || is_referenced(image, refs)
-        };
+    let in_use = |image: &DockerImage, refs: &[String]| -> bool {
+        referenced_ids.contains(image.id.as_str()) || is_referenced(image, refs)
+    };
     let mut junk: Vec<DockerJunk> = Vec::new();
     let mut taken: HashSet<String> = HashSet::new();
 
@@ -262,10 +261,7 @@ pub fn select_docker_junk(images: &[DockerImage], container_refs: &[String]) -> 
     // 两条引用，都报的话类目合计按镜像体积重复计账，实际最多释放一次
     // （`rmi_ref` 对这种行返回 repo@digest，留作未来按引用粒度记账后开启）。
     for image in images {
-        if image.repository == NONE
-            || image.tag == NONE
-            || in_use(image, container_refs)
-        {
+        if image.repository == NONE || image.tag == NONE || in_use(image, container_refs) {
             continue;
         }
         let item = DockerJunk {

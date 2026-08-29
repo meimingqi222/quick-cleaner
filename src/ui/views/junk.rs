@@ -390,24 +390,19 @@ fn render_exclusions_panel(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
     let entries = &root.settings.whitelist;
 
-    let mut panel = card()
-        .p_4()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(icon_shield(MUTED, 14.))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(OUTLINE))
-                        .child(tr_exclusions_hint(lang)),
-                ),
-        );
+    let mut panel = card().p_4().flex().flex_col().gap_2().child(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icon_shield(MUTED, 14.))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(tr_exclusions_hint(lang)),
+            ),
+    );
 
     if entries.is_empty() {
         panel = panel.child(
@@ -791,7 +786,10 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .flex_col()
         .gap_5()
         .child(header)
-        .children(root.show_exclusions.then(|| render_exclusions_panel(root, cx)))
+        .children(
+            root.show_exclusions
+                .then(|| render_exclusions_panel(root, cx)),
+        )
         .children(skipped_banner)
         .child(body)
         // 滚动条拖拽的 move/up 走窗口级监听：鼠标拖出滑块、拖出整页

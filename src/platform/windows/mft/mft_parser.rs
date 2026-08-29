@@ -1,6 +1,7 @@
 //! MFT 字节解析与记录解析
 
 use super::mft_types::*;
+use crate::core::disk::ScanError;
 use std::os::windows::ffi::OsStrExt;
 
 const FSCTL_GET_NTFS_VOLUME_DATA: u32 = 0x0009_0064;
@@ -94,7 +95,7 @@ impl Volume {
             )
         };
         if ok == 0 || data.bytes_per_cluster == 0 || data.bytes_per_file_record_segment == 0 {
-            return Err(ScanError::NotNtfs);
+            return Err(ScanError::UnsupportedFilesystem("NTFS"));
         }
         Ok(data)
     }

@@ -199,10 +199,10 @@ pub(crate) fn lock_for_test() -> std::sync::MutexGuard<'static, ()> {
 /// 那会变成一条永不相配的哑条目。
 fn expand_home(s: &str) -> Option<String> {
     if s == "~" {
-        return dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
+        return crate::platform::user_home().map(|h| h.to_string_lossy().into_owned());
     }
     if let Some(rest) = s.strip_prefix("~/") {
-        let home = dirs::home_dir()?;
+        let home = crate::platform::user_home()?;
         return Some(home.join(rest).to_string_lossy().into_owned());
     }
     Some(s.to_string())

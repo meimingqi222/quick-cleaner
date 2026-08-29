@@ -76,21 +76,54 @@ fn reclaim_stale(root: &Path, tag: &str) {
     }
 }
 
-/// 用 signal 0 探测进程是否存在：它不投递信号，只回答"能不能发"。
-/// `EPERM` 也算活着——那是别人的进程，删它的夹具同样是错的。
+/// 进程是否还在。**判不准一律当作活着**——宁可留几个空目录，也不要在
+/// 共用的临时目录里删掉别人正在用的夹具。
 fn process_is_alive(pid: u32) -> bool {
+    // 只对 macOS 用 libc：`libc` 在 Cargo.toml 里就是按 macOS target 声明的，
+    // 写成 `cfg(unix)` 会在别的 unix 上引到一个不存在的 crate。
     #[cfg(target_os = "macos")]
     {
+        // signal 0 不投递信号，只回答"能不能发"。`EPERM` 也算活着——那是
+        // 别人的进程，删它的夹具同样是错的。
         let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
         if rc == 0 {
             return true;
         }
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        // 没有廉价且可靠的存活判据，就不回收：宁可留几个空目录，
-        // 也不要在别人的临时目录里删错东西。
+        use winapi::shared::minwindef::{DWORD, FALSE};
+        use winapi::shared::winerror::ERROR_ACCESS_DENIED;
+        use winapi::um::handleapi::CloseHandle;
+        use winapi::um::processthreadsapi::{GetExitCodeProcess, OpenProcess};
+        use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+
+        // 就地写死而不是引 `winapi::um::minwinbase::STILL_ACTIVE`：那个常量是
+        // `STATUS_PENDING as u32`，要连带打开 winapi 的 `ntstatus` feature。
+        const STILL_ACTIVE: DWORD = 259;
+
+        // SAFETY: 句柄只在 OpenProcess 成功（非空）时使用，用完立刻关闭；
+        // 退出码写进本地变量。
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid as DWORD);
+            if h.is_null() {
+                // 打不开的原因要分开看：`ERROR_ACCESS_DENIED` 说明进程存在
+                // 但不归我们（等价于 unix 的 `EPERM`），其余（典型是
+                // `ERROR_INVALID_PARAMETER`）才是"这个 pid 不存在"。
+                return std::io::Error::last_os_error().raw_os_error()
+                    == Some(ERROR_ACCESS_DENIED as i32);
+            }
+            let mut code: DWORD = 0;
+            let ok = GetExitCodeProcess(h, &mut code);
+            CloseHandle(h);
+            // 读不到退出码就按活着处理。注意 `STILL_ACTIVE`（259）也可能是
+            // 某个进程真正的退出码，这种巧合只会让我们少回收一个目录。
+            ok == 0 || code == STILL_ACTIVE
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
         let _ = pid;
         true
     }
@@ -99,6 +132,11 @@ fn process_is_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一个不可能属于任何活进程的 pid：超过 macOS 的 pid 上限（99999），
+    /// 且不是 4 的倍数（Windows 的 pid 恒为 4 的倍数）。
+    #[cfg(any(target_os = "macos", windows))]
+    const DEFINITELY_DEAD_PID: u32 = 4_000_001;
 
     /// 名字带 pid，所以同一次运行里重复取同一个 tag 拿到的是同一个目录，
     /// 而且它是空的、可用的。
@@ -138,12 +176,18 @@ mod tests {
     }
 
     /// 一个早已结束的进程留下的夹具，应该被回收掉。
+    ///
+    /// 只在有真存活判据的平台上跑：其他平台的 [`process_is_alive`] 恒为
+    /// `true`（有意的保守兜底），那里断言"应该被回收"是错的。
     #[test]
+    #[cfg(any(target_os = "macos", windows))]
     fn reclaim_removes_dirs_owned_by_dead_pids() {
         let tag = "qc_testing_fixture_dead";
         let root = std::env::temp_dir();
-        // pid 2 在 macOS 上不存在（1 是 launchd），且不会是测试进程自己。
-        let stale = root.join(format!("{tag}_2"));
+        // 用一个超出 pid 取值范围的号：macOS 的 pid 上限是 99999，Windows 的
+        // pid 是 4 的倍数。写死一个小号（比如 2）会赌"它现在恰好没被用"，
+        // 而 pid 回绕之后低号是会被复用的。
+        let stale = root.join(format!("{tag}_{}", DEFINITELY_DEAD_PID));
         let _ = std::fs::remove_dir_all(&stale);
         std::fs::create_dir_all(&stale).unwrap();
 

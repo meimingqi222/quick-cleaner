@@ -816,10 +816,11 @@ fn deduce_install_location(app: &InstalledApp) -> Option<PathBuf> {
     // 3. 从常见系统目录推断
     let clean_name = app.name.trim();
     let mut candidates = Vec::new();
-    if let Some(local) = dirs::data_local_dir() {
+    // 主目录不可信时只保留系统级候选目录。
+    if let Some(local) = super::user_env::real_user_local_appdata() {
         candidates.push(local.join("Programs").join(clean_name));
     }
-    if let Some(roaming) = dirs::data_dir() {
+    if let Some(roaming) = super::user_env::real_user_roaming_appdata() {
         candidates.push(roaming.join(clean_name));
     }
     candidates.push(PathBuf::from(r"C:\Program Files").join(clean_name));
@@ -836,12 +837,13 @@ fn scan_shortcuts_map() -> std::collections::HashMap<String, u64> {
     let mut map = HashMap::new();
 
     let mut search_dirs = Vec::new();
-    if let Some(user_prof) = dirs::home_dir() {
-        search_dirs.push(user_prof.join("Desktop"));
+    // 主目录不可信时只扫系统级目录。
+    if let Some(home) = super::user_env::real_user_home() {
+        search_dirs.push(home.join("Desktop"));
     }
     search_dirs.push(PathBuf::from(r"C:\Users\Public\Desktop"));
-    if let Some(appdata) = dirs::data_dir() {
-        search_dirs.push(appdata.join(r"Microsoft\Windows\Start Menu\Programs"));
+    if let Some(roaming) = super::user_env::real_user_roaming_appdata() {
+        search_dirs.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs"));
     }
     search_dirs.push(PathBuf::from(
         r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs",

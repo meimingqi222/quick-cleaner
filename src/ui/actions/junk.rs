@@ -51,7 +51,7 @@ impl crate::ui::Root {
         self.start_tick(cx);
         cx.notify();
 
-        let targets = all_targets();
+        let targets = all_targets(self.settings.brew_cleanup_at);
         // 占用检测与扫描并发跑：它只做两次子进程调用（lsof + ps），不依赖
         // 扫描结果，只需要目标路径表。克隆一份路径给检测任务，扫描继续
         // 持有原表。结果在扫描完成后等待并合并——首屏不等它，最坏情况

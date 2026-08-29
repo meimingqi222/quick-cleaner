@@ -12,8 +12,7 @@ pub(super) fn discover_via_mft(
     live: &AtomicBool,
     prescanned: Option<crate::core::disk::ScanResult>,
 ) -> Vec<ScanItem> {
-    use crate::platform::windows::mft::scan_volume;
-    use crate::platform::windows::volume::list_volumes;
+    use crate::platform::{list_volumes, scan_volume};
 
     let mut prescanned = prescanned;
     let mut out = Vec::new();

@@ -6,6 +6,7 @@ use crate::core::cleaner::{CleanProgress, CleanTarget};
 use crate::core::disk::{DiskSelectionState, Node, ScanResult, VolumeId};
 use crate::core::model::Check;
 use crate::core::scanner::{apply_clean_result, CategorySummary, ScanItem};
+use crate::core::status::{FanMode, StatusSnapshot};
 use crate::ui::views::DiskTab;
 use gpui::Task;
 use std::collections::HashSet;
@@ -509,7 +510,6 @@ pub struct DiskRow {
     pub path: PathBuf,
     pub protected: bool,
 }
-
 /// 磁盘行缓存的失效键
 pub type DiskRowsKey = (String, u32, DiskTab, u64);
 
@@ -518,6 +518,97 @@ pub type AppsViewKey = (u64, AppFilterPreset, String, AppSortState);
 
 /// 磁盘透镜一屏最多渲染多少行（超出部分用户也看不过来）
 pub const DISK_MAX_ROWS: usize = 200;
+
+/// CPU 占用历史最多保留多少拍（CPU 卡片的柱状图）
+pub const STATUS_HISTORY_LEN: usize = 24;
+
+/// 进程表可以按哪一列排。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProcSortKey {
+    #[default]
+    Cpu,
+    Memory,
+    Name,
+    Pid,
+}
+
+/// 进程表的排序状态。默认 CPU 降序——和活动监视器一致，也是绝大多数人
+/// 打开这个页面时想看的东西。
+#[derive(Clone, Copy, Debug)]
+pub struct ProcSort {
+    pub key: ProcSortKey,
+    pub desc: bool,
+}
+
+impl Default for ProcSort {
+    fn default() -> Self {
+        Self {
+            key: ProcSortKey::Cpu,
+            desc: true,
+        }
+    }
+}
+
+impl ProcSort {
+    /// 点击某一列表头：本来就是这一列就反向，否则换列并取该列的默认方向。
+    ///
+    /// 数值列（CPU / 内存 / PID）默认降序——「谁最占资源」是首要问题；
+    /// 名称列默认升序，那是字典序该有的样子。
+    pub fn toggled(self, key: ProcSortKey) -> Self {
+        if self.key == key {
+            Self {
+                key,
+                desc: !self.desc,
+            }
+        } else {
+            Self {
+                key,
+                desc: !matches!(key, ProcSortKey::Name),
+            }
+        }
+    }
+}
+
+/// 状态监控页的状态。快照由后台轮询任务整包写入，渲染侧只读。
+#[derive(Default)]
+pub struct StatusState {
+    /// 最近一拍采样。None = 监控还没热身完，页面显示加载态。
+    pub snapshot: Option<StatusSnapshot>,
+    /// 最近 N 拍的全局 CPU 占用率，画 CPU 卡片的柱状历史。
+    pub cpu_history: Vec<f32>,
+    /// 同上，GPU 利用率。读不到 GPU 的机型上一直是空，卡片显示「不可用」。
+    pub gpu_history: Vec<f32>,
+    /// 轮询任务槽。切出状态页时任务自退出并清空。
+    pub task: Option<Task<()>>,
+    /// 风扇当前档位。点击按钮时乐观更新，失败时回退 Auto。
+    pub fan_mode: FanMode,
+    /// 风扇档位切换进行中（解锁 thermalmonitord 可能要等几秒），期间按钮禁用。
+    pub fan_applying: bool,
+    /// 上一次切换失败、`fan_mode` 已回退到失败前的档位——此时高亮的那一档
+    /// 背后**没有**保活循环在维持（旧任务已在切换开始时被顶掉）。置位后允许
+    /// 重新点击当前高亮档位把它重新施加；成功施加一次即清除。
+    pub fan_stale: bool,
+    /// 特权守护进程是否已安装。每拍采样刷新一次——渲染侧要靠它决定是否
+    /// 显示「移除系统组件」，不能每帧去 stat 文件系统。
+    pub fan_helper_installed: bool,
+    /// 风扇控制的代次号：每次 `apply_fan_mode` 自增一次。后台任务只在
+    /// 代次仍属于自己时写状态——换成用 `fan_mode == mode` 判断的话，
+    /// 新旧两轮切到同一档位时旧任务会误认领，把新一轮的闸和文案覆盖掉。
+    pub fan_generation: u64,
+    /// 进程表排序方式。
+    pub proc_sort: ProcSort,
+    /// 按当前排序排好的进程下标（指向 `snapshot.processes`）。
+    /// 与软件管理页的 `apps.view` 同一套路：排序结果算一次存下来，
+    /// 而不是在每帧的虚拟列表回调里重排九百个进程。
+    pub proc_view: Vec<usize>,
+    pub proc_scroll: gpui::UniformListScrollHandle,
+    /// 滚动条滑块的拖拽起点（按下时的鼠标 y、当时的滚动偏移）。
+    pub proc_scroll_drag: Option<(f32, f32)>,
+    /// 风扇控制任务（切档 + 每 3 秒重申目标转速的保活循环）。
+    /// thermalmonitord 会在控制进程退出后收回风扇，应用退出即自动恢复，
+    /// 无需额外的退出清理。
+    pub fan_task: Option<Task<()>>,
+}
 
 #[derive(Clone, Debug)]
 pub struct AppsContextMenu {

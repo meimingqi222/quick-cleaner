@@ -528,8 +528,7 @@ fn drag_source_class() -> &'static Class {
             );
             decl.add_method(
                 sel!(draggingSession:sourceOperationMaskForDraggingContext:),
-                drag_operation
-                    as extern "C" fn(&Object, Sel, *mut Object, isize) -> usize,
+                drag_operation as extern "C" fn(&Object, Sel, *mut Object, isize) -> usize,
             );
         }
 
@@ -858,10 +857,7 @@ mod tests {
             !should_display(false, false),
             "设置窗口还没出现、也还没等到超时，此时必须什么都不显示"
         );
-        assert!(
-            should_display(true, false),
-            "设置窗口一出现就该立刻贴上去"
-        );
+        assert!(should_display(true, false), "设置窗口一出现就该立刻贴上去");
         assert!(
             should_display(false, true),
             "等超时之后要有兜底，不能让用户点完按钮什么都没等到"

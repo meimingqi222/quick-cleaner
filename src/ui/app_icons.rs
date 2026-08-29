@@ -29,6 +29,16 @@ pub fn try_get_icon(path: &Path) -> Option<Arc<Image>> {
         .and_then(|entry| entry.clone())
 }
 
+/// 这个路径是否已经尝试过（无论成功与否）。
+///
+/// 与 [`try_get_icon`] 的区别：那个只在**有图标**时返回 Some，取不到图标的
+/// 路径每次都像没加载过。进程表每 2 秒采一拍，靠它才能把「已经确认没图标」
+/// 的进程排除掉，否则每一拍都要重新去读一遍 bundle。
+pub fn is_cached(path: &Path) -> bool {
+    let cache = ICON_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.as_ref().is_some_and(|map| map.contains_key(path))
+}
+
 /// 在后台线程提取一个应用的图标并存入缓存。
 ///
 /// 返回 `true` 表示成功提取到图标，`false` 表示该应用没有可用图标。

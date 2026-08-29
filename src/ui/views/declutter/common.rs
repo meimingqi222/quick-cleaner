@@ -2,8 +2,8 @@
 
 use super::DeclutterTab;
 use crate::core::i18n::Language;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;

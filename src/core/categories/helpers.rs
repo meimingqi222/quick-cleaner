@@ -144,3 +144,73 @@ pub(super) fn is_sensitive_apple_cache(name: &str) -> bool {
 
     SENSITIVE_PREFIXES.iter().any(|p| name.starts_with(p))
 }
+
+/// 把文件的 mtime 往前挪 `days` 天。
+///
+/// std 只能这样改已打开文件的修改时间，改不了目录，所以年龄门只在文件
+/// 叶子上验；目录叶子走同一把 `helpers::is_older_than`，逻辑没有分叉。
+///
+/// 测试夹具，所以整体带 `#[cfg(test)]`，绝不进产物代码。放在 `helpers.rs` 而不是
+/// 各调用方自己的测试模块里：吃年龄门的目标不止 `cache.rs` 一处，谁要用谁就
+/// 再抄一份，两份实现迟早走样。
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+pub(super) fn backdate(path: &std::path::Path, days: u64) {
+    let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400))
+        .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    // 被测的 `is_broken_launch_agent` 只在 macOS 上存在，import 跟着门控。
+    #[cfg(target_os = "macos")]
+    use super::is_broken_launch_agent;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn broken_launch_agent_requires_conclusive_evidence() {
+        let root = crate::core::testing::fixture("qc_broken_launch_agent_tests");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let write = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, body).unwrap();
+            path
+        };
+        let plist = |entry: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>{entry}</dict></plist>"#
+            )
+        };
+
+        let valid = write(
+            "valid.plist",
+            &plist("<key>Program</key><string>/bin/launchctl</string>"),
+        );
+        let missing = write(
+            "missing.plist",
+            &plist("<key>Program</key><string>/definitely/missing/quick-cleaner</string>"),
+        );
+        let relative = write(
+            "relative.plist",
+            &plist("<key>ProgramArguments</key><array><string>tool-on-path</string></array>"),
+        );
+        let empty = write("empty.plist", &plist(""));
+        // 语法根本不合法意味着“探测失败”，不是“确认损坏”；不能因此把
+        // 一个可能只是无权读取/临时写到一半的系统 LaunchAgent 放进删除候选。
+        let malformed = write("malformed.plist", "<plist><dict><key>Program");
+
+        assert!(!is_broken_launch_agent(&valid));
+        assert!(is_broken_launch_agent(&missing));
+        assert!(!is_broken_launch_agent(&relative));
+        assert!(is_broken_launch_agent(&empty));
+        assert!(
+            !is_broken_launch_agent(&malformed),
+            "语法非法只能判为探测失败，不能授权删除"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

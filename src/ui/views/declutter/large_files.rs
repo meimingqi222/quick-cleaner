@@ -4,12 +4,12 @@ use super::common::{
     render_declutter_action_bar, render_empty_state_card, render_unified_nav_header,
 };
 use super::DeclutterTab;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{
     icon_badge, icon_folder_large, icon_photos_similar, icon_video, icon_zip,
 };
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;
@@ -277,7 +277,12 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         .flex()
                                         .flex_col()
                                         .items_end()
-                                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(tr_declutter_large_files_total_found(lang)))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(OUTLINE))
+                                                .child(tr_declutter_large_files_total_found(lang)),
+                                        )
                                         .child(
                                             div()
                                                 .text_xl()
@@ -285,7 +290,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                                 .text_color(rgb(ERROR))
                                                 .child(fmt_size(total_found)),
                                         ),
-                                )
+                                ),
                         )
                         .child(
                             div()
@@ -318,12 +323,13 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                             state.min_size_filter,
                                         ))
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.declutter.min_size_filter = match this.declutter.min_size_filter {
-                                                100_000_000 => 500_000_000,
-                                                500_000_000 => 1_000_000_000,
-                                                1_000_000_000 => 0,
-                                                _ => 100_000_000,
-                                            };
+                                            this.declutter.min_size_filter =
+                                                match this.declutter.min_size_filter {
+                                                    100_000_000 => 500_000_000,
+                                                    500_000_000 => 1_000_000_000,
+                                                    1_000_000_000 => 0,
+                                                    _ => 100_000_000,
+                                                };
                                             cx.notify();
                                         })),
                                 )
@@ -349,13 +355,14 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                             state.kind_filter,
                                         ))
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.declutter.kind_filter = match this.declutter.kind_filter {
-                                                None => Some(0),
-                                                Some(0) => Some(1),
-                                                Some(1) => Some(2),
-                                                Some(2) => Some(3),
-                                                _ => None,
-                                            };
+                                            this.declutter.kind_filter =
+                                                match this.declutter.kind_filter {
+                                                    None => Some(0),
+                                                    Some(0) => Some(1),
+                                                    Some(1) => Some(2),
+                                                    Some(2) => Some(3),
+                                                    _ => None,
+                                                };
                                             cx.notify();
                                         })),
                                 )
@@ -374,7 +381,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                             this.declutter.kind_filter = None;
                                             cx.notify();
                                         })),
-                                )
+                                ),
                         ),
                 )
                 .child(
@@ -401,15 +408,30 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(OUTLINE))
-                                .child(div().flex_1().min_w(px(0.)).child(tr_declutter_col_name(lang)))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .child(tr_declutter_col_name(lang)),
+                                )
                                 .child(
                                     div()
                                         .flex_none()
                                         .flex()
                                         .items_center()
                                         .gap_8()
-                                        .child(div().w(px(100.)).text_right().child(tr_declutter_col_size(lang)))
-                                        .child(div().w(px(120.)).text_right().child(tr_declutter_col_last_accessed(lang))),
+                                        .child(
+                                            div()
+                                                .w(px(100.))
+                                                .text_right()
+                                                .child(tr_declutter_col_size(lang)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(120.))
+                                                .text_right()
+                                                .child(tr_declutter_col_last_accessed(lang)),
+                                        ),
                                 ),
                         )
                         .child(div().flex().flex_col().children(rows)),

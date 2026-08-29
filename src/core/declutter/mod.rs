@@ -22,7 +22,9 @@ use std::path::PathBuf;
 
 /// 获取用户主目录下的搜索根目录（覆盖整个用户主目录）
 pub(crate) fn get_user_content_roots() -> Vec<PathBuf> {
-    dirs::home_dir().map(|h| vec![h]).unwrap_or_default()
+    crate::platform::user_home()
+        .map(|h| vec![h])
+        .unwrap_or_default()
 }
 
 pub(crate) fn is_photo_extension(ext: &str) -> bool {

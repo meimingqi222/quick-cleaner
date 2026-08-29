@@ -13,6 +13,10 @@ coverage/
 # 项目内部临时文档与交接文档
 /docs/
 
+# Stitch 设计稿（HTML + 大尺寸 PNG）。状态监控页的模块注释引用了它作为出处，
+# 但几百 KB 的位图不该进版本库，需要时从 Stitch 重新导出。
+/.stitch/
+
 # 本地临时数据与对比基准（如 WizTree 导出的数百 MB 校验 CSV）
 WizTree_*.csv
 *.tmp

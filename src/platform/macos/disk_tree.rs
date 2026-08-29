@@ -5,25 +5,9 @@ use super::index_v7::{
     MmapOut, MmapPool, NameInterner, V7Header, V7Layout, INDEX_V7_HEADER, INDEX_V7_MAGIC,
 };
 use crate::core::disk::VolumeId;
+pub use crate::core::disk::{DirUsage, Node};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-#[derive(Clone, Debug)]
-pub struct DirUsage {
-    pub path: String,
-    pub size: u64,
-    pub file_count: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Node {
-    pub idx: u32,
-    pub name: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub file_count: u64,
-    pub own_size: u64,
-}
 
 /// 目录树根节点的下标。Windows 上是 `$MFT` 的 5 号记录，这里没有 MFT，用 0。
 pub const ROOT_NODE: u32 = 0;
@@ -2323,23 +2307,6 @@ impl ScanResult {
             // 总量也同步扣减
             self.total_size = self.total_size.saturating_sub(removed_size);
             self.file_count = self.file_count.saturating_sub(removed_files);
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ScanError {
-    AccessDenied,
-    NotNtfs,
-    Io(String),
-}
-
-impl std::fmt::Display for ScanError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ScanError::AccessDenied => write!(f, "需要管理员权限"),
-            ScanError::NotNtfs => write!(f, "不是 NTFS 卷"),
-            ScanError::Io(e) => write!(f, "IO 错误: {e}"),
         }
     }
 }

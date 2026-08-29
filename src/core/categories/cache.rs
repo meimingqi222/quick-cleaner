@@ -5,18 +5,32 @@ use crate::core::categories::CategoryId;
 use crate::core::i18n::Text;
 use std::path::Path;
 
-/// 包管理缓存、用户缓存、缩略图缓存
-pub(super) fn push_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    push_package_cache_targets(t, home);
-    push_user_cache_targets(t, home);
-    push_thumbnail_targets(t, home);
+/// 包管理缓存、用户缓存、缩略图缓存。
+///
+/// `home` 为 None 时跳过用户级缓存；QuickLook 缩略图从 `$TMPDIR` 推路径，
+/// 不依赖 home，仍然加入。
+pub(super) fn push_cache_targets(
+    t: &mut Vec<ScanTarget>,
+    home: Option<&Path>,
+    brew_cleanup_at: Option<i64>,
+) {
+    if let Some(home) = home {
+        push_package_cache_targets(t, home, brew_cleanup_at);
+        push_user_cache_targets(t, home);
+        push_thumbnail_targets(t, home);
+    } else {
+        #[cfg(target_os = "macos")]
+        push_quicklook_thumbnail_targets(t);
+    }
 }
 
 /// 包管理器缓存（npm / pnpm / cargo / go / pip 等）
-fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path, brew_cleanup_at: Option<i64>) {
     #[cfg(windows)]
     {
-        let local = crate::platform::windows::real_user_local_appdata();
+        let Some(local) = crate::platform::user_cache_dir() else {
+            return;
+        };
 
         t.push(target(
             local.join("npm-cache"),
@@ -38,27 +52,32 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             "pnpm cache",
             CategoryId::PackageCache,
         ));
-        // 只收下载来的 `.crate` 压缩包。`registry/src` 是解包树——rust-analyzer
-        // 跳转和离线构建读的都是它；`registry/index` 是注册表索引。整目录清空
-        // 会连后两者一起删（实测本机 cache 128M，而 src 1.0G + index 36M），
-        // 留下 src 时删 cache 不影响离线构建。
-        t.push(target(
-            home.join(".cargo\\registry\\cache"),
-            Text::new("cargo 下载缓存", "cargo download cache"),
+        // 不切到 `registry\cache`：实测删掉它之后，`registry\src` 里带
+        // `.cargo-ok` 的解包树仍然救不了 `cargo build --offline`。判据同
+        // macOS 分支。
+        t.push(target_with_recommendation(
+            home.join(".cargo\\registry"),
+            Text::new("cargo registry 缓存", "cargo registry cache"),
             CategoryId::PackageCache,
+            false,
         ));
         t.push(target(
             home.join(".rustup\\downloads"),
             Text::new("rustup 下载缓存", "rustup downloads"),
             CategoryId::PackageCache,
         ));
-        // 只删下载的模块 zip（`pkg/mod/cache`）。外面按域名解包的那些目录是
-        // 构建真正读取的内容，也是「上游 tag 被删后仅剩的一份」——留着它们，
-        // 删掉 zip 不影响离线构建，比整类不勾回收得多。
-        t.push(target(
-            home.join("go\\pkg\\mod\\cache"),
-            Text::new("go 下载缓存", "go download cache"),
+        // 不切到 `pkg\mod\cache`：解包树留着也救不了离线构建，而且目标必须
+        // 正好是 `…\go\pkg\mod`，否则 `go clean -modcache` 的路由会静默
+        // 失效。判据同 macOS 分支。
+        //
+        // GOPRIVATE / 自建 proxy 拉下来的私有模块也落在这里，内网机器上删了
+        // 可能没有上游可拉——与下面 `~/.m2/repository` 同一条判据（规范第 2
+        // 条），类别照旧是包缓存，只是不预选。
+        t.push(target_with_recommendation(
+            home.join("go\\pkg\\mod"),
+            Text::new("go module 缓存", "go module cache"),
             CategoryId::PackageCache,
+            false,
         ));
         t.push(target(
             local.join("go-build"),
@@ -87,15 +106,17 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         ));
         // 包缓存这条线的分界（规范第 2 条）：**这个目录是公共 registry 的本机
         // 镜像，还是本机某份产物的唯一副本？**
-        // 先试「切到下载缓存那一层」——绝大多数生态都把「下载的压缩包」和「解包
-        // 后构建真正读的东西」分在不同子目录：cargo 的 `registry/cache` vs
-        // `src`+`index`、go 的 `pkg/mod/cache` vs 按域名解包的目录。只删前者，
-        // 既回收了该回收的，又不动离线构建依赖的那份。
-        // 切不出安全子层的才整目录降级：`~/.m2/repository`（`mvn install` 的
-        // 私有构件直接写进读取路径）、`~/.gradle/caches`、`~/.nuget/packages`
-        // ——这几个生态里「只在内网有、上游根本没有」是日常而不是例外。
-        // npm 私服和私有 cargo registry 也能构造出同样情形，所以这条界线是按
-        // 普遍性下的判断，不是机械推导出来的；要挪动谁，得给出新的证据。
+        // - 只是镜像：npm `_cacache`、pip、uv、cargo registry、bun、rustup、
+        //   Homebrew、typescript、node-gyp。删了最坏是重新下载，可以预选。
+        // - 常是唯一副本：`~/.m2/repository`（`mvn install` 的私有构件直接写
+        //   进这个目录）、go module 缓存、`~/.gradle/caches`、`~/.nuget/packages`
+        //   ——这几个生态里「只在内网有、上游根本没有」是日常而不是例外，不预选。
+        //   npm 私服和私有 cargo registry 也能构造出同样情形，所以这条界线是按
+        //   普遍性下的判断，不是机械推导出来的；要挪动谁，得给出新的证据。
+        //
+        // 「切到下载缓存那一层，既回收又不碰解包树」试过，不成立：cargo 和 go
+        // 都不能只靠解包树完成离线构建（实测见上面两条目标的注释）。分界只能
+        // 落在整个目录上。
         // ~/.cache 里既有纯下载缓存，也可能有工具状态。按顶层子目录拆开，
         // 才能只推荐已确认可重建的缓存，同时保留其他项目供审阅。
         push_home_cache_targets(t, home);
@@ -120,27 +141,44 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             Text::new("npm 缓存", "npm cache"),
             CategoryId::PackageCache,
         ));
-        // 只收下载来的 `.crate` 压缩包；`registry/src` 是解包树（rust-analyzer
-        // 与离线构建读的就是它），`registry/index` 是索引。实测本机 cache 128M，
-        // 而 src 1.0G + index 36M——整目录清空等于为 128M 删掉 1.1G。
-        // 留着 src 时删 cache 不影响离线构建。判据同 Windows 分支。
-        t.push(target(
-            home.join(".cargo/registry/cache"),
-            Text::new("cargo 下载缓存", "cargo download cache"),
+        // 整个 `registry` 一起清，不切到 `registry/cache` 那一层。
+        //
+        // 「只删 `.crate` 压缩包、留下 `registry/src` 解包树，离线构建照常」
+        // 这个想法实测**不成立**：删掉 `registry/cache` 之后，即使
+        // `registry/src/<registry>/itoa-1.0.18/` 连同 `.cargo-ok` 原样在位，
+        // `cargo build --offline` 仍然报 `failed to download itoa v1.0.18`
+        // ——cargo 要的是 `.crate` 本身，解包树不作数。既然切不出「省得少、
+        // 还是坏离线构建」以外的子层，就只能整目录展示。registry 也可能含
+        // 私有源，而且删除会破坏离线构建，因此不默认勾选。
+        t.push(target_with_recommendation(
+            home.join(".cargo/registry"),
+            Text::new("cargo 缓存", "cargo cache"),
             CategoryId::PackageCache,
+            false,
         ));
         t.push(target(
             home.join(".rustup/downloads"),
             Text::new("rustup 缓存", "rustup cache"),
             CategoryId::PackageCache,
         ));
-        // 只删下载的模块 zip（`pkg/mod/cache`，实测本机 384M）。外面按域名解包
-        // 的目录是构建真正读取的内容，也是「上游 tag 被删后仅剩的一份」——留着
-        // 它们，删 zip 不影响离线构建。判据同 Windows 分支。
-        t.push(target(
-            home.join("go/pkg/mod/cache"),
-            Text::new("go 下载缓存", "go download cache"),
+        // 同样不切到 `pkg/mod/cache`。实测：删掉 `cache/` 之后按域名解包的
+        // `github.com/google/uuid@v1.6.0/` 完好无损，`GOPROXY=off go build`
+        // 照样挂在 `module lookup disabled by GOPROXY=off`——模块图求解读的是
+        // `cache/download/…/@v/*.mod`，解包树里的 go.mod 不顶用。
+        //
+        // 而且目标必须**正好**是 `…/go/pkg/mod`：`cleaner` 把这条路由到
+        // `go clean -modcache`（见 `core::owner`），判定走的是路径后缀匹配。
+        // 指到子目录会让路由静默失效，退回裸删——正是 `owner.rs` 开头那条
+        // 「删完留下不一致索引」想避开的情形，而且删的就是索引所在的那层。
+        //
+        // GOPRIVATE / 自建 proxy 拉下来的私有模块也落在这里，内网机器上删了
+        // 可能没有上游可拉——与 `~/.m2/repository` 同一条判据（规范第 2 条），
+        // 类别照旧是包缓存，只是不预选。
+        t.push(target_with_recommendation(
+            home.join("go/pkg/mod"),
+            Text::new("go 缓存", "go cache"),
             CategoryId::PackageCache,
+            false,
         ));
         push_home_cache_targets(t, home);
         t.push(target(
@@ -153,8 +191,7 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         // `core::brew`）。节流：距上次真实清理不足一周就不出现；dry-run
         // 失败或没有可清内容也不出现（不出假条目）。体积是 brew 自己
         // dry-run 给出的估算，不是逐文件称的。
-        if crate::core::brew::should_offer(crate::core::settings::Settings::load().brew_cleanup_at)
-        {
+        if crate::core::brew::should_offer(brew_cleanup_at) {
             if let Some((bytes, _files)) = crate::core::brew::cleanup_preview() {
                 t.push(ScanTarget {
                     path: crate::core::brew::virtual_path(),
@@ -194,15 +231,15 @@ fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         // `~/.pnpm-store`。本机实测前者是 0B 空目录、后者才是真身（509M），
         // 只登记前者等于让那 509M 完全不可见。两个都登记，不存在的那个会被
         // 扫描阶段的 `exists()` 滤掉，没有代价。
-        for (dir, label) in [
-            (home.join("Library/pnpm/store"), "pnpm store (Library)"),
-            (home.join(".pnpm-store"), "pnpm store"),
+        for (dir, zh, en) in [
+            (
+                home.join("Library/pnpm/store"),
+                "pnpm store (Library)",
+                "pnpm store (Library)",
+            ),
+            (home.join(".pnpm-store"), "pnpm store", "pnpm store"),
         ] {
-            t.push(target(
-                dir,
-                Text::new(label, "pnpm store"),
-                CategoryId::PackageCache,
-            ));
+            t.push(target(dir, Text::new(zh, en), CategoryId::PackageCache));
         }
     }
 }
@@ -213,7 +250,9 @@ fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     let _ = home;
     #[cfg(windows)]
     {
-        let local = crate::platform::windows::real_user_local_appdata();
+        let Some(local) = crate::platform::user_cache_dir() else {
+            return;
+        };
         // 缩略图
         t.push(target(
             local.join("Microsoft\\Windows\\Explorer"),
@@ -282,6 +321,18 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
                 Text::new(*zh, *en),
                 CategoryId::PackageCache,
             ));
+        } else if let Some((_, zh, en)) = SHOWN_ONLY_HOME_CACHE_DIRS
+            .iter()
+            .find(|(key, _, _)| *key == name)
+        {
+            // 确实是包缓存，只是不能预选：类别不能掉进下面的 `UserTemp`
+            // 兜底分支，否则用户在「包缓存」里根本找不到它。
+            t.push(target_with_recommendation(
+                entry.path(),
+                Text::new(*zh, *en),
+                CategoryId::PackageCache,
+                false,
+            ));
         } else {
             t.push(target_with_recommendation(
                 entry.path(),
@@ -308,13 +359,15 @@ const REBUILDABLE_HOME_CACHE_DIRS: &[(&str, &str, &str)] = &[
     ("gopls", "gopls 缓存", "gopls cache"),
 ];
 
-// 明确不进上面那张表、只展示不预选的 `~/.cache` 子目录：
-//
-// `pypoetry` —— 里面除了下载缓存还住着 `virtualenvs/`，重建它是一次完整的
-// install 事务而不是"解包一下"；参考实现 Mole 也把 `pypoetry/virtualenvs`
-// 放进**恒常合并、用户覆盖不掉**的安全表（`base.sh` 的
-// `SAFETY_WHITELIST_PATTERNS`）。本机没有这个目录，无法确认纯下载子层的
-// 确切路径，所以按规范第 1 条整项降级，而不是凭印象切一个没验证过的路径。
+/// 是包缓存、但**只展示不预选**的 `~/.cache` 子目录。
+///
+/// `pypoetry` —— 里面除了下载缓存还住着 `virtualenvs/`，重建它是一次完整的
+/// install 事务而不是「解包一下」；参考实现 Mole 也把 `pypoetry/virtualenvs`
+/// 放进**恒常合并、用户覆盖不掉**的安全表（`base.sh` 的
+/// `SAFETY_WHITELIST_PATTERNS`）。本机没有这个目录，无法确认纯下载子层的
+/// 确切路径，所以按规范第 1 条整项降级，而不是凭印象切一个没验证过的路径。
+const SHOWN_ONLY_HOME_CACHE_DIRS: &[(&str, &str, &str)] =
+    &[("pypoetry", "Poetry 缓存", "Poetry cache")];
 
 /// `~/Library/Caches` 下已被**整目录**认领的顶层目录。
 ///
@@ -474,5 +527,243 @@ fn push_quicklook_thumbnail_targets(t: &mut Vec<ScanTarget>) {
                 CategoryId::Thumbnails,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_home_cache_targets;
+    use crate::core::categories::CategoryId;
+    // 以下都是 macOS 专属：被测的 `push_user_cache_dirs` 与年龄门夹具本身就带平台门。
+    #[cfg(target_os = "macos")]
+    use super::push_user_cache_dirs;
+    #[cfg(target_os = "macos")]
+    use crate::core::categories::helpers::backdate;
+    #[cfg(target_os = "macos")]
+    use std::path::PathBuf;
+
+    /// 混装目录按内容拆开：更新包叶子进「应用更新包」，形态不明的子项各自
+    /// 作为展示项入表，父目录不得再次入表。
+    ///
+    /// 本机对应物是 `~/Library/Caches/com.google.antigravity`——同一个目录里
+    /// 既有 URLCache 的 `Cache.db`，又有 electron-updater 的 `pending/` 和
+    /// `update.zip`。整目录只能取一个默认值，注定错判。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn mixed_cache_dir_is_split_by_content() {
+        let root = crate::core::testing::fixture("qc_mixed_cache");
+        let caches = root.join("Library/Caches");
+        let mixed = caches.join("com.example.mixedapp");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(mixed.join("pending")).unwrap();
+        std::fs::write(mixed.join("pending/app.zip"), b"pkg").unwrap();
+        std::fs::write(mixed.join("update.zip"), b"pkg").unwrap();
+        std::fs::write(mixed.join("current.blockmap"), b"bm").unwrap();
+        std::fs::write(mixed.join("Cache.db"), b"db").unwrap();
+        std::fs::create_dir_all(mixed.join("fsCachedData")).unwrap();
+        // 没命中签名的目录：仍然整目录一项，不下钻
+        std::fs::create_dir_all(caches.join("example.plainapp/state")).unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
+
+        for leaf in ["pending", "update.zip", "current.blockmap"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == mixed.join(leaf))
+                .unwrap_or_else(|| panic!("更新包叶子 {leaf} 没有入表"));
+            assert_eq!(
+                target.category,
+                CategoryId::UpdaterPackages,
+                "{leaf} 归类错了"
+            );
+        }
+        for residual in ["Cache.db", "fsCachedData"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == mixed.join(residual))
+                .unwrap_or_else(|| panic!("拆开后 {residual} 不该从界面上消失"));
+            assert_eq!(target.category, CategoryId::UserTemp);
+            assert!(!target.recommended, "{residual} 形态不明，不能默认勾选");
+        }
+        assert!(!paths.contains(&&mixed), "父目录入了表，会和子项双算体积");
+
+        let plain = caches.join("example.plainapp");
+        assert!(paths.contains(&&plain), "未命中签名的目录仍应整目录展示");
+        assert!(
+            !paths.contains(&&plain.join("state")),
+            "没拆开的目录不该下钻"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 年龄门：刚下完的更新包只展示、不预选，滞留够久的才预选。
+    ///
+    /// Squirrel.Mac 换版时把暂存内容拷去 `/Applications`，此刻删掉它等于让
+    /// 一次正在进行的更新倒退；而 mtime 早就停住的目录说明那次事务要么完成
+    /// 要么被放弃，留在盘上的纯粹是垃圾。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn fresh_update_package_is_not_preselected() {
+        let root = crate::core::testing::fixture("qc_updater_age");
+        let caches = root.join("Library/Caches");
+        let _ = std::fs::remove_dir_all(&root);
+        for (app, days) in [("example.staleapp", 30u64), ("example.freshapp", 0)] {
+            let dir = caches.join(app);
+            std::fs::create_dir_all(&dir).unwrap();
+            let pkg = dir.join("update.zip");
+            std::fs::write(&pkg, b"pkg").unwrap();
+            if days > 0 {
+                backdate(&pkg, days);
+            }
+        }
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let recommended = |app: &str| {
+            targets
+                .iter()
+                .find(|t| t.path == caches.join(app).join("update.zip"))
+                .map(|t| t.recommended)
+        };
+        assert_eq!(
+            recommended("example.staleapp"),
+            Some(true),
+            "滞留 30 天的更新包该预选"
+        );
+        assert_eq!(
+            recommended("example.freshapp"),
+            Some(false),
+            "刚下完的更新包必须仍然展示，但不能预选"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 只被部分认领的父目录：其余孩子必须入表。
+    ///
+    /// `browser.rs` 只认领 `Google/Chrome`，而旧写法把 `Google` 整个跳过，于是
+    /// 兄弟子项（GoogleUpdater 的下载目录那一类）在界面上彻底隐身——看不见也
+    /// 清不掉，比「不默认勾选」更糟。规范说得很清楚：展示不是成本，隐藏才是。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn partially_claimed_parent_still_shows_its_other_children() {
+        let root = crate::core::testing::fixture("qc_partial_claim");
+        let caches = root.join("Library/Caches");
+        let google = caches.join("Google");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(google.join("Chrome/Default")).unwrap();
+        std::fs::create_dir_all(google.join("Software Update")).unwrap();
+        std::fs::create_dir_all(caches.join("Zed/logs")).unwrap();
+        std::fs::write(caches.join("Zed/ranges.txt"), b"x").unwrap();
+        std::fs::write(caches.join("Zed/update.zip"), b"pkg").unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
+
+        let sibling = google.join("Software Update");
+        let target = targets
+            .iter()
+            .find(|t| t.path == sibling)
+            .expect("未被认领的兄弟子项隐身了");
+        assert_eq!(target.category, CategoryId::UserTemp);
+        assert!(!target.recommended, "认不出它是什么，只能展示不能预选");
+        assert!(paths.contains(&&caches.join("Zed/ranges.txt")));
+        // 部分认领的目录也吃更新包探测：叶子进「应用更新包」，不会因为父目录
+        // 被特殊对待就降级成展示项
+        assert_eq!(
+            targets
+                .iter()
+                .find(|t| t.path == caches.join("Zed/update.zip"))
+                .map(|t| t.category),
+            Some(CategoryId::UpdaterPackages)
+        );
+
+        // 已入表的孩子和父目录本身都不能再进来：父子/同名都会双算体积
+        for forbidden in [
+            google.clone(),
+            google.join("Chrome"),
+            caches.join("Zed"),
+            caches.join("Zed/logs"),
+        ] {
+            assert!(
+                !paths.contains(&&forbidden),
+                "{:?} 已经由更具体的规则认领，重复入表会双算",
+                forbidden
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Apple 自己的目录不做探测。
+    ///
+    /// 签名表是按第三方更新器的产物形态做的，对系统守护进程没有意义；而
+    /// `is_sensitive_apple_cache` 只列了确认危险的那些，其余 `com.apple.*`
+    /// 并不因此就算安全。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn apple_owned_cache_dirs_are_never_probed() {
+        let root = crate::core::testing::fixture("qc_apple_cache");
+        let caches = root.join("Library/Caches");
+        let daemon = caches.join("com.apple.ExampleDaemon");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(daemon.join("pending")).unwrap();
+        std::fs::write(daemon.join("pending/payload.zip"), b"pkg").unwrap();
+        std::fs::write(daemon.join("update.zip"), b"pkg").unwrap();
+
+        let mut targets = Vec::new();
+        push_user_cache_dirs(&mut targets, &caches);
+
+        assert!(
+            !targets
+                .iter()
+                .any(|t| t.category == CategoryId::UpdaterPackages),
+            "com.apple.* 目录被探测了"
+        );
+        let target = targets
+            .iter()
+            .find(|t| t.path == daemon)
+            .expect("com.apple.* 目录仍应整项展示");
+        assert_eq!(target.category, CategoryId::UserTemp);
+        assert!(!target.recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/.cache` 里确认能重建的包缓存不能和认不出的目录混在一个桶里。
+    ///
+    /// uv 的缓存按 XDG 落在 `~/.cache/uv`，官方就有 `uv cache clean`，删了
+    /// 只是重下一遍——原来只有 `opencode` 被特判，其余一律 UserTemp 不勾，
+    /// 机器上 1 GB 出头的 uv 缓存就这么躺在需要手动勾选的那一堆里。
+    #[test]
+    fn rebuildable_home_cache_dirs_are_package_cache() {
+        let root = crate::core::testing::fixture("qc_home_cache");
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["uv", "pip", "some-tool-nobody-heard-of"] {
+            std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
+        }
+
+        let mut targets = Vec::new();
+        push_home_cache_targets(&mut targets, &root);
+
+        for name in ["uv", "pip"] {
+            let target = targets
+                .iter()
+                .find(|t| t.path == root.join(".cache").join(name))
+                .unwrap_or_else(|| panic!("~/.cache/{name} 没有入表"));
+            assert_eq!(
+                target.category,
+                CategoryId::PackageCache,
+                "~/.cache/{name} 归类错了"
+            );
+            assert!(target.recommended);
+        }
+        let unknown = targets
+            .iter()
+            .find(|t| t.path == root.join(".cache").join("some-tool-nobody-heard-of"))
+            .expect("表外的目录仍应展示");
+        assert_eq!(unknown.category, CategoryId::UserTemp);
+        assert!(!unknown.recommended);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

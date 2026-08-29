@@ -113,6 +113,34 @@ pub fn fmt_size(bytes: u64) -> String {
     }
 }
 
+/// 内存 / 交换区专用的容量格式化：**恒定 1024 进位**。
+///
+/// 不能复用 [`fmt_size`]：那个在 macOS / Linux 上按 1000 进位，因为磁盘容量
+/// 从 macOS 10.6 起就是十进制口径（Finder 说 500 GB 就是 500×10⁹ 字节）。
+/// 内存不是——内存条永远按 2 的幂出货，系统报的也是二进制口径：32 GiB 的机器
+/// `sysinfo` 返回 34_359_738_368 字节，除以 1000³ 会显示成「34.36 GB」，而
+/// 「关于本机」和活动监视器都写「32 GB」。同一台机器两个数字，用户只会认为
+/// 程序算错了。
+pub fn fmt_mem(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+
+    let b = bytes as f64;
+    if b >= TB {
+        format!("{:.2} TB", b / TB)
+    } else if b >= GB {
+        format!("{:.2} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// 给大数字添加千分位逗号，提升可读性
 pub fn commas(n: u64) -> String {
     let digits = n.to_string();
@@ -253,6 +281,18 @@ pub fn capture_identity(path: &Path) -> Option<TargetIdentity> {
 
 #[cfg(test)]
 mod tests {
+    /// 32 GiB 的机器上「关于本机」写 32 GB，十进制口径会显示成 34.36 GB。
+    /// 这是当初内存卡片显示错的原点，钉死它。
+    #[test]
+    fn memory_uses_binary_units_like_the_system_does() {
+        assert_eq!(fmt_mem(32 * 1024 * 1024 * 1024), "32.00 GB");
+        assert_eq!(fmt_mem(16 * 1024 * 1024 * 1024), "16.00 GB");
+        // 同一个字节数走磁盘口径（macOS 十进制）本来就该是另一个数，
+        // 两个函数各司其职，不是同一个 bug 的两种写法。
+        #[cfg(not(windows))]
+        assert_eq!(fmt_size(32 * 1024 * 1024 * 1024), "34.36 GB");
+    }
+
     use super::*;
 
     /// 卷标签靠它截断。按字节切会在中文字符中间 panic。

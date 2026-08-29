@@ -231,7 +231,7 @@ mod tests {
         );
     }
 
-    /// `scan_volume` 不再返回 `NotNtfs`，而是真正扫描。
+    /// `scan_volume` 不再返回文件系统不支持，而是真正扫描。
     /// 用临时目录测试，避免扫描整个 `/` 太慢。
     ///
     /// `scan_volume` 完成后会无条件 `cache.save()`，必须把 `QUICKCLEANER_CACHE_DIR`
@@ -239,9 +239,9 @@ mod tests {
     /// 冲掉。用 `isolate_cache_dir` 拿到 guard，保证环境变量不会被并行的
     /// `cache_round_trip` 用例踩掉。
     #[test]
-    fn scan_volume_does_not_return_not_ntfs() {
+    fn scan_volume_accepts_supported_filesystem() {
         let _guard = crate::platform::macos::cache::isolate_cache_dir(
-            "scan_volume_does_not_return_not_ntfs",
+            "scan_volume_accepts_supported_filesystem",
         );
 
         let tmp = crate::core::testing::fixture("qc_test_scan_vol_isolated");
@@ -251,10 +251,10 @@ mod tests {
 
         let vol = VolumeId::from_mount_point(tmp.clone());
         let result = scan_volume(&vol, 0);
-        // 扫描不应返回 NotNtfs
+        // APFS/HFS+ 扫描不应返回文件系统不支持
         assert!(
-            !matches!(result, Err(ScanError::NotNtfs)),
-            "scan_volume 不应返回 NotNtfs"
+            !matches!(result, Err(ScanError::UnsupportedFilesystem(_))),
+            "scan_volume 不应拒绝 macOS 支持的文件系统"
         );
         if let Ok(scan) = result {
             assert!(

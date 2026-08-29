@@ -242,9 +242,7 @@ fn run_as_current(cmdline: &str, hidden: bool) -> Result<u32, String> {
     if hidden {
         c.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
     }
-    let status = c
-        .status()
-        .map_err(|e| format!("启动卸载程序失败: {e}"))?;
+    let status = c.status().map_err(|e| format!("启动卸载程序失败: {e}"))?;
     Ok(status.code().map(|c| c as u32).unwrap_or(1))
 }
 
@@ -398,8 +396,8 @@ fn linked_limited_token() -> Option<winapi::um::winnt::HANDLE> {
     use winapi::um::securitybaseapi::{DuplicateTokenEx, GetTokenInformation};
     use winapi::um::winnt::{
         SecurityImpersonation, TokenLinkedToken, TokenPrimary, TOKEN_ADJUST_DEFAULT,
-        TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
-        TOKEN_LINKED_TOKEN,
+        TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_LINKED_TOKEN,
+        TOKEN_QUERY,
     };
     // SAFETY: 当前进程令牌打开失败就返回；GetTokenInformation 写入本地
     // TOKEN_LINKED_TOKEN，得到的 LinkedToken 再复制成主令牌后立刻关掉。
@@ -449,12 +447,10 @@ unsafe fn create_process_with_token(
     hidden: bool,
 ) -> Result<u32, String> {
     use std::os::windows::ffi::OsStrExt;
-    use winapi::um::processthreadsapi::{
-        GetExitCodeProcess, PROCESS_INFORMATION, STARTUPINFOW,
-    };
+    use winapi::um::processthreadsapi::{GetExitCodeProcess, PROCESS_INFORMATION, STARTUPINFOW};
     use winapi::um::synchapi::WaitForSingleObject;
     use winapi::um::winbase::{
-        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, STARTF_USESHOWWINDOW, INFINITE,
+        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, INFINITE, STARTF_USESHOWWINDOW,
     };
     use winapi::um::winuser::SW_HIDE;
 
@@ -496,11 +492,7 @@ unsafe fn create_process_with_token(
         app.as_ptr(),
         cl.as_mut_ptr(),
         flags,
-        if has_env {
-            env
-        } else {
-            std::ptr::null_mut()
-        },
+        if has_env { env } else { std::ptr::null_mut() },
         std::ptr::null(),
         &mut si,
         &mut pi,

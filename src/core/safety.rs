@@ -120,7 +120,9 @@ fn guards() -> &'static Guards {
     static GUARDS: OnceLock<Guards> = OnceLock::new();
     GUARDS.get_or_init(|| {
         #[cfg(windows)]
-        let orig_home = Some(norm(crate::platform::windows::real_user_home()));
+        // 主目录不可信时这里拿到 None：保护列表缺席的同时，所有锚定
+        // 真实用户的扫描根也会被跳过，不会出现「扫了却没保护」的组合。
+        let orig_home = crate::platform::windows::real_user_home().map(norm);
         #[cfg(not(windows))]
         let orig_home = None;
 
@@ -141,7 +143,7 @@ fn guards() -> &'static Guards {
         let public = None;
 
         #[cfg(target_os = "macos")]
-        let macos_self_banned = dirs::home_dir()
+        let macos_self_banned = crate::platform::user_home()
             .map(|h| {
                 let n = norm(&h);
                 [
@@ -158,7 +160,7 @@ fn guards() -> &'static Guards {
             windows: norm_str(
                 &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
             ),
-            home: dirs::home_dir().map(|h| norm(&h)),
+            home: crate::platform::user_home().map(|h| norm(&h)),
             orig_home,
             known_folders,
             public,

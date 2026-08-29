@@ -1,11 +1,11 @@
 //! 冗余整理总览视图 (Overview Bento Grid)
 
 use super::DeclutterTab;
-use crate::ui::i18n::*;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::{
     icon_badge, icon_downloads, icon_files_duplicate, icon_photos_similar, icon_rocket, icon_weight,
 };
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;

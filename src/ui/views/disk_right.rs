@@ -254,8 +254,14 @@ pub(super) fn render_right_browser_pane(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let (copy_label, copied_status) = match lang {
-            Language::Zh => ("复制路径", crate::core::i18n::Text::new("路径已复制", "Path copied")),
-            Language::En => ("Copy path", crate::core::i18n::Text::new("路径已复制", "Path copied")),
+            Language::Zh => (
+                "复制路径",
+                crate::core::i18n::Text::new("路径已复制", "Path copied"),
+            ),
+            Language::En => (
+                "Copy path",
+                crate::core::i18n::Text::new("路径已复制", "Path copied"),
+            ),
         };
         let full_for_copy = full.clone();
         div()

@@ -1,33 +1,16 @@
-//! MFT 类型定义：SizeTree / ScanResult / ScanError
+//! MFT 类型定义：SizeTree / ScanResult
 
 use super::mft_parser::Entry;
 use super::mft_scanner::resolve_path;
 use std::collections::HashMap;
 
-use crate::core::disk::VolumeId;
+use crate::core::disk::{DirUsage, Node, VolumeId};
 
 /// NTFS 把卷根目录固定放在 `$MFT` 的 5 号记录上。
 /// 对外以 `core::disk::ROOT_NODE` 的名字导出，UI 层不该直接写字面量 5。
 pub const ROOT_RECORD: u32 = 5;
 pub(super) const MAX_DEPTH: usize = 256;
 pub(super) const CHUNK_BYTES: usize = 8 * 1024 * 1024;
-
-#[derive(Clone, Debug)]
-pub struct DirUsage {
-    pub path: String,
-    pub size: u64,
-    pub file_count: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Node {
-    pub idx: u32,
-    pub name: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub file_count: u64,
-    pub own_size: u64,
-}
 
 /// 扫描后保留下来的完整目录树，支持像 WizTree 那样逐层下钻。
 ///
@@ -532,23 +515,6 @@ impl ScanResult {
             self.tree.remove_node(idx);
             self.total_size = self.total_size.saturating_sub(size);
             self.file_count = self.file_count.saturating_sub(files);
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ScanError {
-    AccessDenied,
-    NotNtfs,
-    Io(String),
-}
-
-impl std::fmt::Display for ScanError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ScanError::AccessDenied => write!(f, "需要管理员权限才能读取 $MFT"),
-            ScanError::NotNtfs => write!(f, "该卷不是 NTFS 或无法获取卷信息"),
-            ScanError::Io(e) => write!(f, "读取失败：{e}"),
         }
     }
 }

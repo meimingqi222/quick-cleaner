@@ -35,8 +35,8 @@ use crate::ui::theme::*;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
     render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,
-    render_disk_volume_dropdown, render_junk_view, render_search_view, DeclutterContextMenu,
-    DeclutterState, DiskTab,
+    render_disk_volume_dropdown, render_junk_view, render_search_view, render_status_view,
+    DeclutterContextMenu, DeclutterState, DiskTab,
 };
 
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
@@ -89,6 +89,9 @@ pub struct Root {
     pub clean: CleanState,
     pub declutter: DeclutterState,
     pub search: SearchState,
+    /// 状态监控页：快照与 CPU 历史由后台轮询任务整包写入。
+    /// 字段名避开根视图已有的 `status`（状态栏文案）。
+    pub monitor: StatusState,
     /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
     /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
     /// 省掉 ~700MB 重复内存。
@@ -239,6 +242,8 @@ impl Root {
                 sort_asc: false,
                 gen: 0,
             },
+
+            monitor: StatusState::default(),
 
             #[cfg(not(windows))]
             macos_root_index: None,
@@ -443,11 +448,7 @@ impl Root {
                         // 面板还没露面时一直试；露面之后只在跟贴窗口期内继续。
                         let visible = crate::platform::macos::permission_drop::is_visible();
                         if !visible || tick < REPOSITION_TICKS {
-                            show_fda_drop_panel(
-                                &bundle,
-                                lang,
-                                tick >= FALLBACK_AFTER_TICKS,
-                            );
+                            show_fda_drop_panel(&bundle, lang, tick >= FALLBACK_AFTER_TICKS);
                         }
                         true
                     })
@@ -835,6 +836,7 @@ impl Render for Root {
 
         let content = match self.view {
             View::Dashboard => render_dashboard_view(self, cx),
+            View::Status => render_status_view(self, cx),
             View::Junk => render_junk_view(self, cx),
             View::Apps if self.residual.uninstall.is_some() => render_uninstall_progress(self),
             View::Apps => render_apps_view(self, window, cx),
@@ -854,6 +856,7 @@ impl Render for Root {
 
         let is_scanning = match self.view {
             View::Dashboard | View::Junk => self.junk.scanning,
+            View::Status => false,
             View::Apps => {
                 self.residual.uninstall.is_none() && (self.apps.scanning || self.residual.scanning)
             }
@@ -936,7 +939,6 @@ impl Render for Root {
         root.into_any_element()
     }
 }
-
 
 /// 按当前语言组装文案并浮出（或重新定位）拖拽授权面板。
 ///

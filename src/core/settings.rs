@@ -5,8 +5,8 @@
 //!
 //! # 存在哪
 //!
-//! Windows 上落在**真实前台用户**的 `%APPDATA%\QuickCleaner\settings.json`，
-//! 而不是 `dirs::config_dir()`。原因和 `platform::windows::user_env` 里写的一样：
+//! Windows 上落在**真实前台用户**的 `%APPDATA%\QuickCleaner\settings.json`。
+//! 用户目录由平台门面解析；原因和 `platform::windows::user_env` 里写的一样：
 //! 本程序会通过 UAC 自提权，跨账户提权（OTS）时 `dirs::config_dir()` 返回的是
 //! **管理员**的 AppData，于是提权前存的设置提权后读不到，看起来就像「设置没保存」。
 //!
@@ -149,15 +149,7 @@ impl Settings {
 /// 前台用户、不用 dirs::config_dir()，见本模块头注释）必须共用一份，
 /// 不能各写一遍。
 pub(crate) fn config_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        // 锚定真实前台用户，不能用 dirs::config_dir()——见模块头注释
-        Some(crate::platform::windows::real_user_roaming_appdata().join(DIR_NAME))
-    }
-    #[cfg(not(windows))]
-    {
-        dirs::config_dir().map(|d| d.join(DIR_NAME))
-    }
+    crate::platform::user_data_dir().map(|d| d.join(DIR_NAME))
 }
 
 #[cfg(test)]

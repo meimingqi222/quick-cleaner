@@ -81,7 +81,7 @@ pub(super) fn collect_tree_and_build_items(
 pub(super) fn load_or_build_macos_index(
     live: &AtomicBool,
 ) -> Option<std::sync::Arc<crate::core::disk::ScanResult>> {
-    let home = dirs::home_dir()?;
+    let home = crate::platform::user_home()?;
     load_or_build_macos_index_for(&home, "用户目录", live)
 }
 

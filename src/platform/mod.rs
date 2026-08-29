@@ -21,6 +21,17 @@
 //! | `reveal_in_explorer` | 在系统文件管理器中定位路径 |
 //! | `move_to_trash` | 把单个路径移入回收站/废纸篓（可还原） |
 //! | `is_system_trash` / `empty_trash` | 识别系统回收站/废纸篓目录，以及清空它 |
+//! | `user_home` / `user_cache_dir` / `user_data_dir` / `user_temp_dir` | 真实用户的常用目录 |
+//! | `read_thermal` | 风扇转速与 CPU 温度（拿不到的平台如实返回空） |
+//! | `read_gpu` | GPU 利用率（拿不到的平台如实返回空） |
+//! | `read_battery` | 电池电量 / 循环次数 / 健康度（无电池设备返回 None） |
+//! | `system_uptime_secs` | 系统开机以来的秒数 |
+//! | `terminate_process` | 请求结束一个进程（状态监控页的「结束进程」） |
+//! | `process_unique_id` | 平台进程身份（Darwin uniqueid；Windows 无对等概念） |
+//! | `set_fan_mode` | 风扇控制档位（自动 / 全速） |
+//! | `elevated_fan_control` | 经常驻特权守护进程设定档位（直写被固件拒绝时） |
+//! | `fan_helper_installed` | 特权守护进程是否已安装 |
+//! | `install_fan_helper` / `uninstall_fan_helper` | 安装/卸载特权守护进程（各弹一次授权框，正文由调用方按语言传入） |
 
 /// 编译期校验：当前平台分支确实提供了门面要求的全部函数，且签名一致。
 ///
@@ -32,7 +43,11 @@ macro_rules! platform_contract {
             use crate::core::cleaner::{CleanProgress, CleanReport};
             use crate::core::disk::{ScanError, ScanResult, VolumeId};
             use crate::core::i18n::Language;
+            use crate::core::inuse::{Busy, SpotCheck};
+            use crate::core::status::{FanError, FanMode, ThermalReading};
+            use std::collections::HashMap;
             use std::path::Path;
+            use std::path::PathBuf;
             use std::sync::atomic::AtomicBool;
 
             let _: fn() -> bool = is_elevated;
@@ -62,6 +77,25 @@ macro_rules! platform_contract {
             let _: fn(&Path) -> bool = is_system_trash;
             let _: fn(&CleanProgress) -> CleanReport = empty_trash;
             let _: fn(&Path) = open_in_default_app;
+            let _: fn(&[PathBuf]) -> HashMap<PathBuf, Busy> = detect_inuse;
+            let _: fn(&[PathBuf]) -> HashMap<PathBuf, SpotCheck> = spot_check_inuse;
+            let _: fn() -> Option<PathBuf> = user_home;
+            let _: fn() -> Option<PathBuf> = user_cache_dir;
+            let _: fn() -> Option<PathBuf> = user_data_dir;
+            // Windows 跨账户提权下主目录可能不可信，Temp 也随之拿不到；
+            // 拿不到必须返回 None 跳过目标，不许换一个目录顶替。
+            let _: fn() -> Option<PathBuf> = user_temp_dir;
+            let _: fn() -> ThermalReading = read_thermal;
+            let _: fn() -> crate::core::status::GpuReading = read_gpu;
+            let _: fn() -> Option<crate::core::status::BatteryReading> = read_battery;
+            let _: fn() -> u64 = system_uptime_secs;
+            let _: fn(u32, u64, Option<u64>) -> Result<(), String> = terminate_process;
+            let _: fn(u32) -> Option<u64> = process_unique_id;
+            let _: fn(FanMode) -> Result<(), FanError> = set_fan_mode;
+            let _: fn(FanMode) -> Result<(), FanError> = elevated_fan_control;
+            let _: fn() -> bool = fan_helper_installed;
+            let _: fn(&str) -> Result<(), FanError> = install_fan_helper;
+            let _: fn(&str) -> Result<(), FanError> = uninstall_fan_helper;
         };
     };
 }
@@ -80,10 +114,37 @@ fn posix_locale_tag() -> String {
         .unwrap_or_default()
 }
 
+/// Windows 使用的删除前复检（macOS 有句柄级占用探测，不走这里）。
+///
+/// 只对文件保留活 SQLite 家族闸门；目录不在这里扩大判定范围，嵌套活库由
+/// 删除入口逐项检查。与 macOS 的删除闸门保持同一套安全规则，避免漂移。
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) fn spot_check_without_handle_probe(
+    paths: &[std::path::PathBuf],
+) -> std::collections::HashMap<std::path::PathBuf, crate::core::inuse::SpotCheck> {
+    use crate::core::inuse::SpotCheck;
+
+    paths
+        .iter()
+        .map(|path| {
+            let status = match std::fs::symlink_metadata(path) {
+                Err(_) => SpotCheck::Clear,
+                Ok(metadata)
+                    if metadata.is_file() && crate::core::safety::is_live_database(path) =>
+                {
+                    SpotCheck::Busy
+                }
+                Ok(_) => SpotCheck::Clear,
+            };
+            (path.clone(), status)
+        })
+        .collect()
+}
+
 #[cfg(windows)]
 pub mod windows;
 #[cfg(windows)]
-/// 门面对外只开放**契约里那 16 个函数**，外加两个跨平台通用的图标读取。
+/// 门面对外只开放**契约里的函数**，外加两个跨平台通用的图标读取。
 ///
 /// 以前这里是 `pub use windows::*`：平台内部的每个 `pub` 符号都被透传出去，
 /// 于是 `crate::platform::real_user_home()` 这类只有 Windows 才有的东西，在
@@ -92,10 +153,14 @@ pub mod windows;
 /// 确实需要单平台能力时，得写 `platform::windows::...` 并自己加 `#[cfg]`，
 /// 一眼能看出这是平台分支而不是通用接口。
 pub use windows::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_occupancy, detect_system_language,
-    empty_trash, get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
-    move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
+    detect_system_language, elevated_fan_control, empty_trash, fan_helper_installed,
+    get_volume_space, install_fan_helper, is_elevated, is_system_trash, list_installed_apps,
+    list_volumes, move_to_trash, open_in_default_app, process_unique_id, read_battery, read_gpu,
+    read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait,
+    scan_residuals, scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs,
+    terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -104,105 +169,44 @@ platform_contract!();
 pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_occupancy, detect_system_language,
-    empty_trash, get_volume_space, is_elevated, is_system_trash, list_installed_apps, list_volumes,
-    move_to_trash, open_in_default_app, relaunch_as_admin_if_needed, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, verify_residuals,
+    app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
+    detect_system_language, elevated_fan_control, empty_trash, fan_helper_installed,
+    get_volume_space, install_fan_helper, is_elevated, is_system_trash, list_installed_apps,
+    list_volumes, move_to_trash, open_in_default_app, process_unique_id, read_battery, read_gpu,
+    read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait,
+    scan_residuals, scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs,
+    terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();
 
-/// 既不是 Windows 也不是 macOS 时的兜底实现：编译得过，但什么都不做。
-#[cfg(all(not(windows), not(target_os = "macos")))]
-pub mod fallback {
-    use crate::core::apps::{InstalledApp, ResidualItem, ResidualScanResult};
-    use crate::core::cleaner::{CleanProgress, CleanReport};
-    use crate::core::disk::{ScanError, ScanResult, VolumeId};
-    use crate::core::i18n::Language;
-    use std::path::Path;
-    use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+mod tests {
+    use super::spot_check_without_handle_probe;
+    use crate::core::inuse::SpotCheck;
+    use std::path::PathBuf;
 
-    pub fn is_elevated() -> bool {
-        false
+    #[test]
+    fn handle_probe_fallback_clears_missing_paths() {
+        let paths = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let result = spot_check_without_handle_probe(&paths);
+        assert_eq!(result.get(&paths[0]), Some(&SpotCheck::Clear));
+        assert_eq!(result.get(&paths[1]), Some(&SpotCheck::Clear));
     }
 
-    /// 按 POSIX 环境变量推断界面语言。
-    pub fn detect_system_language() -> Language {
-        Language::from_locale_tag(&crate::platform::posix_locale_tag())
+    #[test]
+    fn handle_probe_fallback_marks_live_database_file_not_parent_dir() {
+        let base = crate::core::testing::fixture("qc_spot_fallback_live_db");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db = base.join("cache.db");
+        std::fs::write(&db, b"x").unwrap();
+        std::fs::write(base.join("cache.db-wal"), b"x").unwrap();
+
+        let result = spot_check_without_handle_probe(&[base.clone(), db.clone()]);
+        assert_eq!(result.get(&base), Some(&SpotCheck::Clear));
+        assert_eq!(result.get(&db), Some(&SpotCheck::Busy));
+        let _ = std::fs::remove_dir_all(base);
     }
-
-    pub fn relaunch_as_admin_if_needed() -> bool {
-        false
-    }
-
-    pub fn list_volumes() -> Vec<VolumeId> {
-        Vec::new()
-    }
-
-    /// 整树空间分析依赖 NTFS 的 `$MFT`，其它平台没有等价物。
-    pub fn scan_volume(_vol: &VolumeId, _top_n: usize) -> Result<ScanResult, ScanError> {
-        Err(ScanError::NotNtfs)
-    }
-
-    pub fn get_volume_space(_vol: &VolumeId) -> Option<(u64, u64)> {
-        None
-    }
-
-    pub fn list_installed_apps(_live: &AtomicBool) -> Vec<InstalledApp> {
-        Vec::new()
-    }
-
-    pub fn run_uninstaller_and_wait(_app: &InstalledApp) -> Result<(), String> {
-        Err("当前平台不支持自动卸载".into())
-    }
-
-    pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
-        ResidualScanResult {
-            app_name: app.name.clone(),
-            app_id: app.id.clone(),
-            ..Default::default()
-        }
-    }
-
-    pub fn clean_residuals(_items: &[ResidualItem], _prog: &CleanProgress) -> CleanReport {
-        CleanReport::default()
-    }
-
-    pub fn detect_occupancy(_app: &InstalledApp) -> crate::core::apps::ResidualOccupancy {
-        crate::core::apps::ResidualOccupancy::default()
-    }
-
-    pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
-        items
-    }
-
-    pub fn reveal_in_explorer(_path: &Path) {}
-
-    /// 没有回收站就**如实报错**，绝不退化成永久删除：调用方开这个开关
-    /// 就是要「删错了能捞回来」，静默替他抹掉是把安全网抽走。
-    pub fn move_to_trash(_path: &Path) -> Result<(), String> {
-        Err("当前平台没有回收站".into())
-    }
-
-    /// 没有回收站，也就没有「回收站目录」这个概念。
-    pub fn is_system_trash(_path: &Path) -> bool {
-        false
-    }
-
-    pub fn empty_trash(_prog: &CleanProgress) -> CleanReport {
-        CleanReport::default()
-    }
-
-    pub fn open_in_default_app(_path: &Path) {}
 }
-
-#[cfg(all(not(windows), not(target_os = "macos")))]
-// fallback 不含 `app_icon_*`：UI 侧对这个 target 已经用 `#[cfg]` 关掉了图标加载。
-pub use fallback::{
-    clean_residuals, detect_system_language, empty_trash, get_volume_space, is_elevated,
-    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
-    scan_volume, verify_residuals,
-};
-#[cfg(all(not(windows), not(target_os = "macos")))]
-platform_contract!();

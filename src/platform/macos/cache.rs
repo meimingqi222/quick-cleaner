@@ -35,12 +35,7 @@ pub(crate) fn cache_dir_path() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("QUICKCLEANER_CACHE_DIR") {
         return Some(PathBuf::from(custom));
     }
-    Some(
-        dirs::home_dir()?
-            .join("Library")
-            .join("Application Support")
-            .join("QuickCleaner"),
-    )
+    Some(super::user_env::user_data_dir()?.join("QuickCleaner"))
 }
 
 /// 缓存/索引目录路径，不存在时自动创建。

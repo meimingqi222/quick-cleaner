@@ -473,7 +473,9 @@ pub fn tr_declutter_large_files_heading(lang: Language) -> &'static str {
 pub fn tr_declutter_large_files_subheading(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "选择不再需要的文件，安全清理以释放宝贵的磁盘空间。",
-        Language::En => "Select files you no longer need. Safely remove them to free up disk space.",
+        Language::En => {
+            "Select files you no longer need. Safely remove them to free up disk space."
+        }
     }
 }
 

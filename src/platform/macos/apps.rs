@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// 扫描目录顺序：用户应用 → 系统应用 → 用户级 Applications → Utilities。
 /// 系统应用（`/System/Applications`）标记为 `is_system_component`，不可卸载。
 pub fn list_installed_apps(live: &AtomicBool) -> Vec<InstalledApp> {
-    let home = dirs::home_dir();
+    let home = super::user_env::user_home();
     let app_dirs: Vec<(PathBuf, bool)> = vec![
         (PathBuf::from("/Applications"), false),
         (PathBuf::from("/System/Applications"), true),
@@ -205,7 +205,7 @@ fn query_last_used_dates(paths: &[(PathBuf, bool)]) -> HashMap<PathBuf, (Option<
     }
 
     // 阶段二：对 Spotlight 没给到日期的应用，用用户数据目录 mtime 回退
-    let home = dirs::home_dir();
+    let home = super::user_env::user_home();
     if let Some(home) = &home {
         for (path, _) in paths {
             // 已有 Spotlight 日期的跳过
@@ -725,6 +725,4 @@ mod tests {
             "注入片段不该以裸语法出现：{injected}"
         );
     }
-
-
 }

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// macOS 专属清理目标
 #[cfg(target_os = "macos")]
-pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: Option<&Path>) {
     // APFS 本地快照：通过 `tmutil listlocalsnapshots /` 发现，
     // 用 `tmutil deletelocalsnapshots <date>` 删除。
     // 这里只做发现，实际清理在 cleaner 模块用 `tmutil` 执行。
@@ -18,6 +18,10 @@ pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     // 本机废纸篓 `~/.Trash` 上面已加，但每个外接卷都有自己的 `.Trashes`，
     // 删到外接盘的文件不会出现在 `~/.Trash` 里。
     push_external_volume_trashes(t);
+
+    let Some(home) = home else {
+        return;
+    };
 
     // Group Containers 下的缓存、临时文件、日志
     // 沙盒应用共享的容器目录，很多应用在这里堆缓存。

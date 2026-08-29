@@ -9,7 +9,12 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct UserContext {
-    pub home: PathBuf,
+    /// `None` = 主目录不可信：跨账户提权时传入的 `--orig-user-home` 无效，
+    /// 而进程环境（`dirs::home_dir()` / `USERPROFILE`）属于管理员。此时
+    /// 所有用户目录操作必须整体跳过，绝不能拿管理员的 Profile 或
+    /// `C:\Users\Default` 顶替——Default 只是新建账户的模板，清它毫无意义，
+    /// 清管理员的目录则是在替另一个人删文件。
+    pub home: Option<PathBuf>,
     pub sid: Option<String>,
 }
 
@@ -39,11 +44,15 @@ pub fn get_user_context() -> &'static UserContext {
             }
         }
 
-        let home = passed_home
-            .filter(|p| p.exists())
-            .or_else(dirs::home_dir)
-            .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("C:\\Users\\Default"));
+        let home = match passed_home {
+            // 提权进程显式收到了原用户目录：只有它自己有效才可用。它失效
+            // 时不能退回 `dirs::home_dir()` / `USERPROFILE`——提权后那是
+            // 管理员的，正是这套机制要防的事。
+            Some(p) if p.exists() => Some(p),
+            Some(_) => None,
+            // 非提权进程：进程环境就是真实用户。
+            None => dirs::home_dir().or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from)),
+        };
 
         let sid = passed_sid.or_else(super::security::current_user_sid);
 
@@ -51,29 +60,48 @@ pub fn get_user_context() -> &'static UserContext {
     })
 }
 
-/// 真实前台用户的根目录（如 `C:\Users\Alice`）
-pub fn real_user_home() -> &'static Path {
-    &get_user_context().home
+/// 真实前台用户的根目录（如 `C:\Users\Alice`）。
+///
+/// 主目录不可信时返回 `None`，调用方必须跳过对应用户目录，不许猜。
+pub fn real_user_home() -> Option<&'static Path> {
+    get_user_context().home.as_deref()
 }
 
 /// 真实前台用户的 Local AppData（如 `C:\Users\Alice\AppData\Local`）
-pub fn real_user_local_appdata() -> PathBuf {
-    real_user_home().join("AppData\\Local")
+pub fn real_user_local_appdata() -> Option<PathBuf> {
+    Some(real_user_home()?.join("AppData\\Local"))
 }
 
 /// 真实前台用户的 Roaming AppData（如 `C:\Users\Alice\AppData\Roaming`）
-pub fn real_user_roaming_appdata() -> PathBuf {
-    real_user_home().join("AppData\\Roaming")
+pub fn real_user_roaming_appdata() -> Option<PathBuf> {
+    Some(real_user_home()?.join("AppData\\Roaming"))
 }
 
-/// 真实前台用户的 Temp 目录（如 `C:\Users\Alice\AppData\Local\Temp`）
-pub fn real_user_temp() -> PathBuf {
-    let local_temp = real_user_local_appdata().join("Temp");
-    if local_temp.exists() {
-        local_temp
-    } else {
-        std::env::temp_dir()
-    }
+/// 真实前台用户的 Temp 目录（如 `C:\Users\Alice\AppData\Local\Temp`）。
+///
+/// 目录当前不存在也照样返回预期路径——「不存在」只说明没有可清的东西，
+/// 不能因此换成进程自己的 `std::env::temp_dir()`：跨账户提权下那是
+/// 管理员的 Temp，扫到、清到的都不是屏幕前这个人的文件。
+pub fn real_user_temp() -> Option<PathBuf> {
+    Some(real_user_local_appdata()?.join("Temp"))
+}
+
+/// 跨平台门面使用的真实前台用户目录语义。与 core 的安全分支对齐：
+/// 主目录不确定时返回 `None`，让「HOME 不确定就跳过用户目录」真正生效。
+pub fn user_home() -> Option<PathBuf> {
+    get_user_context().home.clone()
+}
+
+pub fn user_cache_dir() -> Option<PathBuf> {
+    real_user_local_appdata()
+}
+
+pub fn user_data_dir() -> Option<PathBuf> {
+    real_user_roaming_appdata()
+}
+
+pub fn user_temp_dir() -> Option<PathBuf> {
+    real_user_temp()
 }
 
 /// 需要纳入删除保护的「已知文件夹」在 `User Shell Folders` 里的值名。
@@ -125,7 +153,7 @@ pub fn real_user_known_folders() -> &'static [PathBuf] {
                     .iter()
                     .any(|k| k.eq_ignore_ascii_case(name))
             })
-            .map(|(_, raw)| expand_user_profile(&raw))
+            .filter_map(|(_, raw)| expand_user_profile(&raw))
             .filter(|p| p.is_absolute())
             .collect()
     })
@@ -134,13 +162,17 @@ pub fn real_user_known_folders() -> &'static [PathBuf] {
 /// 展开 `User Shell Folders` 里的 `%USERPROFILE%` 前缀。
 ///
 /// 这些值是 `REG_EXPAND_SZ`，绝大多数形如 `%USERPROFILE%\Desktop`。展开时
-/// 锚定**真实前台用户**的主目录，而不是进程环境里的那个。
-fn expand_user_profile(raw: &str) -> PathBuf {
+/// 锚定**真实前台用户**的主目录，而不是进程环境里的那个。主目录不可信
+/// （跨账户提权时原用户目录失效）时返回 `None`——展开不出正确锚点的
+/// 「已知文件夹」保护不了任何人，宁可缺席也不许指到管理员头上。
+fn expand_user_profile(raw: &str) -> Option<PathBuf> {
     const VAR: &str = "%USERPROFILE%";
     if raw.len() >= VAR.len() && raw[..VAR.len()].eq_ignore_ascii_case(VAR) {
-        return real_user_home().join(raw[VAR.len()..].trim_start_matches(std::path::is_separator));
+        return Some(
+            real_user_home()?.join(raw[VAR.len()..].trim_start_matches(std::path::is_separator)),
+        );
     }
-    PathBuf::from(raw)
+    Some(PathBuf::from(raw))
 }
 
 /// 真实前台用户的 Windows SID

@@ -13,6 +13,33 @@ use quick_cleaner::ui::Root;
 actions!(quick_cleaner, [Quit]);
 
 fn main() {
+    // 风扇特权守护进程的两个非 GUI 入口（详见 platform::macos::fanhelper）：
+    //
+    //   --fanhelper          launchd 以 root 拉起的常驻守护进程本体，
+    //                        在 unix socket 上收「auto / pct <1-100>」两条命令。
+    //   --fanhelper-install  安装流程里由 osascript 以 root 跑一次，写 plist 并
+    //                        launchctl bootstrap，之后立即退出。
+    //
+    // 两者都必须在 GUI 初始化之前分流：守护进程不该建窗口，也不该碰 Dock。
+    #[cfg(target_os = "macos")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.len() == 2 {
+            match args[1].as_str() {
+                "--fanhelper" => {
+                    quick_cleaner::platform::macos::fanhelper::run_daemon();
+                    return;
+                }
+                "--fanhelper-install" => {
+                    std::process::exit(
+                        quick_cleaner::platform::macos::fanhelper::run_install_step(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     #[cfg(windows)]
     {
         // 顺序有讲究：日志路径要锚定真实前台用户，得等 init_user_context 之后；

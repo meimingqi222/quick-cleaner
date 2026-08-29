@@ -22,6 +22,7 @@ pub mod proc;
 pub mod safety;
 pub mod scanner;
 pub mod settings;
+pub mod status;
 pub(crate) mod testing;
 pub mod whitelist;
 

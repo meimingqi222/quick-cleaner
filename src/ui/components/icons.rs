@@ -2,7 +2,9 @@
 //! 采用纯矢量组合绘制，告别粗糙 Emoji，呈现现代沉浸式界面
 
 use crate::ui::theme::*;
-use gpui::{div, img, prelude::*, px, rgb, AnyElement, Div, Image, ImageFormat, ImageSource};
+use gpui::{
+    div, img, prelude::*, px, relative, rgb, AnyElement, Div, Image, ImageFormat, ImageSource,
+};
 use std::sync::Arc;
 
 pub fn icon_app_logo(size: f32) -> AnyElement {
@@ -934,7 +936,187 @@ pub fn icon_file_exe(fg: u32, size: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// 定位/文件夹打开指示图标
+/// 监控脉冲图标（三根起伏的柱，状态监控页与侧边栏共用）
+pub fn icon_pulse(fg: u32, size: f32) -> AnyElement {
+    let bar_w = (size - 4.) / 3.;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_end()
+        .justify_center()
+        .gap(px(2.))
+        .child(
+            div()
+                .w(px(bar_w))
+                .h(px(size * 0.45))
+                .rounded_t_full()
+                .bg(rgb(fg)),
+        )
+        .child(div().w(px(bar_w)).h(px(size)).rounded_t_full().bg(rgb(fg)))
+        .child(
+            div()
+                .w(px(bar_w))
+                .h(px(size * 0.7))
+                .rounded_t_full()
+                .bg(rgb(fg)),
+        )
+        .into_any_element()
+}
+
+/// 风扇图标（轮毂 + 十字分布的四个扇叶节点）
+pub fn icon_fan(fg: u32, size: f32) -> AnyElement {
+    let blade = size * 0.24;
+    let hub = size * 0.3;
+    let offset = size * 0.26;
+    let blade_dot = |dx: f32, dy: f32| {
+        div()
+            .absolute()
+            .left(px(size / 2. + dx - blade / 2.))
+            .top(px(size / 2. + dy - blade / 2.))
+            .w(px(blade))
+            .h(px(blade))
+            .rounded_full()
+            .bg(rgb(fg))
+    };
+    div()
+        .w(px(size))
+        .h(px(size))
+        .relative()
+        .child(blade_dot(0., -offset))
+        .child(blade_dot(0., offset))
+        .child(blade_dot(-offset, 0.))
+        .child(blade_dot(offset, 0.))
+        .child(
+            div()
+                .absolute()
+                .left(px(size / 2. - hub / 2.))
+                .top(px(size / 2. - hub / 2.))
+                .w(px(hub))
+                .h(px(hub))
+                .rounded_full()
+                .border_2()
+                .border_color(rgb(fg))
+                .bg(rgb(CARD)),
+        )
+        .into_any_element()
+}
+
+/// 内存条图标（带金手指缺口的 RAM 侧视）
+pub fn icon_ram(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.9;
+    let h = size * 0.5;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_2()
+                .border_color(rgb(fg))
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .px(px(2.))
+                .child(div().flex_1().h(px(h * 0.35)).rounded_xs().bg(rgb(fg)))
+                .child(div().flex_1().h(px(h * 0.35)).rounded_xs().bg(rgb(fg)))
+                .child(div().flex_1().h(px(h * 0.35)).rounded_xs().bg(rgb(fg))),
+        )
+        .into_any_element()
+}
+
+/// GPU 图标：芯片方框 + 四周引脚。和 `icon_ram` 同一套画法（纯 div 组合），
+/// 一眼能和内存条区分开——内存是横向长条，GPU 是方形芯片。
+pub fn icon_gpu(fg: u32, size: f32) -> AnyElement {
+    let body = size * 0.62;
+    let pin = size * 0.1;
+    let core = body * 0.42;
+    // 芯片四边各两根引脚，按边的 1/3、2/3 位置摆。
+    let pin_at = |left: f32, top: f32, w: f32, h: f32| {
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(top))
+            .w(px(w))
+            .h(px(h))
+            .rounded_xs()
+            .bg(rgb(fg))
+    };
+    let edge = (size - body) / 2.;
+    let mut chip = div().w(px(size)).h(px(size)).relative();
+    for k in 1..=2 {
+        let along = edge + body * (k as f32 / 3.);
+        // 上、下
+        chip = chip
+            .child(pin_at(along - pin / 4., edge - pin, pin / 2., pin))
+            .child(pin_at(along - pin / 4., edge + body, pin / 2., pin))
+            // 左、右
+            .child(pin_at(edge - pin, along - pin / 4., pin, pin / 2.))
+            .child(pin_at(edge + body, along - pin / 4., pin, pin / 2.));
+    }
+    chip.child(
+        div()
+            .absolute()
+            .left(px(edge))
+            .top(px(edge))
+            .w(px(body))
+            .h(px(body))
+            .rounded_sm()
+            .border_2()
+            .border_color(rgb(fg))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(div().w(px(core)).h(px(core)).rounded_xs().bg(rgb(fg))),
+    )
+    .into_any_element()
+}
+
+/// 电池图标：外壳 + 正极触点 + 按电量填充的内条。
+///
+/// `level` 是 0~1 的电量，填充宽度跟着走——图标本身就是一个微型电量计，
+/// 这样卡片标题旁边不用再放一个小进度条。
+pub fn icon_battery(fg: u32, level: f32, size: f32) -> AnyElement {
+    let w = size * 0.82;
+    let h = size * 0.5;
+    let cap = size * 0.08;
+    let level = level.clamp(0.0, 1.0);
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(1.))
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_2()
+                .border_color(rgb(fg))
+                .p(px(1.5))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .h_full()
+                        // 电量再低也留一丝可见的宽度，不然图标看起来是坏的。
+                        .w(relative(level.max(0.06)))
+                        .rounded_xs()
+                        .bg(rgb(fg)),
+                ),
+        )
+        .child(div().w(px(cap)).h(px(h * 0.4)).rounded_r_sm().bg(rgb(fg)))
+        .into_any_element()
+}
+
+/// 定位/文件夹打开指示图标/// 定位/文件夹打开指示图标
 pub fn icon_locate(fg: u32, size: f32) -> AnyElement {
     div()
         .w(px(size))

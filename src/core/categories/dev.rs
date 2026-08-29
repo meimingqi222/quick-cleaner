@@ -7,27 +7,16 @@ use std::path::Path;
 
 /// 开发相关清理目标：AI agent 缓存、构建产物、iOS 备份、编辑器工作区
 pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    #[cfg(windows)]
-    {
-        let local = crate::platform::windows::real_user_local_appdata();
-        let roaming = crate::platform::windows::real_user_roaming_appdata();
+    if let (Some(cache), Some(data)) = (
+        crate::platform::user_cache_dir(),
+        crate::platform::user_data_dir(),
+    ) {
         // AI 编程助手的会话记录与缓存
-        push_ai_agent_targets(t, home, &local, &roaming);
+        push_ai_agent_targets(t, home, &cache, &data);
     }
 
     #[cfg(target_os = "macos")]
     {
-        let cache = home.join("Library/Caches");
-        let app_support = home.join("Library/Application Support");
-
-        // AI 编程助手的缓存、会话残留与临时 worktree。
-        //
-        // macOS 上 Electron 型 agent 的缓存子目录结构与 Windows 完全一致
-        // （Electron 自己保证的），只是根从 `%APPDATA%` 换成
-        // `~/Library/Application Support`，`%LOCALAPPDATA%` 换成 `~/Library/Caches`。
-        // CLI 型 agent（`.claude` / `.codex` 等）直接在 `~` 下，两边一样。
-        push_ai_agent_targets(t, home, &cache, &app_support);
-
         // §6.2 补充清理目标
 
         // Xcode 开发产物（常达数十 GB）
@@ -568,5 +557,120 @@ mod tests {
         push_obsolete_vscode_extensions(&mut t, &tmp);
         assert_eq!(t.len(), 4, "四个分叉编辑器都该被扫到，实得 {}", t.len());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 绝不能出现在清理目标里的东西：配置、凭据、用户自己装的插件与技能。
+    ///
+    /// 这些目录名一旦被误加进 `CLI_AGENTS`，用户清一次就得重新登录、
+    /// 重装插件。用测试钉死比靠 review 可靠。
+    const NEVER_CLEAN: &[&str] = &[
+        "settings.json",
+        "config.toml",
+        "auth.json",
+        "oauth_creds.json",
+        ".credentials.json",
+        "memories",
+        "prompts",
+        "rules",
+        "skills",
+        "plugins",
+        "extensions",
+        "plans",
+        "brain",
+        "connectors",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "GEMINI.md",
+    ];
+
+    #[test]
+    fn ai_agent_targets_never_touch_config_or_credentials() {
+        for (dir, label, subs) in CLI_AGENTS {
+            for sub in *subs {
+                assert!(
+                    !NEVER_CLEAN.contains(sub),
+                    "{label}（{dir}）把 {sub} 列成了可清理项，这会破坏用户配置"
+                );
+            }
+        }
+        for (dir, subs, label, _) in LOCAL_AGENT_DIRS {
+            for sub in *subs {
+                assert!(
+                    !NEVER_CLEAN.contains(sub),
+                    "{label}（{dir}）把 {sub} 列成了可清理项"
+                );
+            }
+        }
+    }
+
+    /// Electron 的会话态目录不能进清理表，否则用户会被踢下线。
+    #[test]
+    fn electron_cache_list_excludes_session_state() {
+        for stateful in [
+            "Service Worker",
+            "IndexedDB",
+            "Local Storage",
+            "Session Storage",
+        ] {
+            assert!(
+                !ELECTRON_CACHE_DIRS.contains(&stateful),
+                "{stateful} 存的是登录态/应用状态，不能当缓存清"
+            );
+        }
+    }
+
+    #[test]
+    fn ai_agent_recommendations_are_decided_per_target() {
+        let root = crate::core::testing::fixture("qc_agent_rules");
+        let home = root.join("home");
+        let local = root.join("local");
+        let roaming = root.join("roaming");
+        let mut targets = Vec::new();
+
+        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
+
+        let claude_cache = home.join(".claude/cache");
+        let claude_projects = home.join(".claude/projects");
+        let cursor_cache = roaming.join("Cursor/Cache");
+        let cursor_profiles = roaming.join("Cursor/CachedProfilesData");
+        let cursor_blobs = roaming.join("Cursor/blob_storage");
+        assert!(targets
+            .iter()
+            .any(|target| target.path == claude_cache && target.recommended));
+        assert!(targets
+            .iter()
+            .any(|target| target.path == cursor_cache && target.recommended));
+        assert!(targets
+            .iter()
+            .any(|target| target.path == claude_projects && !target.recommended));
+        for path in [cursor_profiles, cursor_blobs] {
+            assert!(targets
+                .iter()
+                .any(|target| target.path == path && !target.recommended));
+        }
+    }
+
+    #[test]
+    fn only_vscode_declared_obsolete_extensions_are_recommended() {
+        let root = crate::core::testing::fixture("qc_obsolete_ext");
+        let extensions = root.join(".vscode/extensions");
+        let old = extensions.join("example.tool-1.0.0");
+        let current = extensions.join("example.tool-2.0.0");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            extensions.join(".obsolete"),
+            r#"{"example.tool-1.0.0":true,"example.tool-2.0.0":false,"../escape":true}"#,
+        )
+        .unwrap();
+        let mut targets = Vec::new();
+
+        push_obsolete_vscode_extensions(&mut targets, &root);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, old);
+        assert!(targets[0].recommended);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

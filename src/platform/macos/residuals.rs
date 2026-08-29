@@ -24,7 +24,7 @@ use std::time::Duration;
 /// 以 `CFBundleIdentifier`（存在 `app.registry_subpath`）为主键，
 /// 在 `~/Library`、`/Library` 和点目录下的多个已知位置搜索匹配的残留。
 pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = super::user_env::user_home() else {
         return ResidualScanResult {
             app_name: app.name.clone(),
             app_id: app.id.clone(),
@@ -257,8 +257,8 @@ pub fn detect_occupancy(app: &InstalledApp) -> ResidualOccupancy {
 
     if let Some(run) = run_with_timeout("/bin/ps", &["-axo", "pid=,args="], PROBE_TIMEOUT) {
         // 空/截断/非零退出的 `ps` 是「测不出」，不是「没进程」，按
-        // `core::inuse` 同一套判据丢弃，免得半截记录被当成证据。
-        if crate::core::inuse::ps_output_is_usable(run.ok, &run.stdout) {
+        // `macos::inuse` 同一套判据丢弃，免得半截记录被当成证据。
+        if super::inuse::ps_output_is_usable(run.ok, &run.stdout) {
             occ.processes = String::from_utf8_lossy(&run.stdout)
                 .lines()
                 .filter(|line| process_args_match(line, &bundle_id_lower, display_name))
@@ -280,7 +280,7 @@ pub fn detect_occupancy(app: &InstalledApp) -> ResidualOccupancy {
     occ
 }
 
-/// 两条占用探测命令的超时。取值对齐 `core::inuse` 的 spot-check：用户正
+/// 两条占用探测命令的超时。取值对齐 `macos::inuse` 的 spot-check：用户正
 /// 在等扫描结果，宁可少一条证据也不能让进度条挂住。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 

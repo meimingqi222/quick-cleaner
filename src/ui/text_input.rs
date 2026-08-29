@@ -691,10 +691,7 @@ impl EntityInputHandler for Root {
     ) -> Option<Bounds<Pixels>> {
         let input = self.text_input(self.file_search_focused(window));
         if let Some(hit) = input.text_hit.as_ref() {
-            let range = clamp_to_boundary(
-                &input.text,
-                range_from_utf16(&input.text, &range_utf16),
-            );
+            let range = clamp_to_boundary(&input.text, range_from_utf16(&input.text, &range_utf16));
             let x1 = hit.line.x_for_index(range.start.min(hit.line.len()));
             let x2 = hit.line.x_for_index(range.end.min(hit.line.len()));
             return Some(Bounds::from_corners(

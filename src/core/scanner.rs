@@ -907,7 +907,7 @@ mod tests {
         use std::time::Instant;
 
         let live = AtomicBool::new(true);
-        let targets = all_targets();
+        let targets = all_targets(None);
         println!("固定目标 {} 个", targets.len());
 
         let t0 = Instant::now();

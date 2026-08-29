@@ -1438,11 +1438,14 @@ mod tests {
             assert!(result.tree.find_node_by_path(&probe).is_some());
         }
         assert!(result.tree.size_of(result.tree.root()) > 0);
-        // 溢写临时文件不应残留
+        // 溢写临时文件不应残留。只看**本进程**留下的那些：文件名是
+        // `qc-spill-<pid>-<seq>.bin`，光按 `qc-spill-` 前缀扫会把并发跑的
+        // 另一个测试二进制正在用的溢写文件也算成残留。
+        let mine = format!("qc-spill-{}-", std::process::id());
         let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("qc-spill-"))
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&mine))
             .collect();
         assert!(leftovers.is_empty(), "溢写临时文件残留: {leftovers:?}");
     }

@@ -29,7 +29,10 @@ pub(super) fn push_docker_targets(t: &mut Vec<ScanTarget>) {
                 format!("{}:{} (old version)", junk.image.repository, junk.image.tag),
             ),
             JunkKind::Unreferenced => Text::new(
-                format!("{}:{}（未被容器使用）", junk.image.repository, junk.image.tag),
+                format!(
+                    "{}:{}（未被容器使用）",
+                    junk.image.repository, junk.image.tag
+                ),
                 format!(
                     "{}:{} (unused by any container)",
                     junk.image.repository, junk.image.tag

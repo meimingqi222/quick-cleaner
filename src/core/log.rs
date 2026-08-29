@@ -8,8 +8,8 @@
 //! # 存在哪
 //!
 //! 和 `settings.json` 同目录：`%APPDATA%\QuickCleaner\quick-cleaner.log`。
-//! 同样锚定**真实前台用户**而非 `dirs::config_dir()`——本程序会自提权，
-//! 跨账户提权（OTS）时后者返回管理员的 AppData，日志就会散落在两个账户下。
+//! 同样通过平台门面锚定**真实前台用户**——本程序会自提权，
+//! 跨账户提权（OTS）时直接查询进程环境会返回管理员的 AppData，让日志散落在两个账户下。
 //!
 //! # 设计取舍
 //!
@@ -46,15 +46,7 @@ pub fn path() -> Option<PathBuf> {
 }
 
 fn dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        // 与 settings.rs 保持一致：锚定真实前台用户，不用 dirs::config_dir()
-        Some(crate::platform::windows::real_user_roaming_appdata().join("QuickCleaner"))
-    }
-    #[cfg(not(windows))]
-    {
-        dirs::config_dir().map(|d| d.join("QuickCleaner"))
-    }
+    crate::platform::user_data_dir().map(|d| d.join("QuickCleaner"))
 }
 
 /// 打开日志文件，必要时先滚动。任何一步失败都返回 `None`。
@@ -84,16 +76,7 @@ fn open() -> Option<Mutex<File>> {
 /// 不调用也能用（首次 [`write`] 会自动初始化），但显式调一次能让每次运行
 /// 在日志里有明确的分隔，排查时一眼看出「这是哪一次启动」。
 pub fn init() {
-    let elevated = {
-        #[cfg(windows)]
-        {
-            crate::platform::windows::security::is_elevated()
-        }
-        #[cfg(not(windows))]
-        {
-            false
-        }
-    };
+    let elevated = crate::platform::is_elevated();
     write(format_args!(
         "===== QuickCleaner v{} 启动 | 提权={} | pid={} =====",
         env!("CARGO_PKG_VERSION"),

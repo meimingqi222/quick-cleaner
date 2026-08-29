@@ -62,6 +62,13 @@ impl crate::ui::Root {
             ConfirmKind::CleanPath(p, size) => self.start_clean_path(p, size, cx),
             ConfirmKind::CleanDiskSelected => self.start_clean_disk_selected(cx),
             ConfirmKind::UninstallApp(app) => self.execute_uninstall_app(*app, cx),
+            ConfirmKind::KillProcess {
+                pid,
+                start_time,
+                unique_id,
+                name,
+            } => self.kill_process(pid, start_time, unique_id, name, cx),
+            ConfirmKind::InstallFanHelper(mode) => self.install_fan_helper_and_apply(mode, cx),
         }
     }
 
@@ -113,6 +120,9 @@ impl crate::ui::Root {
                 let snap = this.clean_snapshot().unwrap_or_default();
                 this.clean.freed_total += snap.bytes;
                 finish(this, report, snap, cx);
+                // 所有清理入口共用这一层；在这里刷新可避免磁盘卡片和健康分
+                // 继续显示清理前的可用空间。状态页轮询也会持续刷新当前卷。
+                this.disk.refresh_volume_spaces();
                 cx.notify();
             })
             .ok();
@@ -199,6 +209,15 @@ impl crate::ui::Root {
                 }
                 this.clean.last_failed = failed.clone();
                 this.clean.last_failed_files = snap.failed;
+
+                // brew owner command 在后台线程里持久化节流时间；同步回 Root
+                // 已持有的设置，保证用户不重启应用直接重扫时也不会再次出现。
+                if completed_targets
+                    .iter()
+                    .any(|target| crate::core::brew::is_brew_virtual(&target.path))
+                {
+                    this.settings = crate::core::settings::Settings::load();
+                }
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
                 this.apply_clean_result(&attempted, &still_there);

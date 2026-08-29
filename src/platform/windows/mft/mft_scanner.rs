@@ -2,13 +2,15 @@
 
 use super::mft_parser::*;
 use super::mft_types::*;
-use crate::core::disk::VolumeId;
+use crate::core::disk::{DirUsage, ScanError, VolumeId};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanError> {
-    let letter = vol_id.drive_letter().ok_or(ScanError::NotNtfs)?;
+    let letter = vol_id
+        .drive_letter()
+        .ok_or(ScanError::UnsupportedFilesystem("NTFS"))?;
     let started = Instant::now();
 
     // 对系统卷发起原始卷句柄读取是杀软重点盯防的行为（rawcopy / 勒索软件
@@ -31,7 +33,7 @@ pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanEr
     vol.read_at(mft_offset, &mut first)?;
     let first_time = t_first.elapsed();
     if !apply_fixup(&mut first, bytes_per_sector) {
-        return Err(ScanError::NotNtfs);
+        return Err(ScanError::UnsupportedFilesystem("NTFS"));
     }
     let mut frags: Vec<DataFragment> = Vec::new();
     collect_data_fragments(&first, &mut frags);
@@ -63,7 +65,7 @@ pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanEr
 
     let runs = flatten_fragments(frags);
     if runs.is_empty() {
-        return Err(ScanError::NotNtfs);
+        return Err(ScanError::UnsupportedFilesystem("NTFS"));
     }
     let run_clusters: u64 = runs.iter().map(|&(_, c)| c).sum();
 
@@ -164,7 +166,7 @@ pub fn scan_volume(vol_id: &VolumeId, top_n: usize) -> Result<ScanResult, ScanEr
     }
 
     if entries.len() <= ROOT_RECORD as usize {
-        return Err(ScanError::NotNtfs);
+        return Err(ScanError::UnsupportedFilesystem("NTFS"));
     }
 
     let n = entries.len();

@@ -1036,14 +1036,20 @@ pub fn tr_status_no_install_path(lang: Language, name: &str) -> String {
 pub fn tr_scan_error(lang: Language, err: &crate::core::disk::ScanError) -> String {
     use crate::core::disk::ScanError;
     match (lang, err) {
-        (Language::Zh, ScanError::AccessDenied) => "需要管理员权限才能读取 $MFT".into(),
-        (Language::Zh, ScanError::NotNtfs) => "该卷不是 NTFS 或无法获取卷信息".into(),
+        (Language::Zh, ScanError::AccessDenied) => "需要管理员权限读取磁盘".into(),
+        (Language::Zh, ScanError::UnsupportedFilesystem(expected)) => {
+            format!("该卷的文件系统不受支持（需要 {expected}）")
+        }
+        (Language::Zh, ScanError::UnsupportedPlatform) => "当前平台不支持磁盘树扫描".into(),
         (Language::Zh, ScanError::Io(e)) => format!("读取失败：{e}"),
         (Language::En, ScanError::AccessDenied) => {
-            "Administrator rights are required to read $MFT".into()
+            "Administrator rights are required to read the disk".into()
         }
-        (Language::En, ScanError::NotNtfs) => {
-            "Not an NTFS volume, or volume info is unavailable".into()
+        (Language::En, ScanError::UnsupportedFilesystem(expected)) => {
+            format!("Unsupported volume filesystem (requires {expected})")
+        }
+        (Language::En, ScanError::UnsupportedPlatform) => {
+            "Disk tree scanning is not supported on this platform".into()
         }
         (Language::En, ScanError::Io(e)) => format!("Read failed: {e}"),
     }
@@ -1364,5 +1370,484 @@ pub fn tr_search_sort_kind(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "按类型聚合",
         Language::En => "By Type",
+    }
+}
+
+// ---- 状态监控页（Stitch「System Status」仪表盘） ----
+
+pub fn tr_view_status(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "状态监控",
+        Language::En => "Status",
+    }
+}
+
+pub fn tr_status_heading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "系统状态",
+        Language::En => "System Status",
+    }
+}
+
+pub fn tr_status_subheading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "实时监测系统健康与资源占用",
+        Language::En => "Live system health and resource usage",
+    }
+}
+
+pub fn tr_status_card_health(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "健康概览",
+        Language::En => "Health Overview",
+    }
+}
+
+pub fn tr_status_card_cpu(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "处理器",
+        Language::En => "CPU",
+    }
+}
+
+pub fn tr_status_card_memory(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "内存",
+        Language::En => "Memory",
+    }
+}
+
+pub fn tr_status_card_disk(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "磁盘",
+        Language::En => "Disk",
+    }
+}
+
+pub fn tr_status_card_network(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "网络",
+        Language::En => "Network",
+    }
+}
+
+pub fn tr_status_card_fan(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "风扇与温度",
+        Language::En => "Fan & Temp",
+    }
+}
+
+pub fn tr_status_health_short(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "健康",
+        Language::En => "HEALTH",
+    }
+}
+
+pub fn tr_status_good(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "良好",
+        Language::En => "Good",
+    }
+}
+
+pub fn tr_status_fair(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "一般",
+        Language::En => "Fair",
+    }
+}
+
+pub fn tr_status_high(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "紧张",
+        Language::En => "High Load",
+    }
+}
+
+pub fn tr_status_available(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "可用",
+        Language::En => "Available",
+    }
+}
+
+pub fn tr_status_used(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已用",
+        Language::En => "Used",
+    }
+}
+
+pub fn tr_status_total(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "共",
+        Language::En => "Total",
+    }
+}
+
+pub fn tr_status_uptime_label(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "运行时长",
+        Language::En => "Uptime",
+    }
+}
+
+pub fn tr_status_cores(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "核心",
+        Language::En => "Cores",
+    }
+}
+
+pub fn tr_status_swap(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "交换区",
+        Language::En => "Swap",
+    }
+}
+
+pub fn tr_status_net_live(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "实时速率",
+        Language::En => "Live rates",
+    }
+}
+
+pub fn tr_status_no_fan(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "未检测到风扇",
+        Language::En => "No fan detected",
+    }
+}
+
+pub fn tr_status_fan_count(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "风扇",
+        Language::En => "Fans",
+    }
+}
+
+pub fn tr_status_fan_managed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "由系统托管调速",
+        Language::En => "OS-managed",
+    }
+}
+
+pub fn tr_status_processes(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "活动进程",
+        Language::En => "Active Processes",
+    }
+}
+
+pub fn tr_status_end(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "结束",
+        Language::En => "End",
+    }
+}
+
+pub fn tr_status_loading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在采样…",
+        Language::En => "Sampling…",
+    }
+}
+
+pub fn tr_th_cpu_short(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "CPU",
+        Language::En => "CPU",
+    }
+}
+
+pub fn tr_th_mem_short(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "内存",
+        Language::En => "Memory",
+    }
+}
+
+pub fn tr_confirm_kill_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "结束进程",
+        Language::En => "End Process",
+    }
+}
+
+pub fn tr_confirm_kill_body(lang: Language, name: &str, pid: u32) -> String {
+    match lang {
+        Language::Zh => format!("确定要结束「{name}」（PID {pid}）吗？"),
+        Language::En => format!("End \"{name}\" (PID {pid})?"),
+    }
+}
+
+pub fn tr_confirm_kill_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "进程将收到终止信号并退出，未保存的数据可能丢失。",
+        Language::En => "The process will receive a terminate signal; unsaved data may be lost.",
+    }
+}
+
+pub fn tr_status_kill_ok(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("已向「{name}」发送结束请求"),
+        Language::En => format!("Terminate signal sent to \"{name}\""),
+    }
+}
+
+pub fn tr_status_kill_failed(lang: Language, name: &str, err: &str) -> String {
+    match lang {
+        Language::Zh => format!("结束「{name}」失败：{err}"),
+        Language::En => format!("Failed to end \"{name}\": {err}"),
+    }
+}
+
+pub fn tr_fan_mode_auto(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "自动",
+        Language::En => "Auto",
+    }
+}
+
+/// 中间档。不叫「60%」是因为实际转速会随温度往上走——叫死一个数字会让
+/// 用户觉得程序没照做。
+pub fn tr_fan_mode_cool(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "降温",
+        Language::En => "Cool",
+    }
+}
+
+pub fn tr_fan_mode_full(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "全速",
+        Language::En => "Full Speed",
+    }
+}
+
+pub fn tr_status_fan_ok(lang: Language, mode: crate::core::status::FanMode) -> String {
+    match (lang, mode) {
+        (Language::Zh, crate::core::status::FanMode::Auto) => "风扇已恢复系统自动调速".to_string(),
+        (Language::En, crate::core::status::FanMode::Auto) => {
+            "Fan control returned to system".to_string()
+        }
+        (Language::Zh, crate::core::status::FanMode::Percent(60)) => {
+            "降温模式已开启，转速将随温度升高".to_string()
+        }
+        (Language::En, crate::core::status::FanMode::Percent(60)) => {
+            "Cooling enabled; fan speed will rise with temperature".to_string()
+        }
+        (_, crate::core::status::FanMode::Percent(p)) => match lang {
+            Language::Zh => format!("风扇已锁定在最大转速的 {p}%"),
+            Language::En => format!("Fans locked at {p}% of max speed"),
+        },
+    }
+}
+
+pub fn tr_status_fan_failed(lang: Language, err: &str) -> String {
+    match lang {
+        Language::Zh => format!("风扇控制失败：{err}"),
+        Language::En => format!("Fan control failed: {err}"),
+    }
+}
+
+/// 接管状态本身。原来这一条把状态和恢复说明塞在一格里，还自带一个 `·`
+/// 与脚注自己的分隔符重复；拆成两格后换行断点才落在分隔符上。
+pub fn tr_status_fan_taken_over(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已接管",
+        Language::En => "Manual",
+    }
+}
+
+/// 健康卡片上的「主要扣分项」。不写具体分数——用户要的是「该动哪里」，
+/// 不是一份扣分明细。
+pub fn tr_status_card_gpu(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "GPU",
+        Language::En => "GPU",
+    }
+}
+
+pub fn tr_status_card_battery(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "电池",
+        Language::En => "Battery",
+    }
+}
+
+pub fn tr_status_no_gpu(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "GPU 数据不可用",
+        Language::En => "GPU data unavailable",
+    }
+}
+
+pub fn tr_status_renderer(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "渲染器",
+        Language::En => "Renderer",
+    }
+}
+
+pub fn tr_status_vram(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "显存占用",
+        Language::En => "GPU memory",
+    }
+}
+
+pub fn tr_status_cycles(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "循环次数",
+        Language::En => "Cycles",
+    }
+}
+
+pub fn tr_status_battery_health(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "健康度",
+        Language::En => "Health",
+    }
+}
+
+/// 电池当前处于什么状态。四种：已充满 / 充电中 / 接电但未充 / 使用电池。
+///
+/// 「接电但未充」不是故障：macOS 的优化充电会在 80% 附近主动停下来，
+/// 不单独说清楚的话用户会以为充电坏了。
+pub fn tr_battery_state(
+    lang: Language,
+    charging: bool,
+    external: bool,
+    full: bool,
+) -> &'static str {
+    match (lang, full, charging, external) {
+        (Language::Zh, true, _, _) => "已充满",
+        (Language::Zh, _, true, _) => "充电中",
+        (Language::Zh, _, false, true) => "已接通电源",
+        (Language::Zh, _, false, false) => "使用电池",
+        (Language::En, true, _, _) => "Fully charged",
+        (Language::En, _, true, _) => "Charging",
+        (Language::En, _, false, true) => "Plugged in",
+        (Language::En, _, false, false) => "On battery",
+    }
+}
+
+/// 剩余时间：充电中是「充满还需」，放电中是「可用」。
+pub fn tr_battery_time(lang: Language, minutes: u32, charging: bool) -> String {
+    let (h, m) = (minutes / 60, minutes % 60);
+    let span = match lang {
+        Language::Zh if h > 0 => format!("{h} 小时 {m} 分"),
+        Language::Zh => format!("{m} 分钟"),
+        Language::En if h > 0 => format!("{h} h {m} min"),
+        Language::En => format!("{m} min"),
+    };
+    match (lang, charging) {
+        (Language::Zh, true) => format!("充满还需 {span}"),
+        (Language::Zh, false) => format!("剩余 {span}"),
+        (Language::En, true) => format!("{span} to full"),
+        (Language::En, false) => format!("{span} left"),
+    }
+}
+
+pub fn tr_health_factor(lang: Language, factor: crate::core::status::HealthFactor) -> String {
+    use crate::core::status::HealthFactor as F;
+    let what = match (lang, factor) {
+        (Language::Zh, F::Disk) => "磁盘空间不足",
+        (Language::Zh, F::Swap) => "内存不够用，正在频繁换页",
+        (Language::Zh, F::Memory) => "内存占用偏高",
+        (Language::Zh, F::Cpu) => "CPU 持续高负载",
+        (Language::Zh, F::Uptime) => "已经很久没重启",
+        (Language::En, F::Disk) => "Low disk space",
+        (Language::En, F::Swap) => "Memory exhausted, swapping heavily",
+        (Language::En, F::Memory) => "High memory usage",
+        (Language::En, F::Cpu) => "Sustained high CPU load",
+        (Language::En, F::Uptime) => "Up for a long time without a restart",
+    };
+    match lang {
+        Language::Zh => format!("主因：{what}"),
+        Language::En => format!("Main: {what}"),
+    }
+}
+
+pub fn tr_health_all_clear(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "各项指标均在正常范围",
+        Language::En => "All metrics within normal range",
+    }
+}
+
+pub fn tr_fan_helper_install_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "需要安装风扇控制组件",
+        Language::En => "Fan control component required",
+    }
+}
+
+pub fn tr_fan_helper_install_body(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => concat!(
+            "macOS 固件只允许 root 写风扇转速。安装一个后台组件后，",
+            "以后切换档位不再需要输入密码。"
+        ),
+        Language::En => concat!(
+            "macOS firmware only lets root write fan speeds. After installing a ",
+            "background component, switching modes never asks for a password again."
+        ),
+    }
+}
+
+pub fn tr_fan_helper_install_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => concat!(
+            "接下来会弹一次系统密码框——只有这一次。组件只接受「自动 / 降温 / 全速」三条指令",
+            "两条指令；应用退出时风扇立即交还系统调速。随时可在风扇卡片上移除。"
+        ),
+        Language::En => concat!(
+            "macOS will ask for your password once — only this once. The component ",
+            "accepts only three commands (auto / boost / full), and hands the fans back to the ",
+            "system the moment the app quits. Removable any time from the fan card."
+        ),
+    }
+}
+
+/// 系统授权框正文。默认那句「osascript 想要进行更改」既看不出是谁、也看不出
+/// 要干什么——对一个要装常驻 root 组件的操作，这是必须说清楚的一句话。
+pub fn tr_fan_helper_auth_prompt(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "QuickCleaner 需要安装或更新风扇控制组件。授权后切换风扇档位不再需要密码。",
+        Language::En => "QuickCleaner needs to install or update its fan control component. After this, switching fan modes never needs a password.",
+    }
+}
+
+pub fn tr_fan_helper_remove_prompt(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "QuickCleaner 需要移除风扇控制组件，风扇将交还系统调速。",
+        Language::En => "QuickCleaner needs to remove its fan control component; the fans will be handed back to the system.",
+    }
+}
+
+pub fn tr_fan_helper_remove(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移除风扇控制组件",
+        Language::En => "Remove fan control component",
+    }
+}
+
+pub fn tr_fan_helper_removed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "风扇控制组件已移除，风扇已交还系统调速",
+        Language::En => "Fan control component removed; fans returned to the system",
+    }
+}
+
+pub fn tr_fan_elevate_canceled(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已取消管理员授权，风扇档位未更改",
+        Language::En => "Admin authorization canceled; fan mode unchanged",
     }
 }

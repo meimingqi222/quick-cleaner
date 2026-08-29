@@ -6,3 +6,4 @@ mod declutter;
 mod disk;
 mod junk;
 mod search;
+mod status;

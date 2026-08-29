@@ -209,7 +209,10 @@ mod tests {
     fn large_output_does_not_deadlock() {
         let run = run_with_timeout(
             "/bin/sh",
-            &["-c", "for i in $(seq 1 20000); do echo aaaaaaaaaaaaaaaaaaaa; done"],
+            &[
+                "-c",
+                "for i in $(seq 1 20000); do echo aaaaaaaaaaaaaaaaaaaa; done",
+            ],
             Duration::from_secs(20),
         )
         .expect("不该超时——超时就说明卡在管道上了");

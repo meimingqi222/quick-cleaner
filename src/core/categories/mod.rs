@@ -408,22 +408,28 @@ pub struct ScanTarget {
 }
 
 /// 返回所有类别对应的扫描目标（支持跨平台）。
-pub fn all_targets() -> Vec<ScanTarget> {
-    #[cfg(windows)]
-    let home = crate::platform::windows::real_user_home().to_path_buf();
-    #[cfg(not(windows))]
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+///
+/// `brew_cleanup_at` 来自调用方已经加载的设置，避免目标构造过程中再次读取
+/// 配置文件并刷新全局白名单。
+pub fn all_targets(brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
+    collect_targets(crate::platform::user_home(), brew_cleanup_at)
+}
 
+/// 用户主目录拿不到时仍要产出与 home 无关的系统目标（Windows\\Temp、
+/// APFS 快照、外接卷废纸篓、Docker）。不能整表直接 return，否则跨账户
+/// 提权只丢了一个 `--orig-user-home`，系统垃圾也不扫了。
+fn collect_targets(home: Option<PathBuf>, brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
     let mut t: Vec<ScanTarget> = Vec::new();
-
-    system::push_system_targets(&mut t, &home);
-    cache::push_cache_targets(&mut t, &home);
-    browser::push_browser_targets(&mut t, &home);
-    dev::push_dev_targets(&mut t, &home);
+    let home = home.as_deref();
+    system::push_system_targets(&mut t, home);
+    cache::push_cache_targets(&mut t, home, brew_cleanup_at);
+    if let Some(home) = home {
+        browser::push_browser_targets(&mut t, home);
+        dev::push_dev_targets(&mut t, home);
+    }
     docker::push_docker_targets(&mut t);
     #[cfg(target_os = "macos")]
-    macos::push_macos_targets(&mut t, &home);
-
+    macos::push_macos_targets(&mut t, home);
     t
 }
 
@@ -466,19 +472,15 @@ pub(super) fn target_with_size(
 
 #[cfg(test)]
 mod tests {
-    use super::cache::push_home_cache_targets;
+    // 归属界线：留在这里的测试都是对 `all_targets()` 产出的**整体表级不变量**做
+    // 断言（不嵌套、不含敏感项、路径绝对、清理粒度），跨多个规则文件、没有单一
+    // 归属；只测某一个规则文件的，写进那个文件自己的 `mod tests`。
+    // `unknown_and_group_container_caches_require_manual_selection` 同时驱动
+    // `cache::push_user_cache_dirs` 和 `macos::push_group_container_caches`，同属跨模块这一类。
     #[cfg(target_os = "macos")]
     use super::cache::push_user_cache_dirs;
-    use super::dev::{
-        push_ai_agent_targets, push_obsolete_vscode_extensions, CLI_AGENTS, ELECTRON_CACHE_DIRS,
-        LOCAL_AGENT_DIRS,
-    };
-    #[cfg(target_os = "macos")]
-    use super::helpers::is_broken_launch_agent;
     #[cfg(target_os = "macos")]
     use super::macos::push_group_container_caches;
-    #[cfg(target_os = "macos")]
-    use super::system::push_log_dir_targets;
     use super::*;
 
     /// 扫描目标之间不能有父子嵌套。
@@ -493,7 +495,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn targets_do_not_nest() {
-        let targets = all_targets();
+        let targets = all_targets(None);
         for (a_idx, a) in targets.iter().enumerate() {
             for (b_idx, b) in targets.iter().enumerate() {
                 if a_idx == b_idx {
@@ -524,7 +526,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn no_sensitive_targets_in_default_selected() {
-        let targets = all_targets();
+        let targets = all_targets(None);
 
         // HTTPStorages 不应出现在任何清理目标中
         for t in &targets {
@@ -571,121 +573,6 @@ mod tests {
         }
     }
 
-    /// 绝不能出现在清理目标里的东西：配置、凭据、用户自己装的插件与技能。
-    ///
-    /// 这些目录名一旦被误加进 `CLI_AGENTS`，用户清一次就得重新登录、
-    /// 重装插件。用测试钉死比靠 review 可靠。
-    const NEVER_CLEAN: &[&str] = &[
-        "settings.json",
-        "config.toml",
-        "auth.json",
-        "oauth_creds.json",
-        ".credentials.json",
-        "memories",
-        "prompts",
-        "rules",
-        "skills",
-        "plugins",
-        "extensions",
-        "plans",
-        "brain",
-        "connectors",
-        "CLAUDE.md",
-        "AGENTS.md",
-        "GEMINI.md",
-    ];
-
-    #[test]
-    fn ai_agent_targets_never_touch_config_or_credentials() {
-        for (dir, label, subs) in CLI_AGENTS {
-            for sub in *subs {
-                assert!(
-                    !NEVER_CLEAN.contains(sub),
-                    "{label}（{dir}）把 {sub} 列成了可清理项，这会破坏用户配置"
-                );
-            }
-        }
-        for (dir, subs, label, _) in LOCAL_AGENT_DIRS {
-            for sub in *subs {
-                assert!(
-                    !NEVER_CLEAN.contains(sub),
-                    "{label}（{dir}）把 {sub} 列成了可清理项"
-                );
-            }
-        }
-    }
-
-    /// Electron 的会话态目录不能进清理表，否则用户会被踢下线。
-    #[test]
-    fn electron_cache_list_excludes_session_state() {
-        for stateful in [
-            "Service Worker",
-            "IndexedDB",
-            "Local Storage",
-            "Session Storage",
-        ] {
-            assert!(
-                !ELECTRON_CACHE_DIRS.contains(&stateful),
-                "{stateful} 存的是登录态/应用状态，不能当缓存清"
-            );
-        }
-    }
-
-    #[test]
-    fn ai_agent_recommendations_are_decided_per_target() {
-        let root = crate::core::testing::fixture("qc_agent_rules");
-        let home = root.join("home");
-        let local = root.join("local");
-        let roaming = root.join("roaming");
-        let mut targets = Vec::new();
-
-        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
-
-        let claude_cache = home.join(".claude/cache");
-        let claude_projects = home.join(".claude/projects");
-        let cursor_cache = roaming.join("Cursor/Cache");
-        let cursor_profiles = roaming.join("Cursor/CachedProfilesData");
-        let cursor_blobs = roaming.join("Cursor/blob_storage");
-        assert!(targets
-            .iter()
-            .any(|target| target.path == claude_cache && target.recommended));
-        assert!(targets
-            .iter()
-            .any(|target| target.path == cursor_cache && target.recommended));
-        assert!(targets
-            .iter()
-            .any(|target| target.path == claude_projects && !target.recommended));
-        for path in [cursor_profiles, cursor_blobs] {
-            assert!(targets
-                .iter()
-                .any(|target| target.path == path && !target.recommended));
-        }
-    }
-
-    #[test]
-    fn only_vscode_declared_obsolete_extensions_are_recommended() {
-        let root = crate::core::testing::fixture("qc_obsolete_ext");
-        let extensions = root.join(".vscode/extensions");
-        let old = extensions.join("example.tool-1.0.0");
-        let current = extensions.join("example.tool-2.0.0");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::write(
-            extensions.join(".obsolete"),
-            r#"{"example.tool-1.0.0":true,"example.tool-2.0.0":false,"../escape":true}"#,
-        )
-        .unwrap();
-        let mut targets = Vec::new();
-
-        push_obsolete_vscode_extensions(&mut targets, &root);
-
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].path, old);
-        assert!(targets[0].recommended);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn unknown_and_group_container_caches_require_manual_selection() {
@@ -717,401 +604,98 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// 混装目录按内容拆开：更新包叶子进「应用更新包」，形态不明的子项各自
-    /// 作为展示项入表，父目录不得再次入表。
+    /// 包缓存目标是**整个目录**，不切到「下载缓存」子层；单机可能只有一份的
+    /// 那些不预选。
     ///
-    /// 本机对应物是 `~/Library/Caches/com.google.antigravity`——同一个目录里
-    /// 既有 URLCache 的 `Cache.db`，又有 electron-updater 的 `pending/` 和
-    /// `update.zip`。整目录只能取一个默认值，注定错判。
+    /// 判据写在 `cache.rs`。切子层试过并被实测否掉：删 `~/.cargo/registry/cache`
+    /// 之后带 `.cargo-ok` 的 `registry/src` 还在，`cargo build --offline` 照样
+    /// 报 `failed to download`；删 `go/pkg/mod/cache` 之后按域名解包的目录还在，
+    /// `GOPROXY=off go build` 照样报 `module lookup disabled`。
+    ///
+    /// `go/pkg/mod` 还有第二条约束：`cleaner` 靠路径后缀把它路由到
+    /// `go clean -modcache`（见 `core::owner`），目标一旦指到子目录，路由就会
+    /// 静默失效退回裸删。所以这里连带钉死「子层不能是目标」。
     #[test]
     #[cfg(target_os = "macos")]
-    fn mixed_cache_dir_is_split_by_content() {
-        let root = crate::core::testing::fixture("qc_mixed_cache");
-        let caches = root.join("Library/Caches");
-        let mixed = caches.join("com.example.mixedapp");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(mixed.join("pending")).unwrap();
-        std::fs::write(mixed.join("pending/app.zip"), b"pkg").unwrap();
-        std::fs::write(mixed.join("update.zip"), b"pkg").unwrap();
-        std::fs::write(mixed.join("current.blockmap"), b"bm").unwrap();
-        std::fs::write(mixed.join("Cache.db"), b"db").unwrap();
-        std::fs::create_dir_all(mixed.join("fsCachedData")).unwrap();
-        // 没命中签名的目录：仍然整目录一项，不下钻
-        std::fs::create_dir_all(caches.join("example.plainapp/state")).unwrap();
-
-        let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
-        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
-
-        for leaf in ["pending", "update.zip", "current.blockmap"] {
-            let target = targets
-                .iter()
-                .find(|t| t.path == mixed.join(leaf))
-                .unwrap_or_else(|| panic!("更新包叶子 {leaf} 没有入表"));
-            assert_eq!(
-                target.category,
-                CategoryId::UpdaterPackages,
-                "{leaf} 归类错了"
-            );
-        }
-        for residual in ["Cache.db", "fsCachedData"] {
-            let target = targets
-                .iter()
-                .find(|t| t.path == mixed.join(residual))
-                .unwrap_or_else(|| panic!("拆开后 {residual} 不该从界面上消失"));
-            assert_eq!(target.category, CategoryId::UserTemp);
-            assert!(!target.recommended, "{residual} 形态不明，不能默认勾选");
-        }
-        assert!(!paths.contains(&&mixed), "父目录入了表，会和子项双算体积");
-
-        let plain = caches.join("example.plainapp");
-        assert!(paths.contains(&&plain), "未命中签名的目录仍应整目录展示");
-        assert!(
-            !paths.contains(&&plain.join("state")),
-            "没拆开的目录不该下钻"
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// 年龄门：刚下完的更新包只展示、不预选，滞留够久的才预选。
-    ///
-    /// Squirrel.Mac 换版时把暂存内容拷去 `/Applications`，此刻删掉它等于让
-    /// 一次正在进行的更新倒退；而 mtime 早就停住的目录说明那次事务要么完成
-    /// 要么被放弃，留在盘上的纯粹是垃圾。
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn fresh_update_package_is_not_preselected() {
-        let root = crate::core::testing::fixture("qc_updater_age");
-        let caches = root.join("Library/Caches");
-        let _ = std::fs::remove_dir_all(&root);
-        for (app, days) in [("example.staleapp", 30u64), ("example.freshapp", 0)] {
-            let dir = caches.join(app);
-            std::fs::create_dir_all(&dir).unwrap();
-            let pkg = dir.join("update.zip");
-            std::fs::write(&pkg, b"pkg").unwrap();
-            if days > 0 {
-                backdate(&pkg, days);
-            }
-        }
-
-        let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
-        let recommended = |app: &str| {
-            targets
-                .iter()
-                .find(|t| t.path == caches.join(app).join("update.zip"))
-                .map(|t| t.recommended)
-        };
-        assert_eq!(
-            recommended("example.staleapp"),
-            Some(true),
-            "滞留 30 天的更新包该预选"
-        );
-        assert_eq!(
-            recommended("example.freshapp"),
-            Some(false),
-            "刚下完的更新包必须仍然展示，但不能预选"
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// 把文件的 mtime 往前挪 `days` 天。
-    ///
-    /// std 只能这样改已打开文件的修改时间，改不了目录，所以年龄门只在文件
-    /// 叶子上验；目录叶子走同一把 `helpers::is_older_than`，逻辑没有分叉。
-    #[cfg(target_os = "macos")]
-    fn backdate(path: &std::path::Path, days: u64) {
-        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-        file.set_modified(
-            std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400),
-        )
-        .unwrap();
-    }
-
-    /// 只被部分认领的父目录：其余孩子必须入表。
-    ///
-    /// `browser.rs` 只认领 `Google/Chrome`，而旧写法把 `Google` 整个跳过，于是
-    /// 兄弟子项（GoogleUpdater 的下载目录那一类）在界面上彻底隐身——看不见也
-    /// 清不掉，比「不默认勾选」更糟。规范说得很清楚：展示不是成本，隐藏才是。
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn partially_claimed_parent_still_shows_its_other_children() {
-        let root = crate::core::testing::fixture("qc_partial_claim");
-        let caches = root.join("Library/Caches");
-        let google = caches.join("Google");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(google.join("Chrome/Default")).unwrap();
-        std::fs::create_dir_all(google.join("Software Update")).unwrap();
-        std::fs::create_dir_all(caches.join("Zed/logs")).unwrap();
-        std::fs::write(caches.join("Zed/ranges.txt"), b"x").unwrap();
-        std::fs::write(caches.join("Zed/update.zip"), b"pkg").unwrap();
-
-        let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
-        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
-
-        let sibling = google.join("Software Update");
-        let target = targets
-            .iter()
-            .find(|t| t.path == sibling)
-            .expect("未被认领的兄弟子项隐身了");
-        assert_eq!(target.category, CategoryId::UserTemp);
-        assert!(!target.recommended, "认不出它是什么，只能展示不能预选");
-        assert!(paths.contains(&&caches.join("Zed/ranges.txt")));
-        // 部分认领的目录也吃更新包探测：叶子进「应用更新包」，不会因为父目录
-        // 被特殊对待就降级成展示项
-        assert_eq!(
-            targets
-                .iter()
-                .find(|t| t.path == caches.join("Zed/update.zip"))
-                .map(|t| t.category),
-            Some(CategoryId::UpdaterPackages)
-        );
-
-        // 已入表的孩子和父目录本身都不能再进来：父子/同名都会双算体积
-        for forbidden in [
-            google.clone(),
-            google.join("Chrome"),
-            caches.join("Zed"),
-            caches.join("Zed/logs"),
-        ] {
-            assert!(
-                !paths.contains(&&forbidden),
-                "{:?} 已经由更具体的规则认领，重复入表会双算",
-                forbidden
-            );
-        }
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// Apple 自己的目录不做探测。
-    ///
-    /// 签名表是按第三方更新器的产物形态做的，对系统守护进程没有意义；而
-    /// `is_sensitive_apple_cache` 只列了确认危险的那些，其余 `com.apple.*`
-    /// 并不因此就算安全。
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn apple_owned_cache_dirs_are_never_probed() {
-        let root = crate::core::testing::fixture("qc_apple_cache");
-        let caches = root.join("Library/Caches");
-        let daemon = caches.join("com.apple.ExampleDaemon");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(daemon.join("pending")).unwrap();
-        std::fs::write(daemon.join("pending/payload.zip"), b"pkg").unwrap();
-        std::fs::write(daemon.join("update.zip"), b"pkg").unwrap();
-
-        let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
-
-        assert!(
-            !targets
-                .iter()
-                .any(|t| t.category == CategoryId::UpdaterPackages),
-            "com.apple.* 目录被探测了"
-        );
-        let target = targets
-            .iter()
-            .find(|t| t.path == daemon)
-            .expect("com.apple.* 目录仍应整项展示");
-        assert_eq!(target.category, CategoryId::UserTemp);
-        assert!(!target.recommended);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// `~/.cache` 里确认能重建的包缓存不能和认不出的目录混在一个桶里。
-    ///
-    /// uv 的缓存按 XDG 落在 `~/.cache/uv`，官方就有 `uv cache clean`，删了
-    /// 只是重下一遍——原来只有 `opencode` 被特判，其余一律 UserTemp 不勾，
-    /// 机器上 1 GB 出头的 uv 缓存就这么躺在需要手动勾选的那一堆里。
-    #[test]
-    fn rebuildable_home_cache_dirs_are_package_cache() {
-        let root = crate::core::testing::fixture("qc_home_cache");
-        let _ = std::fs::remove_dir_all(&root);
-        for name in ["uv", "pip", "some-tool-nobody-heard-of"] {
-            std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
-        }
-
-        let mut targets = Vec::new();
-        push_home_cache_targets(&mut targets, &root);
-
-        for name in ["uv", "pip"] {
-            let target = targets
-                .iter()
-                .find(|t| t.path == root.join(".cache").join(name))
-                .unwrap_or_else(|| panic!("~/.cache/{name} 没有入表"));
-            assert_eq!(
-                target.category,
-                CategoryId::PackageCache,
-                "~/.cache/{name} 归类错了"
-            );
-            assert!(target.recommended);
-        }
-        let unknown = targets
-            .iter()
-            .find(|t| t.path == root.join(".cache").join("some-tool-nobody-heard-of"))
-            .expect("表外的目录仍应展示");
-        assert_eq!(unknown.category, CategoryId::UserTemp);
-        assert!(!unknown.recommended);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// `~/Library/Logs` 按顶层子目录展开，黑名单里那几个不预选。
-    ///
-    /// 整目录一个目标等于把 N 个互不相干的所有者打包，用户只能全选或全不选；
-    /// 实机那里躺着 `OneDrive/…/general.keystore` 和当天的崩溃报告。
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn logs_are_split_by_owner_and_hazards_stay_unpreselected() {
-        let root = crate::core::testing::fixture("qc_logs");
-        let logs = root.join("Library/Logs");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(logs.join("Notion")).unwrap();
-        std::fs::create_dir_all(logs.join("DiagnosticReports")).unwrap();
-        std::fs::create_dir_all(logs.join("com.apple.CloudTelemetry")).unwrap();
-        std::fs::create_dir_all(logs.join("OneDrive/Personal")).unwrap();
-        std::fs::write(logs.join("OneDrive/Personal/general.keystore"), b"k").unwrap();
-        std::fs::write(logs.join("warp.log"), b"log").unwrap();
-        // 实机 `~/Library/Logs` 顶层真有这些：SQLite 的 telemetry 缓存与它的
-        // 事务侧文件，名字在 Logs 里但不是日志。
-        std::fs::write(logs.join("telemetryCache.otc"), b"sqlite").unwrap();
-        std::fs::write(logs.join("telemetryCache.otc-wal"), b"w").unwrap();
-        // 名字不在黑名单里，但内容说明它正被某个进程当数据库用
-        std::fs::create_dir_all(logs.join("Telemetry")).unwrap();
-        std::fs::write(logs.join("Telemetry/state.otc"), b"sqlite").unwrap();
-        std::fs::write(logs.join("Telemetry/state.otc-wal"), b"w").unwrap();
-
-        let mut targets = Vec::new();
-        push_log_dir_targets(&mut targets, &logs);
-        let entry = |rel: &str| targets.iter().find(|t| t.path == logs.join(rel));
-
-        assert_eq!(entry("Notion").map(|t| t.recommended), Some(true));
-        assert_eq!(
-            entry("warp.log").map(|t| t.recommended),
-            Some(true),
-            "顶层散落的单个日志也是目标，不能因为拆分反而漏掉"
-        );
-        for hazard in ["DiagnosticReports", "OneDrive", "com.apple.CloudTelemetry"] {
-            let target = entry(hazard).unwrap_or_else(|| panic!("{hazard} 仍然要展示"));
-            assert_eq!(
-                target.category,
-                CategoryId::Logs,
-                "{hazard} 该留在日志类目里"
-            );
-            assert!(!target.recommended, "{hazard} 不只有日志，不能预选");
-        }
-        for stray in ["telemetryCache.otc", "telemetryCache.otc-wal"] {
-            let target = entry(stray).expect("散落的非日志文件仍要展示");
-            assert!(
-                !target.recommended,
-                "{stray} 不是日志，不能因为住在 Logs 里就被默认删掉"
-            );
-        }
-        // 名字表之外的第二道关口：按内容判定
-        let telemetry = entry("Telemetry").expect("内容探测不该把目录从表里抹掉");
-        assert!(
-            !telemetry.recommended,
-            "顶层有 SQLite 事务侧文件的目录正被进程使用，不能预选"
-        );
-        assert!(
-            targets.iter().all(|t| t.path != logs),
-            "整目录一个目标会让用户无法分别决定"
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// 包缓存目标停在「下载缓存」这一层：解包树和索引不碰，父目录不入表。
-    ///
-    /// 判据写在 `cache.rs`。收窄之前 `~/.cargo/registry` 是整目录清空，实测本机
-    /// 等于「为回收 128M 的 `.crate` 压缩包，顺手删掉 1.0G 解包树 + 36M 索引」，
-    /// 而解包树正是 rust-analyzer 跳转和离线构建要读的东西。反向那组断言才是
-    /// 这次收窄真正的契约：它们必须压根不是目标，而不是"目标是但不预选"。
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn package_cache_targets_stop_at_the_download_cache() {
+    fn package_cache_targets_cover_whole_dirs_and_keep_owner_routing() {
         let home = dirs::home_dir().expect("测试需要真实 HOME");
-        let targets = all_targets();
+        let targets = all_targets(None);
         let entry = |rel: &str| targets.iter().find(|t| t.path == home.join(rel));
 
         for rel in [
             ".npm/_cacache",
-            ".cargo/registry/cache",
-            "go/pkg/mod/cache",
             ".pnpm-store",
             "Library/Caches/Homebrew",
             "Library/Caches/go-build",
         ] {
-            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 应作为下载缓存入表"));
+            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 应作为公共镜像入表"));
             assert_eq!(target.category, CategoryId::PackageCache, "{rel} 归类错了");
             assert!(target.recommended, "{rel} 删了最坏只是重下，该预选");
         }
 
-        // 私有仓的构件可能只有本机一份：展示，但不预选
-        let gradle = entry(".gradle/caches").expect("gradle 缓存仍然要展示");
-        assert!(!gradle.recommended, "gradle 可能只有本机一份，不能预选");
+        // 可能只有本机一份：展示，但不预选
+        for rel in [".cargo/registry", "go/pkg/mod", ".gradle/caches"] {
+            let target = entry(rel).unwrap_or_else(|| panic!("{rel} 仍然要展示"));
+            assert_eq!(target.category, CategoryId::PackageCache, "{rel} 归类错了");
+            assert!(!target.recommended, "{rel} 可能只有本机一份，不能预选");
+        }
+
+        // go 目标必须正好落在 owner 路由认得的那个路径上
+        let modcache = entry("go/pkg/mod").expect("go module 缓存要入表");
+        assert!(
+            crate::core::owner::is_go_modcache(&modcache.path),
+            "go 目标不再被 `is_go_modcache` 认出：`go clean -modcache` 路由已失效"
+        );
 
         for rel in [
-            ".cargo/registry",
+            ".cargo/registry/cache",
             ".cargo/registry/src",
             ".cargo/registry/index",
-            "go/pkg/mod",
+            "go/pkg/mod/cache",
         ] {
             assert!(
                 entry(rel).is_none(),
-                "{rel} 不该是清理目标——它是解包树或索引，不是下载缓存"
+                "{rel} 不该单独入表——切子层既救不了离线构建，还会打断 owner 路由"
             );
         }
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn broken_launch_agent_requires_conclusive_evidence() {
-        let root = crate::core::testing::fixture("qc_broken_launch_agent_tests");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let write = |name: &str, body: &str| {
-            let path = root.join(name);
-            std::fs::write(&path, body).unwrap();
-            path
-        };
-        let plist = |entry: &str| {
-            format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>{entry}</dict></plist>"#
-            )
-        };
-
-        let valid = write(
-            "valid.plist",
-            &plist("<key>Program</key><string>/bin/launchctl</string>"),
-        );
-        let missing = write(
-            "missing.plist",
-            &plist("<key>Program</key><string>/definitely/missing/quick-cleaner</string>"),
-        );
-        let relative = write(
-            "relative.plist",
-            &plist("<key>ProgramArguments</key><array><string>tool-on-path</string></array>"),
-        );
-        let empty = write("empty.plist", &plist(""));
-        // 语法根本不合法意味着“探测失败”，不是“确认损坏”；不能因此把
-        // 一个可能只是无权读取/临时写到一半的系统 LaunchAgent 放进删除候选。
-        let malformed = write("malformed.plist", "<plist><dict><key>Program");
-
-        assert!(!is_broken_launch_agent(&valid));
-        assert!(is_broken_launch_agent(&missing));
-        assert!(!is_broken_launch_agent(&relative));
-        assert!(is_broken_launch_agent(&empty));
-        assert!(
-            !is_broken_launch_agent(&malformed),
-            "语法非法只能判为探测失败，不能授权删除"
-        );
-        let _ = std::fs::remove_dir_all(root);
+    fn missing_home_keeps_system_scoped_targets() {
+        let targets = collect_targets(None, None);
+        #[cfg(windows)]
+        {
+            assert!(
+                targets.iter().any(|t| t
+                    .path
+                    .components()
+                    .any(|c| c.as_os_str() == "SoftwareDistribution")),
+                "主目录未知时仍应列出 Windows 更新缓存: {targets:?}"
+            );
+            assert!(
+                targets.iter().any(|t| t.category == CategoryId::SystemTemp),
+                "主目录未知时系统临时目标不能整表消失"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            for t in &targets {
+                let path = t.path.to_string_lossy();
+                assert!(
+                    !path.contains("Library/Application Support"),
+                    "没有 home 不该扫用户 Application Support: {path}"
+                );
+                assert!(
+                    !path.contains("Library/Caches"),
+                    "没有 home 不该扫用户 Caches: {path}"
+                );
+            }
+        }
     }
 
     #[test]
     fn all_targets_are_absolute_and_categorised() {
-        for t in all_targets() {
+        for t in all_targets(None) {
             // 虚拟路径（APFS 本地快照）不是文件系统路径，跳过绝对路径检查
             if crate::core::model::is_virtual_path(&t.path) {
                 // 仍然检查标签
@@ -1146,7 +730,7 @@ mod tests {
     /// 用一个虚拟子项探测这件事：子项受保护 ⇔ 该目标整体不可清理。
     #[test]
     fn every_target_has_cleanable_contents() {
-        for t in all_targets() {
+        for t in all_targets(None) {
             if matches!(
                 t.category,
                 CategoryId::RecycleBin | CategoryId::BrokenLoginItems
@@ -1171,7 +755,7 @@ mod tests {
     /// 打印本机实际命中的 AI agent 目录，用 `--nocapture` 查看。
     #[test]
     fn report_existing_ai_agent_targets() {
-        let all = all_targets();
+        let all = all_targets(None);
         let agent: Vec<_> = all
             .iter()
             .filter(|t| t.category.is_developer() && t.path.exists())

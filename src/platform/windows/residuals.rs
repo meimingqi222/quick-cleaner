@@ -473,12 +473,12 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 
     let mut roots: Vec<PathBuf> = Vec::new();
-    roots.extend(
-        [dirs::data_dir(), dirs::data_local_dir()]
-            .into_iter()
-            .flatten(),
-    );
-    if let Some(local) = dirs::data_local_dir() {
+    // 主目录不可信时跳过用户级根：环境变量里的系统级根不受影响。
+    if let Some(roaming) = super::user_env::real_user_roaming_appdata() {
+        roots.push(roaming);
+    }
+    if let Some(local) = super::user_env::real_user_local_appdata() {
+        roots.push(local.clone());
         roots.push(local.join("Programs"));
         roots.push(local.join(r"VirtualStore\Program Files"));
         roots.push(local.join(r"VirtualStore\Program Files (x86)"));
@@ -538,12 +538,11 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         return;
     }
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    // 主目录不可信时只扫系统级根（ProgramData / PUBLIC）。
+    if let Some(home) = super::user_env::real_user_home() {
         roots.push(home.join("Desktop"));
-        roots.push(home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs"));
-        roots.push(home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"));
     }
-    if let Some(roaming) = dirs::data_dir() {
+    if let Some(roaming) = super::user_env::real_user_roaming_appdata() {
         roots.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs"));
         roots.push(roaming.join(r"Microsoft\Windows\Start Menu\Programs\Startup"));
     }
@@ -1182,7 +1181,7 @@ fn scan_crash_dumps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     if ctx.exe_names.is_empty() {
         return;
     }
-    let Some(local) = dirs::data_local_dir() else {
+    let Some(local) = super::user_env::real_user_local_appdata() else {
         return;
     };
     let dir = local.join("CrashDumps");

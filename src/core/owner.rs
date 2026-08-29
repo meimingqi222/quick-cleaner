@@ -94,8 +94,8 @@ pub fn pnpm_store_prune(target: &Path) -> Option<bool> {
     // 用分隔符收尾的「前缀」判定，避免 `~/.pnpm-store` 误中 `~/.pnpm-store-evil`。
     let store_norm = crate::core::safety::norm(Path::new(&store_path));
     let target_norm = crate::core::safety::norm(target);
-    let matches = store_norm == target_norm
-        || store_norm.starts_with(&format!("{}\\", target_norm));
+    let matches =
+        store_norm == target_norm || store_norm.starts_with(&format!("{}\\", target_norm));
     if store_path.is_empty() || !matches {
         return None;
     }
@@ -118,9 +118,7 @@ mod tests {
 
     #[test]
     fn pnpm_store_recognized_by_suffix() {
-        assert!(is_pnpm_store(&PathBuf::from(
-            "/Users/u/Library/pnpm/store"
-        )));
+        assert!(is_pnpm_store(&PathBuf::from("/Users/u/Library/pnpm/store")));
         // 默认 macOS/Linux 布局，最常被漏掉的那条
         assert!(is_pnpm_store(&PathBuf::from("/Users/u/.pnpm-store")));
         assert!(is_pnpm_store(&PathBuf::from(

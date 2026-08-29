@@ -11,7 +11,9 @@ pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     let _ = home;
     #[cfg(windows)]
     {
-        let local = crate::platform::windows::real_user_local_appdata();
+        let Some(local) = crate::platform::user_cache_dir() else {
+            return;
+        };
 
         // 浏览器缓存（全量覆盖 Default 及所有 Profile 1, Profile 2 ... 配置文件）
         push_chromium_browser_targets(t, &local.join("Google\\Chrome\\User Data"), "Chrome");

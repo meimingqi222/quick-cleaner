@@ -19,6 +19,16 @@ pub enum ConfirmKind {
     CleanPath(PathBuf, u64),
     CleanDiskSelected,
     UninstallApp(Box<InstalledApp>),
+    /// 结束一个进程（状态监控页）。`pid` + 进程名。
+    KillProcess {
+        pid: u32,
+        start_time: u64,
+        unique_id: Option<u64>,
+        name: String,
+    },
+    /// 安装风扇特权守护进程，装完后施加这个档位（状态监控页）。
+    /// 装系统组件是持久化改动，要在应用内讲清楚再走系统密码框。
+    InstallFanHelper(crate::core::status::FanMode),
 }
 
 #[derive(Clone, Debug)]
@@ -41,10 +51,17 @@ pub fn render_confirm_dialog(
     let lang = root.language;
     let cancel_label = tr_btn_cancel(lang);
     let is_uninstall = matches!(&req.kind, ConfirmKind::UninstallApp(_));
+    let is_kill = matches!(&req.kind, ConfirmKind::KillProcess { .. });
+    let is_fan_install = matches!(&req.kind, ConfirmKind::InstallFanHelper(_));
     let confirm_label = match &req.kind {
         ConfirmKind::UninstallApp(_) => match lang {
             Language::Zh => "确认卸载",
             Language::En => "Uninstall",
+        },
+        ConfirmKind::KillProcess { .. } => tr_confirm_kill_title(lang),
+        ConfirmKind::InstallFanHelper(_) => match lang {
+            Language::Zh => "安装",
+            Language::En => "Install",
         },
         _ => match lang {
             Language::Zh => "确认永久删除",
@@ -52,13 +69,19 @@ pub fn render_confirm_dialog(
         },
     };
 
-    let badge = if is_uninstall {
+    let badge = if is_uninstall || is_fan_install {
         icon_badge(icon_apps(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 40.)
+    } else if is_kill {
+        icon_badge(icon_shield(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.)
     } else {
         icon_badge(icon_trash(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.)
     };
 
-    let detail_color = if is_uninstall { OUTLINE } else { ERROR };
+    let detail_color = if is_uninstall || is_fan_install {
+        OUTLINE
+    } else {
+        ERROR
+    };
 
     div()
         .absolute()
@@ -129,7 +152,11 @@ pub fn render_confirm_dialog(
                         .child(
                             div()
                                 .id("confirm-accept")
-                                .child(danger_button(confirm_label.to_string(), true))
+                                .child(if is_fan_install {
+                                    primary_button(confirm_label.to_string(), true)
+                                } else {
+                                    danger_button(confirm_label.to_string(), true)
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm_accept(cx);
                                 })),

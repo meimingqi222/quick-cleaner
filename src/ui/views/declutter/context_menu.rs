@@ -1,7 +1,7 @@
 //! 冗余整理右键悬浮上下文菜单 (Declutter Context Menu)
 
-use crate::ui::i18n::*;
 use crate::ui::components::icons::{icon_folder_large, icon_search, icon_zip};
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::prelude::*;

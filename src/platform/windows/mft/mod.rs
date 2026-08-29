@@ -4,8 +4,9 @@ mod mft_parser;
 mod mft_scanner;
 mod mft_types;
 
+pub use crate::core::disk::{DirUsage, Node, ScanError};
 pub use mft_scanner::scan_volume;
-pub use mft_types::{DirUsage, Node, ScanError, ScanResult, SizeTree, ROOT_RECORD};
+pub use mft_types::{ScanResult, SizeTree, ROOT_RECORD};
 
 #[cfg(test)]
 mod tests {

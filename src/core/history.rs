@@ -56,8 +56,7 @@ pub fn record(
     failed: usize,
     freed_bytes: u64,
 ) {
-    let Some(path) = crate::core::settings::config_dir().map(|d| d.join("history.jsonl"))
-    else {
+    let Some(path) = crate::core::settings::config_dir().map(|d| d.join("history.jsonl")) else {
         return;
     };
     if let Some(dir) = path.parent() {
@@ -66,7 +65,9 @@ pub fn record(
         }
     }
     let entry = HistoryEntry {
-        ts: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+        ts: chrono::Local::now()
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
         action,
         targets: targets
             .iter()

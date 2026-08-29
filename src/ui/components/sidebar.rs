@@ -11,6 +11,7 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedStr
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Dashboard,
+    Status,
     Junk,
     Apps,
     Disk,
@@ -19,8 +20,9 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 6] = [
+    pub const ALL: [View; 7] = [
         View::Dashboard,
+        View::Status,
         View::Junk,
         View::Apps,
         View::Disk,
@@ -38,6 +40,8 @@ impl View {
         match (self, lang) {
             (View::Dashboard, Language::Zh) => "概览扫描",
             (View::Dashboard, Language::En) => "Overview",
+            (View::Status, Language::Zh) => "状态监控",
+            (View::Status, Language::En) => "Status",
             (View::Junk, Language::Zh) => "智能清理",
             (View::Junk, Language::En) => "Smart Clean",
             (View::Apps, Language::Zh) => "软件管理",
@@ -54,6 +58,7 @@ impl View {
     pub fn render_icon(&self, fg: u32) -> AnyElement {
         match self {
             View::Dashboard => icon_dashboard(fg, 18.),
+            View::Status => icon_pulse(fg, 18.),
             View::Junk => icon_trash(fg, 18.),
             View::Apps => icon_apps(fg, 18.),
             View::Disk => icon_disk(fg, 18.),
@@ -108,6 +113,9 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.view = v;
+                if v == View::Status {
+                    this.start_status_monitor(cx);
+                }
                 if v == View::Disk && this.disk.mft.is_none() && this.disk.error.is_none() {
                     this.start_mft_scan(cx);
                 }

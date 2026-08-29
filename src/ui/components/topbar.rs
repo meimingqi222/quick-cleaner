@@ -18,6 +18,8 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
 
     let (busy, label) = match root.view {
         View::Dashboard | View::Junk => (is_junk_busy, tr_btn_rescan(lang, is_junk_busy)),
+        // 状态页的采样常驻后台，按钮永远可点（只是对齐一次节拍）
+        View::Status => (false, tr_btn_rescan(lang, false)),
         View::Apps => (is_apps_busy, tr_btn_refresh_apps(lang, is_apps_busy)),
         View::Disk => (is_mft_busy, tr_btn_reanalyze_disk(lang, is_mft_busy)),
         View::Declutter => (is_declutter_busy, tr_btn_rescan(lang, is_declutter_busy)),
@@ -147,6 +149,10 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 if !this.junk.scanning && !this.clean.running {
                                     this.start_scan(cx);
                                 }
+                            }
+                            // 状态页的轮询常驻，重扫按钮无意义，点了只对齐采样节拍
+                            View::Status => {
+                                this.start_status_monitor(cx);
                             }
                             View::Apps => {
                                 if !this.apps.scanning && !this.residual.scanning {

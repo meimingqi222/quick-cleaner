@@ -941,7 +941,8 @@ fn is_launch_agent_plist(path: &Path) -> bool {
         return false;
     };
     parent == Path::new("/Library/LaunchAgents")
-        || dirs::home_dir().is_some_and(|home| parent == home.join("Library/LaunchAgents"))
+        || crate::platform::user_home()
+            .is_some_and(|home| parent == home.join("Library/LaunchAgents"))
 }
 
 /// 删除一个 Docker 镜像引用。
