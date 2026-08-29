@@ -153,8 +153,7 @@ fn scan_fixed_inner(
             // 白名单条目的父目录：整树清理会连带碰被保护子项，删除层
             // 虽然拦得住，但与其让用户看到一次「失败的清理」，不如默认
             // 不勾（仍展示，仍可手动选）。嵌套语义见 core::whitelist。
-            let recommended =
-                t.recommended && !crate::core::whitelist::has_entry_under(&t.path);
+            let recommended = t.recommended && !crate::core::whitelist::has_entry_under(&t.path);
             // 虚拟路径不走文件系统：APFS 快照是 COW 的取不到体积，记 0；
             // Docker 镜像在发现阶段就带上了真实体积（size_hint）。
             if is_virtual_path(&t.path) {
@@ -438,8 +437,7 @@ pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>, part
     }) {
         // 压着白名单条目的父目录降级默认勾选（发现式类目当前 recommended
         // 全是 false，这行为将来引入推荐的发现式类目时兜底，不留例外）
-        item.recommended =
-            item.recommended && !crate::core::whitelist::has_entry_under(&item.path);
+        item.recommended = item.recommended && !crate::core::whitelist::has_entry_under(&item.path);
         by_cat.entry(item.category).or_default().push(item);
     }
 
@@ -749,7 +747,8 @@ mod tests {
 
     #[test]
     fn fixed_file_target_reports_its_real_size() {
-        let path = std::env::temp_dir().join("qc_scan_single_file");
+        let path =
+            std::env::temp_dir().join(format!("{}_{}", "qc_scan_single_file", std::process::id()));
         std::fs::write(&path, b"metadata").unwrap();
         let live = AtomicBool::new(true);
 
@@ -769,7 +768,8 @@ mod tests {
     fn fixed_scan_rejects_symlink_root() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("qc_scan_symlink_root");
+        let root =
+            std::env::temp_dir().join(format!("{}_{}", "qc_scan_symlink_root", std::process::id()));
         let target = root.join("target");
         let link = root.join("link");
         let _ = std::fs::remove_dir_all(&root);
@@ -809,7 +809,7 @@ mod tests {
             total_size: items.iter().map(|i| i.size).sum(),
             category: cat,
             items,
-        partial: false,
+            partial: false,
         }
     }
 
@@ -964,7 +964,7 @@ mod tests {
 
     /// 造一个真实存在的临时目录，供「合并前过滤已不存在的路径」那条规则用。
     fn real_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("qc_merge_{tag}"));
+        let p = std::env::temp_dir().join(format!("qc_merge_{tag}_{}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -976,7 +976,7 @@ mod tests {
                 category: c,
                 total_size: 0,
                 items: Vec::new(),
-            partial: false,
+                partial: false,
             })
             .collect()
     }
@@ -1009,7 +1009,11 @@ mod tests {
     /// 那些路径不能再并进列表，否则界面上会出现清不掉的幽灵条目。
     #[test]
     fn vanished_paths_are_dropped_on_merge() {
-        let gone = std::env::temp_dir().join("qc_merge_definitely_not_here_8f21");
+        let gone = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_merge_definitely_not_here_8f21",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&gone);
         assert!(!gone.exists());
 

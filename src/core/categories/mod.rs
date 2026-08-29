@@ -1050,7 +1050,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn broken_launch_agent_requires_conclusive_evidence() {
-        let root = std::env::temp_dir().join("qc_broken_launch_agent_tests");
+        let root = std::env::temp_dir().join(format!("{}_{}", "qc_broken_launch_agent_tests", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let write = |name: &str, body: &str| {

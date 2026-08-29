@@ -459,8 +459,12 @@ static CACHE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 pub(crate) fn isolate_cache_dir(test_name: &str) -> std::sync::MutexGuard<'static, ()> {
     let guard = CACHE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 必须带 pid：`CACHE_ENV_LOCK` 只在**单个进程内**串行，而同时存在两个
+    // 测试二进制是常态（上一次运行没退干净、CI 并发、手工重跑）。不带 pid
+    // 时它们指向同一个目录，一方的 `remove_dir_all` 会清掉另一方正在读的
+    // 索引，症状是「应当能读出索引 NotFound」「现役索引不能被回收」。
     let dir = std::env::temp_dir()
-        .join("quick-cleaner-test-cache")
+        .join(format!("quick-cleaner-test-cache_{}", std::process::id()))
         .join(test_name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时缓存目录失败");
@@ -517,7 +521,8 @@ mod tests {
         let dir = cache_dir().unwrap();
 
         // 用真实存在的目录：覆盖判定要 stat 设备号，虚构路径判不出同卷。
-        let base = std::env::temp_dir().join("qc_orphan_prune_base");
+        let base =
+            std::env::temp_dir().join(format!("{}_{}", "qc_orphan_prune_base", std::process::id()));
         let nested = base.join("nested");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&nested).unwrap();
@@ -578,7 +583,7 @@ mod tests {
 
     #[test]
     fn index_tree_round_trip_preserves_sizes() {
-        let root = PathBuf::from("/tmp/qc-index-root");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-index-root", std::process::id()));
         let volume = VolumeId::from_mount_point(root.clone());
         let tree = SizeTree::from_snapshot(
             volume.clone(),
@@ -617,7 +622,11 @@ mod tests {
     #[test]
     fn older_async_save_cannot_overwrite_newer_watermark() {
         let _guard = isolate_cache_dir("index_watermark_order");
-        let volume = VolumeId::from_mount_point(PathBuf::from("/tmp/qc-watermark"));
+        let volume = VolumeId::from_mount_point(PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-watermark",
+            std::process::id()
+        )));
         let newer = test_scan(volume.clone(), 8192);
         let older = test_scan(volume.clone(), 4096);
 
@@ -693,7 +702,7 @@ mod tests {
     #[test]
     fn v7_mmap_round_trip_keeps_nested_search_and_children() {
         let _guard = isolate_cache_dir("v7_mmap_nested_search");
-        let root = PathBuf::from("/tmp/qc-v7-nested");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-nested", std::process::id()));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 7);
         let loaded = load_index(&volume).expect("v7 索引应当能 mmap 加载");
@@ -721,7 +730,7 @@ mod tests {
     #[test]
     fn v7_rejects_corrupt_checksum() {
         let _guard = isolate_cache_dir("v7_bad_checksum");
-        let root = PathBuf::from("/tmp/qc-v7-checksum");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-checksum", std::process::id()));
         let (volume, scan) = snapshot_tree(root, 1024);
         save_index(&volume, &scan, 1);
         let path = index_path(&volume).expect("应当有索引路径");
@@ -739,7 +748,11 @@ mod tests {
     #[test]
     fn v7_rejects_corrupt_header_watermark() {
         let _guard = isolate_cache_dir("v7_bad_header_watermark");
-        let root = PathBuf::from("/tmp/qc-v7-header-watermark");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-header-watermark",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root, 1024);
         save_index(&volume, &scan, 7);
         let path = index_path(&volume).expect("应当有索引路径");
@@ -755,7 +768,7 @@ mod tests {
     #[test]
     fn v7_rejects_bad_csr_sentinel_even_with_checksum() {
         let _guard = isolate_cache_dir("v7_bad_csr_sentinel");
-        let root = PathBuf::from("/tmp/qc-v7-csr");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-csr", std::process::id()));
         let (volume, scan) = snapshot_tree(root, 2048);
         save_index(&volume, &scan, 1);
         let path = index_path(&volume).expect("应当有索引路径");
@@ -775,7 +788,11 @@ mod tests {
     #[test]
     fn v7_rejects_duplicate_csr_child_even_with_checksum() {
         let _guard = isolate_cache_dir("v7_duplicate_csr_child");
-        let root = PathBuf::from("/tmp/qc-v7-duplicate-child");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-duplicate-child",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root, 2048);
         save_index(&volume, &scan, 1);
         let path = index_path(&volume).expect("应当有索引路径");
@@ -797,7 +814,7 @@ mod tests {
     #[test]
     fn v7_rejects_forward_parent_even_with_checksum() {
         let _guard = isolate_cache_dir("v7_bad_parent");
-        let root = PathBuf::from("/tmp/qc-v7-parent");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-parent", std::process::id()));
         let (volume, scan) = snapshot_tree(root, 2048);
         save_index(&volume, &scan, 1);
         let path = index_path(&volume).expect("应当有索引路径");
@@ -819,7 +836,7 @@ mod tests {
     #[test]
     fn mmap_overlay_upsert_is_private_to_clone() {
         let _guard = isolate_cache_dir("v7_mmap_overlay");
-        let root = PathBuf::from("/tmp/qc-v7-overlay");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-overlay", std::process::id()));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 3);
         let loaded = load_index(&volume).expect("应当能加载");
@@ -858,7 +875,11 @@ mod tests {
     #[test]
     fn clone_of_modified_mmap_tree_keeps_delta() {
         let _guard = isolate_cache_dir("v7_clone_keeps_delta");
-        let root = PathBuf::from("/tmp/qc-v7-clone-delta");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-clone-delta",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 1);
         let loaded = load_index(&volume).expect("应当能加载");
@@ -910,7 +931,11 @@ mod tests {
     #[test]
     fn empty_delta_persists_new_watermark() {
         let _guard = isolate_cache_dir("v7_empty_delta_watermark");
-        let root = PathBuf::from("/tmp/qc-v7-empty-delta");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-empty-delta",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root, 4096);
         save_index(&volume, &scan, 1);
         let loaded = load_index(&volume).expect("应当能加载 base");
@@ -928,7 +953,7 @@ mod tests {
     #[test]
     fn delta_save_round_trip_preserves_incremental_state() {
         let _guard = isolate_cache_dir("v7_delta_round_trip");
-        let root = PathBuf::from("/tmp/qc-v7-delta-rt");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-delta-rt", std::process::id()));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 1);
 
@@ -986,7 +1011,11 @@ mod tests {
     #[test]
     fn corrupt_delta_parent_falls_back_to_clean_base() {
         let _guard = isolate_cache_dir("v7_delta_bad_parent");
-        let root = PathBuf::from("/tmp/qc-v7-delta-bad-parent");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-delta-bad-parent",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 1);
         let loaded = load_index(&volume).expect("应当能加载 base");
@@ -1036,7 +1065,7 @@ mod tests {
 
     #[test]
     fn empty_search_returns_bounded_descending_top_n() {
-        let root = PathBuf::from("/tmp/qc-search-top-n");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-search-top-n", std::process::id()));
         let volume = VolumeId::from_mount_point(root.clone());
         let tree = SizeTree::from_snapshot(
             volume,
@@ -1079,7 +1108,11 @@ mod tests {
 
     #[test]
     fn superseded_search_stops_without_results() {
-        let root = PathBuf::from("/tmp/qc-search-cancel");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-search-cancel",
+            std::process::id()
+        ));
         let volume = VolumeId::from_mount_point(root.clone());
         let mut snapshot = Vec::with_capacity(10_001);
         snapshot.push(TreeSnapshotEntry {
@@ -1114,7 +1147,7 @@ mod tests {
     #[test]
     fn streaming_compaction_round_trip_with_delta() {
         let _guard = isolate_cache_dir("v7_streaming_compact");
-        let root = PathBuf::from("/tmp/qc-v7-streaming");
+        let root = PathBuf::from(format!("{}_{}", "/tmp/qc-v7-streaming", std::process::id()));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 1);
         let loaded = load_index(&volume).expect("应当能加载");
@@ -1125,7 +1158,11 @@ mod tests {
             .expect("pkg 应当存在");
         tree.remove_subtree_inplace(pkg);
 
-        let out = std::env::temp_dir().join("qc-v7-streaming-out.bin");
+        let out = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc-v7-streaming-out.bin",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&out);
         let meta = crate::platform::macos::disk_tree::IndexMeta {
             mount: volume.mount_point().to_string_lossy().into_owned(),
@@ -1170,7 +1207,11 @@ mod tests {
     #[test]
     fn full_rewrite_removes_stale_delta() {
         let _guard = isolate_cache_dir("v7_stale_delta");
-        let root = PathBuf::from("/tmp/qc-v7-stale-delta");
+        let root = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc-v7-stale-delta",
+            std::process::id()
+        ));
         let (volume, scan) = snapshot_tree(root.clone(), 4096);
         save_index(&volume, &scan, 1);
         let loaded = load_index(&volume).expect("应当能加载");
@@ -1437,7 +1478,7 @@ mod tests {
     fn streaming_compaction_memory_gate() {
         let volume = VolumeId::from_mount_point(PathBuf::from("/"));
         let real = index_path(&volume).expect("应当有索引路径");
-        let dir = std::env::temp_dir().join("qc-mem-gate");
+        let dir = std::env::temp_dir().join(format!("{}_{}", "qc-mem-gate", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let copy = dir.join("index-copy.bin");

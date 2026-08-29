@@ -33,6 +33,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
+use rayon::prelude::*;
+#[cfg(target_os = "macos")]
 use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::ffi::{OsStr, OsString};
@@ -287,7 +289,10 @@ struct ProcRecord {
 /// 退出码/输出为空或被截断），调用方必须按 fail closed 处理。
 #[cfg(target_os = "macos")]
 fn ps_snapshot() -> Option<Vec<ProcRecord>> {
-    let out = Command::new("/bin/ps").args(["-axo", "pid=,ppid=,comm="]).output().ok()?;
+    let out = Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid=,comm="])
+        .output()
+        .ok()?;
     if !ps_output_is_usable(out.status.success(), &out.stdout) {
         return None;
     }
@@ -609,8 +614,11 @@ fn mark_spot_open_paths(
 #[cfg(target_os = "macos")]
 fn spot_check_macos(paths: &[PathBuf]) -> HashMap<PathBuf, SpotCheck> {
     // 默认全部 Clear，后面只在发现占用/测不出的时候覆盖。
-    let mut result: HashMap<PathBuf, SpotCheck> =
-        paths.iter().cloned().map(|p| (p, SpotCheck::Clear)).collect();
+    let mut result: HashMap<PathBuf, SpotCheck> = paths
+        .iter()
+        .cloned()
+        .map(|p| (p, SpotCheck::Clear))
+        .collect();
 
     // 不存在的路径（已经被删掉、还没落地，或者压根不是真实文件系统路径——
     // 比如 Docker 镜像/本地快照编码出来的虚拟"路径"）没法用名字去问内核
@@ -650,35 +658,53 @@ fn spot_check_macos(paths: &[PathBuf]) -> HashMap<PathBuf, SpotCheck> {
         }
     }
 
-    for batch in spot_check_batches(existing) {
-        let args = spot_check_args(&batch);
+    // 每批独立：一个巨型 `+D` 目录超时只影响它自己那一组，不拖累其它批。
+    // 批次之间没有共享可变状态（`want`/`excluded` 只读），用 rayon 并行把
+    // 墙钟从「各批耗时之和」压到「最慢一批」。本机 97 个目录串行约 30 秒，
+    // 并行后约等于单个 `+D` 的耗时（约 1 秒）。
+    let overrides: HashMap<PathBuf, SpotCheck> = spot_check_batches(existing)
+        .into_par_iter()
+        .map(|batch| spot_check_batch_overrides(&batch, &want, &excluded))
+        .reduce(HashMap::new, |mut acc, part| {
+            acc.extend(part);
+            acc
+        });
+    result.extend(overrides);
+    result
+}
 
-        match run_lsof(&args, SPOT_CHECK_TIMEOUT) {
-            None => {
-                // 连子进程都没跑起来/等到超时被杀掉：这一批全部测不出。
-                for p in &batch {
-                    result.insert(p.clone(), SpotCheck::Unknown);
-                }
+/// 单批复检的覆盖结果：只产出 `Busy`/`Unknown`，`Clear` 是默认值不进表。
+///
+/// 抽成独立函数是为了能在不真的跑 `lsof` 的前提下，对「一批输入 → 一张
+/// 覆盖表」的映射写单测（见 `spot_check_is_noop_off_macos` 同级的测试）。
+#[cfg(target_os = "macos")]
+fn spot_check_batch_overrides(
+    batch: &[PathBuf],
+    want: &HashMap<PathBuf, PathBuf>,
+    excluded: &HashSet<u32>,
+) -> HashMap<PathBuf, SpotCheck> {
+    let mut out: HashMap<PathBuf, SpotCheck> = HashMap::new();
+    match run_lsof(&spot_check_args(batch), SPOT_CHECK_TIMEOUT) {
+        None => {
+            // 连子进程都没跑起来/等到超时被杀掉：这一批全部测不出。
+            for p in batch {
+                out.insert(p.clone(), SpotCheck::Unknown);
             }
-            Some(run) if spot_lsof_result_is_usable(&run) => {
-                // exit 1 既可能是“没有匹配”，也可能带着 +D 找到的记录；
-                // 两种情况都要解析 stdout，不能只看退出状态。
-                mark_spot_open_paths(
-                    &mut result,
-                    &want,
-                    extract_lsof_paths(&run.stdout, &excluded),
-                );
-            }
-            Some(_) => {
-                // 其它退出状态、错误输出或截断输出都测不出。尤其被信号终止
-                // 时 exit_code=None，空 stderr 也不能维持默认 Clear。
-                for p in &batch {
-                    result.insert(p.clone(), SpotCheck::Unknown);
-                }
+        }
+        Some(run) if spot_lsof_result_is_usable(&run) => {
+            // exit 1 既可能是“没有匹配”，也可能带着 +D 找到的记录；
+            // 两种情况都要解析 stdout，不能只看退出状态。
+            mark_spot_open_paths(&mut out, want, extract_lsof_paths(&run.stdout, excluded));
+        }
+        Some(_) => {
+            // 其它退出状态、错误输出或截断输出都测不出。尤其被信号终止
+            // 时 exit_code=None，空 stderr 也不能维持默认 Clear。
+            for p in batch {
+                out.insert(p.clone(), SpotCheck::Unknown);
             }
         }
     }
-    result
+    out
 }
 
 #[cfg(test)]
@@ -701,9 +727,15 @@ mod tests {
         );
         // 456 在排除集合里：那一组的路径整组丢掉，包括 cwd 与 DIR 句柄
         let excl: HashSet<u32> = [456].into_iter().collect();
-        assert_eq!(extract_lsof_paths(raw, &excl), vec![PathBuf::from("/Users/x/a.txt")]);
+        assert_eq!(
+            extract_lsof_paths(raw, &excl),
+            vec![PathBuf::from("/Users/x/a.txt")]
+        );
         // pid 解析不出来（异常输出）时按"不是被排除的"处理，宁可多收不误漏
-        assert_eq!(extract_lsof_paths(b"p??\0n/Users/x/b.txt\0", &none).len(), 1);
+        assert_eq!(
+            extract_lsof_paths(b"p??\0n/Users/x/b.txt\0", &none).len(),
+            1
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -957,7 +989,7 @@ mod tests {
             category: CategoryId::UserTemp,
             total_size: 2,
             items: vec![item("/a"), item("/b")],
-        partial: false,
+            partial: false,
         }];
         let mut busy: HashMap<PathBuf, Busy> = HashMap::new();
         busy.insert(
@@ -990,7 +1022,11 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn spot_check_fallback_marks_live_database_file_busy_not_the_parent_dir() {
-        let base = std::env::temp_dir().join("qc_spot_fallback_live_db");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_spot_fallback_live_db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let db = base.join("cache.db");
@@ -1012,7 +1048,11 @@ mod tests {
     fn spot_check_clears_nonexistent_paths_without_calling_lsof() {
         // 不存在的路径不该被送进 lsof 参数列表（会拖累整批报错），直接
         // 判 Clear。用一个几乎不可能存在的路径验证。
-        let ghost = PathBuf::from("/tmp/qc_inuse_spot_ghost_does_not_exist_xyz");
+        let ghost = PathBuf::from(format!(
+            "{}_{}",
+            "/tmp/qc_inuse_spot_ghost_does_not_exist_xyz",
+            std::process::id()
+        ));
         let result = spot_check(std::slice::from_ref(&ghost));
         assert_eq!(result.get(&ghost), Some(&SpotCheck::Clear));
     }
@@ -1020,7 +1060,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn spot_check_uses_recursive_lsof_for_directories() {
-        let base = std::env::temp_dir().join("qc_spot_check_args");
+        let base =
+            std::env::temp_dir().join(format!("{}_{}", "qc_spot_check_args", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let file = base.join("one.bin");
@@ -1042,7 +1083,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn recursive_directories_do_not_share_a_spot_check_batch() {
-        let base = std::env::temp_dir().join("qc_spot_check_batches");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_spot_check_batches",
+            std::process::id()
+        ));
         let first = base.join("first");
         let second = base.join("second");
         let file = base.join("one.bin");
@@ -1060,17 +1105,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn recursive_lsof_descendant_marks_the_target_busy() {
-        let raw = PathBuf::from("/tmp/qc-cache");
+        let raw = PathBuf::from(format!("{}_{}", "/tmp/qc-cache", std::process::id()));
         let canonical = PathBuf::from("/private/tmp/qc-cache");
         let mut want = HashMap::new();
         want.insert(canonical.clone(), raw.clone());
         let mut result = HashMap::from([(raw.clone(), SpotCheck::Clear)]);
 
-        mark_spot_open_paths(
-            &mut result,
-            &want,
-            [canonical.join("nested/open.bin")],
-        );
+        mark_spot_open_paths(&mut result, &want, [canonical.join("nested/open.bin")]);
 
         assert_eq!(result.get(&raw), Some(&SpotCheck::Busy));
     }

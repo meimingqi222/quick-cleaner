@@ -410,7 +410,10 @@ pub fn sqlite_family_key(name: &str) -> Option<String> {
             return Some(base.to_string());
         }
     }
-    if SQLITE_MAIN_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+    if SQLITE_MAIN_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
         return Some(lower);
     }
     None
@@ -447,7 +450,9 @@ pub fn holds_live_database(dir: &Path) -> bool {
         SQLITE_COMPANION_SUFFIXES
             .iter()
             .any(|suffix| lower.ends_with(suffix))
-            || SQLITE_MAIN_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+            || SQLITE_MAIN_EXTENSIONS
+                .iter()
+                .any(|ext| lower.ends_with(ext))
     })
 }
 
@@ -845,9 +850,9 @@ mod tests {
 
         // 内容照常可清
         assert!(!is_protected(&home.join("Library/Caches")));
-        assert!(!is_protected(
-            &home.join("Library/Application Support/JetBrains/IntelliJIdea2025.2")
-        ));
+        assert!(!is_protected(&home.join(
+            "Library/Application Support/JetBrains/IntelliJIdea2025.2"
+        )));
         // 系统级 /Library 仍然整棵受保护（子树禁止档）
         assert!(is_protected(Path::new("/Library/Fonts")));
         // 大小写不敏感
@@ -860,12 +865,17 @@ mod tests {
     fn under_home_app_support_is_strict() {
         let home = dirs::home_dir().expect("测试环境必须有 home");
         let app_support = home.join("Library/Application Support");
-        assert!(!under_home_app_support(&app_support), "根自身不算（它已被保护挡住）");
+        assert!(
+            !under_home_app_support(&app_support),
+            "根自身不算（它已被保护挡住）"
+        );
         assert!(under_home_app_support(
             &app_support.join("JetBrains/IntelliJIdea2025.2")
         ));
         assert!(!under_home_app_support(&home.join("Library/Caches")));
-        assert!(!under_home_app_support(Path::new("/Applications/Safari.app")));
+        assert!(!under_home_app_support(Path::new(
+            "/Applications/Safari.app"
+        )));
     }
 
     /// AppData 那几层以前只有残留扫描挡着，磁盘透镜的任意路径删除绕得过去。
@@ -937,7 +947,8 @@ mod tests {
     }
 
     fn temp_test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("qc_safety_livedb_{tag}"));
+        let dir =
+            std::env::temp_dir().join(format!("qc_safety_livedb_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -984,7 +995,11 @@ mod tests {
     /// 不能悄悄放行删除。
     #[test]
     fn live_database_fails_closed_when_unreadable() {
-        let missing = std::env::temp_dir().join("qc_safety_livedb_does_not_exist_ever");
+        let missing = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_safety_livedb_does_not_exist_ever",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&missing);
         assert!(
             is_live_database(&missing),

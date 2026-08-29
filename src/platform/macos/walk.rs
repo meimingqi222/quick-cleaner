@@ -1144,7 +1144,7 @@ mod tests {
 
     #[test]
     fn scan_indexes_nested_files() {
-        let tmp = std::env::temp_dir().join("qc_test_walk_full_index");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_test_walk_full_index", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let nm = tmp.join("node_modules").join("pkg");
         std::fs::create_dir_all(&nm).unwrap();
@@ -1164,7 +1164,7 @@ mod tests {
 
     #[test]
     fn scan_temp_dir() {
-        let tmp = std::env::temp_dir().join("qc_test_walk_scan_temp");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_test_walk_scan_temp", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("sub")).unwrap();
         std::fs::write(tmp.join("a.txt"), b"123").unwrap();
@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn scan_cancellation() {
-        let tmp = std::env::temp_dir().join("qc_test_walk_cancel");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_test_walk_cancel", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let vol = VolumeId::from_mount_point(tmp.clone());
@@ -1199,7 +1199,7 @@ mod tests {
     /// 外部标志，中途取消应在远小于完整扫描的时间内返回。
     #[test]
     fn scan_cancel_midway_returns_promptly() {
-        let tmp = std::env::temp_dir().join("qc_test_walk_cancel_midway");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_test_walk_cancel_midway", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         // 生成 20000 个目录（各带一个文件），完整扫描明显超过取消时点
         for i in 0..20000 {

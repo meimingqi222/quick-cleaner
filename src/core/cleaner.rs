@@ -611,8 +611,7 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
     let checked: Vec<(&PathBuf, &Option<TargetIdentity>, bool)> = children
         .iter()
         .map(|(c, child_identity)| {
-            let ok = !p.cancelled()
-                && leaf_binding_holds(dir, parent_identity, c, *child_identity);
+            let ok = !p.cancelled() && leaf_binding_holds(dir, parent_identity, c, *child_identity);
             (c, child_identity, ok)
         })
         .collect();
@@ -1012,7 +1011,11 @@ impl ArbitraryTarget {
 /// `disposal` 只影响手选路径。分类清理走的是固定白名单表（缓存、临时文件、
 /// 构建产物），把它们塞进回收站没有意义，只会让用户再清一次。
 pub fn clean_arbitrary(paths: &[PathBuf], disposal: Disposal, p: &CleanProgress) -> CleanReport {
-    let items: Vec<ArbitraryTarget> = paths.iter().cloned().map(ArbitraryTarget::capture).collect();
+    let items: Vec<ArbitraryTarget> = paths
+        .iter()
+        .cloned()
+        .map(ArbitraryTarget::capture)
+        .collect();
     clean_arbitrary_items(&items, disposal, p)
 }
 
@@ -1138,17 +1141,24 @@ mod tests {
     /// 由它统一覆盖。
     #[test]
     fn clean_path_rejects_whitelisted_target() {
-        let _guard = crate::core::whitelist::TEST_LOCK.lock().unwrap();
+        let _guard = crate::core::whitelist::lock_for_test();
         crate::core::whitelist::clear();
-        let base = std::env::temp_dir().join("qc_whitelist_hard_reject");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_whitelist_hard_reject",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let victim = base.join("precious.sqlite");
         std::fs::write(&victim, b"do not touch").unwrap();
 
-        crate::core::whitelist::reload(std::slice::from_ref(
-            &victim.to_string_lossy().into_owned(),
-        ));
+        assert!(
+            crate::core::whitelist::reload(std::slice::from_ref(
+                &victim.to_string_lossy().into_owned(),
+            )),
+            "白名单条目没装载成功，后面的拒绝断言全部失去前提"
+        );
 
         let p = CleanProgress::default();
         assert_eq!(clean_path(&victim, &p), CleanResult::Skipped);
@@ -1170,7 +1180,11 @@ mod tests {
     /// 手选路径必须复验确认时拍下的身份：替换之后不能按原路径删下去。
     #[test]
     fn clean_arbitrary_rejects_swapped_target() {
-        let base = std::env::temp_dir().join("qc_arbitrary_identity_swap");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_arbitrary_identity_swap",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let path = base.join("leaf.bin");
@@ -1196,16 +1210,23 @@ mod tests {
     /// 受保护路径是策略拒绝，记 skipped 而不是 failed。
     #[test]
     fn clean_arbitrary_skips_protected_path() {
-        let _guard = crate::core::whitelist::TEST_LOCK.lock().unwrap();
+        let _guard = crate::core::whitelist::lock_for_test();
         crate::core::whitelist::clear();
-        let base = std::env::temp_dir().join("qc_arbitrary_protected_skip");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_arbitrary_protected_skip",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let path = base.join("keep.bin");
         std::fs::write(&path, b"x").unwrap();
-        crate::core::whitelist::reload(std::slice::from_ref(
-            &path.to_string_lossy().into_owned(),
-        ));
+        assert!(
+            crate::core::whitelist::reload(std::slice::from_ref(
+                &path.to_string_lossy().into_owned(),
+            )),
+            "白名单条目没装载成功：`skipped` 会是 0，报出来的断言指不到真因"
+        );
 
         let p = CleanProgress::default();
         let report = clean_arbitrary(std::slice::from_ref(&path), Disposal::Permanent, &p);
@@ -1221,7 +1242,11 @@ mod tests {
     /// 确认时拍不到身份（网络盘、mtime 缺失）不能把磁盘透镜整条卡死。
     #[test]
     fn clean_arbitrary_without_identity_still_deletes() {
-        let base = std::env::temp_dir().join("qc_arbitrary_no_identity");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_arbitrary_no_identity",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let path = base.join("ok.bin");
@@ -1248,7 +1273,8 @@ mod tests {
     /// 并报失败，同样满足不变量。
     #[test]
     fn recycle_never_silently_destroys() {
-        let base = std::env::temp_dir().join("qc_recycle_invariant");
+        let base =
+            std::env::temp_dir().join(format!("{}_{}", "qc_recycle_invariant", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let file = base.join("待回收.txt");
@@ -1284,7 +1310,7 @@ mod tests {
     use crate::platform::windows::security::current_user_sid;
 
     fn make_tree(tag: &str, n_files: usize, size: usize) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("qc_prog_{tag}"));
+        let base = std::env::temp_dir().join(format!("qc_prog_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("a").join("deep")).unwrap();
         std::fs::create_dir_all(base.join("b")).unwrap();
@@ -1383,7 +1409,11 @@ mod tests {
     fn emptying_symlink_root_never_touches_target() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("qc_symlink_root_safety");
+        let root = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_symlink_root_safety",
+            std::process::id()
+        ));
         let target = root.join("target");
         let link = root.join("cache-link");
         let _ = std::fs::remove_dir_all(&root);
@@ -1506,7 +1536,11 @@ mod tests {
     /// 新文件应当原封不动地留在原地。
     #[test]
     fn root_identity_guard_blocks_renamed_swap_target() {
-        let base = std::env::temp_dir().join("qc_identity_swap_root");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_identity_swap_root",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let target = base.join("victim.txt");
@@ -1561,7 +1595,11 @@ mod tests {
     fn root_identity_guard_blocks_when_ancestor_becomes_symlink() {
         use std::os::unix::fs::symlink;
 
-        let base = std::env::temp_dir().join("qc_identity_ancestor_swap_cleaner");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_identity_ancestor_swap_cleaner",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
@@ -1598,7 +1636,8 @@ mod tests {
     /// 对这条通道无效」的原因，叶子—父目录绑定必须独立起作用。
     #[test]
     fn leaf_binding_rejects_a_swapped_child_but_not_its_sibling() {
-        let base = std::env::temp_dir().join("qc_leaf_binding_swap");
+        let base =
+            std::env::temp_dir().join(format!("{}_{}", "qc_leaf_binding_swap", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let sibling = base.join("sibling.txt");
@@ -1663,7 +1702,11 @@ mod tests {
 
     #[test]
     fn deletes_readonly_tree() {
-        let base = std::env::temp_dir().join("qc_readonly_test_9f3a");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_readonly_test_9f3a",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("sub")).unwrap();
         let f = base.join("sub").join("ro.txt");
@@ -1687,7 +1730,11 @@ mod tests {
     /// 走到 `delete_tree`。
     #[test]
     fn clean_path_rejects_live_database_directory() {
-        let base = std::env::temp_dir().join("qc_clean_path_live_db_dir");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_clean_path_live_db_dir",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("cache.otc"), b"x").unwrap();
@@ -1704,7 +1751,11 @@ mod tests {
     /// 不依赖调用方先判断它所在的目录。
     #[test]
     fn clean_path_rejects_live_database_file() {
-        let base = std::env::temp_dir().join("qc_clean_path_live_db_file");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_clean_path_live_db_file",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let db = base.join("Cache.db");
@@ -1723,7 +1774,11 @@ mod tests {
     /// 正常清理目标的形状）不能被这道闸门误伤，必须能正常删除。
     #[test]
     fn clean_path_allows_lone_db_file() {
-        let base = std::env::temp_dir().join("qc_clean_path_lone_db");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_clean_path_lone_db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let db = base.join("Manifest.db");
@@ -1765,7 +1820,11 @@ mod tests {
     /// 文件被打开时失败——Unix 允许把正在使用的文件 unlink 掉。
     #[test]
     fn sqlite_family_with_companion_is_rejected_as_live() {
-        let base = std::env::temp_dir().join("qc_sqlite_family_atomic");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_sqlite_family_atomic",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
@@ -1792,7 +1851,11 @@ mod tests {
     /// 可以清理，数据库家族及其祖先目录必须保留。
     #[test]
     fn delete_tree_rejects_nested_live_sqlite_family() {
-        let base = std::env::temp_dir().join("qc_delete_tree_sqlite_family");
+        let base = std::env::temp_dir().join(format!(
+            "{}_{}",
+            "qc_delete_tree_sqlite_family",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         // 家族文件放进子目录 `nested`，不直接放在 `base` 顶层：`base` 本身
         // 作为 `clean_path` 的整删目标要先过 `is_live_database` 这道目录级

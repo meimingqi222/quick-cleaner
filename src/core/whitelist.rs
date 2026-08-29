@@ -181,6 +181,19 @@ pub(crate) fn clear() {
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// 取测试串行锁，**中毒也继续执行**。
+///
+/// 一个测试失败会把 `TEST_LOCK` 变成中毒态，之后每个 `.lock().unwrap()`
+/// 都会以 `PoisonError` 崩掉——于是 1 个真实失败被放大成 9 个失败，而且
+/// 报告里最显眼的那条（`PoisonError`）指向的测试其实完全无辜。串行锁的
+/// 中毒状态不携带任何需要保住的不变量，接管内部值继续跑才是对的。
+#[cfg(test)]
+pub(crate) fn lock_for_test() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// `~` / `~/…` 展开为用户主目录；其余原样返回。展开不了（主目录缺失）
 /// 返回 None——调用方丢弃该条，绝不能把字面 `~/…` 当成有效路径存进去，
 /// 那会变成一条永不相配的哑条目。
@@ -203,9 +216,9 @@ mod tests {
 
     #[test]
     fn reload_then_is_whitelisted_covers_self_and_descendants() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
-        let base = std::env::temp_dir().join("qc_wl_roundtrip");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_wl_roundtrip", std::process::id()));
         let target = base.join("virtualenvs");
         let raw = vec![target.to_string_lossy().into_owned()];
         assert!(reload(&raw));
@@ -221,11 +234,11 @@ mod tests {
 
     #[test]
     fn has_entry_under_marks_ancestors_only() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
-        let base = std::env::temp_dir().join("qc_wl_ancestor");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_wl_ancestor", std::process::id()));
         let target = base.join("keep");
-        reload(&[target.to_string_lossy().into_owned()]);
+        assert!(reload(&[target.to_string_lossy().into_owned()]));
 
         // 父目录是条目的祖先 → 要降级默认勾选
         assert!(has_entry_under(&base));
@@ -233,16 +246,16 @@ mod tests {
         // 条目自己和无关路径不是「压着条目」
         assert!(!has_entry_under(&target.join("child")));
         assert!(!has_entry_under(
-            &std::env::temp_dir().join("qc_wl_unrelated")
+            &std::env::temp_dir().join(format!("{}_{}", "qc_wl_unrelated", std::process::id()))
         ));
         clear();
     }
 
     #[test]
     fn add_deduplicates_equivalent_entries() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
-        let p = std::env::temp_dir().join("qc_wl_dedup");
+        let p = std::env::temp_dir().join(format!("{}_{}", "qc_wl_dedup", std::process::id()));
         let _ = add(&p);
         // 同一路径的不同写法（尾斜杠）归一化后相同，不该出现两条
         let with_slash = PathBuf::from(format!("{}/", p.display()));
@@ -253,7 +266,7 @@ mod tests {
 
     #[test]
     fn add_preserves_original_case_and_roundtrips() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
         // 归一化会折叠大小写，但写回 Settings 的必须是原文——旧实现会把
         // 这里压成全小写，用户在配置文件里看到的路径面目全非。
@@ -273,9 +286,9 @@ mod tests {
 
     #[test]
     fn remove_deletes_only_exact_entry() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
-        let parent = std::env::temp_dir().join("qc_wl_remove");
+        let parent = std::env::temp_dir().join(format!("{}_{}", "qc_wl_remove", std::process::id()));
         let child = parent.join("keep");
         let _ = add(&parent);
         let _ = add(&child);
@@ -295,9 +308,9 @@ mod tests {
 
     #[test]
     fn reload_reports_success_and_plain_paths_roundtrip() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
-        let target = std::env::temp_dir().join("qc_wl_reload_ok");
+        let target = std::env::temp_dir().join(format!("{}_{}", "qc_wl_reload_ok", std::process::id()));
         assert!(reload(&[target.to_string_lossy().into_owned()]));
         assert!(is_whitelisted(&target));
         assert_eq!(
@@ -309,7 +322,7 @@ mod tests {
 
     #[test]
     fn home_tilde_prefix_expands() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = lock_for_test();
         clear();
         let home = dirs::home_dir().expect("测试环境必须有主目录");
         let raw = "~/qc_wl_tilde_probe".to_string();

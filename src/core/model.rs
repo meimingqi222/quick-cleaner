@@ -334,7 +334,7 @@ mod tests {
     /// 没变的文件复核必须通过，否则这个特性会让老路径大面积拒删。
     #[test]
     fn identity_recheck_passes_for_unchanged_file() {
-        let path = std::env::temp_dir().join("qc_identity_unchanged");
+        let path = std::env::temp_dir().join(format!("{}_{}", "qc_identity_unchanged", std::process::id()));
         std::fs::write(&path, b"payload").unwrap();
 
         let id = capture_identity(&path).expect("应该能拿到身份");
@@ -348,7 +348,7 @@ mod tests {
     /// len/mtime）已经不是这个路径当下的了。
     #[test]
     fn identity_recheck_fails_after_delete_and_recreate() {
-        let path = std::env::temp_dir().join("qc_identity_swapped");
+        let path = std::env::temp_dir().join(format!("{}_{}", "qc_identity_swapped", std::process::id()));
         std::fs::write(&path, b"original").unwrap();
         let id = capture_identity(&path).expect("应该能拿到身份");
 
@@ -366,7 +366,7 @@ mod tests {
     /// 原来那个东西，必须保守拒绝而不是默认放行。
     #[test]
     fn identity_recheck_fails_when_path_vanishes() {
-        let path = std::env::temp_dir().join("qc_identity_gone_completely");
+        let path = std::env::temp_dir().join(format!("{}_{}", "qc_identity_gone_completely", std::process::id()));
         std::fs::write(&path, b"x").unwrap();
         let id = capture_identity(&path).expect("应该能拿到身份");
         std::fs::remove_file(&path).unwrap();
@@ -382,7 +382,7 @@ mod tests {
     fn identity_recheck_fails_when_ancestor_becomes_symlink() {
         use std::os::unix::fs::symlink;
 
-        let base = std::env::temp_dir().join("qc_identity_ancestor_swap");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_identity_ancestor_swap", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
@@ -415,7 +415,7 @@ mod tests {
     /// ino + mtime + len）共有的最低保证。
     #[test]
     fn identity_recheck_fails_on_size_change_in_place() {
-        let path = std::env::temp_dir().join("qc_identity_size_change");
+        let path = std::env::temp_dir().join(format!("{}_{}", "qc_identity_size_change", std::process::id()));
         std::fs::write(&path, b"short").unwrap();
         let id = capture_identity(&path).expect("应该能拿到身份");
 

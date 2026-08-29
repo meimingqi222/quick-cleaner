@@ -510,7 +510,7 @@ mod tests {
     /// 伪造都不能算命中；只有以规范签名开头的才算。
     #[test]
     fn cachedir_tag_requires_valid_signature() {
-        let tmp = std::env::temp_dir().join("qc_cachedir_sig");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_cachedir_sig", std::process::id()));
         let dir = tmp.join("cache-dir");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&dir).unwrap();
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn discovers_marked_dirs_and_skips_unmarked_lookalikes() {
-        let base = std::env::temp_dir().join("qc_devscan_test");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_test", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
 
         // 命中：有 Cargo.toml 旁证的 target
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn does_not_descend_into_a_matched_directory() {
-        let base = std::env::temp_dir().join("qc_devscan_nested");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_nested", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
 
         // node_modules 里往往还嵌着 node_modules，只应报告最外层那个
@@ -658,7 +658,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::walk;
 
-        let base = std::env::temp_dir().join("qc_devscan_tree_test");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_tree_test", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
 
         // 命中：有 Cargo.toml 旁证的 target
@@ -715,7 +715,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
-        let base = std::env::temp_dir().join("qc_devscan_incremental_delete");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_incremental_delete", std::process::id()));
         let changed_dir = base.join("small");
         let deleted = changed_dir.join("gone.bin");
         let _ = std::fs::remove_dir_all(&base);
@@ -758,7 +758,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
-        let base = std::env::temp_dir().join("qc_devscan_must_rescan_subtree");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_must_rescan_subtree", std::process::id()));
         let noisy = base.join("noisy");
         let vanished = noisy.join("gone.bin");
         let _ = std::fs::remove_dir_all(&base);
@@ -811,7 +811,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
-        let base = std::env::temp_dir().join("qc_devscan_background_budget");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_background_budget", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("a.bin"), vec![b'x'; 1024]).unwrap();
@@ -881,7 +881,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
-        let base = std::env::temp_dir().join("qc_devscan_must_rescan_root");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_must_rescan_root", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("sub")).unwrap();
         std::fs::write(base.join("sub").join("a.bin"), vec![b'x'; 4096]).unwrap();
@@ -915,7 +915,7 @@ mod tests {
         use crate::core::disk::VolumeId;
         use crate::platform::macos::{fsevents::Changes, walk};
 
-        let base = std::env::temp_dir().join("qc_devscan_root_collapse");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_root_collapse", std::process::id()));
         let outer = base.join("a");
         let inner = outer.join("b");
         // 名字上是 `a` 的前缀延伸，但不是它的后代：不能被误折叠。
@@ -965,7 +965,7 @@ mod tests {
         // requires_full_scan=false 时的根路径事件只是根目录自身的元数据
         // 变化（权限/修改时间），不是 FSEvents 合并事件。应该跳过该条事件、
         // 继续返回 Some(scan)，而不是放弃整个增量。
-        let base = std::env::temp_dir().join("qc_devscan_root_event");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_root_event", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let live = AtomicBool::new(true);
@@ -1000,7 +1000,7 @@ mod tests {
         use crate::platform::macos::{fsevents::Changes, walk};
         use std::os::unix::ffi::OsStringExt;
 
-        let base = std::env::temp_dir().join("qc_devscan_metadata_error");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_metadata_error", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let live = AtomicBool::new(true);
@@ -1032,7 +1032,7 @@ mod tests {
         use crate::platform::macos::{fsevents::Changes, walk};
         use std::os::unix::fs::MetadataExt;
 
-        let base = std::env::temp_dir().join("qc_devscan_incremental_file");
+        let base = std::env::temp_dir().join(format!("{}_{}", "qc_devscan_incremental_file", std::process::id()));
         let changed = base.join("direct.bin");
         let untouched = base.join("large-subtree/keep.bin");
         let _ = std::fs::remove_dir_all(&base);

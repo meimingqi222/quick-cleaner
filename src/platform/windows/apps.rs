@@ -1701,7 +1701,7 @@ mod uninstall_cli {
         app.install_location = Some(PathBuf::from(r"C:\"));
         assert!(!install_location_gone(&app));
 
-        let gone = std::env::temp_dir().join("quick-cleaner-never-existed-install-dir");
+        let gone = std::env::temp_dir().join(format!("{}_{}", "quick-cleaner-never-existed-install-dir", std::process::id()));
         app.install_location = Some(gone);
         assert!(install_location_gone(&app));
     }

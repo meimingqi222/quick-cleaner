@@ -797,7 +797,7 @@ mod tests {
     /// 前是这样」，盖不住扫描到点击之间那几十秒到几分钟的真实窗口）。
     #[test]
     fn selected_targets_carry_the_scan_time_identity_verbatim() {
-        let real = std::env::temp_dir().join("qc_ui_identity_carry_real");
+        let real = std::env::temp_dir().join(format!("{}_{}", "qc_ui_identity_carry_real", std::process::id()));
         std::fs::write(&real, b"scanned content").unwrap();
         let scanned_identity = crate::core::model::capture_identity(&real);
         assert!(scanned_identity.is_some(), "测试前提：文件必须能拍到身份");
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn selected_file_target_is_removed_as_a_file() {
-        let path = std::env::temp_dir().join("qc_ui_single_file_target");
+        let path = std::env::temp_dir().join(format!("{}_{}", "qc_ui_single_file_target", std::process::id()));
         std::fs::write(&path, b"x").unwrap();
         let mut j = junk_fixture();
         j.categories = vec![CategorySummary {

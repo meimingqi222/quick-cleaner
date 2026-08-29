@@ -516,7 +516,7 @@ mod tests {
     /// 120 条记录**全部**属于这一类。
     #[test]
     fn obsolete_entries_without_directories_are_skipped() {
-        let tmp = std::env::temp_dir().join("qc_obsolete_ghost");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_obsolete_ghost", std::process::id()));
         let root = tmp.join(".vscode/extensions");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&root).unwrap();
@@ -539,7 +539,7 @@ mod tests {
     /// 不可全信，把它当路径拼接就是目录穿越。
     #[test]
     fn obsolete_entries_with_path_separators_are_rejected() {
-        let tmp = std::env::temp_dir().join("qc_obsolete_traversal");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_obsolete_traversal", std::process::id()));
         let root = tmp.join(".vscode/extensions");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&root).unwrap();
@@ -556,7 +556,7 @@ mod tests {
     /// `.vscode`，本机另外五个编辑器的 `.obsolete` 完全没人看。
     #[test]
     fn obsolete_scan_covers_vscode_forks_not_just_vscode() {
-        let tmp = std::env::temp_dir().join("qc_obsolete_forks");
+        let tmp = std::env::temp_dir().join(format!("{}_{}", "qc_obsolete_forks", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         for dir in [".cursor", ".windsurf", ".trae", ".qoder"] {
             let root = tmp.join(dir).join("extensions");

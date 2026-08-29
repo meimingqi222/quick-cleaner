@@ -2440,7 +2440,7 @@ mod v7_header_validation_tests {
     /// 它们本来就是同一棵树的两种落盘方式，差异只该出现在偏移上。
     #[test]
     fn inplace_and_streaming_writers_agree() {
-        let dir = std::env::temp_dir().join("qc_v7_equiv");
+        let dir = std::env::temp_dir().join(format!("{}_{}", "qc_v7_equiv", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2488,7 +2488,7 @@ mod v7_header_validation_tests {
     /// 加载器的职责是校验不可信的磁盘数据，必须拒绝这种文件而不是照单全收。
     #[test]
     fn misaligned_csr_offsets_are_rejected() {
-        let dir = std::env::temp_dir().join("qc_v7_align");
+        let dir = std::env::temp_dir().join(format!("{}_{}", "qc_v7_align", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
