@@ -65,9 +65,13 @@ impl std::fmt::Display for FanError {
     }
 }
 
-/// 一次 GPU 采样。拿不到的平台 / 机型全是 `None`，UI 显示「不可用」。
+/// 一张 GPU 的一次采样。拿不到的字段是 `None`，UI 显示「不可用」。
 #[derive(Clone, Debug, Default)]
 pub struct GpuReading {
+    /// 这张卡的稳定标识（Windows 是 LUID，macOS 是 IORegistry 里的次序）。
+    /// 双显卡机器上 UI 靠它记住用户选了哪张——不能用下标，卡片顺序会随
+    /// 采样结果变。
+    pub id: String,
     /// 芯片型号（如 "AGXAcceleratorG13X"）。
     pub name: Option<String>,
     /// 整体利用率 0~100。
@@ -76,6 +80,35 @@ pub struct GpuReading {
     pub renderer_utilization: Option<f32>,
     /// GPU 当前占用的系统内存（统一内存架构上没有独立显存）。
     pub vram_in_use: Option<u64>,
+    /// 芯片温度，摄氏度。Windows 上来自 N 卡驱动自带的 NVML，别家显卡
+    /// 没有免驱动通道，是 `None`。
+    pub temp_c: Option<f32>,
+}
+
+/// 多显卡时切换按钮上的短标签。
+///
+/// 卡片只有约 1/4 行宽，"NVIDIA GeForce RTX 4060 Laptop GPU" 这种全名一个都
+/// 塞不下；取第一段（厂商名）就足够区分核显和独显了，全名仍在卡片脚注里。
+/// 两张卡的第一段撞车（同厂双卡）时整体退回「GPU 1 / GPU 2」——宁可标签没
+/// 信息，也不能给出两个一模一样的按钮。
+pub fn gpu_labels(gpus: &[GpuReading]) -> Vec<String> {
+    let labels: Vec<String> = gpus
+        .iter()
+        .enumerate()
+        .map(|(i, gpu)| {
+            gpu.name
+                .as_deref()
+                .and_then(|name| name.split_whitespace().next())
+                .map(|vendor| vendor.chars().take(10).collect())
+                .unwrap_or_else(|| format!("GPU {}", i + 1))
+        })
+        .collect();
+    let unique: std::collections::HashSet<&String> = labels.iter().collect();
+    if unique.len() == labels.len() {
+        labels
+    } else {
+        (1..=gpus.len()).map(|i| format!("GPU {i}")).collect()
+    }
 }
 
 /// 一次电池采样。台式机 / 无电池设备是 `None`。
@@ -142,9 +175,11 @@ pub struct StatusSnapshot {
     pub process_count: usize,
     pub thermal: ThermalReading,
     pub uptime_secs: u64,
-    pub gpu: GpuReading,
+    /// 机器上的每张 GPU。笔记本普遍是核显 + 独显两张，UI 给切换按钮。
+    pub gpus: Vec<GpuReading>,
     pub battery: Option<BatteryReading>,
-    /// 系统名（如 "macOS 15.6" / "Windows 11 Pro"），健康卡片的小徽章。
+    /// 系统名（如 "macOS 15.6" / "Windows 11"），健康卡片的小徽章。
+    /// 由 [`short_os_name`] 砍掉 SKU / 代号，徽章那格放不下完整版本名。
     pub os_name: String,
     /// 物理内存总量（字节），格式化成 "32 GB" 徽章用。
     pub mem_total_label_bytes: u64,
@@ -237,6 +272,15 @@ impl StatusSampler {
             .processes()
             .values()
             .filter_map(|p| {
+                // Windows 的 PID 0 是 System Idle Process：它不是进程，是
+                // 「没人用 CPU 的那部分时间」的记账条目，既结束不掉也没有
+                // 可执行文件。留着它，进程表里就多出一行点「结束」必然失败
+                // 的幽灵。macOS 的 PID 0 是 kernel_task，那是真进程（活动
+                // 监视器里也列着），不能一起滤掉。
+                #[cfg(windows)]
+                if p.pid().as_u32() == 0 {
+                    return None;
+                }
                 let raw_name = p.name().to_string_lossy().trim().to_string();
                 if raw_name.is_empty() {
                     return None;
@@ -278,7 +322,7 @@ impl StatusSampler {
             processes,
             process_count,
             thermal: crate::platform::read_thermal(),
-            gpu: crate::platform::read_gpu(),
+            gpus: crate::platform::read_gpus(),
             battery: crate::platform::read_battery(),
             uptime_secs: crate::platform::system_uptime_secs(),
             os_name: os_display_name(),
@@ -520,8 +564,28 @@ fn os_display_name() -> String {
     if long.trim().is_empty() {
         System::name().unwrap_or_else(|| String::from("?"))
     } else {
-        long
+        short_os_name(&long)
     }
+}
+
+/// 只留「系统名 + 版本号」，砍掉后面的 SKU / 代号。
+///
+/// 这个串画在健康卡片右上角的徽章里，四列布局下那格只有约 100px 宽。
+/// 各平台的完整版本名都比它长：Windows 是 "Windows 11 Home China"
+/// （中文版 SKU 更长），macOS 是 "macOS 15.6 Sequoia"，Linux 是
+/// "Ubuntu 24.04 LTS"。真机上前者直接画到了卡片外面。
+///
+/// 规则：截到**第一个以数字开头的段**为止（含）。版本号后面跟着的都是
+/// 修饰词，对「这是什么系统」没有增量信息。一个数字段都没有时原样返回。
+fn short_os_name(long: &str) -> String {
+    let mut kept = Vec::new();
+    for token in long.split_whitespace() {
+        kept.push(token);
+        if token.starts_with(|c: char| c.is_ascii_digit()) {
+            break;
+        }
+    }
+    kept.join(" ")
 }
 
 #[cfg(test)]
@@ -535,6 +599,43 @@ mod tests {
             cpu_avg: 10.0,
             uptime_secs: 3600,
         }
+    }
+
+    /// 双显卡切换按钮上的标签要能一眼分辨，撞车就退回序号。
+    #[test]
+    fn gpu_labels_fall_back_to_numbers_when_vendors_collide() {
+        use super::{gpu_labels, GpuReading};
+        let named = |name: &str| GpuReading {
+            name: Some(name.into()),
+            ..GpuReading::default()
+        };
+        assert_eq!(
+            gpu_labels(&[
+                named("AMD Radeon(TM) 610M"),
+                named("NVIDIA GeForce RTX 4060 Laptop GPU"),
+            ]),
+            vec!["AMD", "NVIDIA"]
+        );
+        // 同厂双卡：厂商名分不出谁是谁，退回序号。
+        assert_eq!(
+            gpu_labels(&[named("NVIDIA A"), named("NVIDIA B")]),
+            vec!["GPU 1", "GPU 2"]
+        );
+        // 名字都读不到时也得有个能点的标签。
+        assert_eq!(gpu_labels(&[GpuReading::default()]), vec!["GPU 1"]);
+    }
+
+    /// 徽章那格只有约 100px：完整版本名画出去过一次，别再画第二次。
+    #[test]
+    fn os_name_keeps_version_and_drops_the_sku() {
+        use super::short_os_name;
+        assert_eq!(short_os_name("Windows 11 Home China"), "Windows 11");
+        assert_eq!(short_os_name("macOS 15.6 Sequoia"), "macOS 15.6");
+        assert_eq!(short_os_name("Ubuntu 24.04 LTS"), "Ubuntu 24.04");
+        // 版本号之前的段一个都不能丢。
+        assert_eq!(short_os_name("Mac OS X 10.6 Snow Leopard"), "Mac OS X 10.6");
+        // 没有版本号就原样保留，宁可长也不要截出个残缺的名字。
+        assert_eq!(short_os_name("Windows"), "Windows");
     }
 
     #[test]

@@ -1,27 +1,69 @@
-//! Windows 状态采集：运行时长与结束进程。温度 / 风扇读数暂无
+//! Windows 状态采集：电池、运行时长与结束进程。温度 / 风扇读数暂无
 //! 不依赖驱动的通用方案（WMI 的 MSAcpi 枚举大多被 OEM 关闭），
-//! 如实返回空，由 UI 显示「不可用」。
+//! 如实返回空，由 UI 显示「不可用」。GPU 在 [`super::gpu`]。
 
-use crate::core::status::{FanError, ThermalReading};
+use crate::core::status::{BatteryReading, FanError, ThermalReading};
 use winapi::shared::minwindef::FILETIME;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::processthreadsapi::{GetProcessTimes, OpenProcess, TerminateProcess};
+use winapi::um::winbase::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use winapi::um::winnt::{HANDLE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
 
+/// `SYSTEM_POWER_STATUS.ACLineStatus`：接着市电。
+const AC_LINE_ONLINE: u8 = 1;
+/// `SYSTEM_POWER_STATUS.BatteryFlag`：正在充电。
+const BATTERY_FLAG_CHARGING: u8 = 8;
+/// `SYSTEM_POWER_STATUS.BatteryFlag`：这台机器没有电池。
+const BATTERY_FLAG_NO_BATTERY: u8 = 128;
+
 pub fn read_thermal() -> ThermalReading {
-    ThermalReading::default()
+    super::thermal::read_thermal()
 }
 
-/// Windows 上没有不依赖厂商 SDK 的通用 GPU 利用率通道（PDH 的
-/// `\GPU Engine(*)\Utilization Percentage` 要枚举实例并做差值，
-/// 且只在 WDDM 2.0+ 有），暂时如实返回空。
-pub fn read_gpu() -> crate::core::status::GpuReading {
-    crate::core::status::GpuReading::default()
+pub fn read_gpus() -> Vec<crate::core::status::GpuReading> {
+    super::gpu::read_gpus()
 }
 
-pub fn read_battery() -> Option<crate::core::status::BatteryReading> {
-    None
+/// 电池读数。台式机（`BatteryFlag` 带 [`BATTERY_FLAG_NO_BATTERY`]）返回
+/// `None`，那台机器上整张电池卡片不渲染。
+///
+/// 只有 `GetSystemPowerStatus` 这一个不依赖驱动的通道，它给的是「电量 /
+/// 在充没充 / 还能用多久」。循环次数和健康度要走
+/// `IOCTL_BATTERY_QUERY_INFORMATION`（还得先 SetupDi 枚举电池设备接口），
+/// winapi 0.3 里没有对应的结构体和控制码，这里如实留 `None`——宁可少两行
+/// 脚注，也不拿别的数字冒充健康度。
+pub fn read_battery() -> Option<BatteryReading> {
+    // SAFETY: 出参是本函数栈上的结构体，API 只写不留引用。
+    let mut power: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+    if unsafe { GetSystemPowerStatus(&mut power) } == 0 {
+        return None;
+    }
+    if power.BatteryFlag & BATTERY_FLAG_NO_BATTERY != 0 {
+        return None;
+    }
+    // >100 = 驱动说不准（哨兵值 255）。没有电量就没有这张卡的主读数，
+    // 整张卡不渲染，好过画一根 255% 的进度条。
+    if power.BatteryLifePercent > 100 {
+        return None;
+    }
+    let percent = power.BatteryLifePercent as f32;
+    let charging = power.BatteryFlag & BATTERY_FLAG_CHARGING != 0;
+    let external = power.ACLineStatus == AC_LINE_ONLINE;
+    Some(BatteryReading {
+        percent,
+        charging,
+        external,
+        // Windows 不直接说「充满了」：接着电、又没在充、电量顶格，就是充满。
+        fully_charged: external && !charging && percent >= 100.0,
+        cycle_count: None,
+        design_cycle_count: None,
+        health_percent: None,
+        temp_c: None,
+        // 放电时是「还能用多久」，接上电源后系统给的是 0xFFFFFFFF（未知）。
+        minutes_remaining: (power.BatteryLifeTime != u32::MAX)
+            .then_some(power.BatteryLifeTime / 60),
+    })
 }
 
 pub fn system_uptime_secs() -> u64 {
@@ -115,6 +157,12 @@ fn handle_start_time_secs(handle: HANDLE) -> Option<u64> {
     }
     let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
     Some(ticks / 10_000_000 - 11_644_473_600)
+}
+
+/// Windows 上转速是**只读**的：改档位要么走厂商驱动，要么直接写 EC 端口，
+/// 两条都得装内核驱动。UI 靠这个开关决定不画档位按钮，而不是画完再报错。
+pub fn fan_control_supported() -> bool {
+    false
 }
 
 pub fn set_fan_mode(_mode: crate::core::status::FanMode) -> Result<(), FanError> {

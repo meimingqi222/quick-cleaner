@@ -23,11 +23,12 @@
 //! | `is_system_trash` / `empty_trash` | 识别系统回收站/废纸篓目录，以及清空它 |
 //! | `user_home` / `user_cache_dir` / `user_data_dir` / `user_temp_dir` | 真实用户的常用目录 |
 //! | `read_thermal` | 风扇转速与 CPU 温度（拿不到的平台如实返回空） |
-//! | `read_gpu` | GPU 利用率（拿不到的平台如实返回空） |
+//! | `read_gpus` | 每张 GPU 的利用率（拿不到的平台如实返回空表） |
 //! | `read_battery` | 电池电量 / 循环次数 / 健康度（无电池设备返回 None） |
 //! | `system_uptime_secs` | 系统开机以来的秒数 |
 //! | `terminate_process` | 请求结束一个进程（状态监控页的「结束进程」） |
 //! | `process_unique_id` | 平台进程身份（Darwin uniqueid；Windows 无对等概念） |
+//! | `fan_control_supported` | 这个平台能不能改风扇档位（Windows 只读转速） |
 //! | `set_fan_mode` | 风扇控制档位（自动 / 全速） |
 //! | `elevated_fan_control` | 经常驻特权守护进程设定档位（直写被固件拒绝时） |
 //! | `fan_helper_installed` | 特权守护进程是否已安装 |
@@ -86,11 +87,12 @@ macro_rules! platform_contract {
             // 拿不到必须返回 None 跳过目标，不许换一个目录顶替。
             let _: fn() -> Option<PathBuf> = user_temp_dir;
             let _: fn() -> ThermalReading = read_thermal;
-            let _: fn() -> crate::core::status::GpuReading = read_gpu;
+            let _: fn() -> Vec<crate::core::status::GpuReading> = read_gpus;
             let _: fn() -> Option<crate::core::status::BatteryReading> = read_battery;
             let _: fn() -> u64 = system_uptime_secs;
             let _: fn(u32, u64, Option<u64>) -> Result<(), String> = terminate_process;
             let _: fn(u32) -> Option<u64> = process_unique_id;
+            let _: fn() -> bool = fan_control_supported;
             let _: fn(FanMode) -> Result<(), FanError> = set_fan_mode;
             let _: fn(FanMode) -> Result<(), FanError> = elevated_fan_control;
             let _: fn() -> bool = fan_helper_installed;
@@ -154,13 +156,13 @@ pub mod windows;
 /// 一眼能看出这是平台分支而不是通用接口。
 pub use windows::{
     app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
-    detect_system_language, elevated_fan_control, empty_trash, fan_helper_installed,
-    get_volume_space, install_fan_helper, is_elevated, is_system_trash, list_installed_apps,
-    list_volumes, move_to_trash, open_in_default_app, process_unique_id, read_battery, read_gpu,
-    read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait,
-    scan_residuals, scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs,
-    terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir, user_home,
-    user_temp_dir, verify_residuals,
+    detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
+    fan_helper_installed, get_volume_space, install_fan_helper, is_elevated, is_system_trash,
+    list_installed_apps, list_volumes, move_to_trash, open_in_default_app, process_unique_id,
+    read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
+    system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir,
+    user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -170,13 +172,13 @@ pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
     app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
-    detect_system_language, elevated_fan_control, empty_trash, fan_helper_installed,
-    get_volume_space, install_fan_helper, is_elevated, is_system_trash, list_installed_apps,
-    list_volumes, move_to_trash, open_in_default_app, process_unique_id, read_battery, read_gpu,
-    read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait,
-    scan_residuals, scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs,
-    terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir, user_home,
-    user_temp_dir, verify_residuals,
+    detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
+    fan_helper_installed, get_volume_space, install_fan_helper, is_elevated, is_system_trash,
+    list_installed_apps, list_volumes, move_to_trash, open_in_default_app, process_unique_id,
+    read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
+    system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir,
+    user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();

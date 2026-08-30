@@ -218,6 +218,11 @@ enum SystemThermalState {
     Critical,
 }
 
+/// macOS 走 SMC 直写（必要时经特权守护进程），档位是可以改的。
+pub fn fan_control_supported() -> bool {
+    true
+}
+
 pub fn read_thermal() -> ThermalReading {
     let mut reading = ThermalReading::default();
     let Some(conn) = smc_open() else {

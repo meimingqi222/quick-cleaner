@@ -576,8 +576,14 @@ pub struct StatusState {
     pub snapshot: Option<StatusSnapshot>,
     /// 最近 N 拍的全局 CPU 占用率，画 CPU 卡片的柱状历史。
     pub cpu_history: Vec<f32>,
-    /// 同上，GPU 利用率。读不到 GPU 的机型上一直是空，卡片显示「不可用」。
-    pub gpu_history: Vec<f32>,
+    /// 同上，GPU 利用率，**按卡分别记**。双显卡机器上切换卡片时，柱状图要
+    /// 跟着换成那张卡自己的历史；共用一条历史的话，切过去看到的是另一张卡
+    /// 的曲线。键是 `GpuReading::id`。
+    pub gpu_history: std::collections::HashMap<String, Vec<f32>>,
+    /// 用户选中的 GPU（`GpuReading::id`）。None = 还没选过，由采样任务填成
+    /// 当前最忙的那张。选定后就不再自动跳——否则两张卡忙闲交替时，卡片
+    /// 每两秒换一张，根本看不清。
+    pub gpu_selected: Option<String>,
     /// 轮询任务槽。切出状态页时任务自退出并清空。
     pub task: Option<Task<()>>,
     /// 风扇当前档位。点击按钮时乐观更新，失败时回退 Auto。

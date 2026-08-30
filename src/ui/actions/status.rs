@@ -12,6 +12,18 @@ use std::time::Duration;
 /// 也让 SMC 读数不至于高频打扰硬件。
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 
+/// 默认选中的 GPU：当前最忙的那张。双显卡机器上核显常年在跑桌面合成，
+/// 独显只在真干活时才醒，一上来就把用户带到有数据的那张。
+fn busiest_gpu(gpus: &[crate::core::status::GpuReading]) -> Option<String> {
+    gpus.iter()
+        .max_by(|a, b| {
+            a.utilization
+                .unwrap_or(0.0)
+                .total_cmp(&b.utilization.unwrap_or(0.0))
+        })
+        .map(|gpu| gpu.id.clone())
+}
+
 /// 往柱状历史里推一拍，并把超出一屏的旧数据裁掉。
 ///
 /// saturating_sub：历史不足一屏时多退少补都按 0 算，debug 模式下普通减法
@@ -66,8 +78,23 @@ impl crate::ui::Root {
                             }
                         }
                         push_history(&mut this.monitor.cpu_history, snap.cpu_usage);
-                        if let Some(util) = snap.gpu.utilization {
-                            push_history(&mut this.monitor.gpu_history, util);
+                        for gpu in &snap.gpus {
+                            if let Some(util) = gpu.utilization {
+                                push_history(
+                                    this.monitor.gpu_history.entry(gpu.id.clone()).or_default(),
+                                    util,
+                                );
+                            }
+                        }
+                        // 没选过、或者选中的那张卡不见了（驱动重载、外接显卡
+                        // 拔掉），就落到当前最忙的那张上。
+                        let selected_gone = this
+                            .monitor
+                            .gpu_selected
+                            .as_ref()
+                            .is_none_or(|id| !snap.gpus.iter().any(|g| &g.id == id));
+                        if selected_gone {
+                            this.monitor.gpu_selected = busiest_gpu(&snap.gpus);
                         }
                         this.monitor.snapshot = Some(snap);
                         this.monitor.fan_helper_installed = helper_installed;
@@ -86,6 +113,14 @@ impl crate::ui::Root {
             })
             .ok();
         }));
+    }
+
+    /// 切换 GPU 卡片显示的那张卡。
+    pub fn select_gpu(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.monitor.gpu_selected.as_deref() != Some(id.as_str()) {
+            self.monitor.gpu_selected = Some(id);
+            cx.notify();
+        }
     }
 
     /// 按当前排序重建进程表的下标视图。

@@ -1,9 +1,14 @@
 //! 状态监控视图（Stitch「Dashboard - System Status with Fan Control」设计：
-//! 健康概览 / CPU / 内存 / 磁盘 / 网络 / 风扇温度六卡片 + 活动进程表）
+//! 健康概览 / CPU / GPU / 内存 / 磁盘 / 网络 / 电池 / 风扇温度八卡片
+//! + 活动进程表）
+//!
+//! 卡片数量按硬件有无浮动：读不到 GPU 的机器少一张、没有电池的台式机少
+//! 一张。少的那几格由 `card_rows` 补等宽占位，两排卡片的尺寸必须一致——
+//! 大小不一的网格看起来就像布局坏了。
 
 use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_mem, fmt_size, truncate};
-use crate::core::status::{FanMode, StatusSnapshot, STATUS_PROCESS_TABLE_H};
+use crate::core::status::{gpu_labels, FanMode, StatusSnapshot, STATUS_PROCESS_TABLE_H};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::page_heading;
 use crate::ui::components::donut::{render_donut, DonutSegment};
@@ -49,7 +54,6 @@ fn icon_globe(fg: u32, size: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// 卡片小标题行：图标 + 标题 + 右侧徽章。
 /// 单张卡片的最小宽度。四列布局下窗口一窄，卡片会挤到数字换行、脚注被切；
 /// 给个下限让整行改为换行（`flex_wrap`）而不是继续压扁——4×2 变 2×4 仍然
 /// 读得下去，压成一条缝就没法看了。
@@ -57,6 +61,29 @@ const CARD_MIN_W: f32 = 210.;
 
 /// 一行几张卡。
 const CARDS_PER_ROW: usize = 4;
+
+/// 卡片的统一高度下限。行高由该行最高的卡片决定，不给下限的话上排
+/// （CPU / GPU 带 64px 柱状历史）218px、下排 173px，两排一大一小。
+/// 用 `min_h` 而不是 `h`：真有更高的内容时让卡片长出来，好过被裁掉。
+///
+/// 上限按**最高的那种配置**定：双显卡机器的 GPU 卡多一排切换按钮，实测
+/// 229px。按 220 定的话，那台机器上排 229、下排 220，又不齐了。
+const CARD_H: f32 = 232.;
+
+/// 状态页所有卡片的统一外壳：等宽（一行四等分）、等高、内容不外溢。
+///
+/// `overflow_hidden` 是硬边界：徽章和脚注再长也只能被截断，不能画到卡片
+/// 外面去（Windows 的「Windows 11 Home China」实测整块画到了卡片右边界外）。
+fn status_card() -> Div {
+    card()
+        .flex_1()
+        .min_w(px(CARD_MIN_W))
+        .min_h(px(CARD_H))
+        .overflow_hidden()
+        .p_5()
+        .flex()
+        .flex_col()
+}
 
 /// 把可用的卡片按每行 [`CARDS_PER_ROW`] 张排成若干行。
 ///
@@ -82,41 +109,67 @@ fn card_rows(cards: Vec<Div>) -> Vec<Div> {
                 None => break,
             }
         }
-        // 末行补空位，保证每张卡的宽度和满行时一致。
+        // 末行补空位，保证每张卡的宽度和满行时一致。占位块的内边距和边框
+        // 必须跟真卡片一模一样：flex 的 base size 会被 padding + border 之和
+        // 托底（taffy 和 Chrome / Firefox 一致的行为），空 div 少这 42px，
+        // 等分的份额就白送给同排的真卡片——实测下排两张卡各 255px、上排
+        // 四张各 235px，两排卡片宽度对不上就是这么来的。
         for _ in n..CARDS_PER_ROW {
-            row = row.child(div().flex_1().min_w(px(CARD_MIN_W)));
+            row = row.child(div().flex_1().min_w(px(CARD_MIN_W)).p_5().border_1());
         }
         rows.push(row);
     }
     rows
 }
 
+/// 卡片小标题行：图标 + 标题 + 右侧徽章。
 fn card_header(icon: AnyElement, title: &str, chip: Option<String>) -> Div {
     div()
         .flex()
         .items_center()
         .justify_between()
+        .gap_2()
         .mb_4()
         .child(
-            div().flex().items_center().gap_2().child(icon).child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(TEXT))
-                    .child(title.to_string()),
-            ),
-        )
-        .children(chip.map(|c| {
             div()
-                .px_2()
-                .py(px(2.))
-                .rounded_md()
-                .bg(rgb(SURF_LOW))
-                .text_xs()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(MUTED))
-                .child(c)
-        }))
+                .flex()
+                .items_center()
+                .gap_2()
+                // 不给 min_w(0)，标题和徽章都按各自内容宽度占位，两边加起来
+                // 超过卡片宽度时谁也不肯让，直接顶出卡片。
+                .min_w(px(0.))
+                .child(icon)
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT))
+                        .child(title.to_string()),
+                ),
+        )
+        .children(chip.map(header_chip))
+}
+
+/// 卡片右上角的徽章。
+///
+/// 卡片只有约 1/4 行宽，徽章是次要信息：位置不够时先缩它、缩不下就省略号，
+/// 绝不许把卡片撑破。`truncate` 里的 `overflow_hidden` 同时把自动最小尺寸
+/// 归零，否则文字的最小内容宽度会顶着徽章不缩。
+fn header_chip(text: String) -> Div {
+    div()
+        .flex_shrink()
+        .min_w(px(0.))
+        .truncate()
+        .px_2()
+        .py(px(2.))
+        .rounded_md()
+        .bg(rgb(SURF_LOW))
+        .text_xs()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(rgb(MUTED))
+        .child(text)
 }
 
 /// 大数字 + 单位（各卡片的主读数）。
@@ -347,22 +400,15 @@ fn render_health_card(root: &Root, snap: &StatusSnapshot) -> Div {
                 .text_color(rgb(TEXT))
                 .child(tr_status_card_health(lang).to_string()),
         )
-        .child(div().flex_1());
+        .child(div().flex_1().min_w(px(0.)));
     // 四列布局下这张卡只有约 1/4 宽，塞两个徽章会把第二个裁掉半截。
     // 内存总量在同排的内存卡片里已经有「共 xx GB」，这里只留系统版本。
+    //
+    // 24 字的上限是按 macOS 的「macOS 15.6」定的，Windows 的
+    // 「Windows 11 Home China」一个都截不掉——上限只是粗筛，真正兜底的是
+    // `header_chip` 的截断和卡片的 `overflow_hidden`。
     if !snap.os_name.is_empty() {
-        header = header.child(
-            div()
-                .flex_none()
-                .px_2()
-                .py(px(2.))
-                .rounded_md()
-                .bg(rgb(SURF_LOW))
-                .text_xs()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(MUTED))
-                .child(truncate(&snap.os_name, 24).to_string()),
-        );
+        header = header.child(header_chip(truncate(&snap.os_name, 24).to_string()));
     }
 
     // 得分环 + 中央文字
@@ -402,12 +448,7 @@ fn render_health_card(root: &Root, snap: &StatusSnapshot) -> Div {
                 ),
         );
 
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(header)
         .child(
             div()
@@ -477,12 +518,7 @@ fn render_health_card(root: &Root, snap: &StatusSnapshot) -> Div {
 fn render_cpu_card(snap: &StatusSnapshot, history: &[f32], root: &Root) -> Div {
     let lang = root.language;
     let temp_chip = snap.thermal.cpu_temp.map(|t| format!("{t:.0} °C"));
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_pulse(MUTED, 16.),
             tr_status_card_cpu(lang),
@@ -502,16 +538,27 @@ fn render_cpu_card(snap: &StatusSnapshot, history: &[f32], root: &Root) -> Div {
 
 /// GPU 卡片。刻意和 CPU 卡片同构（大数字 + 柱状历史 + 脚注），因为两者
 /// 是同一类东西——用户扫一眼就该知道该看哪个数字，不需要重新学一种排版。
-/// 调用方保证 `util` 有值（读不到 GPU 的机型整张卡不渲染），所以这里不做
-/// 「不可用」兜底——拿 0% 冒充会让人以为 GPU 闲着。
+///
+/// 笔记本普遍是核显 + 独显：多于一张时底部换成切换按钮，卡片显示选中那张
+/// 的读数。按钮顶掉的是脚注（型号名 + 渲染器占用）——按钮上已经有厂商名，
+/// 同一行位置再写一遍型号是重复信息。
 fn render_gpu_card(
-    gpu: &crate::core::status::GpuReading,
-    util: f32,
+    gpus: &[crate::core::status::GpuReading],
+    selected: usize,
     history: &[f32],
     root: &Root,
+    cx: &mut Context<Root>,
 ) -> Div {
     let lang = root.language;
-    let vram_chip = gpu.vram_in_use.map(fmt_mem);
+    let gpu = &gpus[selected];
+    // 徽章位只有一个：温度比显存更值得放在那儿（和 CPU 卡片同一套语言，
+    // 一眼扫过去两张卡的右上角都是温度）。拿不到温度才退回显存。
+    let chip = match gpu.temp_c {
+        Some(t) => Some(format!("{t:.0} °C")),
+        None => gpu
+            .vram_in_use
+            .map(|bytes| format!("{} {}", tr_status_vram(lang), fmt_mem(bytes))),
+    };
 
     let mut footer = Vec::new();
     if let Some(name) = &gpu.name {
@@ -520,24 +567,75 @@ fn render_gpu_card(
     if let Some(r) = gpu.renderer_utilization {
         footer.push(format!("{} {r:.0}%", tr_status_renderer(lang)));
     }
+    // 温度占了徽章位时，显存挪到脚注，别丢信息。
+    if gpu.temp_c.is_some() {
+        if let Some(bytes) = gpu.vram_in_use {
+            footer.push(format!("{} {}", tr_status_vram(lang), fmt_mem(bytes)));
+        }
+    }
     if footer.is_empty() {
         footer.push(tr_status_no_gpu(lang).to_string());
     }
 
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_gpu(MUTED, 16.),
             tr_status_card_gpu(lang),
-            vram_chip.map(|v| format!("{} {v}", tr_status_vram(lang))),
+            chip,
         ))
-        .child(big_number(format!("{util:.0}"), "%".to_string()))
+        // 读不到利用率的卡不会进这张表（见平台层），unwrap_or 只是兜底。
+        .child(big_number(
+            format!("{:.0}", gpu.utilization.unwrap_or(0.0)),
+            "%".to_string(),
+        ))
         .child(history_bars(history))
-        .child(card_footer(footer))
+        .map(|card| {
+            if gpus.len() > 1 {
+                card.child(gpu_switch_buttons(gpus, selected, cx))
+            } else {
+                card.child(card_footer(footer))
+            }
+        })
+}
+
+/// 多显卡时的切换按钮，样式与风扇档位按钮一致——两者都是「同一张卡上的
+/// 互斥选择」，长得一样用户就不用重新学。
+fn gpu_switch_buttons(
+    gpus: &[crate::core::status::GpuReading],
+    selected: usize,
+    cx: &mut Context<Root>,
+) -> Div {
+    let mut row = div().mt_3().flex().gap_2();
+    for ((index, gpu), label) in gpus.iter().enumerate().zip(gpu_labels(gpus)) {
+        let is_active = index == selected;
+        let id = gpu.id.clone();
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("gpu-{}", gpu.id)))
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .py(px(6.))
+                .rounded_lg()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_center()
+                .cursor_pointer()
+                .when(is_active, |d| {
+                    d.bg(rgb(PRIMARY)).text_color(rgb(ON_PRIMARY))
+                })
+                .when(!is_active, |d| {
+                    d.bg(rgb(SURF_LOW))
+                        .text_color(rgb(MUTED))
+                        .hover(|h| h.bg(rgb(SURF_HIGH)))
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_gpu(id.clone(), cx);
+                })),
+        );
+    }
+    row
 }
 
 /// 电池电量对应的强调色：低电量要显眼，充电中回到主色。
@@ -578,12 +676,7 @@ fn render_battery_card(bat: &crate::core::status::BatteryReading, root: &Root) -
         footer.push(format!("{} {h:.0}%", tr_status_battery_health(lang)));
     }
 
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_battery(accent, bat.percent / 100.0, 16.),
             tr_status_card_battery(lang),
@@ -623,12 +716,7 @@ fn render_memory_card(snap: &StatusSnapshot, root: &Root) -> Div {
             fmt_mem(snap.swap_used)
         ));
     }
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_ram(MUTED, 16.),
             tr_status_card_memory(lang),
@@ -651,12 +739,7 @@ fn render_disk_card(root: &Root) -> Div {
     } else {
         0.0
     };
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_disk(MUTED, 16.),
             tr_status_card_disk(lang),
@@ -676,12 +759,7 @@ fn render_disk_card(root: &Root) -> Div {
 fn render_network_card(snap: &StatusSnapshot, root: &Root) -> Div {
     let lang = root.language;
     let rate = |bps: f64| format!("{}/s", fmt_size(bps as u64));
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_globe(MUTED, 16.),
             tr_status_card_network(lang),
@@ -792,12 +870,7 @@ fn render_fan_card(snap: &StatusSnapshot, root: &Root, cx: &mut Context<Root>) -
     let lang = root.language;
     let fan = snap.thermal.fans.first();
     let temp_chip = snap.thermal.cpu_temp.map(|t| format!("{t:.0} °C"));
-    card()
-        .flex_1()
-        .min_w(px(CARD_MIN_W))
-        .p_5()
-        .flex()
-        .flex_col()
+    status_card()
         .child(card_header(
             icon_fan(MUTED, 16.),
             tr_status_card_fan(lang),
@@ -812,9 +885,12 @@ fn render_fan_card(snap: &StatusSnapshot, root: &Root, cx: &mut Context<Root>) -
                 .text_color(rgb(OUTLINE))
                 .child(tr_status_no_fan(lang).to_string())
         })
-        .when(!snap.thermal.fans.is_empty(), |d| {
-            d.child(fan_mode_buttons(root, snap.thermal.cpu_temp.is_some(), cx))
-        })
+        // Windows 只能读转速、改不了档位（见 `platform::fan_control_supported`）。
+        // 画出来再点一次报错，不如根本不画。
+        .when(
+            !snap.thermal.fans.is_empty() && crate::platform::fan_control_supported(),
+            |d| d.child(fan_mode_buttons(root, snap.thermal.cpu_temp.is_some(), cx)),
+        )
         // 装了特权守护进程才给移除入口：没装的机器上这一行毫无意义。
         .when(root.monitor.fan_helper_installed, |d| {
             let disabled = root.monitor.fan_applying;
@@ -1201,8 +1277,22 @@ pub fn render_status_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 [
                     Some(render_health_card(root, snap)),
                     Some(render_cpu_card(snap, &root.monitor.cpu_history, root)),
-                    snap.gpu.utilization.map(|util| {
-                        render_gpu_card(&snap.gpu, util, &root.monitor.gpu_history, root)
+                    (!snap.gpus.is_empty()).then(|| {
+                        // 选中的那张；选择由采样任务维护，这里只要兜住
+                        // 「刚换过卡、这一拍还没轮到」的一帧。
+                        let selected = root
+                            .monitor
+                            .gpu_selected
+                            .as_ref()
+                            .and_then(|id| snap.gpus.iter().position(|g| &g.id == id))
+                            .unwrap_or(0);
+                        let history = root
+                            .monitor
+                            .gpu_history
+                            .get(&snap.gpus[selected].id)
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]);
+                        render_gpu_card(&snap.gpus, selected, history, root, cx)
                     }),
                     Some(render_memory_card(snap, root)),
                     Some(render_disk_card(root)),

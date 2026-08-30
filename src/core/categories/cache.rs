@@ -28,6 +28,9 @@ pub(super) fn push_cache_targets(
 fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path, brew_cleanup_at: Option<i64>) {
     #[cfg(windows)]
     {
+        // brew 只在 macOS 分支用得上。Windows 上不消费一下，clippy 的
+        // `-D warnings` 会把 CI 卡在「未使用的参数」上。
+        let _ = brew_cleanup_at;
         let Some(local) = crate::platform::user_cache_dir() else {
             return;
         };

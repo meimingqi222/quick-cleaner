@@ -1,6 +1,5 @@
 //! MFT 字节解析与记录解析
 
-use super::mft_types::*;
 use crate::core::disk::ScanError;
 use std::os::windows::ffi::OsStrExt;
 

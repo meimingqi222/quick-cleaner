@@ -159,19 +159,23 @@ fn sub_dict(dict: CFTypeRef, key: &str) -> Option<CFTypeRef> {
 ///
 /// 数据来自 `IOAccelerator` 服务的 `PerformanceStatistics` 字典——这是活动
 /// 监视器和 asitop 用的同一个来源，没有别的公开通道。机器上可能挂着多个
-/// accelerator（独显 + 核显、或者虚拟的），取利用率最高的那个：用户关心的
-/// 是「GPU 忙不忙」，而不是某一颗具体芯片。
-pub fn read_gpu() -> GpuReading {
-    let mut best = GpuReading::default();
+/// accelerator（独显 + 核显、或者虚拟的），**全都列出来**交给 UI 切换，
+/// 而不是替用户挑一张。
+///
+/// 顺序就是 IORegistry 的枚举顺序，稳定；`id` 用序号，UI 靠它记住用户的
+/// 选择。读不出利用率的条目（虚拟 accelerator）跳过：它们在切换按钮里只会
+/// 挤掉真显卡的位置。
+pub fn read_gpus() -> Vec<GpuReading> {
+    let mut gpus = Vec::new();
     unsafe {
         let matcher = IOServiceMatching(c"IOAccelerator".as_ptr());
         if matcher.is_null() {
-            return best;
+            return gpus;
         }
         let mut iter: u32 = 0;
         // matcher 会被消费掉，失败也不用自己释放。
         if IOServiceGetMatchingServices(0, matcher, &mut iter) != 0 || iter == 0 {
-            return best;
+            return gpus;
         }
         loop {
             let entry = IOIteratorNext(iter);
@@ -185,16 +189,20 @@ pub fn read_gpu() -> GpuReading {
                         // 老驱动没有 Device Utilization %，退到渲染器占用。
                         .or_else(|| number(stats, "Renderer Utilization %"))
                         .map(|v| v.clamp(0, 100) as f32);
-                    if util.unwrap_or(-1.0) >= best.utilization.unwrap_or(-1.0) {
-                        best = GpuReading {
+                    if let Some(util) = util {
+                        gpus.push(GpuReading {
+                            id: format!("{}", gpus.len()),
                             name: string(dict, "model").or_else(|| string(dict, "IOClass")),
-                            utilization: util,
+                            utilization: Some(util),
                             renderer_utilization: number(stats, "Renderer Utilization %")
                                 .map(|v| v.clamp(0, 100) as f32),
                             vram_in_use: number(stats, "In use system memory")
                                 .filter(|v| *v > 0)
                                 .map(|v| v as u64),
-                        };
+                            // IOAccelerator 不提供温度；macOS 的芯片温度走
+                            // SMC（见 status.rs 的 read_thermal）。
+                            temp_c: None,
+                        });
                     }
                 }
             }
@@ -202,7 +210,7 @@ pub fn read_gpu() -> GpuReading {
         }
         IOObjectRelease(iter);
     }
-    best
+    gpus
 }
 
 // ------------------------------------------------------------------ 电池
