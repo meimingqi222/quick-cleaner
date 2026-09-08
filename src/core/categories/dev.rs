@@ -369,8 +369,108 @@ pub(super) fn push_ai_agent_targets(
         }
     }
 
+    push_devin_cli_versions(t, home, roaming);
     push_obsolete_vscode_extensions(t, home);
     push_orphaned_editor_workspaces(t, home, roaming);
+}
+
+/// Devin CLI 自管理的版本目录：`_versions/<版本>/` 与 `_download/*.tar.gz`。
+///
+/// Devin CLI 每次 `devin update` 都会下载新安装包、解压出新版本目录，
+/// 但从不回收旧的——旧版本目录和下载包纯粹是垃圾，删掉只代价重新下载。
+///
+/// 当前版本由 `_versions/current` 软链接指向，**绝不能**靠"最新数字版本"
+/// 推断——用户可能回滚到旧版。
+///
+/// 路径平台相关：
+/// - macOS / Linux：`~/.local/share/devin/cli/_versions`
+/// - Windows：`%APPDATA%\devin\cli\_versions`
+fn push_devin_cli_versions(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path) {
+    const AGENT: CategoryId = CategoryId::AiAgents;
+
+    #[cfg(windows)]
+    let cli_root = roaming.join("devin/cli");
+    #[cfg(not(windows))]
+    let cli_root = {
+        let _ = roaming;
+        home.join(".local/share/devin/cli")
+    };
+
+    let versions_dir = cli_root.join("_versions");
+    if !versions_dir.is_dir() {
+        return;
+    }
+
+    // 读 current 软链接解析当前版本目录名。read_link 返回的是链接目标，
+    // 可能是相对路径（如 "3000.6.14"）也可能是绝对路径，取末段即可。
+    let current_version = std::fs::read_link(versions_dir.join("current"))
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+
+    // _update.lock 存在且较新时说明可能正在更新，不预选。
+    // 锁文件在更新完成后会被删除；长期残留的锁文件（本机实测 Jun 至今）
+    // 说明上次更新异常退出，此时预选是安全的。
+    let updating = {
+        let lock = cli_root.join("_update.lock");
+        lock.exists() && !super::helpers::is_older_than(&lock, std::time::Duration::from_secs(3600))
+    };
+
+    // 旧版本目录：跳过 current 软链接、当前版本、_download。
+    // current 缺失时无法确定当前版本，不预选任何版本目录——分不清就别默认删。
+    let recommend_versions = current_version.is_some() && !updating;
+
+    let Ok(entries) = std::fs::read_dir(&versions_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "current"
+            || name == "_download"
+            || Some(&name) == current_version.as_ref()
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .is_ok_and(|ft| ft.is_dir() && !ft.is_symlink())
+        {
+            continue;
+        }
+        t.push(target_with_recommendation(
+            path,
+            Text::new(
+                format!("Devin CLI · 旧版本 {name}"),
+                format!("Devin CLI · old version {name}"),
+            ),
+            AGENT,
+            recommend_versions,
+        ));
+    }
+
+    // 下载的安装包：装完即废，删了最多重新下载
+    let download_dir = versions_dir.join("_download");
+    if let Ok(entries) = std::fs::read_dir(&download_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".tar.gz") {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            t.push(target_with_recommendation(
+                path,
+                Text::new(
+                    format!("Devin CLI · 安装包 {name}"),
+                    format!("Devin CLI · installer {name}"),
+                ),
+                AGENT,
+                !updating,
+            ));
+        }
+    }
 }
 
 /// 只报告已明确指向"用户主目录下不存在文件夹"的本地工作区。
@@ -672,5 +772,111 @@ mod tests {
         assert_eq!(targets[0].path, old);
         assert!(targets[0].recommended);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Devin CLI 旧版本目录与安装包应被列入，当前版本与 current 软链接不能列入。
+    /// 软链接创建是 Unix 专有，Windows 上跳过。
+    #[test]
+    #[cfg(unix)]
+    fn devin_cli_old_versions_and_installers_are_listed() {
+        use super::push_devin_cli_versions;
+        use crate::core::categories::CategoryId;
+
+        let root = crate::core::testing::fixture("qc_devin_versions");
+        let _ = std::fs::remove_dir_all(&root);
+        let cli_root = root.join(".local/share/devin/cli");
+        let versions = cli_root.join("_versions");
+        std::fs::create_dir_all(versions.join("3000.6.14/bin")).unwrap();
+        std::fs::create_dir_all(versions.join("3000.6.11/bin")).unwrap();
+        std::fs::create_dir_all(versions.join("3000.6.7/bin")).unwrap();
+        std::fs::create_dir_all(versions.join("_download")).unwrap();
+        std::fs::write(versions.join("_download/3000.6.14.tar.gz"), b"pkg").unwrap();
+        std::fs::write(versions.join("_download/3000.6.11.tar.gz"), b"pkg").unwrap();
+        std::fs::write(versions.join("_download/3000.6.7.tar.gz"), b"pkg").unwrap();
+        // current 软链接指向当前版本
+        std::os::unix::fs::symlink("3000.6.14", versions.join("current")).unwrap();
+
+        let mut targets = Vec::new();
+        push_devin_cli_versions(&mut targets, &root, &root.join("roaming"));
+
+        // 旧版本目录：3000.6.11 和 3000.6.7，当前版本 3000.6.14 不应出现
+        let old_dirs: Vec<_> = targets
+            .iter()
+            .filter(|t| t.category == CategoryId::AiAgents)
+            .filter(|t| t.path.is_dir())
+            .collect();
+        assert_eq!(old_dirs.len(), 2, "应有 2 个旧版本目录，实得 {}", old_dirs.len());
+        assert!(old_dirs.iter().any(|t| t.path.ends_with("3000.6.11")));
+        assert!(old_dirs.iter().any(|t| t.path.ends_with("3000.6.7")));
+        assert!(!old_dirs.iter().any(|t| t.path.ends_with("3000.6.14")));
+        assert!(old_dirs.iter().all(|t| t.recommended), "旧版本目录应默认勾选");
+
+        // 安装包：3 个 tar.gz
+        let installers: Vec<_> = targets
+            .iter()
+            .filter(|t| t.path.extension().is_some_and(|e| e == "gz"))
+            .collect();
+        assert_eq!(installers.len(), 3, "应有 3 个安装包，实得 {}", installers.len());
+        assert!(installers.iter().all(|t| t.recommended), "安装包应默认勾选");
+
+        // current 软链接和 _download 目录不应作为旧版本目录出现
+        assert!(!targets.iter().any(|t| t.path.ends_with("current")));
+        assert!(!targets.iter().any(|t| t.path.ends_with("_download")));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `_update.lock` 存在且较新时（可能正在更新），旧版本和安装包不预选。
+    #[test]
+    #[cfg(unix)]
+    fn devin_cli_updating_lock_suppresses_recommendation() {
+        use super::push_devin_cli_versions;
+
+        let root = crate::core::testing::fixture("qc_devin_lock");
+        let _ = std::fs::remove_dir_all(&root);
+        let cli_root = root.join(".local/share/devin/cli");
+        let versions = cli_root.join("_versions");
+        std::fs::create_dir_all(versions.join("3000.6.14/bin")).unwrap();
+        std::fs::create_dir_all(versions.join("3000.6.11/bin")).unwrap();
+        std::os::unix::fs::symlink("3000.6.14", versions.join("current")).unwrap();
+        // 创建一个新鲜的锁文件（0 字节，刚刚修改）
+        std::fs::write(cli_root.join("_update.lock"), b"").unwrap();
+
+        let mut targets = Vec::new();
+        push_devin_cli_versions(&mut targets, &root, &root.join("roaming"));
+
+        // 锁文件刚创建，所有目标不应预选
+        assert!(targets.iter().all(|t| !t.recommended), "正在更新时不应预选");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `current` 软链接缺失时（安装损坏），仍然列出所有版本目录但不预选——
+    /// 分不清哪个是当前版本，不能默认删。
+    #[test]
+    #[cfg(unix)]
+    fn devin_cli_missing_current_link_no_recommendation() {
+        use super::push_devin_cli_versions;
+        use crate::core::categories::CategoryId;
+
+        let root = crate::core::testing::fixture("qc_devin_no_current");
+        let _ = std::fs::remove_dir_all(&root);
+        let versions = root.join(".local/share/devin/cli/_versions");
+        std::fs::create_dir_all(versions.join("3000.6.14/bin")).unwrap();
+        std::fs::create_dir_all(versions.join("3000.6.11/bin")).unwrap();
+        // 不创建 current 软链接
+
+        let mut targets = Vec::new();
+        push_devin_cli_versions(&mut targets, &root, &root.join("roaming"));
+
+        let old_dirs: Vec<_> = targets
+            .iter()
+            .filter(|t| t.category == CategoryId::AiAgents && t.path.is_dir())
+            .collect();
+        // 两个版本目录都列出（分不清当前版本），但都不预选
+        assert_eq!(old_dirs.len(), 2);
+        assert!(old_dirs.iter().all(|t| !t.recommended), "current 缺失时不应预选");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
