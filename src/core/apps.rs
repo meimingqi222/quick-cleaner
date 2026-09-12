@@ -668,11 +668,12 @@ pub fn app_gone_after_residual_clean(
     gone(ResidualSource::UninstallEntry) || gone(ResidualSource::InstallDir)
 }
 
-/// 「彻底清除所选」之后对话框该怎么收尾。
+/// 「彻底清除所选」之后的收尾判定。
 ///
-/// `retry_items` 才会再弹一次：只有勾选了却没清掉的。用户没勾的项视为
-/// 这次不处理，不能再弹第二次。`leftover_for_app` 仍包含未勾选项，用来
-/// 判断软件是否还该留在已安装列表——没清就不能当成已经卸干净。
+/// `retry_items` 记录勾选了却仍留在磁盘上的项——**不再用于自动重开对话框**
+/// （删不掉的多半会一直删不掉，自动重开变成死循环），但状态栏计数和测试
+/// 仍依赖它。`leftover_for_app` 含未勾选项，用来判断软件是否还该留在
+/// 已安装列表——没清就不能当成已经卸干净。
 pub struct ResidualCleanFollowUp {
     pub retry_items: Vec<ResidualItem>,
     pub retry_selected: HashSet<usize>,

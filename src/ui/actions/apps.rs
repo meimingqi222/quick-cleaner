@@ -373,10 +373,16 @@ impl crate::ui::Root {
                     .collect();
                 this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
 
-                // 没勾选的项视为这次不处理，不再二次弹出。勾选了却没删掉的
-                // 才留在对话框里方便授权后重试。
-                // 手动处理项和失败项一样要留在列表里：系统扩展在用户去系统
-                // 设置关掉之前一直都在，只是重试没有意义。
+                // 清理后**不再自动重开**残留对话框。
+                //
+                // 以前「勾选了却没删掉的会再弹一次」方便授权后重试；实机
+                // 上删不掉的多半是占用 / ACL / 系统保护，重试还是同样结果，
+                // 变成「点一次彻底清除、弹一次」的循环（百度网盘安装目录 +
+                // TypeLib 就是这种）。状态栏已带失败计数；用户需要时可对该
+                // 应用重新扫描残留。
+                //
+                // `leftover_for_app` 仍要算：没清掉的项不能当成已卸干净，
+                // 不能把软件从已安装列表里摘掉。
                 let unresolved: HashSet<CleanFailure> = report
                     .failed
                     .iter()
@@ -395,23 +401,10 @@ impl crate::ui::Root {
                         // 注册表键、计划任务、系统扩展没有路径，按标识串比对
                         _ => unresolved.contains(&CleanFailure::Id(item.kind.display_label())),
                     });
-                this.residual.selected = follow.retry_selected;
+                this.residual.selected.clear();
+                this.residual.result = None;
                 if app_gone_after_residual_clean(&original_items, &follow.leftover_for_app) {
                     this.drop_app_from_list(&res.app_id);
-                }
-                if follow.retry_items.is_empty() {
-                    this.residual.result = None;
-                } else {
-                    let total_file_size = follow.retry_items.iter().map(ResidualItem::size).sum();
-                    this.residual.result = Some(ResidualScanResult {
-                        app_name: app_name.clone(),
-                        app_id: res.app_id.clone(),
-                        items: follow.retry_items,
-                        total_file_size,
-                        // 重试弹窗沿用本次会话的占用证据：清理刚失败过，
-                        // 进程大概率还在，这条提示正是失败的原因说明。
-                        occupancy: res.occupancy,
-                    });
                 }
 
                 let (ok, fails, manual, size) = (
