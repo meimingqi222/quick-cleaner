@@ -14,6 +14,12 @@ pub fn is_elevated() -> bool {
     unsafe { geteuid() == 0 }
 }
 
+/// macOS 没有 Windows 那种「应用给自己写 Deny Delete」的 ACL 防删。
+/// 门面契约要求两平台同签名，这里恒 false，调用方不会走 ACL 重试。
+pub fn force_delete_access(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// macOS 上可供分析的物理磁盘。
 ///
 /// 现代 macOS（Catalina+）把系统卷和数据卷分开挂载：

@@ -139,6 +139,20 @@ impl From<&Path> for CleanFailure {
     }
 }
 
+/// 删除失败的归类，供 UI 横幅区分「占用」和「权限」。
+///
+/// 只在真正拿到 `io::Error` 时分类；策略拒绝、身份变化、owner 命令失败
+/// 等记 [`FailReason::Other`]。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum FailReason {
+    /// 被其它进程打开（Windows sharing violation / os error 32）。
+    InUse,
+    /// 权限或 ACL 拒绝（os error 5 / `PermissionDenied`）。
+    AccessDenied,
+    #[default]
+    Other,
+}
+
 /// 一次清理的汇总结果。没删掉的目标会被记录下来供 UI 展示。
 #[derive(Clone, Debug, Default)]
 pub struct CleanReport {
@@ -151,6 +165,24 @@ pub struct CleanReport {
     /// 需要用户手动处理的目标。重试无意义，因此和 `failed` 分开计数，
     /// 否则 UI 会把平台限制报成「权限不足」。
     pub manual: Vec<CleanFailure>,
+    /// 清理后仍留在磁盘上的顶层目标的实测体积：`(path, bytes, file_count)`。
+    ///
+    /// 部分失败的目录（Temp 里几个被锁文件）删除前后体积差很大，但
+    /// `apply_clean_result` 会把整条父目标按原样留在列表里。不在这里重测，
+    /// 界面大小就会停在扫描期的旧值——状态栏说释放了 5 GB，列表却纹丝不动。
+    pub remaining_live: Vec<(PathBuf, u64, u64)>,
+    /// 顶层目标的失败摘要：叶子失败数 + 主导原因，供横幅展示。
+    pub fail_info: Vec<TargetFailInfo>,
+}
+
+/// 某个顶层清理目标的失败摘要。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetFailInfo {
+    pub path: PathBuf,
+    /// 映射到该目标下的失败叶子条目数（不是 1）。
+    pub failed_leaves: usize,
+    /// 叶子失败里出现最多的原因。
+    pub reason: FailReason,
 }
 
 impl CleanReport {
@@ -176,6 +208,8 @@ impl CleanReport {
         self.skipped_items.extend(other.skipped_items);
         self.failed.extend(other.failed);
         self.manual.extend(other.manual);
+        self.remaining_live.extend(other.remaining_live);
+        self.fail_info.extend(other.fail_info);
     }
 
     /// 这条路径是不是被策略跳过（白名单 / 保护路径 / 用户取消），而不是删失败。
@@ -281,13 +315,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
-    let dir_removed = match std::fs::remove_dir(path) {
-        Ok(()) => true,
-        Err(err) => {
-            note_delete_failure(path, &err);
-            false
-        }
-    };
+    let dir_removed = remove_dir_forcing(path);
     if dir_removed && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
     } else {
@@ -463,7 +491,59 @@ fn remove_file_forcing(path: &Path) -> bool {
     match std::fs::remove_file(path) {
         Ok(()) => true,
         Err(err) => {
-            note_delete_failure(path, &err);
+            // ACL Deny（应用防删）与只读位不同：清只读无效，要提权拆 ACL 再试。
+            // 只对 PermissionDenied 动手；error 32（句柄占用）改 ACL 也解不开。
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                && crate::platform::force_delete_access(path)
+            {
+                if let Ok(md) = std::fs::symlink_metadata(path) {
+                    clear_readonly(path, &md);
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => return true,
+                    Err(err2) => {
+                        note_io_failure(path, &err2);
+                        return false;
+                    }
+                }
+            }
+            note_io_failure(path, &err);
+            false
+        }
+    }
+}
+
+/// 删空目录。先清目录只读位；仍 Access Denied 时提权拆 ACL 再试。
+///
+/// Windows 上目录也可以带 `FILE_ATTRIBUTE_READONLY`（Go module cache 故意
+/// 设的）。`RemoveDirectory` 对只读目录直接 ERROR_ACCESS_DENIED——文件侧
+/// 早已清只读，目录侧以前漏了，结果是 go/pkg/mod 里文件删光、空壳目录
+/// 却留下，父目录也因「不是空的」报错。
+fn remove_dir_forcing(path: &Path) -> bool {
+    if std::fs::remove_dir(path).is_ok() {
+        return true;
+    }
+    if let Ok(md) = std::fs::symlink_metadata(path) {
+        clear_readonly(path, &md);
+    }
+    match std::fs::remove_dir(path) {
+        Ok(()) => true,
+        Err(err) => {
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                && crate::platform::force_delete_access(path)
+            {
+                if let Ok(md) = std::fs::symlink_metadata(path) {
+                    clear_readonly(path, &md);
+                }
+                match std::fs::remove_dir(path) {
+                    Ok(()) => return true,
+                    Err(err2) => {
+                        note_io_failure(path, &err2);
+                        return false;
+                    }
+                }
+            }
+            note_io_failure(path, &err);
             false
         }
     }
@@ -483,6 +563,113 @@ fn note_delete_failure(path: &Path, err: &dyn std::fmt::Display) {
     } else if n == MAX_LOGGED {
         crate::log!("[删除] 失败原因已记满 {MAX_LOGGED} 条，本批后续不再记录");
     }
+}
+
+/// 拿到具体 `io::Error` 时的失败记录：日志 + 路径→原因，供收尾按父目标聚合。
+fn note_io_failure(path: &Path, err: &std::io::Error) {
+    record_fail_reason(path, classify_io_error(err));
+    note_delete_failure(path, err);
+}
+
+fn classify_io_error(err: &std::io::Error) -> FailReason {
+    // raw_os_error 优先：Windows 上 32/5 是稳定语义，kind 映射有损耗。
+    match err.raw_os_error() {
+        Some(32) => FailReason::InUse,
+        Some(5) => FailReason::AccessDenied,
+        _ => match err.kind() {
+            std::io::ErrorKind::PermissionDenied => FailReason::AccessDenied,
+            _ => FailReason::Other,
+        },
+    }
+}
+
+/// 路径 → 失败原因。`audit` 开新批次时清空。
+static FAIL_REASONS: Mutex<Vec<(PathBuf, FailReason)>> = Mutex::new(Vec::new());
+
+fn record_fail_reason(path: &Path, reason: FailReason) {
+    if let Ok(mut g) = FAIL_REASONS.lock() {
+        // 同路径后写覆盖前写：收尾只关心最终原因。
+        if let Some(slot) = g.iter_mut().find(|(p, _)| p == path) {
+            slot.1 = reason;
+        } else {
+            g.push((path.to_path_buf(), reason));
+        }
+    }
+}
+
+fn take_fail_reasons() -> Vec<(PathBuf, FailReason)> {
+    FAIL_REASONS
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default()
+}
+
+fn fail_reason_for(reasons: &[(PathBuf, FailReason)], leaf: &Path) -> FailReason {
+    reasons
+        .iter()
+        .find(|(p, _)| p == leaf)
+        .map(|(_, r)| *r)
+        .unwrap_or(FailReason::Other)
+}
+
+/// 把叶子失败映射回用户勾选的顶层目标，并统计条数、挑出主导原因。
+fn summarize_failures(
+    targets: &[CleanTarget],
+    failures: &[CleanFailure],
+    reasons: &[(PathBuf, FailReason)],
+) -> Vec<TargetFailInfo> {
+    use std::collections::HashMap;
+    let mut acc: HashMap<PathBuf, (usize, HashMap<FailReason, usize>)> = HashMap::new();
+    for t in targets {
+        for f in failures.iter().filter_map(CleanFailure::as_path) {
+            let hit = f == t.path || (!t.remove_dir && f.starts_with(&t.path));
+            if !hit {
+                continue;
+            }
+            let entry = acc.entry(t.path.clone()).or_default();
+            entry.0 += 1;
+            *entry.1.entry(fail_reason_for(reasons, f)).or_default() += 1;
+        }
+    }
+    acc.into_iter()
+        .map(|(path, (failed_leaves, by_reason))| {
+            let reason = by_reason
+                .into_iter()
+                .max_by_key(|(_, n)| *n)
+                .map(|(r, _)| r)
+                .unwrap_or(FailReason::Other);
+            TargetFailInfo {
+                path,
+                failed_leaves,
+                reason,
+            }
+        })
+        .collect()
+}
+
+/// 对清理后仍留在磁盘上的顶层目标重新称重。
+///
+/// 跳过虚拟路径（Docker/brew 没有真实文件系统对象）。取消场景下未处理到的
+/// 目标也会进来——它们体积未变，重测结果等于原值，无害。
+fn measure_remaining(targets: &[CleanTarget], failures: &[CleanFailure], p: &CleanProgress) -> Vec<(PathBuf, u64, u64)> {
+    let live = AtomicBool::new(true);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for t in targets {
+        let still = failures.iter().filter_map(CleanFailure::as_path).any(|f| {
+            f == t.path || (!t.remove_dir && f.starts_with(&t.path))
+        }) || p.cancelled() && t.path.exists();
+        if !still || !seen.insert(t.path.clone()) {
+            continue;
+        }
+        if crate::core::model::is_virtual_path(&t.path) {
+            continue;
+        }
+        if let Some((bytes, files, _)) = crate::core::scanner::measure_target(&t.path, &live) {
+            out.push((t.path.clone(), bytes, files));
+        }
+    }
+    out
 }
 
 static DELETE_FAILURES_LOGGED: std::sync::atomic::AtomicUsize =
@@ -707,6 +894,7 @@ fn audit_result(report: &CleanReport, p: &CleanProgress) {
 /// 几十万个文件，全记下来日志会先被自己撑爆，而定位问题靠的是顶层目标。
 fn audit(action: &str, paths: impl Iterator<Item = PathBuf>) {
     DELETE_FAILURES_LOGGED.store(0, Ordering::Relaxed);
+    let _ = take_fail_reasons();
     let list: Vec<String> = paths.map(|p| p.display().to_string()).collect();
     crate::log!(
         "[删除] {action}，共 {} 个目标：{}",
@@ -800,6 +988,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
 
         match spot.get(d) {
             Some(crate::core::inuse::SpotCheck::Busy) => {
+                record_fail_reason(d, FailReason::InUse);
                 note_delete_failure(d, &"became-busy");
                 report.record(d, CleanResult::Failed);
                 continue;
@@ -928,6 +1117,24 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             report.merge(clean_dir_contents(d, p));
         }
     }
+
+    // 收尾（仍在后台线程）：按顶层目标聚合失败原因，并对仍留在磁盘上的
+    // 真实路径重新称重。UI 若还拿扫描期旧 size，会出现「状态栏释放了 5GB、
+    // 列表体积纹丝不动」。
+    let reasons = take_fail_reasons();
+    report.fail_info = summarize_failures(targets, &report.failed, &reasons);
+    report.remaining_live = measure_remaining(
+        targets,
+        &report
+            .failed
+            .iter()
+            .chain(report.skipped_items.iter())
+            .chain(report.manual.iter())
+            .cloned()
+            .collect::<Vec<_>>(),
+        p,
+    );
+
     audit_result(&report, p);
     report
 }
@@ -1047,6 +1254,7 @@ pub fn clean_arbitrary_items(
 
         match spot.get(path) {
             Some(crate::core::inuse::SpotCheck::Busy) => {
+                record_fail_reason(path, FailReason::InUse);
                 note_delete_failure(path, &"became-busy");
                 report.record(path, CleanResult::Failed);
                 continue;
@@ -1691,6 +1899,76 @@ mod tests {
         assert!(!base.exists());
     }
 
+    /// Windows 上 Go module cache 会把**目录**也设成只读。`RemoveDirectory`
+    /// 对只读目录直接 access denied——只清文件侧的只读位不够，空壳目录会
+    /// 留下并让父目录报「不是空的」。这正是 go/pkg/mod 失败清单里那批
+    /// `拒绝访问 (os error 5)` 的根因。
+    #[cfg(windows)]
+    #[test]
+    fn deletes_readonly_directory_shell() {
+        let base = crate::core::testing::fixture("qc_readonly_dir_shell");
+        let _ = std::fs::remove_dir_all(&base);
+        let shell = base.join("mod@v1.0.0");
+        std::fs::create_dir_all(&shell).unwrap();
+        std::fs::write(shell.join("go.mod"), b"module x").unwrap();
+
+        let mut perms = std::fs::metadata(&shell).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&shell, perms).unwrap();
+        assert!(std::fs::metadata(&shell).unwrap().permissions().readonly());
+
+        assert_eq!(
+            clean_path(&base, &CleanProgress::default()),
+            CleanResult::Ok
+        );
+        assert!(!shell.exists(), "只读空壳目录必须被清掉");
+        assert!(!base.exists());
+    }
+
+    /// 应用在日志目录上写 Deny Delete ACL 做防删（WorkBuddy 实机形态）。
+    /// 进程早已退出，句柄占用不是原因；提权后应能拆掉 ACL 再删。
+    /// 未提权的测试环境直接跳过——`force_delete_access` 本身有
+    /// `is_elevated` 闸门，这里只验证接线没有断。
+    #[cfg(windows)]
+    #[test]
+    fn acl_deny_delete_is_overridden_when_elevated() {
+        use std::os::windows::process::CommandExt;
+        if !crate::platform::is_elevated() {
+            return;
+        }
+        let base = crate::core::testing::fixture("qc_acl_deny_delete");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let locked = base.join("2026-09-06");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("app.log"), b"locked").unwrap();
+
+        let display = locked.display().to_string();
+        let sid = crate::platform::windows::security::current_user_sid()
+            .expect("提权进程应能读到自己的 SID");
+        // Deny Delete + DeleteSubdirectoriesAndFiles，与 WorkBuddy 同款。
+        let applied = std::process::Command::new("icacls")
+            .args([&display, "/deny", &format!("*{sid}:(D,DC)")])
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .status();
+        assert!(
+            matches!(applied, Ok(s) if s.success()),
+            "icacls 没写上 Deny，后面的拒绝断言失去前提"
+        );
+
+        // 先确认 Deny 真的挡得住裸删（否则测试什么都没验到）。
+        assert!(
+            std::fs::remove_dir_all(&locked).is_err(),
+            "Deny Delete 生效时裸删必须失败"
+        );
+
+        let p = CleanProgress::default();
+        assert_eq!(clean_path(&base, &p), CleanResult::Ok);
+        assert!(!locked.exists(), "拆掉 ACL 后必须能删干净");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     // ---- 任务 1：活数据库删除级闸门 + SQLite 家族删除顺序 ----
 
     /// 目录顶层带活库标记：整个目录在 `clean_path` 这一关就被拒绝，不会
@@ -1823,5 +2101,85 @@ mod tests {
         assert!(nested.join("app.db").exists());
         assert!(nested.join("app.db-wal").exists());
         assert!(nested.join("app.db-shm").exists());
+    }
+
+    #[test]
+    fn classify_io_error_maps_windows_codes() {
+        let sharing = std::io::Error::from_raw_os_error(32);
+        assert_eq!(classify_io_error(&sharing), FailReason::InUse);
+        let denied = std::io::Error::from_raw_os_error(5);
+        assert_eq!(classify_io_error(&denied), FailReason::AccessDenied);
+        let other = std::io::Error::from_raw_os_error(2);
+        assert_eq!(classify_io_error(&other), FailReason::Other);
+    }
+
+    #[test]
+    fn summarize_failures_maps_leaves_to_content_only_parent() {
+        let parent = PathBuf::from(r"C:\cache");
+        let targets = vec![CleanTarget::empty(parent.clone())];
+        let failures = vec![
+            CleanFailure::Path(parent.join("a.tmp")),
+            CleanFailure::Path(parent.join("b.tmp")),
+            CleanFailure::Path(parent.join("sub/c.tmp")),
+        ];
+        let reasons = vec![
+            (parent.join("a.tmp"), FailReason::InUse),
+            (parent.join("b.tmp"), FailReason::InUse),
+            (parent.join("sub/c.tmp"), FailReason::AccessDenied),
+        ];
+        let info = summarize_failures(&targets, &failures, &reasons);
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].path, parent);
+        assert_eq!(info[0].failed_leaves, 3);
+        assert_eq!(info[0].reason, FailReason::InUse);
+    }
+
+    /// 部分失败的目录必须重测：状态栏释放量真实，列表体积也要跟上。
+    #[test]
+    fn clean_targets_remeasures_partially_failed_dir() {
+        let base = crate::core::testing::fixture("qc_remeasure_partial");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let ok = base.join("ok.bin");
+        let locked = base.join("locked.bin");
+        std::fs::write(&ok, vec![0u8; 4096]).unwrap();
+        std::fs::write(&locked, vec![0u8; 8192]).unwrap();
+
+        // 用子进程占住 locked，模拟「部分文件被占用」。
+        #[cfg(windows)]
+        let _holder = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0) // 不共享 → 删除会 sharing violation
+                .open(&locked)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let _holder = std::fs::File::open(&locked).unwrap();
+
+        let targets = vec![CleanTarget::empty(base.clone())];
+        let p = CleanProgress::new(2, 4096 + 8192);
+        let report = clean_targets(&targets, &p);
+
+        assert!(
+            report.failed.iter().any(|f| f.as_path() == Some(locked.as_path()) || f.as_path().map(|p| p.starts_with(&base)).unwrap_or(false)),
+            "被锁文件必须进失败清单"
+        );
+        let live = report
+            .remaining_live
+            .iter()
+            .find(|(path, _, _)| *path == base)
+            .expect("部分失败的父目录必须重测");
+        assert!(
+            live.1 < 4096 + 8192,
+            "重测体积应小于清理前原值，实测 {}",
+            live.1
+        );
+        assert!(live.1 >= 8192, "被锁文件的体积应仍在，实测 {}", live.1);
+        assert!(live.2 >= 1);
+
+        drop(_holder);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

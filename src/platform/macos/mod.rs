@@ -30,7 +30,7 @@ pub use apps::{
     list_installed_apps, open_in_default_app, reveal_in_explorer, run_uninstaller_and_wait,
 };
 pub use disk::{
-    detect_system_language, get_volume_space, is_elevated, list_volumes,
+    detect_system_language, force_delete_access, get_volume_space, is_elevated, list_volumes,
     relaunch_as_admin_if_needed, scan_volume,
 };
 pub use dock::set_dock_icon;

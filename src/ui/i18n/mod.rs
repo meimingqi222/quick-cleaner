@@ -980,8 +980,41 @@ pub fn tr_category_empty(lang: Language) -> &'static str {
 
 pub fn tr_last_clean_skipped(lang: Language, count: usize) -> String {
     match lang {
-        Language::Zh => format!("上次清理有 {count} 个目标未能清理"),
-        Language::En => format!("{count} targets could not be cleaned last time"),
+        Language::Zh => format!("上次清理有 {count} 个目标仍有残留"),
+        Language::En => format!("{count} targets still have leftovers after last clean"),
+    }
+}
+
+/// 失败原因短文案。
+pub fn tr_fail_reason(lang: Language, reason: crate::core::cleaner::FailReason) -> &'static str {
+    use crate::core::cleaner::FailReason;
+    match (lang, reason) {
+        (Language::Zh, FailReason::InUse) => "被占用",
+        (Language::En, FailReason::InUse) => "in use",
+        (Language::Zh, FailReason::AccessDenied) => "权限不足",
+        (Language::En, FailReason::AccessDenied) => "access denied",
+        (Language::Zh, FailReason::Other) => "未能删除",
+        (Language::En, FailReason::Other) => "not removed",
+    }
+}
+
+/// 失败详情行：路径 · 剩余体积 · 原因（N 个文件）。
+pub fn tr_failed_item_detail(
+    lang: Language,
+    path: &str,
+    size: &str,
+    reason: crate::core::cleaner::FailReason,
+    files: u64,
+) -> String {
+    match lang {
+        Language::Zh => format!(
+            "{path} · {size} · {}（{files} 个文件）",
+            tr_fail_reason(lang, reason)
+        ),
+        Language::En => format!(
+            "{path} · {size} · {} ({files} files)",
+            tr_fail_reason(lang, reason)
+        ),
     }
 }
 

@@ -127,6 +127,27 @@ impl JunkState {
         }
     }
 
+    /// 用清理后的实测体积覆盖仍留在列表里的目标。
+    ///
+    /// `apply_clean_result` 对部分失败的父目标原样保留（含扫描期 size）。
+    /// 不覆盖的话，状态栏会说释放了几个 GB，列表体积却纹丝不动。
+    pub fn apply_remaining_sizes(&mut self, remaining: &[(PathBuf, u64, u64)]) {
+        if remaining.is_empty() {
+            return;
+        }
+        for cat in &mut self.categories {
+            for item in &mut cat.items {
+                if let Some((_, bytes, files)) =
+                    remaining.iter().find(|(p, _, _)| *p == item.path)
+                {
+                    item.size = *bytes;
+                    item.file_count = *files;
+                }
+            }
+            cat.total_size = cat.items.iter().map(|i| i.size).sum();
+        }
+    }
+
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         self.selected_items().map(|i| i.path.clone()).collect()
     }
@@ -487,6 +508,19 @@ impl DiskState {
 }
 
 /// 正在执行的清理任务及其结果。
+/// 清理后仍留在列表里的一条失败目标，含重测体积与原因。
+#[derive(Clone, Debug)]
+pub struct FailedItem {
+    pub path: PathBuf,
+    /// 重测后的剩余体积；虚拟路径或测不到时为 0。
+    pub bytes: u64,
+    /// 重测后的剩余文件数。
+    pub files: u64,
+    pub reason: crate::core::cleaner::FailReason,
+    /// 映射到该目标下的失败叶子数。
+    pub failed_leaves: usize,
+}
+
 pub struct CleanState {
     pub running: bool,
     pub progress: Option<Arc<CleanProgress>>,
@@ -494,7 +528,7 @@ pub struct CleanState {
     /// 一旦清理和扫描重叠就会互相顶掉对方的句柄。
     pub task: Option<Task<()>>,
     pub freed_total: u64,
-    pub last_failed: Vec<PathBuf>,
+    pub last_failed: Vec<FailedItem>,
     pub last_failed_files: u64,
     pub show_failed_details: bool,
 }
@@ -966,6 +1000,24 @@ mod tests {
             j.selected.contains(&PathBuf::from(r"C:\rec\b")),
             "删失败的不该被摘掉"
         );
+    }
+
+    /// 部分失败后用实测体积覆盖列表，避免「释放了 5GB、列表纹丝不动」。
+    #[test]
+    fn apply_remaining_sizes_updates_stale_targets() {
+        let mut j = junk_fixture();
+        j.categories = vec![CategorySummary {
+            category: CategoryId::UserTemp,
+            total_size: 1000,
+            items: vec![item(r"C:\temp", CategoryId::UserTemp, 1000, 10)],
+            partial: false,
+        }];
+
+        j.apply_remaining_sizes(&[(PathBuf::from(r"C:\temp"), 120, 2)]);
+
+        assert_eq!(j.categories[0].items[0].size, 120);
+        assert_eq!(j.categories[0].items[0].file_count, 2);
+        assert_eq!(j.categories[0].total_size, 120);
     }
 
     #[test]

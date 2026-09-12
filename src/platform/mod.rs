@@ -52,6 +52,7 @@ macro_rules! platform_contract {
             use std::sync::atomic::AtomicBool;
 
             let _: fn() -> bool = is_elevated;
+            let _: fn(&Path) -> bool = force_delete_access;
             let _: fn() -> Language = detect_system_language;
             let _: fn() -> bool = relaunch_as_admin_if_needed;
             let _: fn() -> Vec<VolumeId> = list_volumes;
@@ -157,12 +158,12 @@ pub mod windows;
 pub use windows::{
     app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
     detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
-    fan_helper_installed, get_volume_space, install_fan_helper, is_elevated, is_system_trash,
-    list_installed_apps, list_volumes, move_to_trash, open_in_default_app, process_unique_id,
-    read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
-    system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir,
-    user_home, user_temp_dir, verify_residuals,
+    fan_helper_installed, force_delete_access, get_volume_space, install_fan_helper, is_elevated,
+    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
+    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
+    reveal_in_explorer, run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode,
+    spot_check_inuse, system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir,
+    user_data_dir, user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -173,12 +174,12 @@ pub mod macos;
 pub use macos::{
     app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
     detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
-    fan_helper_installed, get_volume_space, install_fan_helper, is_elevated, is_system_trash,
-    list_installed_apps, list_volumes, move_to_trash, open_in_default_app, process_unique_id,
-    read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
-    system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir, user_data_dir,
-    user_home, user_temp_dir, verify_residuals,
+    fan_helper_installed, force_delete_access, get_volume_space, install_fan_helper, is_elevated,
+    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
+    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
+    reveal_in_explorer, run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode,
+    spot_check_inuse, system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir,
+    user_data_dir, user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();
