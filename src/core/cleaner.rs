@@ -303,15 +303,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     // Autodesk Fusion `Cache.db` 那次事故的诱因之一，即便这一组当下并没
     // 有被判定为「活库」也一样。
     let mut files_failed: usize = delete_file_groups(files, p);
-    if files_failed > 0 {
-        // 目录级 Deny DeleteChild：第一轮子文件失败后拆本目录 ACL，再扫残留。
-        let _ = crate::platform::force_delete_access(path);
-        files_failed = leftover_files(path)
-            .map(|left| delete_file_groups(left, p))
-            .unwrap_or(files_failed);
-    }
-
-    let subs_failed = subdirs
+    let mut subs_failed = subdirs
         .par_iter()
         .filter(|d| delete_tree(d, p) == CleanResult::Failed)
         .count();
@@ -319,7 +311,21 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
-    let dir_removed = remove_dir_forcing(path);
+    let mut dir_removed = remove_dir_forcing(path);
+    if !dir_removed {
+        // 子文件失败时错误码不一定是 PermissionDenied，上面可能没拆到
+        // 目录级 Deny。这里按「删不掉这个目录」再拆一次 ACL，然后清残留。
+        // GHA 上对同一路径显式 force_delete_access + remove_dir_all 是成功的。
+        let _ = crate::platform::force_delete_access(path);
+        if let Some(left) = leftover_files(path) {
+            files_failed = delete_file_groups(left, p);
+        }
+        subs_failed = subdirs
+            .iter()
+            .filter(|d| d.exists() && delete_tree(d, p) == CleanResult::Failed)
+            .count();
+        dir_removed = remove_dir_forcing(path);
+    }
     if dir_removed && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
     } else {
