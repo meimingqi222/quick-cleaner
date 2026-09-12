@@ -379,14 +379,11 @@ fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
                 d.hover(|h| h.bg(rgb(SURF_HIGH))).cursor_pointer()
             })
             .on_click(cx.listener(|this, _, _, cx| {
-                if this.update.checking
-                    || !crate::platform::is_packaged_install()
-                {
+                if this.update.checking || !crate::platform::is_packaged_install() {
                     return;
                 }
                 this.check_for_updates_manual(cx);
-                this.status =
-                    crate::core::i18n::bilingual(|l| tr_update_checking(l).to_string());
+                this.status = crate::core::i18n::bilingual(|l| tr_update_checking(l).to_string());
                 cx.notify();
             }));
     }
