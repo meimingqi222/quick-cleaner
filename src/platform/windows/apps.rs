@@ -1286,6 +1286,88 @@ fn install_location_gone(app: &InstalledApp) -> bool {
     crate::core::safety::norm(loc).len() > 3 && !loc.exists()
 }
 
+/// 等到卸载真正收尾：ARP 登记项消失 + 相关进程退出 + 状态稳定。
+///
+/// 不能只等进程退出（旧 `wait_until_finished` 的坑）：
+/// - **UAC 确认窗口**：Inno/NSIS 常「复制到临时目录 → runas → 原进程立刻退出」。
+///   用户点 UAC 前一段时间里一个相关进程都没有；宽限期只有 5s 的话会被误判成
+///   「卸载已完成」，残留清理界面和卸载向导撞在一起。
+/// - **msiexec 是通用宿主**：按进程名匹配会误伤其它安装事务，通常只能靠
+///   登记项消失判断。
+/// - **有的卸载器先删 ARP 键再慢慢删文件**：键没了不等于文件清完了。
+///
+/// 策略：登记项仍在就一直等；登记项消失后，要么安装目录也没了，要么再观察
+/// 一段 `POST_UNREGISTER_GRACE`，并且连续 `NEED_STABLE` 拍都干净才算结束。
+/// ARP 消失后仍要观察的窗口：覆盖「键先没、文件还在删」。
+const POST_UNREGISTER_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+/// 连续多少拍都干净才算稳定（一拍 500ms）。
+const NEED_STABLE: u32 = 4;
+
+/// 单次采样是否满足「卸载已收尾」。抽成纯函数便于回归测试。
+///
+/// - 仍有相关进程 → 未收尾
+/// - 安装目录已消失 → 收尾（ARP 残留给残留对话框）
+/// - 登记项仍在且安装目录还在 → 未收尾（UAC / 向导未关）
+/// - 登记项已消失且目录还在 → 距登记项消失需满观察窗口（msiexec 删文件）
+fn uninstall_settled(
+    procs: bool,
+    dir_gone: bool,
+    registered: bool,
+    since_unregistered: Option<std::time::Duration>,
+) -> bool {
+    if procs {
+        return false;
+    }
+    if dir_gone {
+        return true;
+    }
+    if registered {
+        return false;
+    }
+    since_unregistered.is_some_and(|d| d >= POST_UNREGISTER_GRACE)
+}
+
+fn wait_for_uninstall_settled(
+    app: &InstalledApp,
+    install_dir: &str,
+    uninstaller_stem: &str,
+    timeout: std::time::Duration,
+) -> bool {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + timeout;
+    let mut unregistered_at: Option<Instant> = None;
+    let mut stable_streak = 0u32;
+
+    while Instant::now() < deadline {
+        let registered = is_app_registered(app);
+        let procs = has_related_process(install_dir, uninstaller_stem);
+        let dir_gone = install_location_gone(app);
+        if registered {
+            unregistered_at = None;
+        }
+        let since = unregistered_at.get_or_insert_with(Instant::now).elapsed();
+        // 刚插进来的 Instant.elapsed()≈0，只在 !registered 时用到
+        let since = (!registered).then_some(since);
+        let settled = uninstall_settled(procs, dir_gone, registered, since);
+
+        if settled {
+            stable_streak += 1;
+            if stable_streak >= NEED_STABLE {
+                return true;
+            }
+        } else {
+            stable_streak = 0;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    false
+}
+
+fn has_related_process(install_dir: &str, uninstaller_stem: &str) -> bool {
+    crate::platform::windows::process::has_related_process(install_dir, uninstaller_stem)
+}
+
 /// 运行软件官方卸载向导并等待其退出
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
     let raw = app
@@ -1344,11 +1426,10 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
     // 临时目录、以管理员身份重启，然后原进程立刻退出——于是这里马上
     // 就返回了，而卸载向导才刚弹出来，残留清理界面就会和它撞在一起。
     //
-    // 真正的判据是相关进程是否还活着：映像路径在安装目录内的，或者与
-    // 卸载器同名的（Inno 会把 unins000.exe 复制成 unins000.tmp，
-    // 扩展名变了但主名不变）。
-    // 安装目录若是 Program Files 这类公共骨架目录，就不能拿来当判据——
-    // 那样会把一堆无关进程都算成「还在卸载」，一直等到超时。
+    // 真正的判据是「跟这个软件相关的进程是否还活着」+「ARP 登记项是否
+    // 已消失」两者同时成立并保持稳定。安装目录若是 Program Files 这类
+    // 公共骨架目录，就不能拿来当进程判据——那样会把一堆无关进程都算成
+    // 「还在卸载」，一直等到超时。
     let install_dir = app
         .install_location
         .as_ref()
@@ -1363,43 +1444,29 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
         stem
     };
 
-    crate::platform::windows::process::wait_until_finished(
+    let settled = wait_for_uninstall_settled(
+        app,
         &install_dir,
         &uninstaller_stem,
-        // 提权重启需要点时间，给足宽限期再判定
-        std::time::Duration::from_secs(5),
-        // 大型软件卸载可能很久；超时只是兜底，不会一直卡住界面
+        // 大型软件 + UAC 确认可能很久；超时只是兜底，不会一直卡住界面
         std::time::Duration::from_secs(30 * 60),
     );
 
-    // 卸载器进程退出（甚至返回 0）不代表卸载成功：取消向导、外层
-    // bootstrapper 提前退出都可能留下原登记项。以最初枚举到的精确
-    // 注册表键为最终判据，给异步收尾留一个很短的落盘窗口。
-    //
-    // winget / scoop 这类命令行卸载经常把文件删干净却忘了 ARP 登记项，
-    // 或登记项要过一会儿才掉。安装目录已经没了就视为卸成功，残留对话框
-    // 会带上还在的登记项让用户清掉——否则命令跑完列表里还挂着这款软件。
-    for _ in 0..50 {
-        if !is_app_registered(app) {
-            crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
-            return Ok(());
-        }
-        if install_location_gone(app) {
-            crate::log!(
-                "卸载「{}」结束（安装目录已消失，登记项仍在），耗时 {:?}",
-                app.name,
-                t0.elapsed()
-            );
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    if settled {
+        crate::log!("卸载「{}」结束，耗时 {:?}", app.name, t0.elapsed());
+        return Ok(());
     }
 
+    // 超时仍未收尾：如实报错。不能假装成功——残留扫描会在卸载器还在
+    // 跑的时候抢删文件。
     if !status_ok {
         if code == crate::platform::windows::process::WINGET_ADMIN_CONTEXT_PROHIBITED {
             return Err("winget 拒绝在管理员权限下卸载当前用户安装的软件，降权执行仍失败".into());
         }
         return Err(format!("卸载程序退出异常：exit code: {code:#x}"));
+    }
+    if !is_app_registered(app) {
+        return Err("卸载程序已退出，但安装状态未能稳定收尾（文件可能仍在释放）".into());
     }
     Err(format!(
         "卸载程序已退出，但「{}」仍在已安装软件中",
@@ -1652,6 +1719,47 @@ mod uninstall_cli {
         assert_eq!(out.matches("--disable-interactivity").count(), 1);
         assert_eq!(out.matches("--scope").count(), 1);
         assert_eq!(out.matches("--accept-source-agreements").count(), 1);
+    }
+
+    /// UAC 窗口：无相关进程但登记项还在 → 不能判定完成。
+    #[test]
+    fn uac_gap_with_registration_is_not_settled() {
+        assert!(!uninstall_settled(
+            false,
+            false,
+            true,
+            Some(std::time::Duration::from_secs(10))
+        ));
+    }
+
+    /// winget 删完文件留下 ARP 键 → 放行，交给残留对话框。
+    #[test]
+    fn install_dir_gone_with_stale_arp_is_settled() {
+        assert!(uninstall_settled(false, true, true, None));
+    }
+
+    /// 登记项刚消失、安装目录还在 → 要满观察窗口（msiexec 还在删文件）。
+    #[test]
+    fn just_unregistered_still_watching() {
+        assert!(!uninstall_settled(
+            false,
+            false,
+            false,
+            Some(std::time::Duration::from_millis(500))
+        ));
+        assert!(uninstall_settled(
+            false,
+            false,
+            false,
+            Some(POST_UNREGISTER_GRACE)
+        ));
+    }
+
+    /// 仍有卸载器进程在跑 → 未收尾。
+    #[test]
+    fn live_uninstaller_process_is_not_settled() {
+        assert!(!uninstall_settled(true, false, false, Some(POST_UNREGISTER_GRACE)));
+        assert!(!uninstall_settled(true, true, false, None));
     }
 
     #[test]
