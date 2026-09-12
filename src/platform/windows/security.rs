@@ -120,6 +120,56 @@ pub fn quote_win_arg(arg: &str) -> String {
     out
 }
 
+/// 删除因 ACCESS_DENIED（os error 5）失败时的提权补救：取得所有权并授予
+/// Administrators 完全控制，使随后的 `DeleteFile`/`RemoveDirectory` 能通过。
+///
+/// 典型场景：应用（如 WorkBuddy）在自己的日志目录上写 `Deny Delete` ACL
+/// 做防删，进程早已退出，但 ACL 还在。进程占用（os error 32）不走这里——
+/// 那是句柄锁，改 ACL 也解不开。
+///
+/// 仅在已提权时有意义；未提权直接返回 false，不空跑子进程。
+/// `/t` 递归、`/c` 遇错继续：目标子树里混着系统文件时不要整批中断。
+///
+/// 成功只表示「ACL 改过了」，不保证文件一定能删（服务仍可能持有句柄）。
+pub fn force_delete_access(path: &std::path::Path) -> bool {
+    if !is_elevated() {
+        return false;
+    }
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let display = path.display().to_string();
+    let quiet = |cmd: &mut Command| {
+        cmd.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+    };
+
+    // takeown 先做：Deny ACE 的宿主可能不是我们，没有所有权就改不动 DACL。
+    // `/a` 落到 Administrators 组而不是当前用户，和后面 icacls 的授权主体一致。
+    let takeown = Command::new("takeown")
+        .args(["/f", &display, "/a", "/r", "/d", "y"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+        .status();
+    let _ = takeown;
+
+    // icacls 才是真正拆 Deny / 补 Allow 的一步。SID 而不是名字：
+    // 中文系统上组名是「Administrators」以外的本地化串，按名字授权会静默失败。
+    let mut icacls = Command::new("icacls");
+    icacls.args([
+        &display,
+        "/grant",
+        "*S-1-5-32-544:(OI)(CI)F",
+        "/t",
+        "/c",
+        "/q",
+    ]);
+    quiet(&mut icacls);
+    matches!(icacls.status(), Ok(s) if s.success())
+}
+
 /// 若当前未提权，通过 Windows UAC (runas) 自重启当前进程并退出当前无权限进程。
 /// 若提权成功，返回 true；若用户取消或提权失败，返回 false。
 pub fn relaunch_as_admin_if_needed() -> bool {

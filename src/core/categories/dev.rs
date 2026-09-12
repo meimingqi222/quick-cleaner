@@ -388,6 +388,9 @@ pub(super) fn push_ai_agent_targets(
 fn push_devin_cli_versions(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path) {
     const AGENT: CategoryId = CategoryId::AiAgents;
 
+    // Windows 只用 roaming；home 仅供 macOS/Linux 分支使用。
+    #[cfg(windows)]
+    let _ = home;
     #[cfg(windows)]
     let cli_root = roaming.join("devin/cli");
     #[cfg(not(windows))]

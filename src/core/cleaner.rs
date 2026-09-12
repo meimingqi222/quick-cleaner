@@ -281,13 +281,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
-    let dir_removed = match std::fs::remove_dir(path) {
-        Ok(()) => true,
-        Err(err) => {
-            note_delete_failure(path, &err);
-            false
-        }
-    };
+    let dir_removed = remove_dir_forcing(path);
     if dir_removed && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
     } else {
@@ -463,6 +457,58 @@ fn remove_file_forcing(path: &Path) -> bool {
     match std::fs::remove_file(path) {
         Ok(()) => true,
         Err(err) => {
+            // ACL Deny（应用防删）与只读位不同：清只读无效，要提权拆 ACL 再试。
+            // 只对 PermissionDenied 动手；error 32（句柄占用）改 ACL 也解不开。
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                && crate::platform::force_delete_access(path)
+            {
+                if let Ok(md) = std::fs::symlink_metadata(path) {
+                    clear_readonly(path, &md);
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => return true,
+                    Err(err2) => {
+                        note_delete_failure(path, &err2);
+                        return false;
+                    }
+                }
+            }
+            note_delete_failure(path, &err);
+            false
+        }
+    }
+}
+
+/// 删空目录。先清目录只读位；仍 Access Denied 时提权拆 ACL 再试。
+///
+/// Windows 上目录也可以带 `FILE_ATTRIBUTE_READONLY`（Go module cache 故意
+/// 设的）。`RemoveDirectory` 对只读目录直接 ERROR_ACCESS_DENIED——文件侧
+/// 早已清只读，目录侧以前漏了，结果是 go/pkg/mod 里文件删光、空壳目录
+/// 却留下，父目录也因「不是空的」报错。
+fn remove_dir_forcing(path: &Path) -> bool {
+    if std::fs::remove_dir(path).is_ok() {
+        return true;
+    }
+    if let Ok(md) = std::fs::symlink_metadata(path) {
+        clear_readonly(path, &md);
+    }
+    match std::fs::remove_dir(path) {
+        Ok(()) => true,
+        Err(err) => {
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                && crate::platform::force_delete_access(path)
+            {
+                if let Ok(md) = std::fs::symlink_metadata(path) {
+                    clear_readonly(path, &md);
+                }
+                match std::fs::remove_dir(path) {
+                    Ok(()) => return true,
+                    Err(err2) => {
+                        note_delete_failure(path, &err2);
+                        return false;
+                    }
+                }
+            }
             note_delete_failure(path, &err);
             false
         }
@@ -1689,6 +1735,76 @@ mod tests {
             CleanResult::Ok
         );
         assert!(!base.exists());
+    }
+
+    /// Windows 上 Go module cache 会把**目录**也设成只读。`RemoveDirectory`
+    /// 对只读目录直接 access denied——只清文件侧的只读位不够，空壳目录会
+    /// 留下并让父目录报「不是空的」。这正是 go/pkg/mod 失败清单里那批
+    /// `拒绝访问 (os error 5)` 的根因。
+    #[cfg(windows)]
+    #[test]
+    fn deletes_readonly_directory_shell() {
+        let base = crate::core::testing::fixture("qc_readonly_dir_shell");
+        let _ = std::fs::remove_dir_all(&base);
+        let shell = base.join("mod@v1.0.0");
+        std::fs::create_dir_all(&shell).unwrap();
+        std::fs::write(shell.join("go.mod"), b"module x").unwrap();
+
+        let mut perms = std::fs::metadata(&shell).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&shell, perms).unwrap();
+        assert!(std::fs::metadata(&shell).unwrap().permissions().readonly());
+
+        assert_eq!(
+            clean_path(&base, &CleanProgress::default()),
+            CleanResult::Ok
+        );
+        assert!(!shell.exists(), "只读空壳目录必须被清掉");
+        assert!(!base.exists());
+    }
+
+    /// 应用在日志目录上写 Deny Delete ACL 做防删（WorkBuddy 实机形态）。
+    /// 进程早已退出，句柄占用不是原因；提权后应能拆掉 ACL 再删。
+    /// 未提权的测试环境直接跳过——`force_delete_access` 本身有
+    /// `is_elevated` 闸门，这里只验证接线没有断。
+    #[cfg(windows)]
+    #[test]
+    fn acl_deny_delete_is_overridden_when_elevated() {
+        use std::os::windows::process::CommandExt;
+        if !crate::platform::is_elevated() {
+            return;
+        }
+        let base = crate::core::testing::fixture("qc_acl_deny_delete");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let locked = base.join("2026-09-06");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("app.log"), b"locked").unwrap();
+
+        let display = locked.display().to_string();
+        let sid = crate::platform::windows::security::current_user_sid()
+            .expect("提权进程应能读到自己的 SID");
+        // Deny Delete + DeleteSubdirectoriesAndFiles，与 WorkBuddy 同款。
+        let applied = std::process::Command::new("icacls")
+            .args([&display, "/deny", &format!("*{sid}:(D,DC)")])
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .status();
+        assert!(
+            matches!(applied, Ok(s) if s.success()),
+            "icacls 没写上 Deny，后面的拒绝断言失去前提"
+        );
+
+        // 先确认 Deny 真的挡得住裸删（否则测试什么都没验到）。
+        assert!(
+            std::fs::remove_dir_all(&locked).is_err(),
+            "Deny Delete 生效时裸删必须失败"
+        );
+
+        let p = CleanProgress::default();
+        assert_eq!(clean_path(&base, &p), CleanResult::Ok);
+        assert!(!locked.exists(), "拆掉 ACL 后必须能删干净");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // ---- 任务 1：活数据库删除级闸门 + SQLite 家族删除顺序 ----
