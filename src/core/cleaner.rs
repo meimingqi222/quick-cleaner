@@ -493,9 +493,7 @@ fn remove_file_forcing(path: &Path) -> bool {
         Err(err) => {
             // ACL Deny（应用防删）与只读位不同：清只读无效，要提权拆 ACL 再试。
             // 只对 PermissionDenied 动手；error 32（句柄占用）改 ACL 也解不开。
-            if err.kind() == std::io::ErrorKind::PermissionDenied
-                && crate::platform::force_delete_access(path)
-            {
+            if err.kind() == std::io::ErrorKind::PermissionDenied && acl_stripped_for_delete(path) {
                 if let Ok(md) = std::fs::symlink_metadata(path) {
                     clear_readonly(path, &md);
                 }
@@ -511,6 +509,16 @@ fn remove_file_forcing(path: &Path) -> bool {
             false
         }
     }
+}
+
+/// 提权拆 Deny ACL。`(D,DC)` 写在父目录上时，失败路径是子文件，只拆叶子
+/// 拆不掉 DeleteChild。受 `is_protected` 保护的父目录不拆。
+fn acl_stripped_for_delete(path: &Path) -> bool {
+    if crate::platform::force_delete_access(path) {
+        return true;
+    }
+    path.parent()
+        .is_some_and(|p| !is_protected(p) && crate::platform::force_delete_access(p))
 }
 
 /// 删空目录。先清目录只读位；仍 Access Denied 时提权拆 ACL 再试。
@@ -529,9 +537,7 @@ fn remove_dir_forcing(path: &Path) -> bool {
     match std::fs::remove_dir(path) {
         Ok(()) => true,
         Err(err) => {
-            if err.kind() == std::io::ErrorKind::PermissionDenied
-                && crate::platform::force_delete_access(path)
-            {
+            if err.kind() == std::io::ErrorKind::PermissionDenied && acl_stripped_for_delete(path) {
                 if let Ok(md) = std::fs::symlink_metadata(path) {
                     clear_readonly(path, &md);
                 }
