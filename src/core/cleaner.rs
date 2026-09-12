@@ -482,27 +482,23 @@ fn delete_file(path: &Path, size: u64, p: &CleanProgress) -> CleanResult {
 }
 
 fn remove_file_forcing(path: &Path) -> bool {
-    if std::fs::remove_file(path).is_ok() {
-        return true;
-    }
-    if let Ok(md) = std::fs::symlink_metadata(path) {
-        clear_readonly(path, &md);
-    }
-    match std::fs::remove_file(path) {
+    match remove_file_with_readonly_retry(path) {
         Ok(()) => true,
         Err(err) => {
-            // ACL Deny（应用防删）与只读位不同：清只读无效，要提权拆 ACL 再试。
-            // 只对 PermissionDenied 动手；error 32（句柄占用）改 ACL 也解不开。
-            if err.kind() == std::io::ErrorKind::PermissionDenied && acl_stripped_for_delete(path) {
-                if let Ok(md) = std::fs::symlink_metadata(path) {
-                    clear_readonly(path, &md);
-                }
-                match std::fs::remove_file(path) {
-                    Ok(()) => return true,
-                    Err(err2) => {
-                        note_io_failure(path, &err2);
-                        return false;
-                    }
+            if err.kind() != std::io::ErrorKind::PermissionDenied {
+                note_io_failure(path, &err);
+                return false;
+            }
+            // Deny 可能在叶子，也可能在父目录的 DeleteChild。叶子上 icacls
+            // 常会「成功」（本来就没有 Deny），不能据此跳过父目录。
+            let _ = crate::platform::force_delete_access(path);
+            if remove_file_with_readonly_retry(path).is_ok() {
+                return true;
+            }
+            if let Some(parent) = path.parent().filter(|p| !is_protected(p)) {
+                let _ = crate::platform::force_delete_access(parent);
+                if remove_file_with_readonly_retry(path).is_ok() {
+                    return true;
                 }
             }
             note_io_failure(path, &err);
@@ -511,14 +507,15 @@ fn remove_file_forcing(path: &Path) -> bool {
     }
 }
 
-/// 提权拆 Deny ACL。`(D,DC)` 写在父目录上时，失败路径是子文件，只拆叶子
-/// 拆不掉 DeleteChild。受 `is_protected` 保护的父目录不拆。
-fn acl_stripped_for_delete(path: &Path) -> bool {
-    if crate::platform::force_delete_access(path) {
-        return true;
+fn remove_file_with_readonly_retry(path: &Path) -> std::io::Result<()> {
+    if let Err(_err) = std::fs::remove_file(path) {
+        if let Ok(md) = std::fs::symlink_metadata(path) {
+            clear_readonly(path, &md);
+        }
+        std::fs::remove_file(path)
+    } else {
+        Ok(())
     }
-    path.parent()
-        .is_some_and(|p| !is_protected(p) && crate::platform::force_delete_access(p))
 }
 
 /// 删空目录。先清目录只读位；仍 Access Denied 时提权拆 ACL 再试。
@@ -528,30 +525,37 @@ fn acl_stripped_for_delete(path: &Path) -> bool {
 /// 早已清只读，目录侧以前漏了，结果是 go/pkg/mod 里文件删光、空壳目录
 /// 却留下，父目录也因「不是空的」报错。
 fn remove_dir_forcing(path: &Path) -> bool {
-    if std::fs::remove_dir(path).is_ok() {
-        return true;
-    }
-    if let Ok(md) = std::fs::symlink_metadata(path) {
-        clear_readonly(path, &md);
-    }
-    match std::fs::remove_dir(path) {
+    match remove_dir_with_readonly_retry(path) {
         Ok(()) => true,
         Err(err) => {
-            if err.kind() == std::io::ErrorKind::PermissionDenied && acl_stripped_for_delete(path) {
-                if let Ok(md) = std::fs::symlink_metadata(path) {
-                    clear_readonly(path, &md);
-                }
-                match std::fs::remove_dir(path) {
-                    Ok(()) => return true,
-                    Err(err2) => {
-                        note_io_failure(path, &err2);
-                        return false;
-                    }
+            if err.kind() != std::io::ErrorKind::PermissionDenied {
+                note_io_failure(path, &err);
+                return false;
+            }
+            let _ = crate::platform::force_delete_access(path);
+            if remove_dir_with_readonly_retry(path).is_ok() {
+                return true;
+            }
+            if let Some(parent) = path.parent().filter(|p| !is_protected(p)) {
+                let _ = crate::platform::force_delete_access(parent);
+                if remove_dir_with_readonly_retry(path).is_ok() {
+                    return true;
                 }
             }
             note_io_failure(path, &err);
             false
         }
+    }
+}
+
+fn remove_dir_with_readonly_retry(path: &Path) -> std::io::Result<()> {
+    if let Err(_err) = std::fs::remove_dir(path) {
+        if let Ok(md) = std::fs::symlink_metadata(path) {
+            clear_readonly(path, &md);
+        }
+        std::fs::remove_dir(path)
+    } else {
+        Ok(())
     }
 }
 
