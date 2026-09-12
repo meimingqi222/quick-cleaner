@@ -518,16 +518,15 @@ pub struct UpdateState {
     /// 有进行中的扫描/清理时，用户已确认可打断。
     pub install_confirmed: bool,
     /// 下载字节进度。后台线程写、渲染读；下载结束后置回 None。
-    pub live_progress: Option<std::sync::Arc<std::sync::Mutex<crate::core::updater::DownloadProgress>>>,
+    pub live_progress:
+        Option<std::sync::Arc<std::sync::Mutex<crate::core::updater::DownloadProgress>>>,
 }
 
 impl Default for UpdateState {
     fn default() -> Self {
         let current_version = env!("CARGO_PKG_VERSION").to_string();
         Self {
-            status: crate::core::updater::UpdateStatus::Idle {
-                current_version,
-            },
+            status: crate::core::updater::UpdateStatus::Idle { current_version },
             show_dialog: false,
             task: None,
             checking: false,

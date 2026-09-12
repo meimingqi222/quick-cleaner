@@ -89,6 +89,7 @@ pub fn apply_update_and_restart(payload: &Path) -> Result<(), String> {
     let script = format!(
         r#"#!/bin/bash
 set -euo pipefail
+trap '' HUP
 CUR={cur}
 NEW={new}
 OLD="${{CUR}}.old"
@@ -127,9 +128,25 @@ fi
         let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
     }
 
-    std::process::Command::new("/bin/bash")
-        .arg(&script_path)
-        .spawn()
+    let mut cmd = std::process::Command::new("/bin/bash");
+    cmd.arg(&script_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: 子进程里只 setsid，让 helper 离开父进程会话，避免 quit 时
+        // SIGHUP 把替换脚本带走（mv 之后、cp 之前死掉会只剩 .app.old）。
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    cmd.spawn()
         .map_err(|e| format!("spawn update helper: {e}"))?;
     Ok(())
 }

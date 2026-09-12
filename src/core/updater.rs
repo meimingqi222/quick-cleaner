@@ -16,10 +16,7 @@ use std::path::{Component, Path, PathBuf};
 pub const GITHUB_OWNER: &str = "meimingqi222";
 pub const GITHUB_REPO: &str = "quick-cleaner";
 /// 无 token 时 GitHub API 要求 UA，否则 403。
-const USER_AGENT: &str = concat!(
-    "QuickCleaner-Updater/",
-    env!("CARGO_PKG_VERSION")
-);
+const USER_AGENT: &str = concat!("QuickCleaner-Updater/", env!("CARGO_PKG_VERSION"));
 
 /// 启动后首次检查延迟。
 pub const FIRST_CHECK_DELAY_MS: u64 = 10_000;
@@ -99,12 +96,24 @@ impl UpdateStatus {
             UpdateStatus::Idle { current_version }
             | UpdateStatus::Checking { current_version }
             | UpdateStatus::NotAvailable { current_version }
-            | UpdateStatus::Available { current_version, .. }
-            | UpdateStatus::Downloading { current_version, .. }
-            | UpdateStatus::Verifying { current_version, .. }
-            | UpdateStatus::Downloaded { current_version, .. }
-            | UpdateStatus::Installing { current_version, .. }
-            | UpdateStatus::Error { current_version, .. } => current_version,
+            | UpdateStatus::Available {
+                current_version, ..
+            }
+            | UpdateStatus::Downloading {
+                current_version, ..
+            }
+            | UpdateStatus::Verifying {
+                current_version, ..
+            }
+            | UpdateStatus::Downloaded {
+                current_version, ..
+            }
+            | UpdateStatus::Installing {
+                current_version, ..
+            }
+            | UpdateStatus::Error {
+                current_version, ..
+            } => current_version,
         }
     }
 
@@ -222,12 +231,11 @@ pub fn current_target() -> UpdateTarget {
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        // Universal 优先；CI 同时发 arch 专用包，universal 缺失时可回退。
-        UpdateTarget::MacosUniversal
+        UpdateTarget::MacosAarch64
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        UpdateTarget::MacosUniversal
+        UpdateTarget::MacosX86_64
     }
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
@@ -239,17 +247,20 @@ pub fn current_target() -> UpdateTarget {
     }
 }
 
-/// 本平台的候选资产名列表（优先序）。Universal 缺失时回退 arch 包。
+/// 本平台的候选资产名列表（优先序）。Universal 缺失时只回退**本架构**包，
+/// 禁止把另一个 CPU 的 zip 放进来——Intel 装上 aarch64 会打不开。
 pub fn candidate_asset_names(target: UpdateTarget) -> &'static [&'static str] {
     match target {
         UpdateTarget::WindowsX64 => &["quick-cleaner-windows-x86_64.zip"],
-        UpdateTarget::MacosUniversal => &[
+        UpdateTarget::MacosUniversal => &["quick-cleaner-macos-universal.zip"],
+        UpdateTarget::MacosAarch64 => &[
             "quick-cleaner-macos-universal.zip",
             "quick-cleaner-macos-aarch64.zip",
+        ],
+        UpdateTarget::MacosX86_64 => &[
+            "quick-cleaner-macos-universal.zip",
             "quick-cleaner-macos-x86_64.zip",
         ],
-        UpdateTarget::MacosAarch64 => &["quick-cleaner-macos-aarch64.zip"],
-        UpdateTarget::MacosX86_64 => &["quick-cleaner-macos-x86_64.zip"],
     }
 }
 
@@ -322,10 +333,7 @@ pub fn extract_update_zip(zip_path: &Path, dest_dir: &Path) -> Result<PathBuf, S
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("zip entry: {e}"))?;
         let Some(rel) = entry.enclosed_name() else {
-            return Err(format!(
-                "zip entry escapes destination: {:?}",
-                entry.name()
-            ));
+            return Err(format!("zip entry escapes destination: {:?}", entry.name()));
         };
         // enclosed_name 已做规范化；再拦一层绝对路径/盘符。
         if rel.is_absolute()
@@ -414,8 +422,10 @@ fn find_payload(root: &Path) -> Result<PathBuf, String> {
 /// 是否运行在 cargo 构建目录里（开发态，不检查更新）。
 pub fn looks_like_dev_build(exe: &Path) -> bool {
     let s = exe.to_string_lossy().to_ascii_lowercase();
-    s.contains("target\\debug") || s.contains("target/debug")
-        || s.contains("target\\release") || s.contains("target/release")
+    s.contains("target\\debug")
+        || s.contains("target/debug")
+        || s.contains("target\\release")
+        || s.contains("target/release")
 }
 
 /// 用户跳过了这个版本则不提示。
@@ -425,9 +435,7 @@ pub fn is_skipped(latest: &str, skipped: Option<&str>) -> bool {
 
 /// 阻塞拉取 latest release JSON。
 pub fn fetch_latest_release(timeout_ms: u64) -> Result<GithubRelease, String> {
-    let url = format!(
-        "https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-    );
+    let url = format!("https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest");
     let resp = ureq::get(&url)
         .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
@@ -565,8 +573,8 @@ mod tests {
                 size: 1,
             }],
         };
-        let status = evaluate_release("0.0.1", &release, &["quick-cleaner-windows-x86_64.zip"])
-            .unwrap();
+        let status =
+            evaluate_release("0.0.1", &release, &["quick-cleaner-windows-x86_64.zip"]).unwrap();
         assert!(matches!(status, UpdateStatus::NotAvailable { .. }));
 
         let mut draft = release;
@@ -660,6 +668,55 @@ mod tests {
         assert!(is_skipped("0.0.8", Some("v0.0.8")));
         assert!(!is_skipped("0.0.8", Some("0.0.7")));
         assert!(!is_skipped("0.0.8", None));
+    }
+
+    #[test]
+    fn mac_fallback_never_crosses_architecture() {
+        let aarch = candidate_asset_names(UpdateTarget::MacosAarch64);
+        assert_eq!(aarch[0], "quick-cleaner-macos-universal.zip");
+        assert!(aarch.contains(&"quick-cleaner-macos-aarch64.zip"));
+        assert!(!aarch.iter().any(|n| n.contains("x86_64")));
+
+        let intel = candidate_asset_names(UpdateTarget::MacosX86_64);
+        assert_eq!(intel[0], "quick-cleaner-macos-universal.zip");
+        assert!(intel.contains(&"quick-cleaner-macos-x86_64.zip"));
+        assert!(!intel.iter().any(|n| n.contains("aarch64")));
+    }
+
+    #[test]
+    fn intel_mac_does_not_pick_aarch64_when_universal_missing() {
+        let release = GithubRelease {
+            tag_name: "v0.0.8".into(),
+            html_url: "https://example".into(),
+            name: None,
+            body: None,
+            prerelease: false,
+            draft: false,
+            assets: vec![
+                GithubAsset {
+                    name: "quick-cleaner-macos-aarch64.zip".into(),
+                    browser_download_url: "https://example/arm.zip".into(),
+                    size: 1,
+                },
+                GithubAsset {
+                    name: "quick-cleaner-macos-x86_64.zip".into(),
+                    browser_download_url: "https://example/intel.zip".into(),
+                    size: 1,
+                },
+            ],
+        };
+        let status = evaluate_release(
+            "0.0.7",
+            &release,
+            candidate_asset_names(UpdateTarget::MacosX86_64),
+        )
+        .unwrap();
+        match status {
+            UpdateStatus::Available { asset_name, .. } => {
+                assert_eq!(asset_name, "quick-cleaner-macos-x86_64.zip");
+            }
+            other => panic!("expected x86_64 asset, got {other:?}"),
+        }
     }
 
     #[test]

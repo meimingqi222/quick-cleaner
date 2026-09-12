@@ -98,20 +98,15 @@ impl crate::ui::Root {
                 this.settings.save();
                 match result {
                     Ok(status) => {
-                        if let UpdateStatus::Available {
-                            latest_version, ..
-                        } = &status
-                        {
+                        if let UpdateStatus::Available { latest_version, .. } = &status {
                             if is_skipped(latest_version, skipped.as_deref()) {
                                 this.update.status = UpdateStatus::NotAvailable {
                                     current_version: env!("CARGO_PKG_VERSION").to_string(),
                                 };
                             } else {
                                 this.update.status = status;
-                                this.update.show_dialog = matches!(
-                                    this.update.status,
-                                    UpdateStatus::Available { .. }
-                                );
+                                this.update.show_dialog =
+                                    matches!(this.update.status, UpdateStatus::Available { .. });
                             }
                         } else {
                             this.update.status = status;
@@ -324,9 +319,9 @@ impl crate::ui::Root {
             latest_version,
         };
         cx.notify();
-        let work = cx.background_executor().spawn(async move {
-            crate::platform::apply_update_and_restart(&payload)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { crate::platform::apply_update_and_restart(&payload) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| match result {

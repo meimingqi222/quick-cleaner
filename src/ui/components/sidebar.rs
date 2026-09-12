@@ -354,17 +354,17 @@ fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         .when(attention, |d| {
             d.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
         })
-        .when(!attention, |d| d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH))))
+        .when(!attention, |d| {
+            d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
+        })
         .child(div().text_xs().child(SharedString::from(label)))
-        .child(
-            div().text_xs().child(if attention {
-                "›".to_string()
-            } else if root.update.checking {
-                "…".to_string()
-            } else {
-                tr_update_check_now(lang).to_string()
-            }),
-        )
+        .child(div().text_xs().child(if attention {
+            "›".to_string()
+        } else if root.update.checking {
+            "…".to_string()
+        } else {
+            tr_update_check_now(lang).to_string()
+        }))
         .on_click(cx.listener(|this, _, _, cx| {
             let attention = this.update.status.wants_attention();
             if attention {

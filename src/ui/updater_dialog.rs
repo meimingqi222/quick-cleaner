@@ -52,9 +52,7 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
             tr_update_verifying(lang).to_string(),
             false,
         ),
-        UpdateStatus::Downloaded {
-            latest_version, ..
-        } => (
+        UpdateStatus::Downloaded { latest_version, .. } => (
             format!("{} {latest_version}", tr_update_new_version(lang)),
             tr_update_ready_hint(lang).to_string(),
             tr_update_restart_install(lang).to_string(),
@@ -120,12 +118,7 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                                         .text_color(rgb(TEXT))
                                         .child(tr_update_dialog_title(lang)),
                                 )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(MUTED))
-                                        .child(title),
-                                ),
+                                .child(div().text_sm().text_color(rgb(MUTED)).child(title)),
                         ),
                 )
                 .when(!body.is_empty(), |d| {
@@ -145,46 +138,53 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                         .justify_between()
                         .gap_2()
                         .child(
-                            div().flex().items_center().gap_2().when(show_skip, |d| {
-                                d.child(
-                                    div()
-                                        .id("update-skip")
-                                        .cursor_pointer()
-                                        .child(small_button(
-                                            tr_update_skip_version(lang).to_string(),
-                                            SURF_HIGH,
-                                            TEXT,
-                                            true,
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.skip_this_update_version(cx);
-                                        })),
-                                )
-                            })
-                            .when(release_url.is_some(), |d| {
-                                d.child(
-                                    div()
-                                        .id("update-open-release")
-                                        .cursor_pointer()
-                                        .child(small_button(
-                                            tr_update_open_release(lang).to_string(),
-                                            SURF_HIGH,
-                                            TEXT,
-                                            true,
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, _cx| {
-                                            if let Some(url) = match &this.update.status {
-                                                UpdateStatus::Available { release_url, .. }
-                                                | UpdateStatus::Downloading {
-                                                    release_url, ..
-                                                } => Some(release_url.clone()),
-                                                _ => None,
-                                            } {
-                                                this.open_update_release_page(url);
-                                            }
-                                        })),
-                                )
-                            }),
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .when(show_skip, |d| {
+                                    d.child(
+                                        div()
+                                            .id("update-skip")
+                                            .cursor_pointer()
+                                            .child(small_button(
+                                                tr_update_skip_version(lang).to_string(),
+                                                SURF_HIGH,
+                                                TEXT,
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.skip_this_update_version(cx);
+                                            })),
+                                    )
+                                })
+                                .when(release_url.is_some(), |d| {
+                                    d.child(
+                                        div()
+                                            .id("update-open-release")
+                                            .cursor_pointer()
+                                            .child(small_button(
+                                                tr_update_open_release(lang).to_string(),
+                                                SURF_HIGH,
+                                                TEXT,
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, _cx| {
+                                                if let Some(url) = match &this.update.status {
+                                                    UpdateStatus::Available {
+                                                        release_url, ..
+                                                    }
+                                                    | UpdateStatus::Downloading {
+                                                        release_url,
+                                                        ..
+                                                    } => Some(release_url.clone()),
+                                                    _ => None,
+                                                } {
+                                                    this.open_update_release_page(url);
+                                                }
+                                            })),
+                                    )
+                                }),
                         )
                         .child(
                             div().flex().items_center().gap_2().child(
@@ -203,8 +203,8 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                         .id("update-primary")
                         .cursor_pointer()
                         .child(primary_button(primary_label, primary_enabled))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            match &this.update.status {
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| match &this.update.status {
                                 UpdateStatus::Available { .. } => this.start_update_download(cx),
                                 UpdateStatus::Downloaded { .. } => this.install_update_now(cx),
                                 UpdateStatus::Error { .. } => this.retry_update(cx),
@@ -214,8 +214,8 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                                     this.check_for_updates_manual(cx)
                                 }
                                 _ => {}
-                            }
-                        })),
+                            }),
+                        ),
                 ),
         )
 }
