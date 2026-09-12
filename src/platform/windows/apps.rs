@@ -1288,20 +1288,19 @@ fn install_location_gone(app: &InstalledApp) -> bool {
 
 /// 等到卸载真正收尾：ARP 登记项消失 + 相关进程退出 + 状态稳定。
 ///
-/// 不能只等进程退出（旧 `wait_until_finished` 的坑）：
-/// - **UAC 确认窗口**：Inno/NSIS 常「复制到临时目录 → runas → 原进程立刻退出」。
-///   用户点 UAC 前一段时间里一个相关进程都没有；宽限期只有 5s 的话会被误判成
-///   「卸载已完成」，残留清理界面和卸载向导撞在一起。
-/// - **msiexec 是通用宿主**：按进程名匹配会误伤其它安装事务，通常只能靠
-///   登记项消失判断。
-/// - **有的卸载器先删 ARP 键再慢慢删文件**：键没了不等于文件清完了。
+/// 进程消失本身不能当完成：UAC 确认窗口里可能一个相关进程都没有；
+/// msiexec 是通用宿主不能按名匹配；有的卸载器先删 ARP 键再慢慢删文件。
 ///
 /// 策略：登记项仍在就一直等；登记项消失后，要么安装目录也没了，要么再观察
 /// 一段 `POST_UNREGISTER_GRACE`，并且连续 `NEED_STABLE` 拍都干净才算结束。
-/// ARP 消失后仍要观察的窗口：覆盖「键先没、文件还在删」。
 const POST_UNREGISTER_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 /// 连续多少拍都干净才算稳定（一拍 500ms）。
 const NEED_STABLE: u32 = 4;
+/// 命令已失败且等待环里从未见相关进程：再给一点时间让晚到的进程露头。
+const ORPHAN_AFTER_FAILED_CMD: std::time::Duration = std::time::Duration::from_secs(15);
+/// 见过相关进程后又全没了。取消向导和「temp 副本 RestartElevated 之后的 UAC」
+/// 长得一样，15s 不够用户读完 UAC / 离开座位；120s 是取消等待和误杀之间的折中。
+const ORPHAN_AFTER_PROCS_VANISHED: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// 单次采样是否满足「卸载已收尾」。抽成纯函数便于回归测试。
 ///
@@ -1327,29 +1326,84 @@ fn uninstall_settled(
     since_unregistered.is_some_and(|d| d >= POST_UNREGISTER_GRACE)
 }
 
+/// `saw_procs` 只统计等待环里见过的进程，**不含**已经 `child.wait()` 掉的那个父进程。
+///
+/// - **UAC 空窗（环内从未见进程）**：Inno/NSIS 父进程 exit 0，提权子进程还没起来
+///   → `child_ok && !saw_procs`，不算空等，交给总超时。
+/// - **见过又没了**：`saw_procs && !procs`。用户取消，或 temp 第二阶段先被 stem
+///   匹配到、再 `RestartElevated` 退掉去等 UAC，这两种无法从信号上分开，
+///   只能用比失败命令更长的超时（见 `ORPHAN_AFTER_PROCS_VANISHED`）。
+/// - **命令失败且从未出现相关进程**：`!child_ok && !saw_procs`
+///   （winget/cmd 包装直接失败；msiexec 是通用宿主，成功路径上 child_ok
+///   为 true，不会走这条）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UninstallOrphan {
+    None,
+    FailedCommand,
+    ProcsVanished,
+}
+
+fn uninstall_orphan(saw_procs: bool, procs: bool, child_ok: bool) -> UninstallOrphan {
+    if procs {
+        UninstallOrphan::None
+    } else if saw_procs {
+        UninstallOrphan::ProcsVanished
+    } else if !child_ok {
+        UninstallOrphan::FailedCommand
+    } else {
+        UninstallOrphan::None
+    }
+}
+
+fn orphan_fail_fast(kind: UninstallOrphan) -> Option<std::time::Duration> {
+    match kind {
+        UninstallOrphan::None => None,
+        UninstallOrphan::FailedCommand => Some(ORPHAN_AFTER_FAILED_CMD),
+        UninstallOrphan::ProcsVanished => Some(ORPHAN_AFTER_PROCS_VANISHED),
+    }
+}
+
 fn wait_for_uninstall_settled(
     app: &InstalledApp,
     install_dir: &str,
     uninstaller_stem: &str,
     timeout: std::time::Duration,
+    child_ok: bool,
 ) -> bool {
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + timeout;
     let mut unregistered_at: Option<Instant> = None;
+    let mut orphaned_since: Option<Instant> = None;
     let mut stable_streak = 0u32;
+    let mut saw_procs = false;
 
     while Instant::now() < deadline {
         let registered = is_app_registered(app);
         let procs = has_related_process(install_dir, uninstaller_stem);
         let dir_gone = install_location_gone(app);
-        if registered {
-            unregistered_at = None;
+        if procs {
+            saw_procs = true;
         }
-        let since = unregistered_at.get_or_insert_with(Instant::now).elapsed();
-        // 刚插进来的 Instant.elapsed()≈0，只在 !registered 时用到
-        let since = (!registered).then_some(since);
+
+        let since = if registered {
+            unregistered_at = None;
+            None
+        } else {
+            Some(unregistered_at.get_or_insert_with(Instant::now).elapsed())
+        };
         let settled = uninstall_settled(procs, dir_gone, registered, since);
+
+        let orphan_limit = orphan_fail_fast(uninstall_orphan(saw_procs, procs, child_ok))
+            .filter(|_| registered && !dir_gone);
+        if let Some(limit) = orphan_limit {
+            let waited = orphaned_since.get_or_insert_with(Instant::now).elapsed();
+            if waited >= limit {
+                return false;
+            }
+        } else {
+            orphaned_since = None;
+        }
 
         if settled {
             stable_streak += 1;
@@ -1450,6 +1504,7 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
         &uninstaller_stem,
         // 大型软件 + UAC 确认可能很久；超时只是兜底，不会一直卡住界面
         std::time::Duration::from_secs(30 * 60),
+        status_ok,
     );
 
     if settled {
@@ -1760,6 +1815,57 @@ mod uninstall_cli {
     fn live_uninstaller_process_is_not_settled() {
         assert!(!uninstall_settled(true, false, false, Some(POST_UNREGISTER_GRACE)));
         assert!(!uninstall_settled(true, true, false, None));
+    }
+
+    /// UAC 空窗：Inno 父进程 exit 0 后、提权子进程尚未出现。
+    /// child_ok && !saw_procs → 不能当空等，否则会误 fail-fast。
+    #[test]
+    fn uac_gap_is_not_orphaned() {
+        assert_eq!(
+            uninstall_orphan(false, false, true),
+            UninstallOrphan::None
+        );
+        assert_eq!(orphan_fail_fast(UninstallOrphan::None), None);
+    }
+
+    /// 卸载器跑过又退干净（用户取消向导），或 temp 阶段后再去等 UAC。
+    /// 与失败命令分开计时，避免 15s 误杀慢 UAC。
+    #[test]
+    fn wizard_ran_then_exited_is_orphaned() {
+        assert_eq!(
+            uninstall_orphan(true, false, true),
+            UninstallOrphan::ProcsVanished
+        );
+        assert_eq!(
+            uninstall_orphan(true, false, false),
+            UninstallOrphan::ProcsVanished
+        );
+        assert_eq!(
+            orphan_fail_fast(UninstallOrphan::ProcsVanished),
+            Some(ORPHAN_AFTER_PROCS_VANISHED)
+        );
+        assert!(ORPHAN_AFTER_PROCS_VANISHED >= std::time::Duration::from_secs(60));
+        assert!(ORPHAN_AFTER_PROCS_VANISHED > ORPHAN_AFTER_FAILED_CMD);
+    }
+
+    /// winget/cmd 包装直接失败，且从未出现相关进程。
+    #[test]
+    fn failed_command_without_process_is_orphaned() {
+        assert_eq!(
+            uninstall_orphan(false, false, false),
+            UninstallOrphan::FailedCommand
+        );
+        assert_eq!(
+            orphan_fail_fast(UninstallOrphan::FailedCommand),
+            Some(ORPHAN_AFTER_FAILED_CMD)
+        );
+    }
+
+    /// 相关进程还在：不算空等（即使 child 已失败）。
+    #[test]
+    fn live_process_is_not_orphaned() {
+        assert_eq!(uninstall_orphan(true, true, true), UninstallOrphan::None);
+        assert_eq!(uninstall_orphan(true, true, false), UninstallOrphan::None);
     }
 
     #[test]

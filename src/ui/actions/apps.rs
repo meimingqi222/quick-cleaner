@@ -373,16 +373,9 @@ impl crate::ui::Root {
                     .collect();
                 this.prune_deleted_from_mft(&deleted, snap.bytes, cx);
 
-                // 清理后**不再自动重开**残留对话框。
-                //
-                // 以前「勾选了却没删掉的会再弹一次」方便授权后重试；实机
-                // 上删不掉的多半是占用 / ACL / 系统保护，重试还是同样结果，
-                // 变成「点一次彻底清除、弹一次」的循环（百度网盘安装目录 +
-                // TypeLib 就是这种）。状态栏已带失败计数；用户需要时可对该
-                // 应用重新扫描残留。
-                //
-                // `leftover_for_app` 仍要算：没清掉的项不能当成已卸干净，
-                // 不能把软件从已安装列表里摘掉。
+                // 不自动重开残留对话框：删不掉的多半会一直删不掉，重开变成
+                // 点一次弹一次。状态栏报失败计数；残留扫描入口可再扫。
+                // `leftover_for_app` 仍要算——没清掉的项不能当成已卸干净。
                 let unresolved: HashSet<CleanFailure> = report
                     .failed
                     .iter()
@@ -403,7 +396,12 @@ impl crate::ui::Root {
                     });
                 this.residual.selected.clear();
                 this.residual.result = None;
-                if app_gone_after_residual_clean(&original_items, &follow.leftover_for_app) {
+                // 只覆盖「残留扫描」入口：主卸载成功路径在弹残留框之前
+                // 就已经 drop 了应用。这里失败项非空时保留列表项，避免
+                // 残留扫描流程里 InstallDir 清掉、AppData 失败却再也找不到入口。
+                if follow.retry_items.is_empty()
+                    && app_gone_after_residual_clean(&original_items, &follow.leftover_for_app)
+                {
                     this.drop_app_from_list(&res.app_id);
                 }
 

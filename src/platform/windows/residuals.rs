@@ -1326,24 +1326,48 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
 // 清理
 // ---------------------------------------------------------------------------
 
-/// 路径是否已在 `PendingFileRenameOperations` 里登记为「重启后删除」。
+/// 读出 `PendingFileRenameOperations` 里所有**源路径**（归一化后）。
 ///
-/// 卸载器（或 Windows 文件替换）用 `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)`
-/// 把锁住的 shell 扩展 DLL / 目录挂到 Session Manager 下，**重启前系统会
-/// 拒绝一切删除**——ACL 全开、takeown 也一样 Access Denied。百度网盘的
-/// `YunShellExtV164.dll.<时间戳>` 就是这种：重试一百次也是同样结果。
+/// 卸载器用 `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)` 把锁住的 shell 扩展
+/// 挂到 Session Manager 下，**重启前系统拒绝一切删除**——ACL 全开、
+/// takeown 也 Access Denied。
 ///
-/// `*1` 前缀 = 重启删除；`*0` = 重启重命名（目标在下一条）。
-fn is_pending_reboot_delete(path: &Path) -> bool {
+/// 注册表格式是 REG_MULTI_SZ，两种形态并存：
+/// - **成对**：`源\0目标\0`；目标为空串 = 删除；有目标 = 重命名
+/// - **带序号前缀**：`*1\??\<path>`、`*2\??\<path>`（本机 Edge/OneDrive
+///   实测有 `*2`）；公开资料对 `*N` 是删除标志还是顺序号说法不一
+///
+/// 不区分删除/重命名：路径出现在源位置，重启前就锁着。空串是成对格式的
+/// 目标位或表尾填充，必须跳过而不是 break——`MoveFileEx` 删除对正是
+/// `src\0\0`，在第一个空串上 break 会丢掉后面所有源路径。
+fn parse_pending_src_paths(words: &[u16]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let mut start = 0usize;
+    while start < words.len() {
+        if words[start] == 0 {
+            start += 1;
+            continue;
+        }
+        let end = (start..words.len())
+            .find(|&i| words[i] == 0)
+            .unwrap_or(words.len());
+        let entry = String::from_utf16_lossy(&words[start..end]);
+        start = end + 1;
+        let path = normalize_pending_src(&entry);
+        if !path.is_empty() {
+            out.insert(path);
+        }
+    }
+    out
+}
+
+/// 每批残留清理只读一次 `PendingFileRenameOperations`。
+fn pending_reboot_locked_paths() -> std::collections::HashSet<String> {
     use winapi::shared::winerror::ERROR_SUCCESS;
     use winapi::um::winnt::REG_MULTI_SZ;
     use winapi::um::winreg::RegQueryValueExW;
 
-    let want = crate::core::safety::norm(path);
-    if want.is_empty() {
-        return false;
-    }
-
+    let empty = std::collections::HashSet::new();
     let key = to_wide(r"SYSTEM\CurrentControlSet\Control\Session Manager");
     let val = to_wide("PendingFileRenameOperations");
     // SAFETY: 句柄仅在打开成功时使用并关闭；缓冲按返回长度扩容。
@@ -1352,7 +1376,7 @@ fn is_pending_reboot_delete(path: &Path) -> bool {
         if RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.as_ptr(), 0, KEY_READ, &mut hkey) as u32
             != ERROR_SUCCESS
         {
-            return false;
+            return empty;
         }
         let mut size: DWORD = 0;
         let mut ty: DWORD = 0;
@@ -1366,7 +1390,7 @@ fn is_pending_reboot_delete(path: &Path) -> bool {
         );
         if q as u32 != ERROR_SUCCESS || ty != REG_MULTI_SZ || size == 0 {
             RegCloseKey(hkey);
-            return false;
+            return empty;
         }
         let mut buf = vec![0u8; size as usize];
         let q2 = RegQueryValueExW(
@@ -1379,43 +1403,44 @@ fn is_pending_reboot_delete(path: &Path) -> bool {
         );
         RegCloseKey(hkey);
         if q2 as u32 != ERROR_SUCCESS {
-            return false;
+            return empty;
         }
 
-        // REG_MULTI_SZ：UTF-16 双 NUL 结尾的字符串表
         let words: Vec<u16> = buf
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
-        let mut start = 0usize;
-        for i in 0..words.len() {
-            if words[i] != 0 {
-                continue;
-            }
-            if i == start {
-                break; // 连续 NUL = 表结束
-            }
-            let entry = String::from_utf16_lossy(&words[start..i]);
-            start = i + 1;
-            // `*1\??\<path>` = 重启删除
-            let Some(rest) = entry.strip_prefix("*1") else {
-                continue;
-            };
-            let rest = rest.trim_start_matches('\\');
-            let Some(nt) = rest.strip_prefix("??\\") else {
-                continue;
-            };
-            if crate::core::safety::norm(Path::new(nt)) == want {
-                return true;
-            }
-        }
-        false
+        parse_pending_src_paths(&words)
     }
+}
+
+/// 把 pending 条目收成归一化 DOS 路径：`*1\??\C:\foo` / `\??\C:\foo` / `C:\foo`。
+fn normalize_pending_src(entry: &str) -> String {
+    let mut s = entry;
+    // `*1\`、`*2\` … 序号前缀（含义有争议，一律剥掉）
+    if s.starts_with('*') {
+        if let Some(idx) = s.find('\\') {
+            s = &s[idx + 1..];
+        }
+    }
+    s = s.trim_start_matches('\\');
+    if let Some(nt) = s.strip_prefix("??\\") {
+        s = nt;
+    }
+    crate::core::safety::norm(Path::new(s))
+}
+
+fn is_pending_reboot_locked(path: &Path, locked: &std::collections::HashSet<String>) -> bool {
+    let want = crate::core::safety::norm(path);
+    !want.is_empty() && locked.contains(&want)
 }
 
 /// 执行残留清理
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
+
+    // 重启前锁定的路径：整批只读一次注册表。
+    let pending_locked = pending_reboot_locked_paths();
 
     // 先结束占用安装目录的进程、停掉即将删除的服务，否则删文件/服务键会失败。
     let lock_dirs: Vec<String> = items
@@ -1451,11 +1476,11 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
         match &item.kind {
             ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => {
                 prog.note(path);
-                // 重启后删除：系统已锁定到下次启动，再点也不会成功。
+                // 重启后删除/重命名：系统已锁定到下次启动，再点也不会成功。
                 // 记 ManualAction 而不是 Failed——重试无意义，出路是重启。
-                if is_pending_reboot_delete(path) {
+                if is_pending_reboot_locked(path, &pending_locked) {
                     crate::log!(
-                        "[残留] {} 已登记为重启后删除，跳过本轮清理",
+                        "[残留] {} 已登记为重启后处理，跳过本轮清理",
                         path.display()
                     );
                     report.record(path, crate::core::cleaner::CleanResult::ManualAction);
@@ -1594,6 +1619,67 @@ mod tests {
             is_system_component: false,
             uninstaller_missing: false,
         }
+    }
+
+    #[test]
+    fn pending_src_strips_star_prefix_and_nt_namespace() {
+        assert_eq!(
+            normalize_pending_src(r"*1\??\C:\Users\a\BaiduNetdisk\x.dll"),
+            crate::core::safety::norm(Path::new(r"C:\Users\a\BaiduNetdisk\x.dll"))
+        );
+        // Edge/OneDrive 实机会出现 *2，不能只认 *1
+        assert_eq!(
+            normalize_pending_src(r"*2\??\C:\Temp\foo"),
+            crate::core::safety::norm(Path::new(r"C:\Temp\foo"))
+        );
+        // 旧式无序号、仅 \??\ 前缀
+        assert_eq!(
+            normalize_pending_src(r"\??\C:\Temp\bar"),
+            crate::core::safety::norm(Path::new(r"C:\Temp\bar"))
+        );
+        // 裸 DOS 路径
+        assert_eq!(
+            normalize_pending_src(r"C:\Temp\baz"),
+            crate::core::safety::norm(Path::new(r"C:\Temp\baz"))
+        );
+    }
+
+    #[test]
+    fn pending_set_membership_matches_normalized_path() {
+        use std::collections::HashSet;
+        let locked: HashSet<String> = [normalize_pending_src(r"*1\??\C:\x\y.dll")]
+            .into_iter()
+            .collect();
+        assert!(is_pending_reboot_locked(Path::new(r"C:\x\y.dll"), &locked));
+        assert!(!is_pending_reboot_locked(Path::new(r"C:\x\z.dll"), &locked));
+    }
+
+    fn utf16_multi_sz(entries: &[&str]) -> Vec<u16> {
+        let mut w = Vec::new();
+        for e in entries {
+            w.extend(e.encode_utf16());
+            w.push(0);
+        }
+        w.push(0);
+        w
+    }
+
+    /// `MoveFileEx` 删除对是 `src\0\0`：空目标不能当表结束。
+    #[test]
+    fn pending_parse_keeps_sources_after_empty_dest() {
+        let words = utf16_multi_sz(&[r"\??\C:\a", "", r"\??\C:\b", ""]);
+        let locked = parse_pending_src_paths(&words);
+        assert!(locked.contains(&crate::core::safety::norm(Path::new(r"C:\a"))));
+        assert!(locked.contains(&crate::core::safety::norm(Path::new(r"C:\b"))));
+        assert_eq!(locked.len(), 2);
+    }
+
+    #[test]
+    fn pending_parse_handles_star_prefix_and_empty_dest() {
+        let words = utf16_multi_sz(&[r"*1\??\C:\a", "", r"*2\??\C:\b", ""]);
+        let locked = parse_pending_src_paths(&words);
+        assert!(locked.contains(&crate::core::safety::norm(Path::new(r"C:\a"))));
+        assert!(locked.contains(&crate::core::safety::norm(Path::new(r"C:\b"))));
     }
 
     fn ctx_with_dir(name: &str, dir: &str) -> Ctx {
