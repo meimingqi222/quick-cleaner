@@ -207,7 +207,25 @@ impl crate::ui::Root {
                             .map(|target| target.path.clone()),
                     );
                 }
-                this.clean.last_failed = failed.clone();
+                this.clean.last_failed = report
+                    .fail_info
+                    .iter()
+                    .map(|info| {
+                        let (bytes, files) = report
+                            .remaining_live
+                            .iter()
+                            .find(|(p, _, _)| *p == info.path)
+                            .map(|(_, b, f)| (*b, *f))
+                            .unwrap_or((0, 0));
+                        crate::ui::state::FailedItem {
+                            path: info.path.clone(),
+                            bytes,
+                            files,
+                            reason: info.reason,
+                            failed_leaves: info.failed_leaves,
+                        }
+                    })
+                    .collect();
                 this.clean.last_failed_files = snap.failed;
 
                 // brew owner command 在后台线程里持久化节流时间；同步回 Root
@@ -221,6 +239,8 @@ impl crate::ui::Root {
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
                 this.apply_clean_result(&attempted, &still_there);
+                this.junk
+                    .apply_remaining_sizes(&report.remaining_live);
 
                 // 同步更新磁盘透镜的 SizeTree：垃圾清理删掉的路径
                 //（缓存、临时文件、构建产物）在磁盘透镜里也会显示，

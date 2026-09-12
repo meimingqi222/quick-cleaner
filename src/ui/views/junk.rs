@@ -741,11 +741,20 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .p_2()
                             .rounded_md()
                             .bg(rgba(CARD, 0.6))
-                            .children(root.clean.last_failed.iter().take(20).map(|p| {
+                            .children(root.clean.last_failed.iter().take(20).map(|item| {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(ERROR))
-                                    .child(truncate(&p.to_string_lossy(), 80))
+                                    .child(truncate(
+                                        &tr_failed_item_detail(
+                                            lang,
+                                            &item.path.display().to_string(),
+                                            &crate::core::model::fmt_size(item.bytes),
+                                            item.reason,
+                                            item.files,
+                                        ),
+                                        120,
+                                    ))
                                     .into_any_element()
                             })),
                     )

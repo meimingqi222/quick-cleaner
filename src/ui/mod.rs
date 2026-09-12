@@ -592,8 +592,12 @@ impl Root {
         let win = std::env::var("SystemRoot")
             .unwrap_or_else(|_| r"C:\Windows".into())
             .to_ascii_lowercase();
-        self.clean.last_failed.iter().any(|p| {
-            let s = p.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
+        self.clean.last_failed.iter().any(|item| {
+            let s = item
+                .path
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .replace('/', "\\");
             s.starts_with(&win) || s.contains(r"\program files") || s.contains(r"\programdata")
         })
     }
