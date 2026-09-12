@@ -120,8 +120,8 @@ pub fn quote_win_arg(arg: &str) -> String {
     out
 }
 
-/// 删除因 ACCESS_DENIED（os error 5）失败时的提权补救：取得所有权并授予
-/// Administrators 完全控制，使随后的 `DeleteFile`/`RemoveDirectory` 能通过。
+/// 删除因 ACCESS_DENIED（os error 5）失败时的提权补救：取得所有权、摘掉
+/// Deny ACE，再授予 Administrators 完全控制。
 ///
 /// 典型场景：应用（如 WorkBuddy）在自己的日志目录上写 `Deny Delete` ACL
 /// 做防删，进程早已退出，但 ACL 还在。进程占用（os error 32）不走这里——
@@ -129,6 +129,12 @@ pub fn quote_win_arg(arg: &str) -> String {
 ///
 /// 仅在已提权时有意义；未提权直接返回 false，不空跑子进程。
 /// `/t` 递归、`/c` 遇错继续：目标子树里混着系统文件时不要整批中断。
+///
+/// **为什么不能只 `/grant`**：Windows AccessCheck 把「命中的 Deny」当作
+/// 权威，后面的 Allow 不会把它盖回去。只给 Administrators 加 FullControl
+/// 的话，用户 SID 上那条 Deny Delete 仍然让删除失败——实机 WorkBuddy
+/// 日志就是这种「Deny + Allow 并存」的形态。必须先 `/remove:d` 摘掉
+/// Deny，再 `/grant` 兜底。
 ///
 /// 成功只表示「ACL 改过了」，不保证文件一定能删（服务仍可能持有句柄）。
 pub fn force_delete_access(path: &std::path::Path) -> bool {
@@ -155,8 +161,21 @@ pub fn force_delete_access(path: &std::path::Path) -> bool {
         .status();
     let _ = takeown;
 
-    // icacls 才是真正拆 Deny / 补 Allow 的一步。SID 而不是名字：
-    // 中文系统上组名是「Administrators」以外的本地化串，按名字授权会静默失败。
+    // 摘 Deny：当前用户 SID + Everyone。用 SID 而不是名字——中文系统上
+    // 组名本地化后按名字匹配会静默失败。一个 trustee 一条 /remove:d。
+    let sid = current_user_sid();
+    let mut remove_deny = Command::new("icacls");
+    remove_deny.arg(&display);
+    if let Some(sid) = &sid {
+        remove_deny.args(["/remove:d", &format!("*{sid}")]);
+    }
+    remove_deny.args(["/remove:d", "*S-1-1-0"]);
+    remove_deny.args(["/t", "/c", "/q"]);
+    quiet(&mut remove_deny);
+    let removed = matches!(remove_deny.status(), Ok(s) if s.success());
+
+    // Deny 摘掉后再补 Administrators 完全控制，兜住「摘了 Deny 但没 Allow」
+    // 的半截状态。SID 而不是名字，理由同上。
     let mut icacls = Command::new("icacls");
     icacls.args([
         &display,
@@ -167,7 +186,10 @@ pub fn force_delete_access(path: &std::path::Path) -> bool {
         "/q",
     ]);
     quiet(&mut icacls);
-    matches!(icacls.status(), Ok(s) if s.success())
+    let granted = matches!(icacls.status(), Ok(s) if s.success());
+    // 两步任一成功都值得重试删除：/remove:d 成功但 /grant 失败时，
+    // 原来的 Allow（用户 FullControl）往往还在，照样删得掉。
+    removed || granted
 }
 
 /// 若当前未提权，通过 Windows UAC (runas) 自重启当前进程并退出当前无权限进程。
