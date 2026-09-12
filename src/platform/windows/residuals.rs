@@ -1407,8 +1407,10 @@ fn pending_reboot_locked_paths() -> std::collections::HashSet<String> {
         }
 
         let words: Vec<u16> = buf
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         parse_pending_src_paths(&words)
     }
