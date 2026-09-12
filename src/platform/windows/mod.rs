@@ -14,6 +14,7 @@ pub mod residuals;
 pub mod security;
 pub mod status;
 pub mod thermal;
+pub mod updater;
 pub mod user_env;
 pub mod volume;
 pub mod wmi;
@@ -36,6 +37,10 @@ pub use status::{
     elevated_fan_control, fan_control_supported, fan_helper_installed, install_fan_helper,
     process_unique_id, read_battery, read_gpus, read_thermal, set_fan_mode, system_uptime_secs,
     terminate_process, uninstall_fan_helper,
+};
+pub use updater::{
+    apply_update_and_restart, cleanup_previous_update_leftovers, is_packaged_install, open_url,
+    update_cache_dir,
 };
 pub use user_env::{
     detect_system_language, get_user_context, init_user_context, real_user_home,

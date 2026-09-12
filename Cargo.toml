@@ -21,6 +21,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # 状态监控页的 CPU / 内存 / 进程 / 网络采样。关掉默认特性只留需要的，
 # 否则会把用户枚举、磁盘枚举等一整套拉进编译。
 sysinfo = { version = "0.37", default-features = false, features = ["system", "network", "multithread"] }
+# 自动更新：阻塞 HTTP 拉 GitHub Releases，无 async runtime
+ureq = { version = "2.12", features = ["json"] }
+# 解压发行 zip；sha2 做 sidecar 校验
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 展开里带着 `#[cfg(feature = "cargo-clippy")]`——那是

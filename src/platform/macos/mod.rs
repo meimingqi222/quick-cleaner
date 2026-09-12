@@ -22,6 +22,7 @@ pub mod residuals;
 pub mod status;
 pub mod tcc;
 pub mod trash;
+pub mod updater;
 pub mod user_env;
 pub mod walk;
 
@@ -45,6 +46,10 @@ pub use status::{
     terminate_process,
 };
 pub use trash::{empty_trash, is_system_trash, move_to_trash};
+pub use updater::{
+    apply_update_and_restart, cleanup_previous_update_leftovers, is_packaged_install, open_url,
+    update_cache_dir,
+};
 pub use user_env::{user_cache_dir, user_data_dir, user_home, user_temp_dir};
 
 // TCC 渐进式增强：UI 用这些函数检测和引导完全磁盘访问授权

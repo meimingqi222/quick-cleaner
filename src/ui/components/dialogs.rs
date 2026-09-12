@@ -29,6 +29,8 @@ pub enum ConfirmKind {
     /// 安装风扇特权守护进程，装完后施加这个档位（状态监控页）。
     /// 装系统组件是持久化改动，要在应用内讲清楚再走系统密码框。
     InstallFanHelper(crate::core::status::FanMode),
+    /// 打断进行中的扫描/清理并安装应用更新。
+    InstallUpdate,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +55,7 @@ pub fn render_confirm_dialog(
     let is_uninstall = matches!(&req.kind, ConfirmKind::UninstallApp(_));
     let is_kill = matches!(&req.kind, ConfirmKind::KillProcess { .. });
     let is_fan_install = matches!(&req.kind, ConfirmKind::InstallFanHelper(_));
+    let is_update = matches!(&req.kind, ConfirmKind::InstallUpdate);
     let confirm_label = match &req.kind {
         ConfirmKind::UninstallApp(_) => match lang {
             Language::Zh => "确认卸载",
@@ -63,13 +66,14 @@ pub fn render_confirm_dialog(
             Language::Zh => "安装",
             Language::En => "Install",
         },
+        ConfirmKind::InstallUpdate => tr_update_restart_install(lang),
         _ => match lang {
             Language::Zh => "确认永久删除",
             Language::En => "Delete Permanently",
         },
     };
 
-    let badge = if is_uninstall || is_fan_install {
+    let badge = if is_uninstall || is_fan_install || is_update {
         icon_badge(icon_apps(PRIMARY, 20.), PRIMARY_FIXED, PRIMARY, 40.)
     } else if is_kill {
         icon_badge(icon_shield(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.)
@@ -77,7 +81,7 @@ pub fn render_confirm_dialog(
         icon_badge(icon_trash(ERROR, 20.), ERROR_CONTAINER, ERROR, 40.)
     };
 
-    let detail_color = if is_uninstall || is_fan_install {
+    let detail_color = if is_uninstall || is_fan_install || is_update {
         OUTLINE
     } else {
         ERROR
@@ -152,7 +156,7 @@ pub fn render_confirm_dialog(
                         .child(
                             div()
                                 .id("confirm-accept")
-                                .child(if is_fan_install {
+                                .child(if is_fan_install || is_update {
                                     primary_button(confirm_label.to_string(), true)
                                 } else {
                                     danger_button(confirm_label.to_string(), true)

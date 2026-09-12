@@ -56,6 +56,15 @@ pub struct Settings {
     /// 就不在列表里出现 brew 清理条目——dry-run 不是瞬时命令，每轮扫描
     /// 都跑没有道理。只在真实清理成功后更新。
     pub brew_cleanup_at: Option<i64>,
+
+    /// 是否在启动/周期触发时自动检查 GitHub 上的新版本。
+    pub auto_check_updates: bool,
+
+    /// 用户点过「跳过此版本」的版本号；检测到同版本时不再弹窗。
+    pub skipped_update_version: Option<String>,
+
+    /// 上一次更新检查成功发起的 Unix 时间（秒）。仅作诊断与节流参考。
+    pub last_update_check_at: Option<i64>,
 }
 
 impl Default for Settings {
@@ -66,6 +75,9 @@ impl Default for Settings {
             macos_fda_dismissed: false,
             whitelist: Vec::new(),
             brew_cleanup_at: None,
+            auto_check_updates: true,
+            skipped_update_version: None,
+            last_update_check_at: None,
         }
     }
 }
@@ -164,6 +176,9 @@ mod tests {
             macos_fda_dismissed: true,
             whitelist: vec!["/tmp/keep-this".to_string()],
             brew_cleanup_at: Some(1_700_000_000),
+            auto_check_updates: false,
+            skipped_update_version: Some("0.0.8".into()),
+            last_update_check_at: Some(1_700_000_001),
         };
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(Settings::merge_json(&text), s);
