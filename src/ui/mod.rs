@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod state;
 pub mod text_input;
 pub mod theme;
+pub mod updater_dialog;
 pub mod views;
 pub use state::*;
 
@@ -32,6 +33,7 @@ use crate::ui::components::{
 };
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
+use crate::ui::updater_dialog::render_update_dialog;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
     render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,
@@ -92,6 +94,8 @@ pub struct Root {
     /// 状态监控页：快照与 CPU 历史由后台轮询任务整包写入。
     /// 字段名避开根视图已有的 `status`（状态栏文案）。
     pub monitor: StatusState,
+    /// 自动更新：GitHub Releases 检测、下载校验与安装交接。
+    pub update: crate::ui::state::UpdateState,
     /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
     /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
     /// 省掉 ~700MB 重复内存。
@@ -244,6 +248,8 @@ impl Root {
             },
 
             monitor: StatusState::default(),
+
+            update: crate::ui::state::UpdateState::default(),
 
             #[cfg(not(windows))]
             macos_root_index: None,
@@ -938,6 +944,10 @@ impl Render for Root {
 
         if let Some(dropdown) = render_disk_volume_dropdown(self, cx) {
             root = root.child(dropdown);
+        }
+
+        if self.update.show_dialog {
+            root = root.child(render_update_dialog(self, cx));
         }
 
         root.into_any_element()

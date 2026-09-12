@@ -24,6 +24,7 @@ pub mod scanner;
 pub mod settings;
 pub mod status;
 pub(crate) mod testing;
+pub mod updater;
 pub mod whitelist;
 
 pub use fs_query::{FSIndexEngine, FileIndexQuery, IndexedFile, QueryFilter};

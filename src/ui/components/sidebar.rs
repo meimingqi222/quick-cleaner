@@ -314,6 +314,65 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         })),
                                 ),
                         ),
-                ),
+                )
+                // 版本号 + 更新入口
+                .child(render_version_row(root, cx)),
         )
+}
+
+/// 侧栏底栏的版本行：有更新时整行可点开对话框；否则显示版本号 + 检查按钮。
+fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
+    use crate::core::updater::UpdateStatus;
+    let lang = root.language;
+    let version = env!("CARGO_PKG_VERSION");
+    let status = &root.update.status;
+    let attention = status.wants_attention();
+    let label = match status {
+        UpdateStatus::Available { latest_version, .. } => {
+            format!("{} {}", tr_update_available_short(lang), latest_version)
+        }
+        UpdateStatus::Downloading { .. } => tr_update_downloading(lang).to_string(),
+        UpdateStatus::Verifying { .. } => tr_update_verifying(lang).to_string(),
+        UpdateStatus::Downloaded { latest_version, .. } => {
+            format!("{} {latest_version}", tr_update_restart_install(lang))
+        }
+        UpdateStatus::Installing { .. } => tr_update_installing(lang).to_string(),
+        UpdateStatus::Error { .. } => tr_update_failed(lang).to_string(),
+        UpdateStatus::Checking { .. } => tr_update_checking(lang).to_string(),
+        _ => format!("{} {version}", tr_update_version_prefix(lang)),
+    };
+
+    div()
+        .id("sidebar-update-row")
+        .flex()
+        .items_center()
+        .justify_between()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .cursor_pointer()
+        .when(attention, |d| {
+            d.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+        })
+        .when(!attention, |d| d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH))))
+        .child(div().text_xs().child(SharedString::from(label)))
+        .child(
+            div().text_xs().child(if attention {
+                "›".to_string()
+            } else if root.update.checking {
+                "…".to_string()
+            } else {
+                tr_update_check_now(lang).to_string()
+            }),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            let attention = this.update.status.wants_attention();
+            if attention {
+                this.open_update_dialog(cx);
+            } else {
+                this.check_for_updates_manual(cx);
+                this.open_update_dialog(cx);
+            }
+        }))
+        .into_any_element()
 }

@@ -110,6 +110,8 @@ fn main() {
                     }
                     // 软件列表扫描主要读 /Applications，不触发 TCC，可安全启动
                     root.start_apps_scan(cx);
+                    // 发行安装才检查 GitHub；开发构建会在门禁处直接返回。
+                    root.start_update_scheduler(cx);
                     root
                 })
             },

@@ -69,6 +69,10 @@ impl crate::ui::Root {
                 name,
             } => self.kill_process(pid, start_time, unique_id, name, cx),
             ConfirmKind::InstallFanHelper(mode) => self.install_fan_helper_and_apply(mode, cx),
+            ConfirmKind::InstallUpdate => {
+                self.update.install_confirmed = true;
+                self.install_update_now(cx);
+            }
         }
     }
 

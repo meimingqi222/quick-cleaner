@@ -1884,3 +1884,138 @@ pub fn tr_fan_elevate_canceled(lang: Language) -> &'static str {
         Language::En => "Admin authorization canceled; fan mode unchanged",
     }
 }
+
+// —— 自动更新 ——
+
+pub fn tr_update_version_prefix(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "版本",
+        Language::En => "Version",
+    }
+}
+
+pub fn tr_update_available_short(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "有新版本",
+        Language::En => "Update available",
+    }
+}
+
+pub fn tr_update_check_now(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "检查更新",
+        Language::En => "Check for updates",
+    }
+}
+
+pub fn tr_update_checking(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在检查…",
+        Language::En => "Checking…",
+    }
+}
+
+pub fn tr_update_dialog_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "应用更新",
+        Language::En => "App update",
+    }
+}
+
+pub fn tr_update_new_version(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "发现新版本",
+        Language::En => "A new version is available",
+    }
+}
+
+pub fn tr_update_download(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "下载更新",
+        Language::En => "Download",
+    }
+}
+
+pub fn tr_update_downloading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在下载…",
+        Language::En => "Downloading…",
+    }
+}
+
+pub fn tr_update_verifying(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在校验…",
+        Language::En => "Verifying…",
+    }
+}
+
+pub fn tr_update_restart_install(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "重启安装",
+        Language::En => "Restart to install",
+    }
+}
+
+pub fn tr_update_installing(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在安装…",
+        Language::En => "Installing…",
+    }
+}
+
+pub fn tr_update_ready_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "新版本已下载并校验通过，重启后即可完成安装。",
+        Language::En => "The update is downloaded and verified. Restart to finish installing.",
+    }
+}
+
+pub fn tr_update_skip_version(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "跳过此版本",
+        Language::En => "Skip this version",
+    }
+}
+
+pub fn tr_update_later(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "稍后",
+        Language::En => "Later",
+    }
+}
+
+pub fn tr_update_open_release(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打开发布页",
+        Language::En => "Open release page",
+    }
+}
+
+pub fn tr_update_retry(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "重试",
+        Language::En => "Retry",
+    }
+}
+
+pub fn tr_update_failed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "更新失败",
+        Language::En => "Update failed",
+    }
+}
+
+pub fn tr_update_install_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打断当前任务并安装更新？",
+        Language::En => "Interrupt current work and install the update?",
+    }
+}
+
+pub fn tr_update_install_busy_body(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "扫描或清理仍在进行。安装更新会退出应用并中断这些任务。",
+        Language::En => "A scan or clean is still running. Installing will quit the app and interrupt that work.",
+    }
+}

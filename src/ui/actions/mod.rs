@@ -7,3 +7,4 @@ mod disk;
 mod junk;
 mod search;
 mod status;
+mod updater;

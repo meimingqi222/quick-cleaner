@@ -33,6 +33,11 @@
 //! | `elevated_fan_control` | 经常驻特权守护进程设定档位（直写被固件拒绝时） |
 //! | `fan_helper_installed` | 特权守护进程是否已安装 |
 //! | `install_fan_helper` / `uninstall_fan_helper` | 安装/卸载特权守护进程（各弹一次授权框，正文由调用方按语言传入） |
+//! | `is_packaged_install` | 是否来自发行安装（非 cargo 开发构建） |
+//! | `update_cache_dir` | 自动更新的下载/解压缓存目录 |
+//! | `open_url` | 用系统默认浏览器打开 http(s) 链接 |
+//! | `apply_update_and_restart` | 自替换载荷并拉起 helper，随后本进程退出 |
+//! | `cleanup_previous_update_leftovers` | 启动时删除上次更新残留的 `.old` |
 
 /// 编译期校验：当前平台分支确实提供了门面要求的全部函数，且签名一致。
 ///
@@ -99,6 +104,11 @@ macro_rules! platform_contract {
             let _: fn() -> bool = fan_helper_installed;
             let _: fn(&str) -> Result<(), FanError> = install_fan_helper;
             let _: fn(&str) -> Result<(), FanError> = uninstall_fan_helper;
+            let _: fn() -> bool = is_packaged_install;
+            let _: fn() -> Option<PathBuf> = update_cache_dir;
+            let _: fn(&str) = open_url;
+            let _: fn(&Path) -> Result<(), String> = apply_update_and_restart;
+            let _: fn() = cleanup_previous_update_leftovers;
         };
     };
 }
@@ -156,14 +166,16 @@ pub mod windows;
 /// 确实需要单平台能力时，得写 `platform::windows::...` 并自己加 `#[cfg]`，
 /// 一眼能看出这是平台分支而不是通用接口。
 pub use windows::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
-    detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
-    fan_helper_installed, force_delete_access, get_volume_space, install_fan_helper, is_elevated,
+    app_icon_from_bundle, app_icon_png, apply_update_and_restart, clean_residuals,
+    cleanup_previous_update_leftovers, detect_inuse, detect_occupancy, detect_system_language,
+    elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
+    force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
-    reveal_in_explorer, run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode,
-    spot_check_inuse, system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir,
-    user_data_dir, user_home, user_temp_dir, verify_residuals,
+    open_url, process_unique_id, read_battery, read_gpus, read_thermal,
+    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
+    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
+    uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -172,14 +184,16 @@ platform_contract!();
 pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    app_icon_from_bundle, app_icon_png, clean_residuals, detect_inuse, detect_occupancy,
-    detect_system_language, elevated_fan_control, empty_trash, fan_control_supported,
-    fan_helper_installed, force_delete_access, get_volume_space, install_fan_helper, is_elevated,
+    app_icon_from_bundle, app_icon_png, apply_update_and_restart, clean_residuals,
+    cleanup_previous_update_leftovers, detect_inuse, detect_occupancy, detect_system_language,
+    elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
+    force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
-    reveal_in_explorer, run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode,
-    spot_check_inuse, system_uptime_secs, terminate_process, uninstall_fan_helper, user_cache_dir,
-    user_data_dir, user_home, user_temp_dir, verify_residuals,
+    open_url, process_unique_id, read_battery, read_gpus, read_thermal,
+    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
+    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
+    uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();

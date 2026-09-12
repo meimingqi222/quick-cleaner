@@ -506,6 +506,37 @@ impl DiskState {
     }
 }
 
+/// 自动更新的界面状态。
+pub struct UpdateState {
+    pub status: crate::core::updater::UpdateStatus,
+    /// 是否展开侧栏更新入口对应的详情对话框。
+    pub show_dialog: bool,
+    /// 检查/下载任务槽。与扫描任务分离，避免互相顶掉句柄。
+    pub task: Option<Task<()>>,
+    /// 检查是否在飞（手动按钮禁用）。
+    pub checking: bool,
+    /// 有进行中的扫描/清理时，用户已确认可打断。
+    pub install_confirmed: bool,
+    /// 下载字节进度。后台线程写、渲染读；下载结束后置回 None。
+    pub live_progress: Option<std::sync::Arc<std::sync::Mutex<crate::core::updater::DownloadProgress>>>,
+}
+
+impl Default for UpdateState {
+    fn default() -> Self {
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        Self {
+            status: crate::core::updater::UpdateStatus::Idle {
+                current_version,
+            },
+            show_dialog: false,
+            task: None,
+            checking: false,
+            install_confirmed: false,
+            live_progress: None,
+        }
+    }
+}
+
 /// 正在执行的清理任务及其结果。
 /// 清理后仍留在列表里的一条失败目标，含重测体积与原因。
 #[derive(Clone, Debug)]
