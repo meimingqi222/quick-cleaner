@@ -651,14 +651,20 @@ fn summarize_failures(
 ///
 /// 跳过虚拟路径（Docker/brew 没有真实文件系统对象）。取消场景下未处理到的
 /// 目标也会进来——它们体积未变，重测结果等于原值，无害。
-fn measure_remaining(targets: &[CleanTarget], failures: &[CleanFailure], p: &CleanProgress) -> Vec<(PathBuf, u64, u64)> {
+fn measure_remaining(
+    targets: &[CleanTarget],
+    failures: &[CleanFailure],
+    p: &CleanProgress,
+) -> Vec<(PathBuf, u64, u64)> {
     let live = AtomicBool::new(true);
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for t in targets {
-        let still = failures.iter().filter_map(CleanFailure::as_path).any(|f| {
-            f == t.path || (!t.remove_dir && f.starts_with(&t.path))
-        }) || p.cancelled() && t.path.exists();
+        let still = failures
+            .iter()
+            .filter_map(CleanFailure::as_path)
+            .any(|f| f == t.path || (!t.remove_dir && f.starts_with(&t.path)))
+            || p.cancelled() && t.path.exists();
         if !still || !seen.insert(t.path.clone()) {
             continue;
         }
@@ -2135,51 +2141,74 @@ mod tests {
     }
 
     /// 部分失败的目录必须重测：状态栏释放量真实，列表体积也要跟上。
+    ///
+    /// Unix 允许 unlink 已打开的文件，打开句柄挡不住删除（同
+    /// `delete_sqlite_family` 的注释）。Windows 用独占共享；其它平台用
+    /// 去掉写权限的子目录。
     #[test]
     fn clean_targets_remeasures_partially_failed_dir() {
         let base = crate::core::testing::fixture("qc_remeasure_partial");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let ok = base.join("ok.bin");
-        let locked = base.join("locked.bin");
         std::fs::write(&ok, vec![0u8; 4096]).unwrap();
-        std::fs::write(&locked, vec![0u8; 8192]).unwrap();
 
-        // 用子进程占住 locked，模拟「部分文件被占用」。
         #[cfg(windows)]
-        let _holder = {
+        let (held, _guard) = {
             use std::os::windows::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
+            let locked = base.join("locked.bin");
+            std::fs::write(&locked, vec![0u8; 8192]).unwrap();
+            let guard = std::fs::OpenOptions::new()
                 .read(true)
-                .share_mode(0) // 不共享 → 删除会 sharing violation
+                .share_mode(0)
                 .open(&locked)
-                .unwrap()
+                .unwrap();
+            (locked, guard)
         };
         #[cfg(not(windows))]
-        let _holder = std::fs::File::open(&locked).unwrap();
+        let (held, held_dir) = {
+            use std::os::unix::fs::PermissionsExt;
+            let held_dir = base.join("held");
+            std::fs::create_dir(&held_dir).unwrap();
+            let locked = held_dir.join("locked.bin");
+            std::fs::write(&locked, vec![0u8; 8192]).unwrap();
+            let mut perms = std::fs::metadata(&held_dir).unwrap().permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(&held_dir, perms).unwrap();
+            (locked, held_dir)
+        };
 
         let targets = vec![CleanTarget::empty(base.clone())];
         let p = CleanProgress::new(2, 4096 + 8192);
         let report = clean_targets(&targets, &p);
 
         assert!(
-            report.failed.iter().any(|f| f.as_path() == Some(locked.as_path()) || f.as_path().map(|p| p.starts_with(&base)).unwrap_or(false)),
+            report
+                .failed
+                .iter()
+                .any(|f| f.as_path() == Some(held.as_path())
+                    || f.as_path().map(|p| p.starts_with(&base)).unwrap_or(false)),
             "被锁文件必须进失败清单"
         );
+        assert!(!ok.exists(), "未占用的文件应已删掉");
+        assert!(held.exists(), "挡着的文件应还在");
         let live = report
             .remaining_live
             .iter()
             .find(|(path, _, _)| *path == base)
             .expect("部分失败的父目录必须重测");
-        assert!(
-            live.1 < 4096 + 8192,
-            "重测体积应小于清理前原值，实测 {}",
-            live.1
-        );
         assert!(live.1 >= 8192, "被锁文件的体积应仍在，实测 {}", live.1);
         assert!(live.2 >= 1);
 
-        drop(_holder);
+        #[cfg(windows)]
+        drop(_guard);
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&held_dir).unwrap().permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&held_dir, perms);
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 }

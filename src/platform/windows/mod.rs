@@ -29,7 +29,9 @@ pub use recycle::{
     empty_trash, is_recycle_junk_entry, is_system_trash, move_to_trash, sweep_orphaned_recycle,
 };
 pub use residuals::{clean_residuals, detect_occupancy, scan_residuals, verify_residuals};
-pub use security::{current_user_sid, force_delete_access, is_elevated, relaunch_as_admin_if_needed};
+pub use security::{
+    current_user_sid, force_delete_access, is_elevated, relaunch_as_admin_if_needed,
+};
 pub use status::{
     elevated_fan_control, fan_control_supported, fan_helper_installed, install_fan_helper,
     process_unique_id, read_battery, read_gpus, read_thermal, set_fan_mode, system_uptime_secs,

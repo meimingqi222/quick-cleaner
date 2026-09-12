@@ -239,8 +239,7 @@ impl crate::ui::Root {
 
                 // 就地更新，不再触发整轮复扫（开发垃圾扫描要几十秒）
                 this.apply_clean_result(&attempted, &still_there);
-                this.junk
-                    .apply_remaining_sizes(&report.remaining_live);
+                this.junk.apply_remaining_sizes(&report.remaining_live);
 
                 // 同步更新磁盘透镜的 SizeTree：垃圾清理删掉的路径
                 //（缓存、临时文件、构建产物）在磁盘透镜里也会显示，

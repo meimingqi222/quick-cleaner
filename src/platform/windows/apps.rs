@@ -1813,7 +1813,12 @@ mod uninstall_cli {
     /// 仍有卸载器进程在跑 → 未收尾。
     #[test]
     fn live_uninstaller_process_is_not_settled() {
-        assert!(!uninstall_settled(true, false, false, Some(POST_UNREGISTER_GRACE)));
+        assert!(!uninstall_settled(
+            true,
+            false,
+            false,
+            Some(POST_UNREGISTER_GRACE)
+        ));
         assert!(!uninstall_settled(true, true, false, None));
     }
 
@@ -1821,10 +1826,7 @@ mod uninstall_cli {
     /// child_ok && !saw_procs → 不能当空等，否则会误 fail-fast。
     #[test]
     fn uac_gap_is_not_orphaned() {
-        assert_eq!(
-            uninstall_orphan(false, false, true),
-            UninstallOrphan::None
-        );
+        assert_eq!(uninstall_orphan(false, false, true), UninstallOrphan::None);
         assert_eq!(orphan_fail_fast(UninstallOrphan::None), None);
     }
 

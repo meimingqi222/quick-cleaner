@@ -1479,10 +1479,7 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 // 重启后删除/重命名：系统已锁定到下次启动，再点也不会成功。
                 // 记 ManualAction 而不是 Failed——重试无意义，出路是重启。
                 if is_pending_reboot_locked(path, &pending_locked) {
-                    crate::log!(
-                        "[残留] {} 已登记为重启后处理，跳过本轮清理",
-                        path.display()
-                    );
+                    crate::log!("[残留] {} 已登记为重启后处理，跳过本轮清理", path.display());
                     report.record(path, crate::core::cleaner::CleanResult::ManualAction);
                     continue;
                 }

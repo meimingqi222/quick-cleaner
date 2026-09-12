@@ -427,10 +427,7 @@ fn push_devin_cli_versions(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path)
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "current"
-            || name == "_download"
-            || Some(&name) == current_version.as_ref()
-        {
+        if name == "current" || name == "_download" || Some(&name) == current_version.as_ref() {
             continue;
         }
         let path = entry.path();
@@ -808,18 +805,31 @@ mod tests {
             .filter(|t| t.category == CategoryId::AiAgents)
             .filter(|t| t.path.is_dir())
             .collect();
-        assert_eq!(old_dirs.len(), 2, "应有 2 个旧版本目录，实得 {}", old_dirs.len());
+        assert_eq!(
+            old_dirs.len(),
+            2,
+            "应有 2 个旧版本目录，实得 {}",
+            old_dirs.len()
+        );
         assert!(old_dirs.iter().any(|t| t.path.ends_with("3000.6.11")));
         assert!(old_dirs.iter().any(|t| t.path.ends_with("3000.6.7")));
         assert!(!old_dirs.iter().any(|t| t.path.ends_with("3000.6.14")));
-        assert!(old_dirs.iter().all(|t| t.recommended), "旧版本目录应默认勾选");
+        assert!(
+            old_dirs.iter().all(|t| t.recommended),
+            "旧版本目录应默认勾选"
+        );
 
         // 安装包：3 个 tar.gz
         let installers: Vec<_> = targets
             .iter()
             .filter(|t| t.path.extension().is_some_and(|e| e == "gz"))
             .collect();
-        assert_eq!(installers.len(), 3, "应有 3 个安装包，实得 {}", installers.len());
+        assert_eq!(
+            installers.len(),
+            3,
+            "应有 3 个安装包，实得 {}",
+            installers.len()
+        );
         assert!(installers.iter().all(|t| t.recommended), "安装包应默认勾选");
 
         // current 软链接和 _download 目录不应作为旧版本目录出现
@@ -878,7 +888,10 @@ mod tests {
             .collect();
         // 两个版本目录都列出（分不清当前版本），但都不预选
         assert_eq!(old_dirs.len(), 2);
-        assert!(old_dirs.iter().all(|t| !t.recommended), "current 缺失时不应预选");
+        assert!(
+            old_dirs.iter().all(|t| !t.recommended),
+            "current 缺失时不应预选"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

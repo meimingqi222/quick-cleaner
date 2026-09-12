@@ -137,8 +137,7 @@ impl JunkState {
         }
         for cat in &mut self.categories {
             for item in &mut cat.items {
-                if let Some((_, bytes, files)) =
-                    remaining.iter().find(|(p, _, _)| *p == item.path)
+                if let Some((_, bytes, files)) = remaining.iter().find(|(p, _, _)| *p == item.path)
                 {
                     item.size = *bytes;
                     item.file_count = *files;
