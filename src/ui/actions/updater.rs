@@ -105,8 +105,9 @@ impl crate::ui::Root {
                                 };
                             } else {
                                 this.update.status = status;
-                                this.update.show_dialog =
-                                    matches!(this.update.status, UpdateStatus::Available { .. });
+                                // maka 同款 autoDownload：发现即后台下载，侧栏出现
+                                // 「重启安装」入口；不弹窗打断。
+                                this.start_update_download(cx);
                             }
                         } else {
                             this.update.status = status;
@@ -117,10 +118,14 @@ impl crate::ui::Root {
                         this.update.status = UpdateStatus::Error {
                             current_version: env!("CARGO_PKG_VERSION").to_string(),
                             operation: updater::UpdateOperation::Check,
-                            message,
+                            message: message.clone(),
                         };
+                        // 自动静默检查失败不弹窗；侧栏会出现「更新失败」可点。
+                        // 手动检查失败写状态栏，同样不强制弹窗。
                         if manual {
-                            this.update.show_dialog = true;
+                            this.status = crate::core::i18n::bilingual(|l| {
+                                format!("{}: {message}", tr_update_failed(l))
+                            });
                         }
                     }
                 }
@@ -132,6 +137,10 @@ impl crate::ui::Root {
     }
 
     pub fn open_update_dialog(&mut self, cx: &mut Context<Self>) {
+        // 空状态不弹「检查更新」对话框——没有可执行的更新动作。
+        if !self.update.status.wants_attention() {
+            return;
+        }
         self.update.show_dialog = true;
         cx.notify();
     }

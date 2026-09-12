@@ -26,7 +26,7 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                 crate::core::model::truncate(notes.trim(), 240)
             };
             (
-                format!("{} {latest_version}", tr_update_new_version(lang)),
+                format!("v{latest_version}"),
                 note,
                 tr_update_download(lang).to_string(),
                 true,
@@ -53,7 +53,7 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
             false,
         ),
         UpdateStatus::Downloaded { latest_version, .. } => (
-            format!("{} {latest_version}", tr_update_new_version(lang)),
+            format!("v{latest_version}"),
             tr_update_ready_hint(lang).to_string(),
             tr_update_restart_install(lang).to_string(),
             true,
@@ -70,11 +70,12 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
             tr_update_retry(lang).to_string(),
             true,
         ),
+        // 其它状态不应弹窗（open_update_dialog 已拦）；兜底只显示检查中。
         _ => (
-            tr_update_dialog_title(lang).to_string(),
+            tr_update_checking(lang).to_string(),
             String::new(),
-            tr_update_check_now(lang).to_string(),
-            !root.update.checking,
+            tr_update_later(lang).to_string(),
+            false,
         ),
     };
 

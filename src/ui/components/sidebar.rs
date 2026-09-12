@@ -320,13 +320,18 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         )
 }
 
-/// 侧栏底栏的版本行：有更新时整行可点开对话框；否则显示版本号 + 检查按钮。
+/// 侧栏底栏版本行。
+///
+/// 无更新时只显示灰字版本号，**不提供「检查更新」按钮**——检查由启动/周期
+/// 调度静默完成。有更新时才出现高亮入口；已下载则一点直接进入安装（maka 同款）。
 fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     use crate::core::updater::UpdateStatus;
     let lang = root.language;
     let version = env!("CARGO_PKG_VERSION");
     let status = &root.update.status;
     let attention = status.wants_attention();
+    let checking = root.update.checking || matches!(status, UpdateStatus::Checking { .. });
+
     let label = match status {
         UpdateStatus::Available { latest_version, .. } => {
             format!("{} {}", tr_update_available_short(lang), latest_version)
@@ -338,11 +343,11 @@ fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         }
         UpdateStatus::Installing { .. } => tr_update_installing(lang).to_string(),
         UpdateStatus::Error { .. } => tr_update_failed(lang).to_string(),
-        UpdateStatus::Checking { .. } => tr_update_checking(lang).to_string(),
-        _ => format!("{} {version}", tr_update_version_prefix(lang)),
+        _ if checking => tr_update_checking(lang).to_string(),
+        _ => format!("v{version}"),
     };
 
-    div()
+    let mut row = div()
         .id("sidebar-update-row")
         .flex()
         .items_center()
@@ -350,29 +355,41 @@ fn render_version_row(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         .px_3()
         .py_2()
         .rounded_lg()
-        .cursor_pointer()
-        .when(attention, |d| {
-            d.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
-        })
-        .when(!attention, |d| {
-            d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
-        })
-        .child(div().text_xs().child(SharedString::from(label)))
-        .child(div().text_xs().child(if attention {
-            "›".to_string()
-        } else if root.update.checking {
-            "…".to_string()
-        } else {
-            tr_update_check_now(lang).to_string()
-        }))
-        .on_click(cx.listener(|this, _, _, cx| {
-            let attention = this.update.status.wants_attention();
-            if attention {
+        .child(div().text_xs().child(SharedString::from(label.clone())));
+
+    if attention {
+        row = row
+            .bg(rgb(PRIMARY_FIXED))
+            .text_color(rgb(PRIMARY))
+            .cursor_pointer()
+            .child(div().text_xs().child("›"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                // 已下载：一点直接安装，不再进对话框（maka：下载完点按钮即重启）。
+                if matches!(this.update.status, UpdateStatus::Downloaded { .. }) {
+                    this.install_update_now(cx);
+                    return;
+                }
                 this.open_update_dialog(cx);
-            } else {
+            }));
+    } else {
+        // 静默：无更新时不引导用户去点检查。点击版本号只是再查一次，不弹窗。
+        row = row
+            .text_color(rgb(MUTED))
+            .when(!checking, |d| {
+                d.hover(|h| h.bg(rgb(SURF_HIGH))).cursor_pointer()
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.update.checking
+                    || !crate::platform::is_packaged_install()
+                {
+                    return;
+                }
                 this.check_for_updates_manual(cx);
-                this.open_update_dialog(cx);
-            }
-        }))
-        .into_any_element()
+                this.status =
+                    crate::core::i18n::bilingual(|l| tr_update_checking(l).to_string());
+                cx.notify();
+            }));
+    }
+
+    row.into_any_element()
 }

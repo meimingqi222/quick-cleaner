@@ -946,7 +946,7 @@ impl Render for Root {
             root = root.child(dropdown);
         }
 
-        if self.update.show_dialog {
+        if self.update.show_dialog && self.update.status.wants_attention() {
             root = root.child(render_update_dialog(self, cx));
         }
 
