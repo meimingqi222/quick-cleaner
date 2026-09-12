@@ -1326,6 +1326,93 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
 // 清理
 // ---------------------------------------------------------------------------
 
+/// 路径是否已在 `PendingFileRenameOperations` 里登记为「重启后删除」。
+///
+/// 卸载器（或 Windows 文件替换）用 `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)`
+/// 把锁住的 shell 扩展 DLL / 目录挂到 Session Manager 下，**重启前系统会
+/// 拒绝一切删除**——ACL 全开、takeown 也一样 Access Denied。百度网盘的
+/// `YunShellExtV164.dll.<时间戳>` 就是这种：重试一百次也是同样结果。
+///
+/// `*1` 前缀 = 重启删除；`*0` = 重启重命名（目标在下一条）。
+fn is_pending_reboot_delete(path: &Path) -> bool {
+    use winapi::shared::winerror::ERROR_SUCCESS;
+    use winapi::um::winnt::REG_MULTI_SZ;
+    use winapi::um::winreg::RegQueryValueExW;
+
+    let want = crate::core::safety::norm(path);
+    if want.is_empty() {
+        return false;
+    }
+
+    let key = to_wide(r"SYSTEM\CurrentControlSet\Control\Session Manager");
+    let val = to_wide("PendingFileRenameOperations");
+    // SAFETY: 句柄仅在打开成功时使用并关闭；缓冲按返回长度扩容。
+    unsafe {
+        let mut hkey: HKEY = std::ptr::null_mut();
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.as_ptr(), 0, KEY_READ, &mut hkey) as u32
+            != ERROR_SUCCESS
+        {
+            return false;
+        }
+        let mut size: DWORD = 0;
+        let mut ty: DWORD = 0;
+        let q = RegQueryValueExW(
+            hkey,
+            val.as_ptr(),
+            std::ptr::null_mut(),
+            &mut ty,
+            std::ptr::null_mut(),
+            &mut size,
+        );
+        if q as u32 != ERROR_SUCCESS || ty != REG_MULTI_SZ || size == 0 {
+            RegCloseKey(hkey);
+            return false;
+        }
+        let mut buf = vec![0u8; size as usize];
+        let q2 = RegQueryValueExW(
+            hkey,
+            val.as_ptr(),
+            std::ptr::null_mut(),
+            &mut ty,
+            buf.as_mut_ptr(),
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if q2 as u32 != ERROR_SUCCESS {
+            return false;
+        }
+
+        // REG_MULTI_SZ：UTF-16 双 NUL 结尾的字符串表
+        let words: Vec<u16> = buf
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let mut start = 0usize;
+        for i in 0..words.len() {
+            if words[i] != 0 {
+                continue;
+            }
+            if i == start {
+                break; // 连续 NUL = 表结束
+            }
+            let entry = String::from_utf16_lossy(&words[start..i]);
+            start = i + 1;
+            // `*1\??\<path>` = 重启删除
+            let Some(rest) = entry.strip_prefix("*1") else {
+                continue;
+            };
+            let rest = rest.trim_start_matches('\\');
+            let Some(nt) = rest.strip_prefix("??\\") else {
+                continue;
+            };
+            if crate::core::safety::norm(Path::new(nt)) == want {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// 执行残留清理
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
@@ -1364,6 +1451,16 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
         match &item.kind {
             ResidualKind::Directory(path, _) | ResidualKind::File(path, _) => {
                 prog.note(path);
+                // 重启后删除：系统已锁定到下次启动，再点也不会成功。
+                // 记 ManualAction 而不是 Failed——重试无意义，出路是重启。
+                if is_pending_reboot_delete(path) {
+                    crate::log!(
+                        "[残留] {} 已登记为重启后删除，跳过本轮清理",
+                        path.display()
+                    );
+                    report.record(path, crate::core::cleaner::CleanResult::ManualAction);
+                    continue;
+                }
                 // 残留走回收站，不永久删（与 macOS 侧同一条理由，见
                 // `platform::macos::residuals::clean_residuals`）：判据是
                 // 「这个 app 已经不在任何位置装着了」，判错的代价是活应用

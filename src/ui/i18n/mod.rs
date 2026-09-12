@@ -662,7 +662,7 @@ pub fn tr_status_residual_cleaned(lang: Language, name: &str, count: usize, size
     }
 }
 
-/// 有「需手动处理」的残留（SIP 下的系统扩展）时的收尾文案。
+/// 有「需手动处理 / 重启后由系统删除」的残留时的收尾文案。
 ///
 /// 不能复用 `_partial` 的「被占用或权限不足」——那是在把平台限制说成软件
 /// 出错，用户会以为重试一下就好。
@@ -675,10 +675,10 @@ pub fn tr_status_residual_cleaned_manual(
 ) -> String {
     match lang {
         Language::Zh => format!(
-            "已清除「{name}」的 {count} 项残留，释放 {size}（{manual} 项需在系统设置中手动关闭）"
+            "已清除「{name}」的 {count} 项残留，释放 {size}（{manual} 项需重启后由系统清除，或在系统设置中处理）"
         ),
         Language::En => format!(
-            "Removed {count} leftovers of \"{name}\", freed {size} ({manual} need to be turned off in System Settings)"
+            "Removed {count} leftovers of \"{name}\", freed {size} ({manual} need a reboot or manual cleanup in System Settings)"
         ),
     }
 }
