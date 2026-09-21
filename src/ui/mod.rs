@@ -507,6 +507,12 @@ impl Root {
         }
     }
 
+    /// 打开「登录项与扩展」设置页（系统扩展只能用户自己去关）。
+    pub fn open_system_extension_settings(&mut self, _cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::open_login_items_settings();
+    }
+
     pub fn open_app_context_menu(&mut self, app: InstalledApp, x: f32, y: f32) {
         self.apps.context_menu = Some(AppsContextMenu { app, x, y });
     }

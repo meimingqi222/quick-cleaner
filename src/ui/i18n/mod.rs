@@ -648,6 +648,34 @@ pub fn tr_residual_launchd_group(lang: Language) -> &'static str {
     }
 }
 
+/// 残留里含系统扩展时的引导标题：程序删不掉，只能用户自己去关。
+pub fn tr_residual_sysext_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "含系统扩展，需在系统设置中手动关闭",
+        Language::En => "Contains a system extension — turn it off in System Settings",
+    }
+}
+
+/// 系统扩展引导的补救指引：说清入口藏在驱动程序扩展的 ⓘ 里。
+pub fn tr_residual_sysext_advice(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => {
+            "第三方程序无权注销他人的系统扩展：到「系统设置 → 通用 → 登录项与扩展 → 驱动程序扩展 ⓘ」里关掉，重启后再回来重新扫描"
+        }
+        Language::En => {
+            "Third-party apps can't deactivate another team's extension — turn it off in System Settings → General → Login Items & Extensions → Driver Extensions ⓘ, reboot, then rescan"
+        }
+    }
+}
+
+/// 系统扩展引导条上的跳转按钮。
+pub fn tr_residual_sysext_open(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打开登录项与扩展",
+        Language::En => "Open Login Items & Extensions",
+    }
+}
+
 pub fn tr_status_residual_cleaning(lang: Language, name: &str, count: usize) -> String {
     match lang {
         Language::Zh => format!("正在彻底清除「{name}」的 {count} 项残留…"),

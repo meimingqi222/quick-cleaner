@@ -75,6 +75,16 @@ pub fn open_full_disk_access_settings() {
         .spawn();
 }
 
+/// 打开「系统设置 → 通用 → 登录项与扩展」。
+///
+/// 系统扩展只能用户自己去关（注销要求请求方与扩展同属一个 Team ID），
+/// 程序代劳不了。和 FDA 跳转同路：只是 `open` 一个设置直达链接。
+pub fn open_login_items_settings() {
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
+        .spawn();
+}
+
 /// 当前可执行文件所在的 .app bundle 路径（用于提示用户该把哪个拖进授权列表）。
 ///
 /// 从终端直接跑二进制时没有 bundle，返回 `None`——此时责任进程是终端，

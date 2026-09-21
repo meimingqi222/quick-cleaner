@@ -55,4 +55,5 @@ pub use user_env::{user_cache_dir, user_data_dir, user_home, user_temp_dir};
 // TCC 渐进式增强：UI 用这些函数检测和引导完全磁盘访问授权
 pub use tcc::{
     enclosing_app_bundle, has_full_disk_access, is_tcc_denied, open_full_disk_access_settings,
+    open_login_items_settings,
 };

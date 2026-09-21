@@ -1,6 +1,6 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
-use crate::core::apps::{InstalledApp, ResidualOccupancy};
+use crate::core::apps::{InstalledApp, ResidualKind, ResidualOccupancy};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
@@ -265,6 +265,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
         .filter_map(|&idx| res.items.get(idx))
         .map(|it| it.size())
         .sum();
+
+    let has_sysext = res
+        .items
+        .iter()
+        .any(|it| matches!(it.kind, ResidualKind::SystemExtension(..)));
 
     let (empty_title, empty_desc, done_label) = match lang {
         Language::Zh => (
@@ -596,6 +601,56 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     // 同屏是自相矛盾的。
                     .when(!is_empty && res.occupancy.is_occupied(), |d| {
                         d.child(render_occupancy_banner(&res.occupancy, lang))
+                    })
+                    // 系统扩展引导：程序注销不了，只能用户自己去设置里关。
+                    // 和占用条同一样式（提示不是错误），按钮直达登录项与扩展。
+                    .when(!is_empty && has_sysext, |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .p_3()
+                                .rounded_lg()
+                                .bg(rgb(CAUTION_CONTAINER))
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(icon_sparkle(CAUTION, 14.))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(CAUTION))
+                                                .child(tr_residual_sysext_title(lang)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(CAUTION))
+                                        .pl(px(22.))
+                                        .child(tr_residual_sysext_advice(lang)),
+                                )
+                                .child(
+                                    div().flex().justify_end().child(
+                                        div()
+                                            .id("resid-open-sysext-settings")
+                                            .child(small_button(
+                                                tr_residual_sysext_open(lang).to_string(),
+                                                PRIMARY_FIXED,
+                                                PRIMARY,
+                                                true,
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_system_extension_settings(cx);
+                                            })),
+                                    ),
+                                ),
+                        )
                     })
                     .child(
                         div()
