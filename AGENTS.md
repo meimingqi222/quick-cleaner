@@ -33,6 +33,8 @@ CI 以 clippy `-D warnings` 卡关。提交前这三项都要能过。
 | P2 | 补位用的隐形占位块要和真卡片一样有 `p_5` + `border_1`，否则同排卡片不等宽 |
 | P3 | 卡片徽章要在源头缩短并由卡片裁切，别指望 gpui 的文字省略号 |
 | P4 | WMI 方法入参的 `uint32` 要按 `VT_I4` 填，`VT_UI4` 一律 TYPE_MISMATCH |
+| P5 | File Provider 的 `SF_DATALESS` 目录 `stat` 正常但 `readdir` 永久卡死，要靠 `getattrlistbulk` 的 `ATTR_CMN_FLAGS` 识别跳过，不能按路径名猜 |
+| P6 | 索引不含被跳过的子树（dataless / hang 集），别把 SizeTree 的缺项当成文件不存在 |
 
 ## 改代码时
 

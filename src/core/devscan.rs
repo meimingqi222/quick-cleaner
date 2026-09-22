@@ -736,6 +736,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
         let refreshed = refresh_macos_index(&volume, original, &changes, &live)
             .expect("小目录删除应能增量更新");
@@ -784,6 +785,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
         let refreshed = refresh_macos_index(&volume, original, &changes, &live)
             .expect("被合并的子树应能局部重扫，而不是回退全量");
@@ -828,6 +830,7 @@ mod tests {
             full_scan_reason: Some("EventIdsWrapped"),
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
         for (case, changes) in [
             ("回放要求整盘重建", Some(full_scan_demanded)),
@@ -857,6 +860,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 0,
+            incomplete: false,
         };
         let (_, advanced) = apply_replayed_changes(
             &base,
@@ -869,6 +873,119 @@ mod tests {
         )
         .expect("无变更时应原样复用索引并返回推进后的水位");
         assert_eq!(advanced, 7);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 回放超时续传：`incomplete` 批次按普通增量应用并推进水位，
+    /// 绝不能因为「没等到 HistoryDone」就丢树整盘重建。
+    #[cfg(not(windows))]
+    #[test]
+    fn incomplete_replay_applies_partial_and_advances_watermark() {
+        use crate::core::devscan::macos::{apply_replayed_changes, RefreshBudget};
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = crate::core::testing::fixture("qc_devscan_incomplete_replay");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("hit")).unwrap();
+        std::fs::write(base.join("hit").join("a.bin"), vec![b'x'; 128]).unwrap();
+        std::fs::create_dir_all(base.join("gone")).unwrap();
+        std::fs::write(base.join("gone").join("b.bin"), vec![b'y'; 64]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let scan = walk::scan_root(&base, volume, &live).unwrap();
+        assert!(scan.tree.find_node_by_path(&base.join("gone")).is_some());
+
+        let gone = base.join("gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        let changes = Changes {
+            paths: vec![gone.clone()],
+            must_rescan: Vec::new(),
+            last_event_id: 42,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+            incomplete: true,
+        };
+        let (refreshed, advanced) = apply_replayed_changes(
+            &base,
+            "测试",
+            std::sync::Arc::new(scan),
+            1,
+            &live,
+            RefreshBudget::Interactive,
+            Some(changes),
+        )
+        .expect("超时续传批次应走增量，而不是回退整盘重建");
+
+        assert_eq!(advanced, 42, "水位必须推进到本批最大事件 ID");
+        assert!(
+            refreshed.tree.find_node_by_path(&gone).is_none(),
+            "已收路径的变更必须落到索引里"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 卷根 `MustScanSubDirs` 拆成直接子目录后必须走增量，而不是 `requires_full_scan`
+    /// 整盘重建。水位钉在检查点上，未回放历史由这次按当前状态的子树重扫覆盖。
+    #[cfg(not(windows))]
+    #[test]
+    fn root_must_rescan_as_children_goes_incremental() {
+        use crate::core::devscan::macos::{apply_replayed_changes, RefreshBudget};
+        use crate::core::disk::VolumeId;
+        use crate::platform::macos::{fsevents::Changes, walk};
+
+        let base = crate::core::testing::fixture("qc_devscan_root_must_children");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("keep")).unwrap();
+        std::fs::write(base.join("keep").join("a.bin"), vec![b'x'; 16]).unwrap();
+
+        let live = AtomicBool::new(true);
+        let volume = VolumeId::from_mount_point(base.clone());
+        let scan = walk::scan_root(&base, volume, &live).unwrap();
+        std::fs::write(base.join("keep").join("new.bin"), vec![b'y'; 8]).unwrap();
+
+        let children: Vec<_> = std::fs::read_dir(&base)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert!(!children.is_empty());
+        let changes = Changes {
+            paths: Vec::new(),
+            must_rescan: children,
+            last_event_id: 99,
+            requires_full_scan: false,
+            full_scan_reason: None,
+            filtered_cache_events: 0,
+            raw_event_count: 1,
+            incomplete: false,
+        };
+        let (refreshed, advanced) = apply_replayed_changes(
+            &base,
+            "测试",
+            std::sync::Arc::new(scan),
+            1,
+            &live,
+            RefreshBudget::Interactive,
+            Some(changes),
+        )
+        .expect("直接子目录重扫应走增量，而不是 requires_full_scan 整盘重建");
+
+        assert_eq!(advanced, 99);
+        assert!(
+            refreshed
+                .tree
+                .find_node_by_path(&base.join("keep").join("new.bin"))
+                .is_some(),
+            "子树重扫必须纳入重扫期间新建的文件"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -898,6 +1015,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
         assert!(
             refresh_macos_index(&volume, original, &changes, &live).is_none(),
@@ -939,6 +1057,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 3,
+            incomplete: false,
         };
         let refreshed = refresh_macos_index(&volume, original, &changes, &live)
             .expect("嵌套变更根应折叠后增量更新");
@@ -980,6 +1099,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
 
         let refreshed = refresh_macos_index(&volume, original, &changes, &live)
@@ -1015,6 +1135,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
 
         // 修复后：单个 metadata 失败不再放弃整个增量，应返回 Some。
@@ -1053,6 +1174,7 @@ mod tests {
             full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count: 1,
+            incomplete: false,
         };
 
         let refreshed = refresh_macos_index(&volume, original, &changes, &live).unwrap();

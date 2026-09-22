@@ -350,6 +350,16 @@ pub(super) enum RefreshBudget {
     Background,
 }
 
+/// 事件水位差超过这个值就不回放，直接重建。
+///
+/// 内核对这类积压的历史大概率已被 Purge，回放只会空转几十秒后在卷根拿到
+/// `MustScanSubDirs`（真机实测 since=809184151、约 4 天积压：45s / 137 万
+/// 事件后照样整盘重建，比旧版 30s 超时还慢 15s）。`FSEventsGetCurrentEventId`
+/// 只是一次系统调用，拿它比 gap 几乎免费。健康期 15 分钟一 tick 约 15~25 万
+/// ID，阈值留出一个数量级——真被 Purge 之前，回放 + 前缀续传仍然划算。
+#[cfg(not(windows))]
+const STALE_WATERMARK_EVENT_GAP: u64 = 4_000_000;
+
 /// 校验并刷新一份进程内缓存。即使没有路径变化，也要持久化推进后的水位。
 #[cfg(not(windows))]
 fn refresh_cached_macos_index(
@@ -360,8 +370,47 @@ fn refresh_cached_macos_index(
     live: &AtomicBool,
     budget: RefreshBudget,
 ) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
+    if last_event_id > 0 {
+        let gap =
+            crate::platform::macos::fsevents::current_event_id().saturating_sub(last_event_id);
+        if gap > STALE_WATERMARK_EVENT_GAP {
+            return rebuild_macos_index(
+                root,
+                label,
+                &scan.volume,
+                live,
+                budget,
+                &format!(
+                    "索引水位过旧（事件差 {gap} 超过 {STALE_WATERMARK_EVENT_GAP}，回放只会空转）"
+                ),
+            );
+        }
+    }
     let changes = crate::platform::macos::fsevents::changes_since(root, last_event_id);
     apply_replayed_changes(root, label, scan, last_event_id, live, budget, changes)
+}
+
+/// 增量走不通时的统一出口：交互预算当场整盘重建，后台预算放弃本轮。
+#[cfg(not(windows))]
+fn rebuild_macos_index(
+    root: &Path,
+    label: &str,
+    volume: &crate::core::disk::VolumeId,
+    live: &AtomicBool,
+    budget: RefreshBudget,
+    reason: &str,
+) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
+    if budget == RefreshBudget::Background {
+        crate::log!(
+            "{} 后台推进放弃本轮（{}），整盘重建留给下次交互",
+            label,
+            reason
+        );
+        return None;
+    }
+    crate::log!("{} {}，整盘重建", label, reason);
+    let (scan, checkpoint) = full_macos_scan(root, volume, live).ok()?;
+    Some((std::sync::Arc::new(scan), checkpoint))
 }
 
 /// 拿到回放结果之后的决策部分。
@@ -369,6 +418,11 @@ fn refresh_cached_macos_index(
 /// 和 [`refresh_cached_macos_index`] 分开，是为了让「预算」这条判断可测：
 /// `changes_since` 要真实的 FSEvents 流，四条支路里哪条把后台线程放进了整盘
 /// 重建，靠跑真流是复现不出来的，只能把 `Changes` 直接喂进来。
+///
+/// `Changes::incomplete`（回放超时续传）按**普通增量**走：已收路径照常
+/// 局部重扫，水位推进到本批最大 ID，下一轮接着回放。不完整不等于不可信——
+/// 丢事件有 `MustScanSubDirs` / `UserDropped` / `KernelDropped` 显式标记，
+/// 那才会进 `must_rescan` 或 `requires_full_scan`。
 #[cfg(not(windows))]
 pub(super) fn apply_replayed_changes(
     root: &Path,
@@ -380,21 +434,6 @@ pub(super) fn apply_replayed_changes(
     changes: Option<crate::platform::macos::fsevents::Changes>,
 ) -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
     let volume = scan.volume.clone();
-    // 四条「增量走不通」的支路原本各自展开一遍整盘重建，收敛到这里：加预算
-    // 判定时只有一个地方要改，也就不会漏掉某一条支路把后台线程放进全量扫描。
-    let rebuild = |reason: &str| -> Option<(std::sync::Arc<crate::core::disk::ScanResult>, u64)> {
-        if budget == RefreshBudget::Background {
-            crate::log!(
-                "{} 后台推进放弃本轮（{}），整盘重建留给下次交互",
-                label,
-                reason
-            );
-            return None;
-        }
-        crate::log!("{} {}，整盘重建", label, reason);
-        let (scan, checkpoint) = full_macos_scan(root, &volume, live).ok()?;
-        Some((std::sync::Arc::new(scan), checkpoint))
-    };
 
     match changes {
         Some(changes)
@@ -402,12 +441,28 @@ pub(super) fn apply_replayed_changes(
                 && changes.paths.is_empty()
                 && changes.must_rescan.is_empty() =>
         {
+            if changes.incomplete {
+                crate::log!(
+                    "{} 超时续传空批次（水位 → {}），下轮继续",
+                    label,
+                    changes.last_event_id
+                );
+            }
             if changes.last_event_id > last_event_id {
                 spawn_save_index(volume, scan.clone(), changes.last_event_id);
             }
             Some((scan, changes.last_event_id))
         }
         Some(changes) if !changes.requires_full_scan => {
+            if changes.incomplete {
+                crate::log!(
+                    "{} 超时续传按增量应用（{} 路径 + {} 重扫根），水位 → {}",
+                    label,
+                    changes.paths.len(),
+                    changes.must_rescan.len(),
+                    changes.last_event_id
+                );
+            }
             let owned = scan.as_ref().clone();
             match refresh_macos_index(&volume, owned, &changes, live) {
                 Some(refreshed) => {
@@ -415,14 +470,18 @@ pub(super) fn apply_replayed_changes(
                     spawn_save_index(volume, refreshed.clone(), changes.last_event_id);
                     Some((refreshed, changes.last_event_id))
                 }
-                None => rebuild("索引增量更新失败"),
+                None => rebuild_macos_index(root, label, &volume, live, budget, "索引增量更新失败"),
             }
         }
-        Some(changes) => rebuild(&format!(
-            "索引需要全量重建：原因={:?}",
-            changes.full_scan_reason
-        )),
-        None => rebuild("索引水位不可回放"),
+        Some(changes) => rebuild_macos_index(
+            root,
+            label,
+            &volume,
+            live,
+            budget,
+            &format!("索引需要全量重建：原因={:?}", changes.full_scan_reason),
+        ),
+        None => rebuild_macos_index(root, label, &volume, live, budget, "索引水位不可回放"),
     }
 }
 
@@ -664,7 +723,25 @@ pub(super) fn refresh_macos_index(
         );
         return None;
     }
-    if estimated > ALWAYS_INCREMENTAL_RECORDS && ratio > REBUILD_RATIO {
+    // 卷根 `MustScanSubDirs` 拆出来的「全部直接子目录」：覆盖面天然是
+    // 100%，比例门只会把它误判成「全量更划算」。子树并行重扫 + 就地替换
+    // 不走 from-scratch 流式建树，保留增量路径。
+    let covers_entire_volume = match std::fs::read_dir(mount) {
+        Ok(rd) => {
+            let mut kids: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            kids.sort();
+            !kids.is_empty()
+                && kids
+                    .iter()
+                    .all(|k| roots.iter().any(|r| r == k || k.starts_with(r.as_path())))
+        }
+        Err(_) => false,
+    };
+    if !covers_entire_volume && estimated > ALWAYS_INCREMENTAL_RECORDS && ratio > REBUILD_RATIO {
         crate::log!(
             "refresh_macos_index: 重扫量占全树 {:.1}% > {:.0}%，全量更划算，放弃增量",
             ratio * 100.0,

@@ -38,6 +38,41 @@ const BULK_BUF_SIZE: usize = 256 * 1024;
 /// v7 文件映射。400k 条以内内存路径更省事（约 20MB 峰值）。
 const SPILL_THRESHOLD: usize = 400_000;
 
+/// 单目录 `getattrlistbulk` 循环软预算。
+///
+/// 超大本地目录（几十万条）合法但慢；到点收手，把**已收到的条目**交出去，
+/// 子目录也已入队的部分继续扫。比卡在硬超时上强，也不用整目录丢弃。
+const ENUM_SOFT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 单目录枚举硬超时。
+///
+/// `getattrlistbulk` 在 File Provider / 挂死的网络卷上可能无限阻塞（实测
+/// 某次全盘重建 7 个 worker 空等、1 个卡在内核态）。到点跳过该目录并丢弃
+/// 枚举线程——扫描必须收工，不能被一个目录拖死。代价是极少数目录的条目
+/// 缺失，以及泄漏一个迟早会被 OS 回收的线程。
+const ENUM_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 硬超时过的目录。同一进程内后续扫描直接跳过，不再各付 30 秒——
+/// File Provider 卷的卡死是持久状态（实测 OneDrive `.Trash` readdir 20s
+/// 不返回），等它自己好转没有意义。代价：这些子树在本进程后续索引里
+/// 缺失，要下次全新重建才恢复，所以扫描结束必须打汇总。
+static HANG_DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+fn note_hang_dir(dir: &Path) {
+    let mut hang = HANG_DIRS.lock().unwrap_or_else(|e| e.into_inner());
+    if !hang.iter().any(|p| p == dir) {
+        hang.push(dir.to_path_buf());
+    }
+}
+
+fn is_hang_dir(dir: &Path) -> bool {
+    HANG_DIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|p| p == dir)
+}
+
 /// macOS vnode 类型枚举，对应 `<sys/vnode.h>` 里的 `enum vtype`。
 ///
 /// `libc` crate 没有暴露这些常量，这里手动定义。
@@ -64,6 +99,14 @@ const ATTR_CMN_ERROR: u32 = 0x20000000;
 /// `ATTR_CMN_MODTIME`：libc 没暴露，手动定义。
 const ATTR_CMN_MODTIME: u32 = 0x00000400;
 
+/// `SF_DATALESS`（`<sys/stat.h>`）：File Provider 占位符，内容不在本地。
+///
+/// `stat` 读的是本地缓存的元数据，秒回；但**枚举**一个 dataless 目录会让
+/// 内核同步向 provider 拉子项列表——OneDrive 的 `.Trash` 实测永久阻塞
+/// （`ls` 150s 不返回，provider 进程 0% CPU 干等）。识别它不靠路径名，
+/// 靠 `getattrlistbulk` 顺带返回的 `st_flags`，零额外 syscall。
+const SF_DATALESS: u32 = 0x40000000;
+
 /// 单条目录条目的信息。
 struct DirEntry {
     name: String,
@@ -71,6 +114,8 @@ struct DirEntry {
     is_reg: bool,
     size: u64,
     mtime: u64,
+    /// `st_flags`，用于识别 `SF_DATALESS` 占位符目录。
+    flags: u32,
 }
 
 /// 解析 `getattrlistbulk` 返回的缓冲区里的一条记录。
@@ -98,6 +143,7 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
     //   ATTR_CMN_NAME      = 0x00000001  (bit 0)
     //   ATTR_CMN_OBJTYPE   = 0x00000008  (bit 3)
     //   ATTR_CMN_MODTIME   = 0x00000400  (bit 10)
+    //   ATTR_CMN_FLAGS     = 0x00040000  (bit 18)
     //   ATTR_CMN_ERROR     = 0x20000000  (bit 29)
     // 写反会静默拿到错误数值——尤其是带错误码的条目（权限被拒等），
     // 会把 NAME/OBJTYPE 读到错位的字节上，产生垃圾名和垃圾类型。
@@ -127,7 +173,14 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
         off += std::mem::size_of::<libc::timespec>();
     }
 
-    // ATTR_CMN_ERROR：u_int32_t 错误码，排在 NAME、OBJTYPE、MODTIME 之后
+    // ATTR_CMN_FLAGS：u_int32_t 文件标志位，含 SF_DATALESS
+    let mut flags: u32 = 0;
+    if common & libc::ATTR_CMN_FLAGS != 0 {
+        flags = std::ptr::read_unaligned(ptr.add(off) as *const u32);
+        off += std::mem::size_of::<u32>();
+    }
+
+    // ATTR_CMN_ERROR：u_int32_t 错误码，排在 FLAGS 之后
     if common & ATTR_CMN_ERROR != 0 {
         off += std::mem::size_of::<u32>();
     }
@@ -149,6 +202,7 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
         is_reg: obj_type == vtype::VREG,
         size,
         mtime,
+        flags,
     })
 }
 
@@ -158,18 +212,31 @@ unsafe fn parse_bulk_entry(ptr: *const u8) -> Option<DirEntry> {
 fn enumerate_dir(dir_fd: libc::c_int) -> Vec<DirEntry> {
     let mut entries = Vec::new();
     let mut buf = vec![0u8; BULK_BUF_SIZE];
+    let started = Instant::now();
 
-    // 构造 attrlist：请求 NAME、MODTIME、OBJTYPE、ALLOCSIZE
+    // 构造 attrlist：请求 NAME、MODTIME、FLAGS、OBJTYPE、ERROR、ALLOCSIZE。
+    // FLAGS 用来识别 SF_DATALESS 占位符目录，ERROR 兜住权限被拒的条目。
     let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
     al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
     al.commonattr = libc::ATTR_CMN_RETURNED_ATTRS
         | libc::ATTR_CMN_NAME
         | ATTR_CMN_MODTIME
+        | libc::ATTR_CMN_FLAGS
         | ATTR_CMN_ERROR
         | libc::ATTR_CMN_OBJTYPE;
     al.fileattr = libc::ATTR_FILE_ALLOCSIZE;
 
     loop {
+        // 批次之间检查软预算：单次 `getattrlistbulk` 仍可能阻塞，硬超时由
+        // 枚举伙伴线程兜底；这里管的是「合法但巨大」的目录。
+        if started.elapsed() > ENUM_SOFT_BUDGET {
+            crate::log!(
+                "目录枚举达到软预算 {:?}，已收 {} 条后收手",
+                ENUM_SOFT_BUDGET,
+                entries.len()
+            );
+            break;
+        }
         // SAFETY: buf 是本地 Vec，大小正确；al 是合法的 attrlist。
         let n = unsafe {
             libc::getattrlistbulk(
@@ -225,17 +292,31 @@ impl WorkQueue {
     }
 
     /// 取一个任务。队列空但有活跃线程时等待；都没有时返回 None。
-    fn pop(&self) -> Option<(PathBuf, u32)> {
+    ///
+    /// **必须看 `live`**：原先无超时 `cv.wait`，取消标志翻掉也叫不醒。
+    /// 只要还有一个 worker 在枚举里（`active > 0`），其余等待方就钉死
+    /// 在这里——用户点取消/关窗要等最慢那个目录收工（buddy 之前的版本
+    /// 里那是永远）。现在短超时轮询 `live`，取消后等待方立刻退出。
+    /// 注意它治的是取消路径：扫描 stall 的真凶是枚举挂起本身，那条归
+    /// ENUM_HARD_TIMEOUT 和 hang 集。
+    fn pop(&self, live: &AtomicBool) -> Option<(PathBuf, u32)> {
         let mut q = self.queue.lock().unwrap();
         loop {
             if let Some(item) = q.pop() {
                 return Some(item);
             }
+            if !live.load(Ordering::Relaxed) {
+                return None;
+            }
             let active = *self.active.lock().unwrap();
             if active == 0 {
                 return None;
             }
-            q = self.cv.wait(q).unwrap();
+            let (guard, _) = self
+                .cv
+                .wait_timeout(q, std::time::Duration::from_millis(50))
+                .unwrap();
+            q = guard;
         }
     }
 
@@ -245,7 +326,7 @@ impl WorkQueue {
 
     fn dec_active(&self) {
         let mut a = self.active.lock().unwrap();
-        *a -= 1;
+        *a = a.saturating_sub(1);
         if *a == 0 {
             // 唤醒所有等待的线程，让它们看到 active==0 并退出
             self.cv.notify_all();
@@ -267,6 +348,10 @@ struct Collector {
     dir_count: AtomicU64,
     /// 溢写一旦写失败（磁盘满等）置位，扫描以错误收场。
     failed: AtomicBool,
+    /// 因命中 hang 集而跳过的目录数（汇总日志用）。
+    skipped_hang: AtomicU64,
+    /// 因 `SF_DATALESS` 占位符而跳过的目录数（不递归、不触发下载）。
+    skipped_dataless: AtomicU64,
 }
 
 struct CollectState {
@@ -279,6 +364,58 @@ struct CollectState {
 struct ScanBuf {
     entries: Vec<RawEntry>,
     names: Vec<u8>,
+}
+
+/// 从 `qc-spill-<pid>-<seq>.bin` 文件名里取出属主 pid。
+fn parse_spill_pid(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("qc-spill-")?;
+    let pid_str = rest.split('-').next()?;
+    pid_str.parse::<u32>().ok()
+}
+
+/// pid 是否还活着。`kill(pid, 0)` 不投递信号，只回答"能不能发"；
+/// `EPERM` 也算活着——那是别人的进程，删它的溢写文件同样是错的。
+fn pid_is_alive(pid: u32) -> bool {
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// 回收死进程留下的 `qc-spill-*.bin`。
+///
+/// `SpillState::finish` 只在扫描正常走完时才删文件；进程被杀（或崩溃）就
+/// 永久留下，实测攒过 4 个共 1.3GB。文件名带 pid，按活性回收：活着的进程
+/// （可能是另一个并发实例）的文件不碰。每进程只跑一次。
+fn reclaim_stale_spill_files() {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        let tmp = std::env::temp_dir();
+        let Ok(rd) = std::fs::read_dir(&tmp) else { return };
+        let mut reclaimed = 0u64;
+        let mut bytes = 0u64;
+        for entry in rd.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(pid) = parse_spill_pid(name) else { continue };
+            if pid == std::process::id() || pid_is_alive(pid) {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                bytes += meta.len();
+            }
+            if std::fs::remove_file(entry.path()).is_ok() {
+                reclaimed += 1;
+            }
+        }
+        if reclaimed > 0 {
+            crate::log!(
+                "回收死进程溢写文件 {reclaimed} 个，释放 {:.1} MB",
+                bytes as f64 / 1024.0 / 1024.0
+            );
+        }
+    });
 }
 
 /// 溢写记录：`[parent u32][is_dir u8][mtime u32][size u64][name_len u16][name]`。
@@ -371,6 +508,8 @@ impl Collector {
             file_count: AtomicU64::new(0),
             dir_count: AtomicU64::new(0),
             failed: AtomicBool::new(false),
+            skipped_hang: AtomicU64::new(0),
+            skipped_dataless: AtomicU64::new(0),
         }
     }
 
@@ -538,6 +677,9 @@ fn scan_root_inner(
         return Err(ScanError::Io(format!("根目录不存在: {}", root.display())));
     }
 
+    // 顺手回收死进程留下的溢写文件（上次扫描被杀时没走到 finish）。
+    reclaim_stale_spill_files();
+
     let wq = WorkQueue::new();
     let collector = Collector::new();
 
@@ -577,6 +719,13 @@ fn scan_root_inner(
     let total_size = collector.total_size.load(Ordering::Relaxed);
     let file_count = collector.file_count.load(Ordering::Relaxed);
     let dir_count = collector.dir_count.load(Ordering::Relaxed);
+    let skipped_hang = collector.skipped_hang.load(Ordering::Relaxed);
+    let skipped_dataless = collector.skipped_dataless.load(Ordering::Relaxed);
+    if skipped_hang + skipped_dataless > 0 {
+        crate::log!(
+            "扫描跳过目录：dataless 占位符 {skipped_dataless} 个，hang 集命中 {skipped_hang} 个（索引不含这些子树；目录物化后 FSEvents 会触发增量补回）"
+        );
+    }
     let collected = collector
         .finish()
         .map_err(|error| ScanError::Io(format!("扫描溢写收尾失败: {error}")))?;
@@ -670,6 +819,8 @@ struct PreparedBatch {
     dir_count: u64,
     file_count: u64,
     total_size: u64,
+    /// 本批里因 `SF_DATALESS` 而未入队递归的目录数。
+    skipped_dataless: u64,
 }
 
 /// 把一个目录枚举出的一批条目整理成提交格式（纯函数，便于单测）。
@@ -687,6 +838,7 @@ fn prepare_batch(dir: &Path, dir_idx: u32, entries: Vec<DirEntry>) -> PreparedBa
         dir_count: 0,
         file_count: 0,
         total_size: 0,
+        skipped_dataless: 0,
     };
     for entry in entries {
         // 数据卷镜像整条剪掉：/ 是合成根，/Users、/Applications 等经
@@ -705,8 +857,15 @@ fn prepare_batch(dir: &Path, dir_idx: u32, entries: Vec<DirEntry>) -> PreparedBa
         let name_off = out.names.len() as u32;
         out.names.extend_from_slice(entry.name.as_bytes());
         if entry.is_dir {
-            out.subdirs
-                .push((dir.join(&entry.name), out.entries.len() as u32));
+            // dataless 占位符目录不递归：子项列表不在本地，枚举会触发
+            // provider 拉取（OneDrive `.Trash` 实测永久阻塞）。节点本身
+            // 已收录，只是不下钻。
+            if entry.flags & SF_DATALESS != 0 {
+                out.skipped_dataless += 1;
+            } else {
+                out.subdirs
+                    .push((dir.join(&entry.name), out.entries.len() as u32));
+            }
         }
         out.entries.push(RawEntry {
             parent: dir_idx,
@@ -720,44 +879,112 @@ fn prepare_batch(dir: &Path, dir_idx: u32, entries: Vec<DirEntry>) -> PreparedBa
     out
 }
 
+/// 打开目录并 `getattrlistbulk` 枚举。打开失败返回空 Vec。
+fn enumerate_path_blocking(dir: &Path) -> Vec<DirEntry> {
+    let c_path = match std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Vec::new();
+    }
+    let entries = enumerate_dir(fd);
+    unsafe { libc::close(fd) };
+    entries
+}
+
+/// 枚举伙伴：专职跑阻塞的 `open`/`getattrlistbulk`，扫描线程只带超时等待。
+///
+/// 为什么要拆线程：`getattrlistbulk` 卡死时**无法从同线程打断**。扫描线程
+/// 若自己进内核，就只能陪着卡到天荒地老。伙伴卡住时扫描线程超时跳过该目录、
+/// 另起一个伙伴——泄漏一个线程换整盘扫描能收工。
+struct EnumBuddy {
+    dirs: std::sync::mpsc::Sender<PathBuf>,
+    entries: std::sync::mpsc::Receiver<Vec<DirEntry>>,
+}
+
+fn spawn_enum_buddy() -> EnumBuddy {
+    let (dir_tx, dir_rx) = std::sync::mpsc::channel::<PathBuf>();
+    let (ent_tx, ent_rx) = std::sync::mpsc::channel::<Vec<DirEntry>>();
+    std::thread::Builder::new()
+        .name("qc-enum".into())
+        .spawn(move || {
+            for dir in dir_rx {
+                let entries = enumerate_path_blocking(&dir);
+                if ent_tx.send(entries).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("枚举伙伴线程创建失败");
+    EnumBuddy {
+        dirs: dir_tx,
+        entries: ent_rx,
+    }
+}
+
+/// 向伙伴要一个目录的条目；超时或管道断开则跳过该目录。
+fn buddy_enumerate(
+    buddy: &mut EnumBuddy,
+    dir: &Path,
+    timeout: std::time::Duration,
+) -> Option<Vec<DirEntry>> {
+    if buddy.dirs.send(dir.to_path_buf()).is_err() {
+        *buddy = spawn_enum_buddy();
+        buddy.dirs.send(dir.to_path_buf()).ok()?;
+    }
+    match buddy.entries.recv_timeout(timeout) {
+        Ok(entries) => Some(entries),
+        Err(_) => {
+            crate::log!(
+                "目录枚举超时（{:?}），跳过 {}（伙伴线程将被放弃）",
+                timeout,
+                dir.display()
+            );
+            note_hang_dir(dir);
+            *buddy = spawn_enum_buddy();
+            None
+        }
+    }
+}
+
 /// 工作线程主循环：取目录 → 枚举 → 推子目录 → 重复。
 ///
 /// 每个从队列取出的项包含目录路径和该目录在 entries 数组中的下标。
 /// 子条目的 parent 直接设为该下标，不再需要在聚合阶段做路径反查。
 fn worker_loop(wq: &WorkQueue, collector: &Collector, live: &AtomicBool) {
+    let mut buddy = spawn_enum_buddy();
     loop {
         if !live.load(Ordering::Relaxed) {
             return;
         }
 
-        let (dir, dir_idx) = match wq.pop() {
+        let (dir, dir_idx) = match wq.pop(live) {
             Some(item) => item,
             None => return,
         };
 
         wq.inc_active();
 
-        let c_path = match std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
-            Ok(c) => c,
-            Err(_) => {
-                wq.dec_active();
-                continue;
-            }
+        // hang 集命中直接跳过：上次枚举它超时过，不再各付一次硬超时。
+        // dataless 占位符目录在 prepare_batch 里就不入队，到不了这里。
+        let entries = if is_hang_dir(&dir) {
+            collector.skipped_hang.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        } else {
+            buddy_enumerate(&mut buddy, &dir, ENUM_HARD_TIMEOUT).unwrap_or_default()
         };
-        let fd = unsafe {
-            libc::open(
-                c_path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-            )
-        };
-        if fd < 0 {
-            wq.dec_active();
-            continue;
-        }
-        let entries = enumerate_dir(fd);
-        unsafe { libc::close(fd) };
 
         let batch = prepare_batch(&dir, dir_idx, entries);
+        collector
+            .skipped_dataless
+            .fetch_add(batch.skipped_dataless, Ordering::Relaxed);
         collector
             .dir_count
             .fetch_add(batch.dir_count, Ordering::Relaxed);
@@ -1087,6 +1314,55 @@ fn build_size_tree_streaming(
 mod tests {
     use super::*;
 
+    /// 伙伴线程正常路径：小目录能枚举出文件。
+    #[test]
+    fn buddy_enumerates_real_directory() {
+        let base = crate::core::testing::fixture("qc_walk_buddy_enum");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("a.bin"), vec![b'x'; 16]).unwrap();
+        std::fs::create_dir(base.join("sub")).unwrap();
+
+        let mut buddy = spawn_enum_buddy();
+        let entries = buddy_enumerate(&mut buddy, &base, ENUM_HARD_TIMEOUT)
+            .expect("本地临时目录应在硬超时内返回");
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"a.bin"), "应枚举到 a.bin，实际 {names:?}");
+        assert!(names.contains(&"sub"), "应枚举到 sub，实际 {names:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 硬超时路径：伙伴无响应时必须返回 `None` 而不是陪跑到底，
+    /// 且替换后的新伙伴仍能干活——扫描不能被一个目录拖死。
+    #[test]
+    fn buddy_timeout_replaces_worker_and_scan_continues() {
+        // 只出不进的假伙伴：扫描线程会在硬超时后放弃它。
+        let (dir_tx, _dir_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let (_ent_tx, ent_rx) = std::sync::mpsc::channel::<Vec<DirEntry>>();
+        let mut buddy = EnumBuddy {
+            dirs: dir_tx,
+            entries: ent_rx,
+        };
+
+        let base = crate::core::testing::fixture("qc_walk_buddy_timeout");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("ok.bin"), vec![b'y'; 8]).unwrap();
+
+        let timeout = std::time::Duration::from_millis(50);
+        assert!(
+            buddy_enumerate(&mut buddy, &base, timeout).is_none(),
+            "无响应伙伴必须超时返回 None，而不是阻塞扫描"
+        );
+        let entries = buddy_enumerate(&mut buddy, &base, ENUM_HARD_TIMEOUT)
+            .expect("替换后的伙伴应能继续枚举");
+        assert!(
+            entries.iter().any(|e| e.name == "ok.bin"),
+            "跳过卡死目录后扫描必须还能覆盖其它目录"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// 回归：镜像剪枝后子目录队列下标必须与实际提交位置对齐。
     ///
     /// 旧实现镜像只从 raw_entries 里跳过，入队下标却用 enumerate 的
@@ -1101,6 +1377,7 @@ mod tests {
             is_reg: !is_dir,
             size,
             mtime: 0,
+            flags: 0,
         };
         // readdir 顺序任意；镜像放最前，后面跟同批目录与文件
         let entries = vec![
@@ -1196,10 +1473,13 @@ mod tests {
 
     /// 扫描开始后外部取消必须及时生效。
     ///
-    /// 回归背景：旧实现把外部 AtomicBool 的初始值复制进新的 Arc，
-    /// 工作线程检查的是那份副本，扫描开始后外部置 false 根本看不到，
-    /// 只能等整棵树扫完。现在工作线程通过 scoped threads 直接借用
-    /// 外部标志，中途取消应在远小于完整扫描的时间内返回。
+    /// 回归背景：
+    /// 1. 旧实现把外部 AtomicBool 复制进 Arc，中途取消看不见。
+    /// 2. `pop` 无超时 `cv.wait` 且不看 `live`——只要还有一个 worker
+    ///    卡在枚举（`active > 0`），等待方永远醒不来，`thread::scope`
+    ///    join 死锁。溢写文件停更、进程空转十几分钟就是它。
+    ///
+    /// 这里用「取消后 join 限时」直接卡死锁：超时说明 pop 还在睡。
     #[test]
     fn scan_cancel_midway_returns_promptly() {
         let tmp = crate::core::testing::fixture("qc_test_walk_cancel_midway");
@@ -1219,6 +1499,18 @@ mod tests {
             let handle = std::thread::spawn(move || scan_root(&tmp_for_scan, vol, &live_for_scan));
             std::thread::sleep(std::time::Duration::from_millis(50));
             live.store(false, Ordering::Relaxed);
+            // 不带超时的 join 在死锁场景下会把测试挂死；限时等待。
+            let deadline = Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if handle.is_finished() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "取消后 scan_root 必须在 5s 内返回——多半是 WorkQueue::pop 又睡死在 cv.wait"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             let result = handle.join().expect("扫描线程不应 panic");
             assert!(result.is_err(), "中途取消的扫描应当返回错误");
         }
@@ -1228,6 +1520,96 @@ mod tests {
             "取消后应当及时返回，实际耗时 {elapsed:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `pop` 在取消后必须立刻返回 None，而不是陪着 `active > 0` 睡到天荒地老。
+    #[test]
+    fn work_queue_pop_wakes_on_cancel() {
+        let wq = WorkQueue::new();
+        wq.inc_active(); // 模拟另一个 worker 卡在枚举
+        let live = std::sync::Arc::new(AtomicBool::new(true));
+        let live2 = std::sync::Arc::clone(&live);
+        let handle = std::thread::spawn(move || wq.pop(&live2));
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        live.store(false, Ordering::Relaxed);
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if handle.is_finished() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "pop 在 live=false 后必须返回——cv.wait 不看取消标志就会在这里挂死"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let got = handle.join().unwrap();
+        assert!(
+            got.is_none(),
+            "取消且队列空时 pop 应返回 None，实际 {got:?}"
+        );
+    }
+
+    /// dataless 占位符目录：节点本身收录，但不入队递归（枚举会触发
+    /// provider 拉取，OneDrive `.Trash` 实测永久阻塞）。靠 `st_flags`
+    /// 识别，不靠路径名——已物化的 `.Trash`、本地 `~/.Trash` 照常递归。
+    #[test]
+    fn dataless_dir_is_recorded_but_not_recursed() {
+        let dir = Path::new("/cloud");
+        let mk = |name: &str, is_dir: bool, flags: u32| DirEntry {
+            name: name.to_string(),
+            is_dir,
+            is_reg: !is_dir,
+            size: 0,
+            mtime: 0,
+            flags,
+        };
+        let entries = vec![
+            mk(".Trash", true, SF_DATALESS), // dataless 目录：收录不递归
+            mk("realdir", true, 0),          // 普通目录：收录且递归
+            mk("afile", false, SF_DATALESS), // dataless 文件：照常收录
+        ];
+        let batch = prepare_batch(dir, 0, entries);
+        assert_eq!(batch.entries.len(), 3, "三个节点都进 entries");
+        assert_eq!(batch.subdirs.len(), 1, "只有 realdir 入队");
+        assert_eq!(batch.subdirs[0].0, dir.join("realdir"));
+        assert_eq!(batch.skipped_dataless, 1);
+    }
+
+    /// hang 集命中后，同进程后续扫描直接跳过该目录，不再各付一次 30s。
+    #[test]
+    fn hang_dir_is_skipped_on_second_visit() {
+        let base = crate::core::testing::fixture("qc_walk_hang_set_skip");
+        let _ = std::fs::remove_dir_all(&base);
+        let hang = base.join("hang");
+        std::fs::create_dir_all(hang.join("inner")).unwrap();
+        std::fs::write(hang.join("inner/x.bin"), vec![b'x'; 8]).unwrap();
+        std::fs::create_dir_all(base.join("ok")).unwrap();
+        std::fs::write(base.join("ok/o.txt"), b"o").unwrap();
+
+        // 第一轮：假装它在 buddy 里硬超时过
+        note_hang_dir(&hang);
+        let live = AtomicBool::new(true);
+        let vol = VolumeId::from_mount_point(base.clone());
+        let scan = scan_root(&base, vol, &live).expect("扫描应收工");
+
+        assert!(scan.tree.find_node_by_path(&hang).is_some(), "目录节点保留");
+        assert!(
+            scan.tree
+                .find_node_by_path(&hang.join("inner/x.bin"))
+                .is_none(),
+            "hang 目录的内容必须被跳过"
+        );
+        assert!(
+            scan.tree
+                .find_node_by_path(&base.join("ok/o.txt"))
+                .is_some(),
+            "其它目录不受影响"
+        );
+
+        // 静态集是进程级的，清掉别污染同进程其它用例
+        HANG_DIRS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// 回归测试：`parse_bulk_entry` 在 `ATTR_CMN_ERROR` 被设置时，
@@ -1375,6 +1757,57 @@ mod tests {
         assert!(entry.is_reg);
         assert_eq!(entry.size, 8192);
         assert_eq!(entry.mtime, 1700000000, "MODTIME 应当被正确解析");
+    }
+
+    /// 验证带 ATTR_CMN_FLAGS 的记录能正确解析出 SF_DATALESS。
+    ///
+    /// FLAGS(bit 18)排在 MODTIME(bit 10)之后、ERROR(bit 29)之前。
+    /// 偏移算错会读到相邻字段，把普通目录误判成 dataless 或反之。
+    #[test]
+    fn parse_bulk_entry_with_flags() {
+        let name_bytes = b"cloud-dir";
+        let attrref_size = std::mem::size_of::<libc::attrreference_t>();
+        let attrset_size = std::mem::size_of::<libc::attribute_set_t>();
+        let timespec_size = std::mem::size_of::<libc::timespec>();
+
+        // [u32 length] [attribute_set_t] [attrref] [u32 objtype] [timespec] [u32 flags] [u32 error] [name\0]
+        let attrref_off = 4 + attrset_size;
+        let objtype_off = attrref_off + attrref_size;
+        let modtime_off = objtype_off + 4;
+        let flags_off = modtime_off + timespec_size;
+        let error_off = flags_off + 4;
+        let name_start = error_off + 4;
+        let name_len = name_bytes.len() + 1;
+        let total_len = name_start + name_len;
+
+        let mut buf = vec![0u8; total_len];
+        buf[0..4].copy_from_slice(&(total_len as u32).to_ne_bytes());
+        // commonattr = NAME | OBJTYPE | MODTIME | FLAGS | ERROR（全量，按 bit 升序）
+        buf[4..8].copy_from_slice(
+            &(libc::ATTR_CMN_NAME
+                | libc::ATTR_CMN_OBJTYPE
+                | ATTR_CMN_MODTIME
+                | libc::ATTR_CMN_FLAGS
+                | ATTR_CMN_ERROR)
+                .to_ne_bytes(),
+        );
+
+        let name_offset = (name_start - attrref_off) as i32;
+        buf[attrref_off..attrref_off + 4].copy_from_slice(&name_offset.to_ne_bytes());
+        buf[attrref_off + 4..attrref_off + 8].copy_from_slice(&(name_len as u32).to_ne_bytes());
+
+        buf[objtype_off..objtype_off + 4].copy_from_slice(&vtype::VDIR.to_ne_bytes());
+        buf[modtime_off..modtime_off + 8].copy_from_slice(&1700000000i64.to_ne_bytes());
+        buf[modtime_off + 8..modtime_off + 16].copy_from_slice(&0i64.to_ne_bytes());
+        buf[flags_off..flags_off + 4].copy_from_slice(&SF_DATALESS.to_ne_bytes());
+        buf[error_off..error_off + 4].copy_from_slice(&0u32.to_ne_bytes());
+        buf[name_start..name_start + name_bytes.len()].copy_from_slice(name_bytes);
+
+        let entry = unsafe { parse_bulk_entry(buf.as_ptr()) }.expect("应当能解析出条目");
+        assert_eq!(entry.name, "cloud-dir");
+        assert!(entry.is_dir, "OBJTYPE 应当是 VDIR");
+        assert_eq!(entry.flags, SF_DATALESS, "FLAGS 应当解析出 SF_DATALESS");
+        assert_eq!(entry.mtime, 1700000000, "MODTIME 不应被 FLAGS 挤错位");
     }
 
     /// 扫描真实的 `~/Library`（约 92 万文件，约 12 秒）。

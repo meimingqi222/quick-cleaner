@@ -226,14 +226,17 @@ mod tests {
     }
 
     /// `list_volumes` 至少返回根卷 `/`。
+    ///
+    /// 不断言「排在第一位」：返回顺序跟设备哈希迭代走，本机挂了
+    /// `/Volumes/Recovery` 时首位会变成它。存在性才是契约。
     #[test]
     fn list_volumes_includes_root() {
         let vols = list_volumes();
         assert!(!vols.is_empty(), "至少应该返回根卷");
-        assert_eq!(
-            vols[0].mount_point(),
-            std::path::Path::new("/"),
-            "第一个卷应该是根卷"
+        assert!(
+            vols.iter()
+                .any(|v| v.mount_point() == std::path::Path::new("/")),
+            "必须包含根卷，实际 {vols:?}"
         );
     }
 

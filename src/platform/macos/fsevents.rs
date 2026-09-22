@@ -21,6 +21,14 @@ use std::os::raw::{c_char, c_double, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// 单轮历史回放的时间预算（秒）。
+///
+/// 实测旧水位差 2000 万+ 事件 ID 时，回放密度约 2.5 万 ID/秒，拉到当前要
+/// 15 分钟量级；而卷根 `MustScanSubDirs` 这类「历史已不可信」的信号会在
+/// 中途冒头。预算放到 120s 只会让人干等——3–5s 内看清能不能推进，不能
+/// 推进就让调用方决定重建/续传。超时续传见 [`Changes::incomplete`]。
+const REPLAY_BUDGET_SECS: u64 = 5;
+
 /// 把数据卷镜像路径折叠回正规路径。
 ///
 /// macOS 的 `/` 是合成根，`/Users` 等顶层目录经 firmlink 指向数据卷；
@@ -68,7 +76,7 @@ fn is_root_rescan(flags: FSEventStreamEventFlags, event_path: &str, canonical_ro
 }
 
 /// FSEvents 回放结果。
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Changes {
     pub paths: Vec<PathBuf>,
     /// 必须整棵重扫的子树。
@@ -96,10 +104,20 @@ pub struct Changes {
     /// 注意：`requires_full_scan` 因「根自己要重扫」置位时，回放是被提前
     /// 截断的，这里是**截断处的部分计数**，不是本次历史的事件总量。
     pub raw_event_count: usize,
+    /// 历史回放未等到 `HistoryDone`，本批只是前缀。
+    ///
+    /// `last_event_id` 此时是**回调里见过的最大事件 ID**，不是整段历史的
+    /// 末尾。调用方应把本批路径当普通增量应用，并让下一轮从该水位续传；
+    /// 不要因为「不完整」就丢掉整棵树去做整盘重建——那正是超时路径曾经
+    /// 付出 57s+ 代价的地方。
+    pub incomplete: bool,
 }
 
 struct Collector {
     events: Vec<(PathBuf, FSEventStreamEventFlags)>,
+    /// 回调里见过的最大事件 ID。超时续传时用它推进水位——只推进到
+    /// **已经投递到的位置**，未回放的历史留给下一轮。
+    max_event_id: u64,
     history_done: bool,
     /// 被监听的根，**已折叠成正规形态**。用它认出「根自己需要整棵重扫」
     /// 这种等价全量的信号。折叠在建 `Collector` 时做一次：回调可能被调用
@@ -126,7 +144,7 @@ extern "C" fn event_callback(
     count: usize,
     event_paths: *mut c_void,
     event_flags: *const FSEventStreamEventFlags,
-    _event_ids: *const FSEventStreamEventId,
+    event_ids: *const FSEventStreamEventId,
 ) {
     if info.is_null() || event_paths.is_null() || event_flags.is_null() {
         return;
@@ -137,6 +155,12 @@ extern "C" fn event_callback(
     let paths = event_paths as *const *const c_char;
     for i in 0..count {
         let flags = unsafe { *event_flags.add(i) };
+        if !event_ids.is_null() {
+            let id = unsafe { *event_ids.add(i) };
+            if id > collector.max_event_id {
+                collector.max_event_id = id;
+            }
+        }
         let path_ptr = unsafe { *paths.add(i) };
         if !path_ptr.is_null() {
             let path = unsafe { CStr::from_ptr(path_ptr) };
@@ -194,6 +218,7 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
 
     let mut collector = Collector {
         events: Vec::new(),
+        max_event_id: 0,
         history_done: false,
         // 根可能在事件里以镜像形态出现（`/System/Volumes/Data`），两边都归
         // 一后再比，和调用方最终比对 `must_rescan` 用的形态保持一致。
@@ -243,8 +268,9 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     }
 
     // 历史事件需要运行当前线程的 run loop 才会进入 callback。没有事件时
-    // 不能无限等待，因此设置一个有限上限；超时不代表数据正确，直接要求全扫。
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // 不能无限等待，因此设置一个有限上限。超时**不再**直接判死刑：只要
+    // 回调已经投递过事件（水位可推进），就按本批前缀续传，下一轮接着回放。
+    let deadline = Instant::now() + Duration::from_secs(REPLAY_BUDGET_SECS);
     while !collector.history_done && !collector.root_must_rescan && Instant::now() < deadline {
         let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, 1) };
         // kCFRunLoopRunFinished / kCFRunLoopRunStopped 都意味着本轮没有更多源。
@@ -256,23 +282,27 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     let history_done = collector.history_done;
     let root_must_rescan = collector.root_must_rescan;
     let raw_event_count = collector.events.len();
-    // 历史回放没等到 `HistoryDone` 就到点了，下面会返回 `None`。
     let timed_out = since != fsevent_sys::kFSEventStreamEventIdSinceNow && !history_done;
+    // 只推进到「回调已经见过」的位置。比 `since` 还旧的 ID（或 SinceNow）
+    // 都不能当进度。
+    let max_event_id = collector.max_event_id;
+    let progressed = max_event_id > since;
 
-    // 这两条路径都不会把 `latest` 交给任何人：根重扫走 `requires_full_scan`，
-    // 超时直接 `None`，调用方一律转全量、用 `full_macos_scan` 自己的
-    // checkpoint。所以 `FlushSync` 和 `GetLatestEventId` 一起跳过——
+    // 根重扫走 `requires_full_scan`，水位一步不推。超时但有进度时填
+    // `max_event_id`（已投递到的位置）——再往后是还没看过的历史，留给
+    // 下一轮续传；绝不能填 `GetLatestEventId`，那会把未回放段静默跳过。
     //
-    // `FlushSync` 不是免费的：它会把 pending 事件再逼出一批，回调继续为每
-    // 条分配路径，而这些同样是要整包丢的。实测一次间隔 2.9 小时的整盘回放，
-    // 30s 超时之后还在 `FlushSync` 里堵了 12.6s（42.7s → 30.1s）。
-    //
-    // 水位填 `since`，即「一步都没推进」。回放是被主动截断的，后面的历史
-    // 根本没看过；填 `GetLatestEventId`（已投递到的位置）会让那段未回放的
-    // 历史被静默跳过。今天两种填法都不出错，填 `since` 是为了哪天有人在这
-    // 条分支上持久化它时，最坏也只是白重放一遍。
-    let latest = if root_must_rescan || timed_out {
+    // 完成路径才 `FlushSync` + `GetLatestEventId`。`FlushSync` 不是免费的：
+    // 它会把 pending 事件再逼出一批。实测一次间隔 2.9 小时的回放，超时后
+    // 还在 `FlushSync` 里堵了 12.6s。超时路径我们已经打算续传，更不该堵。
+    let latest = if root_must_rescan {
         since
+    } else if timed_out {
+        if progressed {
+            max_event_id
+        } else {
+            since
+        }
     } else {
         unsafe {
             FSEventStreamFlushSync(stream);
@@ -286,43 +316,74 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
         FSEventStreamRelease(stream);
     }
 
-    // 根自己要重扫 == 整盘重扫，`refresh_macos_index` 只会原样退回，收上来
-    // 的路径一个也用不上。走 `requires_full_scan` 这条既有通道，调用方会带
-    // 原因地转全量重建。
+    // 根自己要重扫 == 其下一切可能已变。**不再** `requires_full_scan` 整盘
+    // 重建：那条路径在冷启动（水位差极大、根事件埋在几十万条中间）上，先
+    // 白放一遍历史再 57s 重建，两头挨打。
     //
-    // 能省多少取决于第一条根重扫事件在流里的位置：内核在历史不足时把它作
-    // 为首条投递就几乎全省，散落在中间就只省后半截。实测一次回放 39s，日
-    // 志里 33 条根事件散布在 27 万条中间——所以下面要打出「已收 N 事件」，
-    // 那是量化这一步到底省了多少的唯一依据，别当成固定收益。
+    // 改成把**直接子目录**收进 `must_rescan`，水位钉在 `current_event_id`
+    // ——接下来按当前文件系统状态重扫这些子树，未回放历史与这次重扫重叠，
+    // 再回放没有增量信息。成本估算（`refresh_macos_index`）若判定覆盖面
+    // 过大仍会回退全量，那是一次干净的 `full_macos_scan`，检查点也在当前。
     //
-    // `last_event_id` 在这条路径上是 `since`（一步未推进），理由见上。
-    //
-    // 必须在下面的 history_done 超时判定之前返回：提前收尾时 history_done
-    // 自然还是 false，落到超时分支会退化成 `None`，反而丢掉诊断原因。
+    // 能省多少取决于第一条根重扫事件在流里的位置；`REPLAY_BUDGET_SECS`
+    // 把最坏白等压到秒级。`incomplete` 在这条路径上是 false：要做的事
+    // 已经明确（重扫子树），不是「回放前缀、下轮续传」。
     if root_must_rescan {
+        let children = direct_children(root);
+        if children.is_empty() {
+            crate::log!(
+                "FSEvents: 卷根 {} 需整棵重扫且读不到子项，放弃回放（已收 {} 事件）转全量",
+                root.display(),
+                raw_event_count
+            );
+            return Some(Changes {
+                paths: Vec::new(),
+                must_rescan: Vec::new(),
+                last_event_id: latest,
+                requires_full_scan: true,
+                full_scan_reason: Some("RootMustScanSubDirs"),
+                filtered_cache_events: 0,
+                raw_event_count,
+                incomplete: false,
+            });
+        }
+        let checkpoint = current_event_id();
         crate::log!(
-            "FSEvents: 卷根 {} 需整棵重扫，放弃回放（已收 {} 事件）转全量",
+            "FSEvents: 卷根 {} 需整棵重扫（已收 {} 事件）→ 拆成 {} 个直接子目录增量重扫，水位钉 {}",
             root.display(),
-            raw_event_count
+            raw_event_count,
+            children.len(),
+            checkpoint
         );
         return Some(Changes {
             paths: Vec::new(),
-            must_rescan: Vec::new(),
-            last_event_id: latest,
-            requires_full_scan: true,
-            full_scan_reason: Some("RootMustScanSubDirs"),
+            must_rescan: children,
+            last_event_id: checkpoint,
+            requires_full_scan: false,
+            full_scan_reason: None,
             filtered_cache_events: 0,
             raw_event_count,
+            incomplete: false,
         });
     }
 
-    if timed_out {
+    if timed_out && !progressed {
         crate::log!(
-            "FSEvents: 历史回放超时（30s 未收到 HistoryDone），since={}，原始事件 {}",
+            "FSEvents: 历史回放超时且无进度（{}s 未收到 HistoryDone），since={}，原始事件 {}",
+            REPLAY_BUDGET_SECS,
             since,
             raw_event_count
         );
         return None;
+    }
+    if timed_out {
+        crate::log!(
+            "FSEvents: 历史回放超时（{}s 未收到 HistoryDone），since={} → 已推进到 {}，原始事件 {}，下轮续传",
+            REPLAY_BUDGET_SECS,
+            since,
+            latest,
+            raw_event_count
+        );
     }
 
     // 索引文件保存在用户目录内，保存索引本身也会产生 FSEvents；这些事件
@@ -367,7 +428,8 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
     must_rescan.dedup();
 
     crate::log!(
-        "FSEvents 回放完成：since={} → latest={}，原始 {} 事件，过滤缓存 {}，有效 {} 路径，子树重扫 {}，full_scan={}({:?})，耗时 {:?}",
+        "FSEvents 回放{}：since={} → latest={}，原始 {} 事件，过滤缓存 {}，有效 {} 路径，子树重扫 {}，full_scan={}({:?})，耗时 {:?}",
+        if timed_out { "超时续传" } else { "完成" },
         since,
         latest,
         raw_event_count,
@@ -404,12 +466,31 @@ pub fn changes_since(root: &Path, since: u64) -> Option<Changes> {
         full_scan_reason,
         filtered_cache_events,
         raw_event_count,
+        incomplete: timed_out,
     })
 }
 
 /// 获取当前系统 FSEvents 水位，用于在全量扫描完成后建立一致的检查点。
 pub fn current_event_id() -> u64 {
     unsafe { fsevent_sys::FSEventsGetCurrentEventId() }
+}
+
+/// 列出 `root` 的直接子目录（折叠镜像形态）。卷根 `MustScanSubDirs` 拆
+/// 增量重扫时用。读不到就返回空，调用方回退全量。
+fn direct_children(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.push(canonicalize_event_path(&path));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]

@@ -8,9 +8,21 @@ use crate::core::disk::VolumeId;
 pub use crate::core::disk::{DirUsage, Node};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// 目录树根节点的下标。Windows 上是 `$MFT` 的 5 号记录，这里没有 MFT，用 0。
 pub const ROOT_NODE: u32 = 0;
+
+/// ASCII 小写化，用作子名索引的键。
+///
+/// 与查找路径上的 `eq_ignore_ascii_case` 对齐——不折叠非 ASCII 大小写，
+/// 避免把 macOS 上本就区分的两个名字错误合并。
+fn ascii_lower(s: &str) -> Box<str> {
+    if s.bytes().all(|b| !b.is_ascii_uppercase()) {
+        return s.into();
+    }
+    s.to_ascii_lowercase().into_boxed_str()
+}
 
 /// `parent_bits` 布局：低 29 位父下标，bit 29 保留，bit 30 使用中，bit 31 目录。
 const PARENT_MASK: u32 = 0x1FFF_FFFF;
@@ -43,6 +55,16 @@ pub struct SizeTree {
     /// mmap 主体节点的显式修改（下标 → 覆盖值）。堆树恒为空。
     overrides: OverrideMap,
     extra_child: HashMap<u32, Vec<u32>>,
+    /// 目录 →（ASCII 小写名 → 子下标）旁路索引，只缓存**查找过**的目录。
+    ///
+    /// `find_path` 原先每层线性扫子节点；`refresh_macos_index` 对上万条
+    /// 变更路径反复查 `Library` 这类大目录时，光名字比较就能吃掉几十秒。
+    /// 结构一变（增删子树 / 重建 CSR / 应用 delta）整表作废——增量刷新里
+    /// 结构变更次数远小于路径查找次数。
+    ///
+    /// 用 `Mutex` 而不是 `RefCell`：`ScanResult` 经 `Arc` 跨线程共享，
+    /// 必须 `Sync`。
+    child_name_cache: Mutex<HashMap<u32, HashMap<Box<str>, u32>>>,
 }
 
 /// 只读 mmap 映射。写入从不落到这页内存上——见 [`SizeTree::overrides`]。
@@ -492,6 +514,8 @@ impl Clone for SizeTree {
             mapped: self.mapped.clone(),
             overrides: self.overrides.clone(),
             extra_child: self.extra_child.clone(),
+            // 查找缓存跟树的就地状态走，克隆后可能立刻变更；空表最安全。
+            child_name_cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -517,6 +541,7 @@ impl SizeTree {
             mapped: None,
             overrides: OverrideMap::default(),
             extra_child: HashMap::new(),
+            child_name_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -541,6 +566,7 @@ impl SizeTree {
             mapped: None,
             overrides: OverrideMap::default(),
             extra_child: HashMap::new(),
+            child_name_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -642,6 +668,7 @@ impl SizeTree {
         self.name_pool.clear();
         self.overrides.clear();
         self.extra_child.clear();
+        self.invalidate_child_name_cache();
     }
 
     /// 仅供性能基准：把主体节点标记为覆盖，制造非空 overrides。
@@ -739,6 +766,7 @@ impl SizeTree {
             mapped: Some(std::sync::Arc::new(mapped)),
             overrides: OverrideMap::default(),
             extra_child: HashMap::new(),
+            child_name_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -981,6 +1009,7 @@ impl SizeTree {
             mapped: Some(std::sync::Arc::new(mapped)),
             overrides: OverrideMap::default(),
             extra_child: HashMap::new(),
+            child_name_cache: Mutex::new(HashMap::new()),
         };
         let meta = parse_delta_file(delta_path, base_checksum).and_then(|(meta, payload)| {
             if tree.apply_delta_payload(&payload, &meta).is_ok() {
@@ -990,6 +1019,7 @@ impl SizeTree {
                 tree.name_pool.clear();
                 tree.overrides.clear();
                 tree.extra_child.clear();
+                tree.invalidate_child_name_cache();
                 None
             }
         });
@@ -1002,6 +1032,7 @@ impl SizeTree {
         payload: &[u8],
         meta: &DeltaMeta,
     ) -> Result<(), std::io::Error> {
+        self.invalidate_child_name_cache();
         if self.mapped.is_none() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1574,6 +1605,7 @@ impl SizeTree {
         if !self.valid(idx) {
             return;
         }
+        self.invalidate_child_name_cache();
 
         // 递归标记子树所有节点为 unused
         let mut stack = vec![idx];
@@ -1714,6 +1746,7 @@ impl SizeTree {
     /// mmap 主体的子列表不可原地插入。第一次给某个父节点加 overlay
     /// 孩子时，把原 CSR 复制出来再追加。
     fn overlay_link_child(&mut self, parent: u32, child: u32) {
+        self.invalidate_child_name_cache();
         if self.mapped.is_none() {
             return;
         }
@@ -1838,6 +1871,37 @@ impl SizeTree {
         out
     }
 
+    /// 按名查直接子节点。首次进入某目录时扫一遍子列表建哈希，之后 O(1)。
+    ///
+    /// 与原先 `find_path` 的线性扫描语义一致：`eq_ignore_ascii_case`、
+    /// 同名取先出现的那个、跳过未使用的槽位。
+    fn find_child_by_name(&self, parent: u32, name: &str) -> Option<u32> {
+        let mut cache = self
+            .child_name_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let map = cache.entry(parent).or_insert_with(|| {
+            let mut m: HashMap<Box<str>, u32> = HashMap::new();
+            for &c in self.child_slice(parent) {
+                if !self.valid(c) {
+                    continue;
+                }
+                let key = ascii_lower(self.entry_name_str(c));
+                m.entry(key).or_insert(c);
+            }
+            m
+        });
+        map.get(&ascii_lower(name)).copied()
+    }
+
+    /// 子列表或 `used` 标志变了就整表作废。
+    fn invalidate_child_name_cache(&self) {
+        self.child_name_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     pub fn find_path(&self, full_path: &Path) -> Vec<u32> {
         let mut path_indices = vec![self.root()];
         let relative = full_path
@@ -1857,22 +1921,7 @@ impl SizeTree {
             if comp_str.is_empty() {
                 continue;
             }
-            let hit = self.child_slice(cur).iter().copied().find(|&c| {
-                self.valid(c) && {
-                    let name = self.entry_name_str(c);
-                    // macOS 文件系统大小写不敏感（APFS 默认），
-                    // 用 eq_ignore_ascii_case 匹配，避免 Devin/devin 查不到。
-                    #[cfg(not(windows))]
-                    {
-                        name.eq_ignore_ascii_case(&comp_str)
-                    }
-                    #[cfg(windows)]
-                    {
-                        name == comp_str.as_ref()
-                    }
-                }
-            });
-            match hit {
+            match self.find_child_by_name(cur, &comp_str) {
                 Some(idx) => {
                     cur = idx;
                     path_indices.push(cur);
@@ -2033,6 +2082,7 @@ impl SizeTree {
         if !self.valid(idx) {
             return;
         }
+        self.invalidate_child_name_cache();
         let (size, files) = self.subtree_totals(idx);
         let children: Vec<u32> = self.child_slice(idx).to_vec();
         self.update_slot(idx as usize, |e| e.set_used(false));
@@ -2085,6 +2135,7 @@ impl SizeTree {
         if let Some(existing) = self.find_node_by_path(path) {
             self.remove_subtree_inplace(existing);
         }
+        self.invalidate_child_name_cache();
         let Some(name) = path.file_name() else {
             return false;
         };
@@ -2112,6 +2163,7 @@ impl SizeTree {
     }
 
     fn mark_unused_recursive(&mut self, idx: u32) {
+        self.invalidate_child_name_cache();
         if !self.valid(idx) {
             return;
         }
@@ -2143,6 +2195,7 @@ impl SizeTree {
     /// 调用后需调用 `rebuild_child_arrays` 重建 CSR 索引（堆上主体）；
     /// mmap 主体走 `extra_child` overlay，不重建整棵 CSR。
     pub fn append_subtree(&mut self, parent_idx: u32, subtree: &SizeTree, root_name: &str) {
+        self.invalidate_child_name_cache();
         if !self.valid(parent_idx) || !self.slot(parent_idx as usize).is_dir() {
             return;
         }
@@ -2208,6 +2261,7 @@ impl SizeTree {
     /// 从 entries 数组重建 CSR 子节点索引。
     /// 在完成所有 `append_subtree` / `remove_subtree_inplace` 操作后调用一次。
     pub fn rebuild_child_arrays(&mut self) {
+        self.invalidate_child_name_cache();
         if self.mapped.is_some() {
             return;
         }
@@ -2361,6 +2415,39 @@ mod resolve_path_tests {
         assert_eq!(t.path_of(600), "");
         // 深度以内的仍然正常解析
         assert!(t.path_of(10).ends_with("/d10"));
+    }
+
+    /// 路径查找旁路缓存必须与原先线性扫描语义一致：ASCII 大小写不敏感，
+    /// 且结构变更后不能继续给出过期下标。
+    #[test]
+    fn child_name_cache_matches_lookup_and_invalidates_on_mutation() {
+        let mut t = tree(vec![
+            entry(ROOT_NODE, "/", true),
+            entry(0, "Users", true),
+            entry(1, "Me", true),
+            entry(2, "Notes.txt", false),
+        ]);
+        // 大小写不敏感命中（与 eq_ignore_ascii_case 一致）
+        assert_eq!(
+            t.find_node_by_path(Path::new("/users/me/notes.txt")),
+            Some(3),
+            "旁路缓存必须保持 ASCII 大小写不敏感查找"
+        );
+        // 第二次走缓存
+        assert_eq!(
+            t.find_node_by_path(Path::new("/Users/Me/Notes.txt")),
+            Some(3)
+        );
+
+        // 删掉文件后缓存必须作废，不能再解析出旧下标
+        t.remove_subtree_inplace(3);
+        t.rebuild_child_arrays();
+        assert_eq!(
+            t.find_node_by_path(Path::new("/Users/Me/Notes.txt")),
+            None,
+            "结构变更后不得继续命中缓存里的幽灵节点"
+        );
+        assert_eq!(t.find_node_by_path(Path::new("/Users/Me")), Some(2));
     }
 }
 
