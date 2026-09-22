@@ -392,13 +392,17 @@ fn reclaim_stale_spill_files() {
     static DONE: std::sync::Once = std::sync::Once::new();
     DONE.call_once(|| {
         let tmp = std::env::temp_dir();
-        let Ok(rd) = std::fs::read_dir(&tmp) else { return };
+        let Ok(rd) = std::fs::read_dir(&tmp) else {
+            return;
+        };
         let mut reclaimed = 0u64;
         let mut bytes = 0u64;
         for entry in rd.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let Some(pid) = parse_spill_pid(name) else { continue };
+            let Some(pid) = parse_spill_pid(name) else {
+                continue;
+            };
             if pid == std::process::id() || pid_is_alive(pid) {
                 continue;
             }
