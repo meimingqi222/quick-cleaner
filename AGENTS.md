@@ -7,13 +7,16 @@ QuickCleaner：Rust + GPUI 的 Windows / macOS 磁盘清理工具。分层是 `u
 ## 命令
 
 ```bash
+cargo fmt --check
 cargo build
 cargo test --lib
 cargo clippy --all-targets -- -D warnings
 cargo run -- --no-elevate
 ```
 
-CI 以 clippy `-D warnings` 卡关。提交前这三项都要能过。
+CI 卡 `cargo fmt --check` 和 clippy `-D warnings`。提交前这几项都要能过。
+
+仓库带 `.githooks/pre-commit`（未格式化时自动 `cargo fmt` 并拦下提交），clone 后执行一次 `git config core.hooksPath .githooks` 启用。
 
 ## Commit 前必做：核对立项 pitfalls
 

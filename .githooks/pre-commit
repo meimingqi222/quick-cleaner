@@ -1,0 +1,9 @@
+#!/bin/sh
+# 提交前自动格式化；有改动时阻止提交，提示重新 stage。
+# Windows GUI 工具可能用精简环境拉起 git，补一下 rustup 的默认路径。
+PATH="$HOME/.cargo/bin:$PATH"
+if ! cargo fmt --check; then
+    cargo fmt
+    echo "cargo fmt 已修改文件，请 git add 后重新提交" >&2
+    exit 1
+fi
