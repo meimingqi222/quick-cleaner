@@ -279,10 +279,20 @@ fn owning_app(target: &Path, procs_lower: &[String]) -> Option<String> {
 #[cfg(target_os = "macos")]
 const FULL_SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// 定点复检允许的超时。目录目标使用 `+D` 递归枚举，可能明显慢于文件精确
-/// 查询；超时只会让该批变成 Unknown 并拒删，不会放行。
+/// 文件批定点复检的超时。目录批不走这个值，见 [`SPOT_CHECK_DIR_TIMEOUT`]。
+/// 超时只会让该批变成 Unknown 并拒删，不会放行。
 #[cfg(target_os = "macos")]
 const SPOT_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 目录批（`+D` 递归枚举）的复检超时必须远大于文件批：`lsof +D` 要先
+/// 遍历整棵子树才能回答「里面有没有被打开的文件」，本机实测几万到十几万
+/// 个文件的缓存目录单次就要 3 秒上下。曾经和文件批共用 3 秒，导致
+/// `~/.cache/*`、`~/Library/pnpm/store` 这类大目录每次都被测成 Unknown
+/// 然后 fail-closed 拒删——路径完全合法却永远清不掉。目录批在
+/// `spot_check_batches` 里已单独成组，放大超时不会拖慢同批的文件路径；
+/// 并行执行下整体代价也只是多等最慢的那一个目录。
+#[cfg(target_os = "macos")]
+const SPOT_CHECK_DIR_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 一次 `lsof` 调用的结果。exit 状态单独存着，是因为 `+D` 模式下空结果和
 /// 命中都可能返回 1，而被信号终止则没有退出码；必须结合 stdout/stderr
@@ -525,7 +535,13 @@ fn spot_check_batch_overrides(
     excluded: &HashSet<u32>,
 ) -> HashMap<PathBuf, SpotCheck> {
     let mut out: HashMap<PathBuf, SpotCheck> = HashMap::new();
-    match run_lsof(&spot_check_args(batch), SPOT_CHECK_TIMEOUT) {
+    // 目录批单独成组（spot_check_batches 保证），按是否含递归目标取超时。
+    let timeout = if batch.iter().any(|p| is_recursive_spot_target(p)) {
+        SPOT_CHECK_DIR_TIMEOUT
+    } else {
+        SPOT_CHECK_TIMEOUT
+    };
+    match run_lsof(&spot_check_args(batch), timeout) {
         None => {
             // 连子进程都没跑起来/等到超时被杀掉：这一批全部测不出。
             for p in batch {

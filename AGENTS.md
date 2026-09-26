@@ -38,6 +38,8 @@ CI 卡 `cargo fmt --check` 和 clippy `-D warnings`。提交前这几项都要�
 | P4 | WMI 方法入参的 `uint32` 要按 `VT_I4` 填，`VT_UI4` 一律 TYPE_MISMATCH |
 | P5 | File Provider 的 `SF_DATALESS` 目录 `stat` 正常但 `readdir` 永久卡死，要靠 `getattrlistbulk` 的 `ATTR_CMN_FLAGS` 识别跳过，不能按路径名猜 |
 | P6 | 索引不含被跳过的子树（dataless / hang 集），别把 SizeTree 的缺项当成文件不存在 |
+| P7 | Unix 身份复核只认 dev+ino，别把 mtime/len 加回去（会永久拒删活跃文件）|
+| P8 | `lsof +D` 复检目录批用独立的长超时，不能和文件批共用 3 秒 |
 
 ## 改代码时
 

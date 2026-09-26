@@ -203,12 +203,13 @@ pub struct TargetIdentity {
     dev: u64,
     #[cfg(unix)]
     ino: u64,
-    /// 秒级修改时间。两个平台都存：Unix 上是 dev/ino 之外的补充判据，
-    /// Windows 上和 `len` 一起构成弱校验的全部依据。
+    /// 秒级修改时间。Windows 上和 `len` 一起构成弱校验的全部依据；
+    /// Unix 上不参与复核（见 [`Self::recheck`]），但拿不到 mtime 的
+    /// 文件系统（虚拟/网络盘）仍然返回 `None` 走 fail closed，不能为了
+    /// 少一个字段就放宽掉。
     mtime: i64,
-    /// 文件长度。两个平台都存，原因见类型文档——在 Unix 上补上「同一秒
-    /// 内原地覆盖写、mtime 精度不够」这个缝，在 Windows 上是弱校验的
-    /// 另一半依据。
+    /// 文件长度。Windows 上弱校验的另一半依据；Unix 上不参与复核，原因
+    /// 同 `mtime`。
     len: u64,
 }
 
@@ -248,11 +249,30 @@ impl TargetIdentity {
     ///
     /// 路径读不出来（已经不存在、权限变了）一律算「对不上」：既然拿不到
     /// 现状就没法确认它还是原来那个东西，宁可保守拒绝。
+    ///
+    /// Unix 上只比 `dev + ino`，不比对 `mtime`/`len`：快照后目标被**原地**
+    /// 写入（Finder 重写的 `.DS_Store`、持续追加的日志、仍在被使用的缓存
+    /// 目录）inode 不变，旧实现把 mtime/len 也算进判等，这些文件每轮都被
+    /// 判成「身份已变」而永久拒删——这是真实踩过的残留问题。inode 唯一
+    /// 标识文件系统对象，同一 dev+ino 就是同一个对象；剩余风险是快照对象
+    /// 被删除后 inode 恰好被复用，这个口子本来就挡不住（复用者的 mtime/
+    /// len 也可以恰好相近），不值得用永久拒删活跃文件去换。
+    ///
+    /// Windows 没有稳定的文件号，仍用 `mtime + len` 弱校验（快照取不到
+    /// mtime 时 `from_metadata` 直接返回 `None`，与旧行为一致）。
     pub fn recheck(&self, path: &Path) -> bool {
-        std::fs::symlink_metadata(path)
-            .ok()
-            .and_then(|md| Self::from_metadata(&md))
-            .is_some_and(|now| now == *self)
+        let Ok(md) = std::fs::symlink_metadata(path) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            md.dev() == self.dev && md.ino() == self.ino
+        }
+        #[cfg(windows)]
+        {
+            Self::from_metadata(&md).is_some_and(|now| now == *self)
+        }
     }
 }
 
@@ -454,21 +474,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// `len` 在两个平台上都参与比对，必须能挡住「体积明显不同」的
-    /// 替换——这是弱身份（Windows：mtime + len）与强身份（Unix：dev +
-    /// ino + mtime + len）共有的最低保证。
+    /// 原地覆盖写不改 inode：Unix 复核只认 dev+ino，必须放行——正在
+    /// 追加的日志、被 Finder 重写的 `.DS_Store` 就是这种文件，旧实现按
+    /// mtime/len 拒绝会让它们永远清不掉。Windows 弱校验只有 mtime+len，
+    /// 同样的原地改写必须仍然拒绝。
     #[test]
-    fn identity_recheck_fails_on_size_change_in_place() {
+    fn identity_recheck_inplace_write_verdict_is_platform_split() {
         let path = crate::core::testing::file_path("qc_identity_size_change");
         std::fs::write(&path, b"short").unwrap();
         let id = capture_identity(&path).expect("应该能拿到身份");
 
-        // 不删除、直接原地覆盖写入更长的内容：在支持原地覆盖的文件系统上
-        // inode 号可能不变（Unix），但 mtime 必然更新、体积也变了。
+        // 不删除、直接原地覆盖写入更长的内容：Unix 上 inode 不变。
         std::fs::write(&path, b"this payload is a lot longer than before").unwrap();
 
-        assert!(!id.recheck(&path));
+        #[cfg(unix)]
+        assert!(id.recheck(&path), "原地改写 inode 未变，应视为同一对象");
+        #[cfg(windows)]
+        assert!(!id.recheck(&path), "弱校验的 mtime/len 变了必须拒绝");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// 目录内容增删会更新目录自身 mtime：仍在被使用的缓存目录快照后
+    /// 往里写文件是常态，Unix 复核不能把这也当成「身份变了」——这是
+    /// `clean_dir_contents` 父目录复核不落脚的保证。
+    #[cfg(unix)]
+    #[test]
+    fn identity_recheck_ignores_dir_mtime_churn() {
+        let dir = crate::core::testing::fixture("qc_identity_dir_churn");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = capture_identity(&dir).expect("应该能拿到身份");
+
+        std::fs::write(dir.join("new-child.tmp"), b"x").unwrap();
+
+        assert!(id.recheck(&dir), "子项增删改导致 mtime 变化不应拒删");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

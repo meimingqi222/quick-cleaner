@@ -1021,6 +1021,10 @@ pub fn tr_fail_reason(lang: Language, reason: crate::core::cleaner::FailReason) 
         (Language::En, FailReason::InUse) => "in use",
         (Language::Zh, FailReason::AccessDenied) => "权限不足",
         (Language::En, FailReason::AccessDenied) => "access denied",
+        (Language::Zh, FailReason::Unverified) => "占用状态未知",
+        (Language::En, FailReason::Unverified) => "in-use check inconclusive",
+        (Language::Zh, FailReason::Changed) => "扫描后已变更",
+        (Language::En, FailReason::Changed) => "changed since scan",
         (Language::Zh, FailReason::Other) => "未能删除",
         (Language::En, FailReason::Other) => "not removed",
     }

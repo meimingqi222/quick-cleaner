@@ -141,14 +141,22 @@ impl From<&Path> for CleanFailure {
 
 /// 删除失败的归类，供 UI 横幅区分「占用」和「权限」。
 ///
-/// 只在真正拿到 `io::Error` 时分类；策略拒绝、身份变化、owner 命令失败
-/// 等记 [`FailReason::Other`]。
+/// 只在真正拿到 `io::Error` 时分类；策略拒绝、owner 命令失败等记
+/// [`FailReason::Other`]。占用复检测不出、身份复核不匹配各有自己的
+/// 变体——这两类各有明确的用户出路（重试/等空闲 vs 重新扫描），混进
+/// Other 会让横幅把它们和真错误一起显示成「未能删除」。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FailReason {
-    /// 被其它进程打开（Windows sharing violation / os error 32）。
+    /// 被其它进程打开（Windows sharing violation / os error 32），
+    /// 或被活数据库保护拦下。
     InUse,
     /// 权限或 ACL 拒绝（os error 5 / `PermissionDenied`）。
     AccessDenied,
+    /// 占用复检没能得出结论（lsof 超时/调用失败）：保守拒删，
+    /// 既不是「确认被占用」也不是「没权限」。
+    Unverified,
+    /// 删除前身份复核与扫描期快照不一致：目标被替换或仍在被改写。
+    Changed,
     #[default]
     Other,
 }
@@ -440,6 +448,7 @@ fn delete_sqlite_family(members: Vec<(PathBuf, u64)>, p: &CleanProgress) -> usiz
     // 每个家族的位置再次 fail closed。
     if !companions.is_empty() && !main.is_empty() {
         for (path, _) in companions.iter().chain(main.iter()) {
+            record_fail_reason(path, FailReason::InUse);
             note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         }
         let blocked = companions.len() + main.len();
@@ -678,7 +687,10 @@ fn summarize_failures(
     let mut acc: HashMap<PathBuf, (usize, HashMap<FailReason, usize>)> = HashMap::new();
     for t in targets {
         for f in failures.iter().filter_map(CleanFailure::as_path) {
-            let hit = f == t.path || (!t.remove_dir && f.starts_with(&t.path));
+            // 不用 remove_dir 区分：整删目标在递归层也可能留下子级失败
+            // 叶子（活数据库家族拒删记的是子路径，不是顶层目标），starts_with
+            // 对 remove_dir=true 同样能把它们映射回用户看到的那一行。
+            let hit = f == t.path || f.starts_with(&t.path);
             if !hit {
                 continue;
             }
@@ -778,6 +790,7 @@ pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Skipped;
     }
     if crate::core::safety::is_live_database(path) {
+        record_fail_reason(path, FailReason::InUse);
         note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         return CleanResult::Failed;
     }
@@ -870,6 +883,7 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         .map(|(c, _child_identity, binding_ok)| {
             let mut r = CleanReport::default();
             if !binding_ok {
+                record_fail_reason(c, FailReason::Changed);
                 note_delete_failure(c, &"identity-changed");
                 r.failed.push(CleanFailure::Path((*c).clone()));
                 p.failed.fetch_add(1, Ordering::Relaxed);
@@ -1056,6 +1070,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
                 continue;
             }
             Some(crate::core::inuse::SpotCheck::Unknown) => {
+                record_fail_reason(d, FailReason::Unverified);
                 note_delete_failure(d, &"spot-check-unknown");
                 report.record(d, CleanResult::Failed);
                 continue;
@@ -1077,6 +1092,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
         #[cfg(target_os = "macos")]
         if is_launch_agent_plist(d) {
             if !root_identity_holds(d, t.identity) {
+                record_fail_reason(d, FailReason::Changed);
                 note_delete_failure(d, &"identity-changed");
                 report.record(d, CleanResult::Failed);
                 continue;
@@ -1133,6 +1149,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
         let go_modcache = crate::core::owner::is_go_modcache(d);
         let pnpm_store = crate::core::owner::is_pnpm_store(d);
         if (go_modcache || pnpm_store) && !root_identity_holds(d, t.identity) {
+            record_fail_reason(d, FailReason::Changed);
             note_delete_failure(d, &"identity-changed");
             report.record(d, CleanResult::Failed);
             continue;
@@ -1170,6 +1187,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             // APFS 快照这类虚拟路径（身份恒为 None），调用方在这里明确
             // 分流；真实目标没有快照一律拒绝。
             if !crate::core::model::is_virtual_path(d) && !root_identity_holds(d, t.identity) {
+                record_fail_reason(d, FailReason::Changed);
                 note_delete_failure(d, &"identity-changed");
                 report.record(d, CleanResult::Failed);
                 continue;
@@ -1322,6 +1340,7 @@ pub fn clean_arbitrary_items(
                 continue;
             }
             Some(crate::core::inuse::SpotCheck::Unknown) => {
+                record_fail_reason(path, FailReason::Unverified);
                 note_delete_failure(path, &"spot-check-unknown");
                 report.record(path, CleanResult::Failed);
                 continue;
@@ -1337,6 +1356,7 @@ pub fn clean_arbitrary_items(
         // 卡死：没有快照就跳过复验。有快照但对不上，才是 TOCTOU。
         if let Some(identity) = item.identity {
             if !identity.recheck(path) {
+                record_fail_reason(path, FailReason::Changed);
                 note_delete_failure(path, &"identity-changed");
                 report.record(path, CleanResult::Failed);
                 continue;
@@ -1381,6 +1401,7 @@ fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Skipped;
     }
     if crate::core::safety::is_live_database(path) {
+        record_fail_reason(path, FailReason::InUse);
         note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
         return CleanResult::Failed;
     }
