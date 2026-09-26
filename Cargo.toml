@@ -8,7 +8,11 @@ default-run = "quick-cleaner"
 # `default-features = false` 关掉 Linux 的 wayland/x11 和 Windows 的 manifest，
 # 但必须保留 `font-kit`——否则 macOS 上会用 NoopTextSystem，文字全部不可见
 # （光栅化返回空像素，布局占位但渲染透明）。
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+# runtime_shaders：gpui 默认在 build.rs 里调 `xcrun metal` 预编译 shader，
+# 新版 Xcode 把 Metal Toolchain 拆成了独立下载组件，没装的机器（包括这台
+# 和部分 CI runner）构建直接失败。开这个特性把 shader 挪到启动时编译，
+# 代价是一次几十毫秒，换来构建不再依赖 Metal Toolchain。
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
 walkdir = "2"
 rayon = "1"
 dirs = "5"
@@ -114,3 +118,12 @@ required-features = ["fanprobe"]
 name = "authprobe"
 path = "examples/authprobe.rs"
 required-features = ["authprobe"]
+
+# crates.io 的 gpui 停在 0.2.2，上游仓库（zed main，gpui_macos）已修掉
+# 一个 macOS 主线程死锁：window_did_change_key_status 持 window_state
+# 锁时调 resignKeyWindow，resign 同步发出 windowDidResignKey 通知重入
+# 同一回调，parking_lot 不可重入 → 卡死（macOS 27 窗口状态恢复时实测
+# 可复现）。vendor/gpui 是 0.2.2 原样拷贝，只打上游同款补丁（先
+# drop(lock) 再 resignKeyWindow）。升级到官方带修复的版本后删掉本节。
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }

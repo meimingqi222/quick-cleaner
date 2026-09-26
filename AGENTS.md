@@ -40,6 +40,7 @@ CI 卡 `cargo fmt --check` 和 clippy `-D warnings`。提交前这几项都要�
 | P6 | 索引不含被跳过的子树（dataless / hang 集），别把 SizeTree 的缺项当成文件不存在 |
 | P7 | Unix 身份复核只认 dev+ino，别把 mtime/len 加回去（会永久拒删活跃文件）|
 | P8 | `lsof +D` 复检目录批用独立的长超时，不能和文件批共用 3 秒 |
+| P9 | `vendor/gpui`（启动死锁补丁）和 `runtime_shaders`（免 Metal Toolchain）不能删 |
 
 ## 改代码时
 
