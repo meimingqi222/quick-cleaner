@@ -51,16 +51,6 @@ impl crate::ui::Root {
         self.start_tick(cx);
         cx.notify();
 
-        let targets = all_targets(self.settings.brew_cleanup_at);
-        // 占用检测与扫描并发跑：它只做两次子进程调用（lsof + ps），不依赖
-        // 扫描结果，只需要目标路径表。克隆一份路径给检测任务，扫描继续
-        // 持有原表。结果在扫描完成后等待并合并——首屏不等它，最坏情况
-        // 只是徽标比列表晚零点几秒出现。
-        let busy_paths: Vec<std::path::PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
-        let detect = cx
-            .background_executor()
-            .spawn(async move { crate::core::inuse::detect(&busy_paths) });
-
         // 提权时先解析目标最集中的那个卷的 $MFT，阶段一在树上查表而不是
         // 遍历目录。看着是给首屏多加了一步，实测反而更快：本机 MFT 解析
         // 3.3 秒，而遍历要 4.1~4.9 秒——阶段一的瓶颈是 `go\pkg\mod`、
@@ -73,15 +63,22 @@ impl crate::ui::Root {
         //
         // macOS：先加载/构建用户目录索引，阶段一在树上查表（毫秒级），
         // 阶段二在树上 DFS。索引复用后首次启动和后续启动都受益。
-        #[cfg(windows)]
-        let prescan_volume = if is_elevated() {
-            dominant_volume(&targets)
-        } else {
-            None
-        };
-        #[cfg(not(windows))]
-        let prescan_volume: Option<VolumeId> = None;
+        let brew_cleanup_at = self.settings.brew_cleanup_at;
+        let executor = cx.background_executor().clone();
         let scan = cx.background_executor().spawn(async move {
+            // 目标表会枚举大量应用缓存目录，必须和索引扫描一样离开 UI 线程。
+            let targets = all_targets(brew_cleanup_at);
+            let busy_paths: Vec<std::path::PathBuf> =
+                targets.iter().map(|t| t.path.clone()).collect();
+            let detect = executor.spawn(async move { crate::core::inuse::detect(&busy_paths) });
+            #[cfg(windows)]
+            let prescan_volume = if is_elevated() {
+                dominant_volume(&targets)
+            } else {
+                None
+            };
+            #[cfg(not(windows))]
+            let prescan_volume: Option<VolumeId> = None;
             #[cfg(windows)]
             let pre = prescan_volume.and_then(|v| scan_volume(&v, 0).ok());
             #[cfg(not(windows))]
@@ -95,10 +92,10 @@ impl crate::ui::Root {
                 Some(s) => scan_fixed_with_tree(&targets, &live, &s.tree),
                 None => scan_fixed(&targets, &live),
             };
-            (cats, pre)
+            (cats, pre, detect)
         });
         self.junk.scan_task = Some(cx.spawn(async move |this, cx| {
-            let (result, prescanned) = scan.await;
+            let (result, prescanned, detect) = scan.await;
             this.update(cx, |this, cx| {
                 this.junk.categories = result;
                 this.junk.scanned = true;

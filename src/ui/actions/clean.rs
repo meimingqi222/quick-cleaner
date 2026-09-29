@@ -267,8 +267,9 @@ impl crate::ui::Root {
                     }
                 }
 
-                let fails = this.clean.last_failed.len();
-                let unresolved = fails + dropped_busy;
+                // 失败、策略跳过、需手动处理和取消后未触及的目标都在 still_there。
+                // 只数失败会把「白名单刚加入后被跳过」误报为全部完成。
+                let unresolved = still_there.len() + dropped_busy;
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
                     if unresolved > 0 {

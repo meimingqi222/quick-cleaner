@@ -7,7 +7,7 @@
 use crate::core::i18n::{bilingual, Text};
 use crate::core::scanner::CategorySummary;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 一个目标的占用状态：三态，`unknown` 是“测不出”专用状态。
 ///
@@ -101,6 +101,19 @@ pub enum SpotCheck {
 /// 委托当前平台对一小批路径做删除前占用复检。
 pub fn spot_check(paths: &[PathBuf]) -> HashMap<PathBuf, SpotCheck> {
     crate::platform::spot_check_inuse(paths)
+}
+
+/// 这一个路径此刻有没有被打开。三态，`None` = **测不出**。
+///
+/// 与 [`spot_check`] 是同一套探测（文件精确匹配、目录 `+D` 递归），只
+/// 是把「一批」收成「一个可判定的三态」，给活数据库闸门用——它需要区分
+/// 「确实没人打开」和「查不出来」，而后者必须继续 fail closed。
+pub fn is_open(path: &Path) -> Option<bool> {
+    match spot_check(std::slice::from_ref(&path.to_path_buf())).get(path) {
+        Some(SpotCheck::Clear) => Some(false),
+        Some(SpotCheck::Busy) => Some(true),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

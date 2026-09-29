@@ -615,6 +615,154 @@ fn spotlight_index_is_usable() -> bool {
         .is_ok_and(|n| n > 0)
 }
 
+/// 一次批量取「这台机器上所有 .app 的 Bundle ID」最多等多久。
+///
+/// 比单条 [`MDFIND_TIMEOUT`] 宽松：`mdfind` 一次枚举几百个应用包、`mdls`
+/// 再批量读它们的索引属性，冷缓存时比单点查询慢一个量级。这条路径跑在
+/// 后台线程上（扫描中用户在等结果，但界面没卡），所以宁可多等一会儿也
+/// 不要因为一次误超时把整轮扫描判成「测不出」。
+const BUNDLE_ID_BULK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// 一次 `mdls` 最多带多少个应用包。
+///
+/// 只是把参数表切小，避免在应用特别多的机器上撞 `ARG_MAX`；实测 584 个包
+/// 一次调用 80ms，分批不影响总耗时。
+const MDLS_BATCH: usize = 256;
+
+/// 这台机器上所有已安装 `.app` 的 Bundle ID 集合。
+///
+/// 这是 [`bundle_is_still_installed`] 的批量版，服务的场景相反：那边问
+/// 「这一个 ID 还装着吗」，这边一次拿回全部在场的 ID，让调用方对着集合
+/// 反查几百个候选（孤儿残留扫描）。逐个候选跑 `mdfind` 就是几百次子进程，
+/// 加起来几秒到几十秒，不可接受。
+///
+/// **先按「是不是真的应用包」过滤**（`.app` 后缀 **且** 有
+/// `Contents/Info.plist`）。`mdfind` 的 `com.apple.application-bundle`
+/// 类型并不等于「应用包」：本机实测它把 `~/Library/HTTPStorages/cn.trae.app`、
+/// `WebKit/com.conductor.app`、VS Code 里的 `org.eclipse.equinox.app` 全都
+/// 当成应用包返回了。那些**恰恰是孤儿残留本身**，混进集合的后果是它们自己
+/// （以及同前缀的一串）再也报不出来——自己把自己洗白了。
+///
+/// 返回 `None` = **测不出**，语义与 [`bundle_is_still_installed`] 的 `None`
+/// 完全一致，调用方必须 fail closed（一条都不删）。三种「测不出」：
+///
+/// - `mdfind` / `mdls` 起不来、超时、非零退出，或 `mdfind` 的 stderr 有内容
+/// - `mdfind` 一个真应用包都没查到——任何一台 macOS 都必然有一堆，空结果
+///   只能是索引不可用（和哨兵查询同一个判据）
+/// - `mdls` 的返回值个数与请求的包数对不上，或者某个包读成了空 / `(null)`
+///
+/// 最后一条是这里唯一不显然的规矩：漏读一个包 = 它的 ID 不在集合里 = 它
+/// 的活数据会被下游判成「孤儿」。加上前面的过滤后，本机 566 个真应用包
+/// 一个都没漏读；真的碰上读不出 ID 的 bundle（权限/损坏），宁可整轮扫描
+/// 不工作，也不能让漏读变成放行删除。
+pub fn installed_bundle_ids() -> Option<std::collections::HashSet<String>> {
+    let run = crate::core::proc::run_with_timeout(
+        "/usr/bin/mdfind",
+        &[
+            "-0",
+            "kMDItemContentType == \"com.apple.application-bundle\"",
+        ],
+        BUNDLE_ID_BULK_TIMEOUT,
+    )?;
+    if !run.ok || run.stderr.iter().any(|b| !b.is_ascii_whitespace()) {
+        return None;
+    }
+    let paths: Vec<PathBuf> = run
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+        .map(|value| PathBuf::from(String::from_utf8_lossy(value).into_owned()))
+        .filter(|path| is_real_bundle(path))
+        .collect();
+    if paths.is_empty() {
+        return None;
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    for chunk in paths.chunks(MDLS_BATCH) {
+        let mut args: Vec<&std::ffi::OsStr> = vec![
+            std::ffi::OsStr::new("-raw"),
+            std::ffi::OsStr::new("-name"),
+            std::ffi::OsStr::new("kMDItemCFBundleIdentifier"),
+        ];
+        args.extend(chunk.iter().map(|path| path.as_os_str()));
+        let run =
+            crate::core::proc::run_with_timeout("/usr/bin/mdls", &args, BUNDLE_ID_BULK_TIMEOUT)?;
+        if !run.ok {
+            return None;
+        }
+        let mut values: Vec<&[u8]> = run.stdout.split(|byte| *byte == 0).collect();
+        // `mdls -raw` 用 NUL 分隔，末尾有没有 NUL 都见过，两种都要认。
+        if values.last().is_some_and(|value| value.is_empty()) {
+            values.pop();
+        }
+        if values.len() != chunk.len() {
+            return None;
+        }
+        for value in values {
+            let id = String::from_utf8_lossy(value).trim().to_string();
+            if id.is_empty() || id == "(null)" {
+                return None;
+            }
+            ids.insert(id);
+        }
+    }
+    // Spotlight 可以正常返回几百个应用，却单独漏掉被隐私设置排除的安装
+    // 位置。常见安装目录再直接读一遍 Info.plist；读不全则不能用部分集合
+    // 授权孤儿残留删除。
+    let mut roots = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Applications/Utilities"),
+        PathBuf::from("/System/Applications"),
+    ];
+    if let Some(home) = super::user_env::user_home() {
+        roots.push(home.join("Applications"));
+    }
+    ids.extend(bundle_ids_in_app_roots(&roots)?);
+    Some(ids)
+}
+
+fn bundle_ids_in_app_roots(roots: &[PathBuf]) -> Option<std::collections::HashSet<String>> {
+    let mut ids = std::collections::HashSet::new();
+    for root in roots {
+        let entries = match std::fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        };
+        for entry in entries {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if !is_real_bundle(&path) {
+                continue;
+            }
+            let output = std::process::Command::new("/usr/bin/plutil")
+                .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+                .arg(path.join("Contents/Info.plist"))
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let id = String::from_utf8(output.stdout).ok()?;
+            let id = id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            ids.insert(id.to_owned());
+        }
+    }
+    Some(ids)
+}
+
+/// 这个路径是不是一个真的应用包。
+///
+/// 后缀 `.app` 不够：`~/Library` 下有的是带 `.app` 后缀的普通目录，而且它们
+/// 正是我们要找的孤儿残留。`Contents/Info.plist` 才是应用包的标志。
+fn is_real_bundle(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "app") && path.join("Contents/Info.plist").is_file()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +842,37 @@ mod tests {
             spotlight_index_is_usable(),
             "哨兵查询报告 Spotlight 索引不可用"
         );
+    }
+
+    /// 批量版必须真的拿回一批 ID。
+    ///
+    /// 返回 `None` 或空集在孤儿扫描里的含义是「一次都不删」，所以这条既在
+    /// 验证功能可用，也在验证「返回值全空」不会被误当成正常结果。
+    #[test]
+    fn installed_bundle_ids_returns_known_apps() {
+        let ids = installed_bundle_ids().expect("本机 Spotlight 应当可用");
+        assert!(!ids.is_empty(), "一个应用都没读到");
+        assert!(
+            ids.iter()
+                .any(|id| id.eq_ignore_ascii_case("com.apple.Safari")),
+            "批量读回的 {} 个 ID 里连 Safari 都没有，说明 mdls 那一段没跑对",
+            ids.len()
+        );
+    }
+
+    #[test]
+    fn direct_app_roots_find_bundles_missing_from_spotlight() {
+        let root = crate::core::testing::fixture("qc_direct_app_roots");
+        let app = root.join("PrivateApp.app/Contents");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>com.example.PrivateApp</string></dict></plist>",
+        )
+        .unwrap();
+        let ids = bundle_ids_in_app_roots(std::slice::from_ref(&root)).unwrap();
+        assert!(ids.contains("com.example.PrivateApp"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// 查询串构造必须把 id 完整转义掉，任何 id 都不能改变查询的结构。

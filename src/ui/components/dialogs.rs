@@ -1,6 +1,6 @@
 //! 弹窗对话框（二次确认与残留深度清理审查弹窗）
 
-use crate::core::apps::{InstalledApp, ResidualKind, ResidualOccupancy};
+use crate::core::apps::{InstalledApp, ResidualKind, ResidualOccupancy, ResidualScope};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
@@ -271,17 +271,27 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
         .iter()
         .any(|it| matches!(it.kind, ResidualKind::SystemExtension(..)));
 
-    let (empty_title, empty_desc, done_label) = match lang {
-        Language::Zh => (
-            "该软件未发现关联的文件或注册表残留",
-            "官方卸载已彻底清理所有文件与配置注册表。",
-            "完成",
+    let done_label = match lang {
+        Language::Zh => "完成",
+        Language::En => "Done",
+    };
+    // 空态文案也分两种口径：按应用扫出来的「没残留」说的是卸载干不干净，
+    // 孤儿扫描说的则是「用户目录里没有找不到主人的东西」。
+    let (empty_title, empty_desc) = match res.scope {
+        ResidualScope::OrphanLeftovers => (
+            tr_orphan_empty_title(lang),
+            tr_orphan_empty_desc(lang),
         ),
-        Language::En => (
-            "No residual files or registry traces found",
-            "Uninstallation has cleanly removed all associated files and registry configurations.",
-            "Done",
-        ),
+        ResidualScope::App => match lang {
+            Language::Zh => (
+                "该软件未发现关联的文件或注册表残留",
+                "官方卸载已彻底清理所有文件与配置注册表。",
+            ),
+            Language::En => (
+                "No residual files or registry traces found",
+                "Uninstallation has cleanly removed all associated files and registry configurations.",
+            ),
+        },
     };
 
     let item_rows: Vec<gpui::AnyElement> = if is_empty {
@@ -531,21 +541,31 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             )
     };
 
-    let modal_title = match lang {
-        Language::Zh => format!("发现「{}」的 {} 项关联残留", res.app_name, total_items),
-        Language::En => format!(
-            "Found {} residual items for \"{}\"",
-            total_items, res.app_name
+    // 标题两种口径：按应用扫出来的残留属于一个「主人」，孤儿扫描一次覆盖
+    // 一堆已经不在的软件，用「发现「」的 N 项残留」会把空名字套进引号里。
+    let (modal_title, modal_sub) = match res.scope {
+        ResidualScope::App => (
+            match lang {
+                Language::Zh => format!("发现「{}」的 {} 项关联残留", res.app_name, total_items),
+                Language::En => format!(
+                    "Found {} residual items for \"{}\"",
+                    total_items, res.app_name
+                ),
+            },
+            match lang {
+                Language::Zh => format!(
+                    "包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {}",
+                    fmt_size(res.total_file_size)
+                ),
+                Language::En => format!(
+                    "Includes caches, app configuration and registry traces. Potential space: {}",
+                    fmt_size(res.total_file_size)
+                ),
+            },
         ),
-    };
-    let modal_sub = match lang {
-        Language::Zh => format!(
-            "包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {}",
-            fmt_size(res.total_file_size)
-        ),
-        Language::En => format!(
-            "Includes caches, app configuration and registry traces. Potential space: {}",
-            fmt_size(res.total_file_size)
+        ResidualScope::OrphanLeftovers => (
+            tr_orphan_modal_title(lang, total_items),
+            tr_orphan_modal_sub(lang, &fmt_size(res.total_file_size)),
         ),
     };
 

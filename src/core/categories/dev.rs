@@ -53,111 +53,115 @@ pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 /// （`plugins`、`skills`——本机各占约 380 MB，是最大的诱惑也是最不该动的）
 /// 一律不在表内。
 ///
+/// 每个子目录带一个「默认是否勾选」标记，**不靠名字启发式现推**：
+/// 同一条 `matches!(sub, "cache" | "log" | ...)` 过去同时决定了「纯临时的
+/// `.tmp` 不勾」和「827 MB 的会话记录也不勾」——两件事，一条规则。
+/// 判据是规范第二条：删掉只丢「重新生成 / 重新下载」的勾，
+/// 会丢会话、历史、编辑快照的一律不勾（仍然展示，用户可手动选）。
+///
 /// 平台无关：目录名和子目录名在 Windows / macOS 上一致，只有根目录
 /// （`%USERPROFILE%` ↔ `~`）在调用方拼接。
-pub(super) const CLI_AGENTS: &[(&str, &str, &[&str])] = &[
+/// CLI agent 的一个可清理子目录：`(子目录名, 默认是否勾选)`。
+pub(super) type AgentSubdir = (&'static str, bool);
+
+/// 一个 CLI agent：`(主目录名, 显示名, 可清理子目录)`。
+pub(super) type CliAgent = (&'static str, &'static str, &'static [AgentSubdir]);
+
+pub(super) const CLI_AGENTS: &[CliAgent] = &[
     (
         ".claude",
         "Claude Code",
-        // projects 是会话转录，file-history 是编辑快照，都属于历史而非配置
+        // projects 是会话转录，file-history 是编辑快照，都属于历史而非配置；
+        // paste-cache / shell-snapshots 是纯临时。
         &[
-            "cache",
-            "paste-cache",
-            "shell-snapshots",
-            "file-history",
-            "projects",
-            "sessions",
-            "backups",
-            "session-env",
-            "jobs",
-            "tasks",
-            "daemon",
-            "ide",
+            ("cache", true),
+            ("paste-cache", true),
+            ("shell-snapshots", true),
+            ("file-history", false),
+            ("projects", false),
+            ("sessions", false),
+            ("backups", false),
+            ("session-env", false),
+            ("jobs", false),
+            ("tasks", false),
+            ("daemon", false),
+            ("ide", false),
         ],
     ),
     (
         ".codex",
         "Codex",
-        // shell_snapshots 用下划线（与本机实测一致），.claude/.workbuddy 用连字符
+        // shell_snapshots 用下划线（与本机实测一致），.claude/.workbuddy 用连字符。
+        // `.tmp` 本机 121 MB，是 Codex 自己的暂存目录。
         &[
-            "cache",
-            "log",
-            "tmp",
-            ".tmp",
-            "sessions",
-            "archived_sessions",
-            "attachments",
-            "backup",
-            "dictation-history",
-            "visualizations",
-            "ambient-suggestions",
-            "computer-use",
-            "computer-use-turn-ended",
-            "node_repl",
-            "process_manager",
-            "mcp-oauth-locks",
-            "thread-writer-locks",
-            "shell_snapshots",
+            ("cache", true),
+            ("log", true),
+            ("tmp", true),
+            (".tmp", true),
+            ("shell_snapshots", true),
+            ("sessions", false),
+            ("archived_sessions", false),
+            ("attachments", false),
+            ("backup", false),
+            ("dictation-history", false),
+            ("visualizations", false),
+            ("ambient-suggestions", false),
+            ("computer-use", false),
+            ("computer-use-turn-ended", false),
+            ("node_repl", false),
+            ("process_manager", false),
+            ("mcp-oauth-locks", false),
+            ("thread-writer-locks", false),
         ],
     ),
-    (".gemini", "Gemini CLI", &["tmp", "chats", "sessions"]),
-    (".qwen", "Qwen Code", &["tmp", "todos"]),
+    (
+        ".gemini",
+        "Gemini CLI",
+        &[("tmp", true), ("chats", false), ("sessions", false)],
+    ),
+    (".qwen", "Qwen Code", &[("tmp", true), ("todos", false)]),
     (
         ".augment",
         "Augment",
         &[
-            "tmp",
-            "sessions",
-            "backups",
-            "checkpoint-documents",
-            "observability",
+            ("tmp", true),
+            ("observability", true),
+            ("sessions", false),
+            ("backups", false),
+            ("checkpoint-documents", false),
         ],
     ),
-    (".copilot", "Copilot CLI", &["logs", "ide", "session-state"]),
+    (
+        ".copilot",
+        "Copilot CLI",
+        &[("logs", true), ("ide", false), ("session-state", false)],
+    ),
     (
         ".workbuddy",
         "WorkBuddy",
         &[
-            "logs",
-            "sessions",
-            "shell-snapshots",
-            "file-history",
-            "backup",
-            "audit-log",
+            ("logs", true),
+            ("shell-snapshots", true),
+            ("sessions", false),
+            ("file-history", false),
+            ("backup", false),
+            ("audit-log", false),
         ],
     ),
 ];
 
-/// Electron / VS Code 系应用的标准缓存子目录。
+/// Electron / Chromium 系 AI 编程应用在「 roaming 」根下的目录名。
 ///
-/// 刻意**不含** `Service Worker`、`IndexedDB`、`Local Storage`——那些存的是
-/// 登录态和应用设置，清掉等于把用户踢下线。
-///
-/// 平台无关：这些子目录名在 Windows `%APPDATA%` 和 macOS
-/// `~/Library/Application Support` 下完全一致（Electron 自己保证的）。
-pub(super) const ELECTRON_CACHE_DIRS: &[&str] = &[
-    "Cache",
-    "Code Cache",
-    "GPUCache",
-    "DawnGraphiteCache",
-    "DawnWebGPUCache",
-    "CachedData",
-    "CachedProfilesData",
-    "CachedExtensionVSIXs",
-    "blob_storage",
-    "logs",
-    "Crashpad",
-    "CrashReport",
-    "fcache",
-];
-
-/// Electron 型 AI 编程应用在「 roaming 」根下的目录名。
+/// **不再决定覆盖面**：一个应用能不能被扫到，靠的是内容签名
+/// （`categories::chromium`），不是它叫什么。这张表只决定**归属**——
+/// 名字在表里的应用，它的缓存叶子归到「AI 编程助手缓存」；表外的归到
+/// 「应用缓存」。所以漏一个名字的代价只是分类不精准，不再是一条缓存
+/// 永远清不掉——这正是旧设计最贵的地方。
 ///
 /// Windows 上根是 `%APPDATA%`，macOS 上是 `~/Library/Application Support`。
-/// 不存在的路径会在扫描阶段被 `path.exists()` 过滤掉，所以多列几个
-/// 候选没有代价——本机没装的应用在别的机器上可能有。
-pub(super) const ROAMING_AGENT_APPS: &[&str] = &[
+pub(super) const AI_APP_DIRS: &[&str] = &[
     "Claude",
+    "Codex",
     "Cursor",
     "CursorStar",
     "Trae",
@@ -178,7 +182,26 @@ pub(super) const ROAMING_AGENT_APPS: &[&str] = &[
     "Devin - Next",
     "anythingllm-desktop",
     "crush-gui",
+    "CatPawAI",
+    "Maka",
+    "MiniMax",
+    "MiniMax Code",
+    "Xiaomi MiMo",
+    "Grok Bot",
+    "Doubao",
+    "LobsterAI",
+    "xyz.chatboxapp.app",
+    "com.qoder.app.stable",
+    "Qoder",
+    "Paseo",
 ];
+
+/// 这个应用目录名算不算 AI 工具（只影响归类，见 [`AI_APP_DIRS`]）。
+fn is_ai_app_dir(name: &str) -> bool {
+    AI_APP_DIRS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(name))
+}
 
 /// 「 local 」根下的 agent 缓存目录：(目录名, 可清子目录, 中文展示名, 英文展示名)。
 /// 子目录为空表示整个目录都是缓存；中英一致的条目两列写同一个字符串。
@@ -241,8 +264,13 @@ pub(super) const AGENT_WORKTREE_DIRS: &[(&str, &str)] = &[
 
 /// AI 编程助手的缓存、会话残留与临时 worktree。
 ///
-/// 全部是固定路径——不存在的会在扫描阶段被 `path.exists()` 过滤掉，
-/// 所以多列几个候选目录的代价只是一次 stat。
+/// 三种来源，覆盖面各不同：
+/// - **固定路径**：`CLI_AGENTS` 逐个子目录列出。不存在的会在扫描阶段被
+///   `path.exists()` 过滤掉，多列几个候选的代价只是一次 stat。
+/// - **内容签名**：Electron/Chromium 系应用（[`push_chromium_app_caches`]）
+///   与 agent 目录下自建的浏览器 profile。这里**不看名字**——名字只决定
+///   归到 AI 类还是应用缓存。
+/// - **动态发现**：旧版本目录、日志库。
 ///
 /// 平台无关：调用方传入平台对应的根目录即可——
 /// - Windows: `home = %USERPROFILE%`, `local = %LOCALAPPDATA%`, `roaming = %APPDATA%`
@@ -257,30 +285,24 @@ pub(super) fn push_ai_agent_targets(
 
     // ---- CLI 型 agent ----
     for (dir, label, subs) in CLI_AGENTS {
-        for sub in *subs {
+        for (sub, recommended) in *subs {
             t.push(target_with_recommendation(
                 home.join(dir).join(sub),
                 format!("{label} · {sub}"),
                 AGENT,
-                matches!(*sub, "cache" | "log" | "logs" | "observability"),
+                *recommended,
             ));
         }
+    }
+    push_agent_log_databases(t, home);
+    // agent 目录下自建的浏览器 profile：`~/.gemini/antigravity-browser-profile`
+    // 是 Chromium 的 userData 形状，同样只收叶子。
+    for (dir, label, _) in CLI_AGENTS {
+        push_chromium_leaves(t, &home.join(dir), label, AGENT);
     }
 
-    // ---- Electron / VS Code 系应用 ----
-    for app in ROAMING_AGENT_APPS {
-        for cache in ELECTRON_CACHE_DIRS {
-            t.push(target_with_recommendation(
-                roaming.join(app).join(cache),
-                format!("{app} · {cache}"),
-                AGENT,
-                // CachedProfilesData 可能保存本地唯一的编辑器 Profile，
-                // blob_storage 也可能承载未保存的附件或草稿。两者继续展示，
-                // 但不能默认勾选。
-                !matches!(*cache, "CachedProfilesData" | "blob_storage"),
-            ));
-        }
-    }
+    // ---- Electron / Chromium 系应用：按内容签名认，不按应用名认 ----
+    push_chromium_app_caches(t, roaming);
 
     // ---- local 根下的缓存与更新包 ----
     for (dir, subs, zh, en) in LOCAL_AGENT_DIRS {
@@ -370,17 +392,204 @@ pub(super) fn push_ai_agent_targets(
     }
 
     push_devin_cli_versions(t, home, roaming);
+    push_codex_cli_versions(t, home);
     push_obsolete_vscode_extensions(t, home);
     push_orphaned_editor_workspaces(t, home, roaming);
+}
+
+/// 应用目录（`~/Library/Application Support` / `%APPDATA%`）下所有 Chromium
+/// 系应用的缓存叶子。
+///
+/// 这一条取代了按应用名列名单的老做法：覆盖面靠内容签名，名字只决定归类
+/// （AI 工具进 `AiAgents`，其余进 `UserCache`）。因此漏一个名字的代价从
+/// 「一堆缓存永远清不掉」降成「分类标签不够准」。
+///
+/// 浏览器不在这里：它们用的是同一个 profile 布局，已经由 `browser.rs` 逐
+/// 浏览器认领（包括 `Crashpad/completed` 这类特殊处置），重复入表就是双算。
+fn push_chromium_app_caches(t: &mut Vec<ScanTarget>, roaming: &Path) {
+    let Ok(entries) = std::fs::read_dir(roaming) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if super::browser::owns_app_support_dir(&name) {
+            continue;
+        }
+        if super::browser::contains_claimed_browser_child(&name) {
+            if let Ok(children) = std::fs::read_dir(entry.path()) {
+                for child in children.flatten() {
+                    let child_name = child.file_name().to_string_lossy().into_owned();
+                    if child.file_type().is_ok_and(|kind| kind.is_dir())
+                        && !super::browser::claimed_browser_child(&name, &child_name)
+                    {
+                        let category = if is_ai_app_dir(&child_name) {
+                            CategoryId::AiAgents
+                        } else {
+                            CategoryId::UserCache
+                        };
+                        push_chromium_leaves(t, &child.path(), &child_name, category);
+                    }
+                }
+            }
+            continue;
+        }
+        let category = if is_ai_app_dir(&name) {
+            CategoryId::AiAgents
+        } else {
+            CategoryId::UserCache
+        };
+        push_chromium_leaves(t, &entry.path(), &name, category);
+    }
+}
+
+/// 把一个目录（应用目录 / agent 目录 / 缓存根）下的 Chromium 缓存叶子入表。
+///
+/// 只列叶子，不列承载它的目录——理由见 `categories::chromium` 头注释。
+/// 标签把父目录名放在所有者位置：用户看到的是「Codex · GPUCache」，
+/// 而不是一个不透明的绝对路径。
+fn push_chromium_leaves(t: &mut Vec<ScanTarget>, dir: &Path, owner: &str, category: CategoryId) {
+    for leaf in super::chromium::cache_leaves(dir) {
+        // 叶子在 profile 里时把 profile 名也写进标签：`Codex · GPUCache` 与
+        // `Codex · Default · GPUCache` 是两条不同的路径，只写叶子名在界面上
+        // 就是两行同名条目。
+        let trail = super::chromium::leaf_trail(dir, &leaf);
+        let Some(leaf_name) = trail.last() else {
+            continue;
+        };
+        t.push(target_with_recommendation(
+            leaf,
+            format!("{owner} · {}", trail.join(" · ")),
+            category,
+            super::chromium::leaf_recommended(leaf_name),
+        ));
+    }
+}
+
+/// agent 根目录下的 `logs*.sqlite` 日志库。
+///
+/// 本机 `~/.codex/logs_2.sqlite` 单个 279 MB，`.tables` 里只有一张 `logs`
+/// 表——而 `~/.codex/log` 这个**目录**早就在表里了：同一个东西的两种形态，
+/// 只收目录就漏掉了大头。
+///
+/// 刻意不预选：日志库开着 WAL/SHM（agent 运行时恒成立），删除级闸门
+/// （`safety::is_active_sqlite_member`）会直接拒删，预选只会制造一次必然
+/// 失败。用户关掉 agent 再手动勾，才删得掉。
+fn push_agent_log_databases(t: &mut Vec<ScanTarget>, home: &Path) {
+    for (dir, label, _) in CLI_AGENTS {
+        let Ok(entries) = std::fs::read_dir(home.join(dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // `logs.sqlite` / `logs_2.sqlite`。后缀把 `logs_2.sqlite-wal` 挡在
+            // 外面；`thread_history_1.sqlite`、`state_5.sqlite`、
+            // `memories_1.sqlite` 是会话历史、状态与记忆，绝不入表。
+            if !name.starts_with("logs") || !name.ends_with(".sqlite") {
+                continue;
+            }
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            t.push(target_with_recommendation(
+                entry.path(),
+                Text::new(
+                    format!("{label} · 日志库 {name}"),
+                    format!("{label} · log database {name}"),
+                ),
+                CategoryId::AiAgents,
+                false,
+            ));
+        }
+    }
+}
+
+/// Devin CLI / Codex CLI 这类自管理版本目录的旧版本回收。
+///
+/// 两者是同一个形状：一堆版本目录 + 一个 `current` 软链接指向当前版本。
+/// 旧版本目录纯属垃圾（本机 Codex 四个旧版本共 1.17 GB），删了最多重新
+/// 下载——但**当前版本只能从 `current` 读**，不能按版本号大小猜：用户可能
+/// 回滚到旧版，`current` 缺失时一个都不预选（分不清就别默认删）。
+fn push_old_version_dirs(
+    t: &mut Vec<ScanTarget>,
+    versions_dir: &Path,
+    keep: Option<&str>,
+    label: &str,
+    recommended: bool,
+) {
+    let Ok(entries) = std::fs::read_dir(versions_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // `current` 是软链接、`_download` 是安装包暂存、`install.lock` /
+        // `auto-update-version` 是更新器自己的书签：都不是版本目录。
+        if name == "current" || name == "_download" || Some(name.as_str()) == keep {
+            continue;
+        }
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            continue;
+        }
+        t.push(target_with_recommendation(
+            path,
+            Text::new(
+                format!("{label} · 旧版本 {name}"),
+                format!("{label} · old version {name}"),
+            ),
+            CategoryId::AiAgents,
+            recommended,
+        ));
+    }
+}
+
+/// `<root>/current` 软链接指向的目录名。读不到就 `None`。
+fn current_version_name(root: &Path) -> Option<String> {
+    std::fs::read_link(root.join("current"))
+        .ok()
+        .and_then(|target| target.file_name().map(|n| n.to_string_lossy().into_owned()))
+}
+
+/// 安装目录里的锁文件很新 → 可能正在换版，这一轮不预选。
+///
+/// 锁文件在更新完成后会被删掉；长期残留的锁（本机 Codex 的
+/// `install.lock` 空文件从 8 月留到现在）说明上次更新异常退出，此时预选是
+/// 安全的。
+fn update_in_flight(lock: &Path) -> bool {
+    lock.exists() && !super::helpers::is_older_than(lock, std::time::Duration::from_secs(3600))
+}
+
+/// Codex CLI 自管理的版本目录：`~/.codex/packages/standalone/releases/<版本>/`。
+///
+/// 每次 `codex` 自更新都会解压一份新版本目录，旧的从来不清（本机 5 份共
+/// 1.4 GB，其中四个旧版本 1.17 GB）。当前版本由 `standalone/current`
+/// 软链接指向。
+fn push_codex_cli_versions(t: &mut Vec<ScanTarget>, home: &Path) {
+    let standalone = home.join(".codex/packages/standalone");
+    if !standalone.is_dir() {
+        return;
+    }
+    let current = current_version_name(&standalone);
+    let updating = update_in_flight(&standalone.join("install.lock"));
+    push_old_version_dirs(
+        t,
+        &standalone.join("releases"),
+        current.as_deref(),
+        "Codex CLI",
+        current.is_some() && !updating,
+    );
 }
 
 /// Devin CLI 自管理的版本目录：`_versions/<版本>/` 与 `_download/*.tar.gz`。
 ///
 /// Devin CLI 每次 `devin update` 都会下载新安装包、解压出新版本目录，
 /// 但从不回收旧的——旧版本目录和下载包纯粹是垃圾，删掉只代价重新下载。
-///
-/// 当前版本由 `_versions/current` 软链接指向，**绝不能**靠"最新数字版本"
-/// 推断——用户可能回滚到旧版。
+/// 版本目录的处置与 Codex CLI 共用 [`push_old_version_dirs`]。
 ///
 /// 路径平台相关：
 /// - macOS / Linux：`~/.local/share/devin/cli/_versions`
@@ -404,49 +613,17 @@ fn push_devin_cli_versions(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path)
         return;
     }
 
-    // 读 current 软链接解析当前版本目录名。read_link 返回的是链接目标，
-    // 可能是相对路径（如 "3000.6.14"）也可能是绝对路径，取末段即可。
-    let current_version = std::fs::read_link(versions_dir.join("current"))
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-
-    // _update.lock 存在且较新时说明可能正在更新，不预选。
-    // 锁文件在更新完成后会被删除；长期残留的锁文件（本机实测 Jun 至今）
-    // 说明上次更新异常退出，此时预选是安全的。
-    let updating = {
-        let lock = cli_root.join("_update.lock");
-        lock.exists() && !super::helpers::is_older_than(&lock, std::time::Duration::from_secs(3600))
-    };
-
-    // 旧版本目录：跳过 current 软链接、当前版本、_download。
-    // current 缺失时无法确定当前版本，不预选任何版本目录——分不清就别默认删。
-    let recommend_versions = current_version.is_some() && !updating;
-
-    let Ok(entries) = std::fs::read_dir(&versions_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "current" || name == "_download" || Some(&name) == current_version.as_ref() {
-            continue;
-        }
-        let path = entry.path();
-        if !entry
-            .file_type()
-            .is_ok_and(|ft| ft.is_dir() && !ft.is_symlink())
-        {
-            continue;
-        }
-        t.push(target_with_recommendation(
-            path,
-            Text::new(
-                format!("Devin CLI · 旧版本 {name}"),
-                format!("Devin CLI · old version {name}"),
-            ),
-            AGENT,
-            recommend_versions,
-        ));
-    }
+    // `current` 缺失时无法确定当前版本，不预选任何版本目录——分不清就别默认删。
+    // `_update.lock` 很新说明可能正在换版，同样不预选。
+    let current_version = current_version_name(&versions_dir);
+    let updating = update_in_flight(&cli_root.join("_update.lock"));
+    push_old_version_dirs(
+        t,
+        &versions_dir,
+        current_version.as_deref(),
+        "Devin CLI",
+        current_version.is_some() && !updating,
+    );
 
     // 下载的安装包：装完即废，删了最多重新下载
     let download_dir = versions_dir.join("_download");
@@ -686,7 +863,7 @@ mod tests {
     #[test]
     fn ai_agent_targets_never_touch_config_or_credentials() {
         for (dir, label, subs) in CLI_AGENTS {
-            for sub in *subs {
+            for (sub, _) in *subs {
                 assert!(
                     !NEVER_CLEAN.contains(sub),
                     "{label}（{dir}）把 {sub} 列成了可清理项，这会破坏用户配置"
@@ -703,19 +880,42 @@ mod tests {
         }
     }
 
-    /// Electron 的会话态目录不能进清理表，否则用户会被踢下线。
+    /// 纯临时目录要预选，会话/历史不预选。
+    ///
+    /// 这条过去由一个字符串启发式（`sub == "cache" || sub == "log" || ...`）
+    /// 同时决定，`.tmp` 因此被漏在外面（本机 121 MB）；现在改成表里显式写，
+    /// 改错了测试就红。
     #[test]
-    fn electron_cache_list_excludes_session_state() {
-        for stateful in [
-            "Service Worker",
-            "IndexedDB",
-            "Local Storage",
-            "Session Storage",
+    fn temp_subdirs_are_recommended_and_history_is_not() {
+        let recommended = |dir: &str, sub: &str| {
+            CLI_AGENTS
+                .iter()
+                .find(|(name, _, _)| *name == dir)
+                .and_then(|(_, _, subs)| subs.iter().find(|(name, _)| *name == sub))
+                .map(|(_, recommended)| *recommended)
+                .unwrap_or_else(|| panic!("{dir}/{sub} 不在表里"))
+        };
+        for (dir, sub) in [
+            (".codex", "tmp"),
+            (".codex", ".tmp"),
+            (".codex", "cache"),
+            (".claude", "paste-cache"),
+            (".claude", "shell-snapshots"),
+            (".gemini", "tmp"),
+            (".augment", "observability"),
+            (".workbuddy", "logs"),
         ] {
-            assert!(
-                !ELECTRON_CACHE_DIRS.contains(&stateful),
-                "{stateful} 存的是登录态/应用状态，不能当缓存清"
-            );
+            assert!(recommended(dir, sub), "{dir}/{sub} 是纯临时，该预选");
+        }
+        for (dir, sub) in [
+            (".codex", "sessions"),
+            (".codex", "computer-use"),
+            (".claude", "projects"),
+            (".claude", "file-history"),
+            (".augment", "checkpoint-documents"),
+            (".workbuddy", "sessions"),
+        ] {
+            assert!(!recommended(dir, sub), "{dir}/{sub} 是历史/会话，不该预选");
         }
     }
 
@@ -725,6 +925,17 @@ mod tests {
         let home = root.join("home");
         let local = root.join("local");
         let roaming = root.join("roaming");
+        // Chromium 系的缓存叶子靠内容签名发现，夹具必须把签名建出来。
+        for leaf in [
+            "Cache",
+            "Code Cache",
+            "GPUCache",
+            "CachedProfilesData",
+            "blob_storage",
+        ] {
+            std::fs::create_dir_all(roaming.join("Cursor").join(leaf)).unwrap();
+            std::fs::write(roaming.join("Cursor").join(leaf).join("data"), b"x").unwrap();
+        }
         let mut targets = Vec::new();
 
         push_ai_agent_targets(&mut targets, &home, &local, &roaming);
@@ -748,6 +959,148 @@ mod tests {
                 .iter()
                 .any(|target| target.path == path && !target.recommended));
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 覆盖面不再依赖应用名：签名在，表外的应用也能被扫到；名字只影响归类。
+    #[test]
+    fn chromium_shape_wins_over_the_app_name_list() {
+        let root = crate::core::testing::fixture("qc_ai_shape");
+        let home = root.join("home");
+        let local = root.join("local");
+        let roaming = root.join("roaming");
+        for app in ["Codex", "SomeToolNobodyListed"] {
+            for leaf in ["Cache", "Code Cache", "GPUCache"] {
+                let dir = roaming.join(app).join(leaf);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("data"), b"x").unwrap();
+            }
+        }
+        let mut targets = Vec::new();
+        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
+
+        let category = |path: std::path::PathBuf| {
+            targets
+                .iter()
+                .find(|target| target.path == path)
+                .map(|target| target.category)
+        };
+        let cache = |app: &str| roaming.join(app).join("Cache");
+        assert_eq!(category(cache("Codex")), Some(CategoryId::AiAgents));
+        // 名字不在表里也照样进表，只是归到「应用缓存」。
+        assert_eq!(
+            category(cache("SomeToolNobodyListed")),
+            Some(CategoryId::UserCache)
+        );
+        // 承载缓存的目录本身不能入表
+        assert!(!targets.iter().any(|t| t.path == roaming.join("Codex")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browser_vendor_siblings_are_scanned_without_claimed_browser() {
+        let root = crate::core::testing::fixture("qc_browser_vendor_siblings");
+        let roaming = root.join("Application Support");
+        for app in ["Google/Chrome", "Google/OtherApp"] {
+            for leaf in ["Cache", "GPUCache"] {
+                let dir = roaming.join(app).join(leaf);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("data"), b"x").unwrap();
+            }
+        }
+        let mut targets = Vec::new();
+        push_chromium_app_caches(&mut targets, &roaming);
+        assert!(targets
+            .iter()
+            .any(|target| target.path == roaming.join("Google/OtherApp/Cache")));
+        assert!(!targets
+            .iter()
+            .any(|target| target.path.starts_with(roaming.join("Google/Chrome"))));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/.codex/packages/standalone/releases/<版本>/`：旧版本列出并预选，
+    /// `current` 指向的那份、`install.lock`、`auto-update-version` 都不列。
+    #[test]
+    #[cfg(unix)]
+    fn codex_old_versions_are_listed_and_current_is_kept() {
+        use super::push_codex_cli_versions;
+
+        let root = crate::core::testing::fixture("qc_codex_versions");
+        let standalone = root.join(".codex/packages/standalone");
+        for version in [
+            "0.147.0-aarch64-apple-darwin",
+            "0.155.1-aarch64-apple-darwin",
+            "0.157.1-aarch64-apple-darwin",
+        ] {
+            std::fs::create_dir_all(standalone.join("releases").join(version).join("bin")).unwrap();
+        }
+        std::fs::write(standalone.join("auto-update-version"), b"0.157.1").unwrap();
+        std::fs::write(standalone.join("install.lock"), b"").unwrap();
+        std::os::unix::fs::symlink(
+            "releases/0.157.1-aarch64-apple-darwin",
+            standalone.join("current"),
+        )
+        .unwrap();
+        // 锁文件是刚写的 → 视为正在换版，一律不预选
+        let mut targets = Vec::new();
+        push_codex_cli_versions(&mut targets, &root);
+        assert_eq!(targets.len(), 2, "{targets:?}");
+        assert!(
+            targets.iter().all(|t| !t.recommended),
+            "更新中的锁文件应压掉预选"
+        );
+        assert!(targets.iter().all(|t| t.category == CategoryId::AiAgents));
+        let mut paths: Vec<String> = targets
+            .iter()
+            .map(|t| t.path.display().to_string())
+            .collect();
+        paths.sort();
+        assert!(paths[0].contains("0.147.0"), "{paths:?}");
+        assert!(paths[1].contains("0.155.1"), "{paths:?}");
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.contains("0.157.1") || p.contains("current")),
+            "当前版本与软链接不能入表: {paths:?}"
+        );
+
+        // 锁文件很旧（上次更新异常退出）→ 旧版本可以预选
+        std::fs::remove_file(standalone.join("install.lock")).unwrap();
+        let mut targets = Vec::new();
+        push_codex_cli_versions(&mut targets, &root);
+        assert_eq!(targets.len(), 2);
+        assert!(
+            targets.iter().all(|t| t.recommended),
+            "current 在且无更新时该预选"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 日志库（`logs_2.sqlite`）要进表但不预选；会话历史与状态库绝不入表。
+    #[test]
+    fn agent_log_databases_are_listed_but_never_recommended() {
+        let root = crate::core::testing::fixture("qc_agent_logs_db");
+        let codex = root.join(".codex");
+        std::fs::create_dir_all(&codex).unwrap();
+        for name in [
+            "logs_2.sqlite",
+            "thread_history_1.sqlite",
+            "state_5.sqlite",
+            "memories_1.sqlite",
+        ] {
+            std::fs::write(codex.join(name), b"db").unwrap();
+        }
+        let mut targets = Vec::new();
+        push_agent_log_databases(&mut targets, &root);
+
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert!(targets[0].path.ends_with("logs_2.sqlite"));
+        assert!(
+            !targets[0].recommended,
+            "日志库开着 WAL，预选只会制造必然失败"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

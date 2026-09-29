@@ -2,6 +2,7 @@
 
 mod browser;
 mod cache;
+mod chromium;
 mod dev;
 mod docker;
 mod helpers;
@@ -430,7 +431,21 @@ fn collect_targets(home: Option<PathBuf>, brew_cleanup_at: Option<i64>) -> Vec<S
     docker::push_docker_targets(&mut t);
     #[cfg(target_os = "macos")]
     macos::push_macos_targets(&mut t, home);
+    dedupe_paths(&mut t);
     t
+}
+
+/// 同一条路径被两条规则同时入表时只留先入的那条。
+///
+/// 目标表是多条规则各自 push 出来的：父子双算靠各自的 `CLAIMED_*` 表挡着，
+/// 但**同一条路径**被两条规则收进来是纯浪费——`scan_fixed_inner` 逐目标
+/// 独立称重后直接相加，同一条路径会按两份体积计，列表里还会出现两行。
+///
+/// 保留先入表的那条：后入的规则都是更泛的兜底（形状识别、目录展开），
+/// 先入的是更具体的规则，标签也更具体。
+fn dedupe_paths(t: &mut Vec<ScanTarget>) {
+    let mut seen = std::collections::HashSet::new();
+    t.retain(|target| seen.insert(target.path.clone()));
 }
 
 pub(super) fn target(path: PathBuf, label: impl Into<Text>, category: CategoryId) -> ScanTarget {
@@ -482,6 +497,68 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos::push_group_container_caches;
     use super::*;
+
+    /// 同一条路径只能入表一次。
+    ///
+    /// 形状识别是**兜底规则**，和显式条目撞车是迟早的事（Chromium 叶子 vs
+    /// 某条写死的路径）。撞上不是靠人盯 review，而是靠这条：先入表的那条
+    /// （更具体的规则）留下，重复的那条丢掉。
+    #[test]
+    fn duplicate_paths_are_kept_once() {
+        let mut targets = vec![
+            target(
+                PathBuf::from("/tmp/qc-dup/a"),
+                Text::same("具体规则"),
+                CategoryId::AiAgents,
+            ),
+            target(
+                PathBuf::from("/tmp/qc-dup/a"),
+                Text::same("兜底规则"),
+                CategoryId::UserCache,
+            ),
+            target(
+                PathBuf::from("/tmp/qc-dup/b"),
+                Text::same("b"),
+                CategoryId::UserCache,
+            ),
+        ];
+        dedupe_paths(&mut targets);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].category,
+            CategoryId::AiAgents,
+            "应保留先入表的那条"
+        );
+    }
+
+    /// 形状识别出来的目标绝不能是登录态/会话数据。
+    ///
+    /// 这条比 `chromium` 自己的单测更靠外一层：它扫的是**整张表**，
+    /// 以后不论哪条规则把 `Cookies` / `Local Storage` / Profile 本体默认勾上，
+    /// 都会在这里红。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn default_selected_never_contains_session_state() {
+        for target in all_targets(None).iter().filter(|t| t.recommended) {
+            let path = target.path.to_string_lossy();
+            for forbidden in [
+                "/Cookies",
+                "/Login Data",
+                "/Local Storage",
+                "/Session Storage",
+                "/IndexedDB",
+                "/Service Worker",
+                "/WebStorage",
+                "/chrome-profile",
+            ] {
+                assert!(
+                    !path.ends_with(forbidden),
+                    "{} 存的是登录态/Profile 本体，不能预选",
+                    path
+                );
+            }
+        }
+    }
 
     /// 扫描目标之间不能有父子嵌套。
     ///

@@ -259,6 +259,17 @@ pub fn tr_btn_force_clean(lang: Language) -> &'static str {
     }
 }
 
+/// macOS「已卸载残留」入口：扫的是**已经不在列表里**的软件留下的东西。
+///
+/// 名字不能叫「强力清理」——那个是按应用清的，用户会以为点它等于给列表里
+/// 选中的软件做深度清理。
+pub fn tr_btn_orphan_scan(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已卸载残留",
+        Language::En => "App Leftovers",
+    }
+}
+
 pub fn tr_disk_heading(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "Disk Lens 磁盘透镜",
@@ -521,6 +532,124 @@ pub fn tr_status_residual_still_installed(lang: Language, name: &str) -> String 
         Language::En => format!(
             "Stopped: \"{name}\" still appears to be installed. Nothing was deleted — finish uninstalling it first"
         ),
+    }
+}
+
+// ---- 已卸载残留（孤儿扫描，macOS）----
+
+pub fn tr_status_orphan_scanning(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在扫描已卸载软件留下的残留…",
+        Language::En => "Scanning leftovers of apps that are no longer installed…",
+    }
+}
+
+pub fn tr_status_orphan_done(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => {
+            format!("扫描完成：发现 {count} 项已卸载软件的残留，共 {size}")
+        }
+        Language::En => {
+            format!("Scan complete — {count} leftovers from removed apps, {size} total")
+        }
+    }
+}
+
+/// 扫描查不出结果时（Spotlight 索引不可用）的状态行。
+///
+/// 必须跟「没有残留」分开说：这两者的界面表现都是「一条都没列」，但一个
+/// 是「你的机器很干净」，一个是「我们这次答不了」。把后者说成前者就是欺骗。
+pub fn tr_status_orphan_unknown(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => {
+            "这次查不出结果：Spotlight 索引此刻不可用。没有猜测，也没有删除任何内容，稍后可重试"
+        }
+        Language::En => {
+            "Could not determine anything this time: the Spotlight index is unavailable. Nothing was guessed or deleted — try again later"
+        }
+    }
+}
+
+pub fn tr_status_orphan_cleaning(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在清除 {count} 项已卸载软件的残留…"),
+        Language::En => format!("Removing {count} leftovers of apps that are gone…"),
+    }
+}
+
+pub fn tr_status_orphan_cleaned(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("已清除 {count} 项残留，释放 {size}"),
+        Language::En => format!("Removed {count} leftovers, freed {size}"),
+    }
+}
+
+pub fn tr_status_orphan_cleaned_manual(
+    lang: Language,
+    count: usize,
+    size: &str,
+    manual: usize,
+) -> String {
+    match lang {
+        Language::Zh => format!(
+            "已清除 {count} 项残留，释放 {size}（{manual} 项需重启后由系统清除，或在系统设置中处理）"
+        ),
+        Language::En => format!(
+            "Removed {count} leftovers, freed {size} ({manual} need a reboot or manual cleanup in System Settings)"
+        ),
+    }
+}
+
+pub fn tr_status_orphan_cleaned_partial(lang: Language, size: &str, skipped: usize) -> String {
+    match lang {
+        Language::Zh => format!("残留清除完成，释放 {size}（{skipped} 项被占用或权限不足已跳过）"),
+        Language::En => {
+            format!("Leftovers cleaned, freed {size} ({skipped} skipped — in use or access denied)")
+        }
+    }
+}
+
+/// 孤儿清理被最后一道判据挡下：选中的项里有主人又被装回来了。
+pub fn tr_status_orphan_still_installed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => {
+            "已中止：所选残留里有软件又被装回来了，未删除任何内容。请重新扫描后再清理"
+        }
+        Language::En => {
+            "Stopped: one of these apps is installed again. Nothing was deleted — rescan before cleaning"
+        }
+    }
+}
+
+pub fn tr_orphan_modal_title(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("发现 {count} 项已卸载软件的残留"),
+        Language::En => format!("Found {count} leftovers from apps no longer installed"),
+    }
+}
+
+pub fn tr_orphan_modal_sub(lang: Language, size: &str) -> String {
+    match lang {
+        Language::Zh => format!(
+            "按 Bundle ID 匹配：这些软件的本体已经不在本机，缓存与配置还留在用户目录里，预计释放 {size}"
+        ),
+        Language::En => format!(
+            "Matched by bundle ID: the apps are gone, their caches and preferences are still here. Potential space: {size}"
+        ),
+    }
+}
+
+pub fn tr_orphan_empty_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "没有发现已卸载软件的残留",
+        Language::En => "No leftovers from removed apps",
+    }
+}
+
+pub fn tr_orphan_empty_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "用户目录里没有找不到主人的缓存与配置。",
+        Language::En => "Nothing in your user library belongs to an app that is gone.",
     }
 }
 

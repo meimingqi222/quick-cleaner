@@ -2,7 +2,7 @@
 
 use crate::core::apps::{
     app_gone_after_residual_clean, residual_clean_follow_up, InstalledApp, ResidualItem,
-    ResidualOccupancy, ResidualScanResult,
+    ResidualOccupancy, ResidualScanResult, ResidualScope,
 };
 use crate::core::cleaner::{CleanFailure, CleanProgress};
 use crate::core::i18n::{bilingual, Language};
@@ -205,6 +205,7 @@ impl crate::ui::Root {
                 let total: u64 = remaining.iter().map(|i| i.size()).sum();
                 let res = ResidualScanResult {
                     app_name: name.clone(),
+                    scope: ResidualScope::App,
                     app_id: app_id.clone(),
                     items: remaining,
                     total_file_size: total,
@@ -228,6 +229,51 @@ impl crate::ui::Root {
                     this.macos_root_index = None;
                 }
 
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// 扫描机器上所有「本体已经不在、用户目录里还留着东西」的软件（macOS）。
+    ///
+    /// 这是唯一一个不依赖已安装列表的残留入口。软件一旦被用户自己删掉
+    /// （拖进废纸篓、用别家的清理工具、跑厂商自己的卸载器），上面那套按应用
+    /// 的扫描就再也够不到它——`/Applications` 里没有 `.app` 就没有
+    /// [`InstalledApp`]，没有 [`InstalledApp`] 就没有残留扫描的起点。
+    ///
+    /// 与按应用扫描的两处不同，都在弹窗和状态文案里如实体现：
+    /// - 一次覆盖多款软件，没有单一的「主人」，所以没有占用探测（`ps` /
+    ///   `launchctl` 的判据是单个 Bundle ID 或应用名）。
+    /// - 测不出就是测不出：Spotlight 索引不可用时如实告知，不回退成「很干净」。
+    #[cfg(target_os = "macos")]
+    pub fn start_orphan_leftover_scan(&mut self, cx: &mut Context<Self>) {
+        if self.residual.scanning || self.clean.running {
+            return;
+        }
+        self.residual.scanning = true;
+        self.residual.result = None;
+        self.status = bilingual(|l| tr_status_orphan_scanning(l).to_string());
+        cx.notify();
+
+        let scan = cx
+            .background_executor()
+            .spawn(async move { crate::platform::macos::residuals::scan_orphan_residuals() });
+
+        self.residual.task = Some(cx.spawn(async move |this, cx| {
+            let scanned = scan.await;
+            this.update(cx, |this, cx| {
+                this.residual.scanning = false;
+                let Some(res) = scanned else {
+                    this.status = bilingual(|l| tr_status_orphan_unknown(l).to_string());
+                    cx.notify();
+                    return;
+                };
+                let count = res.items.len();
+                let size = fmt_size(res.total_file_size);
+                this.status = bilingual(|l| tr_status_orphan_done(l, count, &size));
+                this.residual.selected = res.default_selection();
+                this.residual.result = Some(res);
                 cx.notify();
             })
             .ok();
@@ -308,7 +354,10 @@ impl crate::ui::Root {
                 _ => None,
             })
             .collect();
-        self.status = bilingual(|l| tr_status_residual_cleaning(l, &cleaning_name, cleaning_count));
+        self.status = bilingual(|l| match res.scope {
+            ResidualScope::App => tr_status_residual_cleaning(l, &cleaning_name, cleaning_count),
+            ResidualScope::OrphanLeftovers => tr_status_orphan_cleaning(l, cleaning_count),
+        });
         self.start_tick(cx);
         cx.notify();
 
@@ -316,6 +365,7 @@ impl crate::ui::Root {
         let restore = res.clone();
         let restore_selected = selected_before.clone();
         let app_id_for_check = res.app_id.clone();
+        let scope_for_check = res.scope;
 
         let clean = cx.background_executor().spawn(async move {
             // 删除边界的最后一道判据：这个 bundle 真的已经不在机器上了吗？
@@ -329,14 +379,26 @@ impl crate::ui::Root {
             // macOS 专属：判据是 Spotlight 反查，Windows 没有等价物（它的
             // 残留判定走注册表卸载登记项，是另一套证据），所以这里按仓库
             // 约定写成显式的平台分支，而不是塞进 `platform` 门面契约。
+            //
+            // 孤儿扫描没有单一的 app_id：它一次覆盖多款软件，所以按每条残留
+            // 自己记着的主人（Bundle ID）逐项复核，集合是此刻现取的。任意一条
+            // 验不了、或者主人又被装回来，整批不删。
             #[cfg(target_os = "macos")]
             {
-                match crate::platform::macos::apps::bundle_is_still_installed(&app_id_for_check) {
-                    Some(false) => {}
-                    // 明确还装着，或者根本测不出（超时/命令失败）——两种都
-                    // 不许删。`None` 必须 fail closed：Spotlight 索引不全时
-                    // 的空结果和"确实没装"长得一模一样。
-                    _ => return None,
+                let owners_gone = match scope_for_check {
+                    ResidualScope::App => matches!(
+                        crate::platform::macos::apps::bundle_is_still_installed(&app_id_for_check),
+                        Some(false)
+                    ),
+                    ResidualScope::OrphanLeftovers => {
+                        crate::platform::macos::residuals::orphan_owners_all_gone(&items_to_clean)
+                    }
+                };
+                // 明确还装着，或者根本测不出（超时/命令失败）——两种都
+                // 不许删。`None` 必须 fail closed：Spotlight 索引不全时
+                // 的空结果和"确实没装"长得一模一样。
+                if !owners_gone {
+                    return None;
                 }
             }
             #[cfg(not(target_os = "macos"))]
@@ -352,8 +414,14 @@ impl crate::ui::Root {
                     // 原样还原：一个字节都没删，列表和勾选不该丢。
                     this.residual.result = Some(restore);
                     this.residual.selected = restore_selected;
-                    this.status =
-                        bilingual(|l| tr_status_residual_still_installed(l, &app_name_for_abort));
+                    this.status = bilingual(|l| match scope_for_check {
+                        ResidualScope::App => {
+                            tr_status_residual_still_installed(l, &app_name_for_abort)
+                        }
+                        ResidualScope::OrphanLeftovers => {
+                            tr_status_orphan_still_installed(l).to_string()
+                        }
+                    });
                     cx.notify();
                 })
                 .ok();
@@ -411,15 +479,26 @@ impl crate::ui::Root {
                     report.manual.len(),
                     fmt_size(snap.bytes),
                 );
-                this.status = bilingual(|l| {
-                    if fails > 0 {
-                        tr_status_residual_cleaned_partial(l, &app_name, &size, fails)
-                    } else if manual > 0 {
-                        // 「权限不足」在这里是假话：SIP 下的系统扩展本来就
-                        // 不该由我们删，重试多少次都一样。
-                        tr_status_residual_cleaned_manual(l, &app_name, ok, &size, manual)
-                    } else {
-                        tr_status_residual_cleaned(l, &app_name, ok, &size)
+                this.status = bilingual(|l| match scope_for_check {
+                    ResidualScope::App => {
+                        if fails > 0 {
+                            tr_status_residual_cleaned_partial(l, &app_name, &size, fails)
+                        } else if manual > 0 {
+                            // 「权限不足」在这里是假话：SIP 下的系统扩展本来就
+                            // 不该由我们删，重试多少次都一样。
+                            tr_status_residual_cleaned_manual(l, &app_name, ok, &size, manual)
+                        } else {
+                            tr_status_residual_cleaned(l, &app_name, ok, &size)
+                        }
+                    }
+                    ResidualScope::OrphanLeftovers => {
+                        if fails > 0 {
+                            tr_status_orphan_cleaned_partial(l, &size, fails)
+                        } else if manual > 0 {
+                            tr_status_orphan_cleaned_manual(l, ok, &size, manual)
+                        } else {
+                            tr_status_orphan_cleaned(l, ok, &size)
+                        }
                     }
                 });
 

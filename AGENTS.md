@@ -41,6 +41,10 @@ CI 卡 `cargo fmt --check` 和 clippy `-D warnings`。提交前这几项都要�
 | P7 | Unix 身份复核只认 dev+ino，别把 mtime/len 加回去（会永久拒删活跃文件）|
 | P8 | `lsof +D` 复检目录批用独立的长超时，不能和文件批共用 3 秒 |
 | P9 | `vendor/gpui`（启动死锁补丁）和 `runtime_shaders`（免 Metal Toolchain）不能删 |
+| P10 | 孤儿残留（已卸载软件）只认 Bundle ID 名，家族判据和「测不出」都不能放宽 |
+| P11 | 应用缓存靠内容签名认（应用名只决定归类）；Profile 本体、旧版本当前版、空目录都有硬规矩 |
+| P12 | 活库闸门要留「崩溃残留」可证伪通道：伴随文件存在 ≠ 有活连接 |
+| P13 | 首次窗口绘制前不能同步生成清理目标；窗口级回调不能调用需要当前视图的 `request_animation_frame()` |
 
 ## 改代码时
 

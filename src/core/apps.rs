@@ -568,6 +568,13 @@ pub struct ResidualItem {
     /// 扫描/卸载后复核时的文件系统身份。注册表、任务和系统扩展没有路径，
     /// 值为 `None`；真实路径清理时必须有快照且复验一致。
     pub identity: Option<crate::core::model::TargetIdentity>,
+    /// 这条路径是从哪个 Bundle ID 的名字推出来的（只有 macOS 的孤儿残留
+    /// 扫描会填）。
+    ///
+    /// 按应用扫描时「主人」就是被扫的那个 app，不需要逐项记录；孤儿扫描
+    /// 一次覆盖机器上所有已卸载的软件，删除前必须逐项回到它自己的主人身上
+    /// 复核「这个 app 真的不在了吗」，所以得带着主人走。
+    pub owner_bundle_id: Option<String>,
 }
 
 impl ResidualItem {
@@ -578,6 +585,7 @@ impl ResidualItem {
             confidence: Confidence::Certain,
             source,
             identity,
+            owner_bundle_id: None,
         }
     }
 
@@ -588,7 +596,22 @@ impl ResidualItem {
             confidence: Confidence::Possible,
             source,
             identity,
+            owner_bundle_id: None,
         }
+    }
+
+    /// 记下这条残留的主人（孤儿扫描用）。见 [`Self::owner_bundle_id`]。
+    pub fn for_bundle(mut self, bundle_id: &str) -> Self {
+        self.owner_bundle_id = Some(bundle_id.to_string());
+        self
+    }
+
+    /// 这条残留该按哪个 Bundle ID 去复核「主人还在不在」。
+    ///
+    /// 主人未知时返回 `None`——调用方必须当成「验不了」拒删，不能让
+    /// `unwrap_or_default()` 变出一个空 ID 混过去。
+    pub fn owner(&self) -> Option<&str> {
+        self.owner_bundle_id.as_deref().filter(|id| !id.is_empty())
     }
 
     pub fn size(&self) -> u64 {
@@ -641,10 +664,24 @@ impl ResidualOccupancy {
     }
 }
 
+/// 一次残留扫描覆盖的范围。
+///
+/// 决定弹窗标题、清理前的主人口径，以及清理后该不该动「已安装软件」列表。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResidualScope {
+    /// 某一款软件：卸载流程或单应用深度清理。
+    #[default]
+    App,
+    /// 机器上所有「已经不在、但用户目录里还留着东西」的软件（macOS 孤儿扫描）。
+    OrphanLeftovers,
+}
+
 /// 关联残留深度扫描结果
 #[derive(Clone, Debug, Default)]
 pub struct ResidualScanResult {
     pub app_name: String,
+    /// 本次扫描覆盖的范围。孤儿扫描没有单一的 app，`app_name` 为空。
+    pub scope: ResidualScope,
     /// 对应 [`InstalledApp::id`]，清理完残留后用来从内存列表里拿掉这款软件。
     pub app_id: String,
     pub items: Vec<ResidualItem>,

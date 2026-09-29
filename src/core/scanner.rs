@@ -429,11 +429,21 @@ pub fn scan_discovered_arc(
 /// 合并前会剔除**已经不存在**的路径：第二阶段跑了几十秒，这期间用户完全
 /// 可能已经清掉了其中一些目录，把它们并进列表会显示成能清理却清不掉的幽灵条目。
 pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>, partial: bool) {
+    // 固定表与发现式扫描分属不同类目，同路径和父子重叠都不能靠类目内去重。
+    // 固定目标保留原有处置策略；重叠的发现式目标不再重复计量或删除。
+    let fixed_paths: Vec<PathBuf> = cats
+        .iter()
+        .flat_map(|cat| cat.items.iter().map(|item| item.path.clone()))
+        .collect();
     let mut by_cat: std::collections::HashMap<CategoryId, Vec<ScanItem>> =
         std::collections::HashMap::new();
     for mut item in items.into_iter().filter(|it| {
         // 同固定表：白名单条目不展示
-        it.path.exists() && !crate::core::whitelist::is_whitelisted(&it.path)
+        it.path.exists()
+            && !crate::core::whitelist::is_whitelisted(&it.path)
+            && !fixed_paths
+                .iter()
+                .any(|fixed| it.path.starts_with(fixed) || fixed.starts_with(&it.path))
     }) {
         // 压着白名单条目的父目录降级默认勾选（发现式类目当前 recommended
         // 全是 false，这行为将来引入推荐的发现式类目时兜底，不留例外）
@@ -449,17 +459,12 @@ pub fn merge_discovered(cats: &mut [CategorySummary], items: Vec<ScanItem>, part
         if partial && cat.category.is_discovered() {
             cat.partial = true;
         }
-        let Some(mut found) = by_cat.remove(&cat.category) else {
-            continue;
-        };
-        // 同一路径可能在第一阶段的固定表里已经有了，别重复计数
-        let existing: HashSet<&Path> = cat.items.iter().map(|i| i.path.as_path()).collect();
-        found.retain(|it| !existing.contains(it.path.as_path()));
-
-        cat.items.append(&mut found);
-        if cat.category.is_discovered() {
-            cat.items
-                .sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
+        if let Some(mut found) = by_cat.remove(&cat.category) {
+            cat.items.append(&mut found);
+            if cat.category.is_discovered() {
+                cat.items
+                    .sort_unstable_by_key(|b| std::cmp::Reverse(b.size));
+            }
         }
         cat.total_size = cat.items.iter().map(|it| it.size).sum();
     }
@@ -1050,6 +1055,33 @@ mod tests {
         assert_eq!(dev.total_size, 1000);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discovered_items_cannot_overlap_fixed_targets_across_categories() {
+        let root = real_dir("cross_category_overlap");
+        let child = root.join("node_modules");
+        std::fs::create_dir_all(&child).unwrap();
+        let mut cats = empty_cats();
+        let fixed = item(&root.to_string_lossy(), 1000, CategoryId::UserCache);
+        let fixed_cat = cats
+            .iter_mut()
+            .find(|cat| cat.category == CategoryId::UserCache)
+            .unwrap();
+        fixed_cat.items.push(fixed);
+        fixed_cat.total_size = 1000;
+
+        let discovered = item(&child.to_string_lossy(), 400, CategoryId::DevBuild);
+        merge_discovered(&mut cats, vec![discovered], false);
+
+        assert!(cats
+            .iter()
+            .find(|cat| cat.category == CategoryId::DevBuild)
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(cats.iter().map(|cat| cat.total_size).sum::<u64>(), 1000);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

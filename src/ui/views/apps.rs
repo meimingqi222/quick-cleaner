@@ -38,12 +38,47 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .collect();
 
     // 顶部大标题与概览
-    let header = div().flex().justify_between().items_center().gap_4().child(
-        div().flex_1().min_w(px(0.)).child(page_heading(
+    //
+    // macOS 还需要一个不依赖列表的入口：软件列表只认磁盘上还在的 `.app`，
+    // 用户自己删掉的 app 永远不会出现在列表里（详见 `start_orphan_leftover_scan`）。
+    let orphan_scan_button: Option<AnyElement> = {
+        #[cfg(target_os = "macos")]
+        {
+            let busy = root.residual.scanning || root.clean.running;
+            Some(
+                div()
+                    .id("orphan-leftover-scan")
+                    .flex_none()
+                    .child(crate::ui::components::buttons::small_button(
+                        tr_btn_orphan_scan(lang).to_string(),
+                        SURF_HIGH,
+                        TEXT,
+                        !busy,
+                    ))
+                    .when(!busy, |d| {
+                        d.on_click(cx.listener(|this, _, _, cx| {
+                            this.start_orphan_leftover_scan(cx);
+                        }))
+                    })
+                    .into_any_element(),
+            )
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    };
+
+    let header = div()
+        .flex()
+        .justify_between()
+        .items_center()
+        .gap_4()
+        .child(div().flex_1().min_w(px(0.)).child(page_heading(
             tr_apps_heading(lang),
             tr_apps_subheading(lang),
-        )),
-    );
+        )))
+        .children(orphan_scan_button);
 
     let (label_storage, label_total_count, label_stale_count) = match lang {
         Language::Zh => ("估算总占用空间", "已安装应用总数", "长期未用软件 (>90天)"),

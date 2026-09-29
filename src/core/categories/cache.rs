@@ -298,6 +298,17 @@ fn push_thumbnail_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 }
 
 /// 展开 `~/.cache`，避免一个宽泛父目录掩盖子项目的不同安全级别。
+///
+/// 三种形状分三条路：
+/// 1. 认得出来的包缓存 → `PackageCache`（表里有的预选，没有的只展示）；
+/// 2. Chromium 数据目录（`chrome-devtools-mcp/chrome-profile/Default/...`
+///    这类）→ **只收缓存叶子**，父目录不入表；
+/// 3. 其余 → `UserTemp`，整目录展示、不预选。
+///
+/// 第 2 条是实测踩出来的：`~/.cache/chrome-devtools-mcp` 整个 228 MB，可重建
+/// 的只有 85 MB，剩下是那个浏览器 Profile 本体（Cookies / Login Data /
+/// DIPS / IndexedDB）。整目录入表等于拿别人的登录态换 140 MB，
+/// 而“不预选就完事”又等于那 85 MB 永远清不掉。
 pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     let root = home.join(".cache");
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -308,9 +319,26 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
+        let dir = entry.path();
+        let leaves = super::chromium::cache_leaves(&dir);
+        if !leaves.is_empty() {
+            for leaf in leaves {
+                let trail = super::chromium::leaf_trail(&dir, &leaf);
+                let Some(leaf_name) = trail.last() else {
+                    continue;
+                };
+                t.push(target_with_recommendation(
+                    leaf,
+                    format!("~/.cache/{name} · {}", trail.join(" · ")),
+                    CategoryId::UserCache,
+                    super::chromium::leaf_recommended(leaf_name),
+                ));
+            }
+            continue;
+        }
         if name == "opencode" {
             t.push(target_with_recommendation(
-                entry.path(),
+                dir,
                 Text::new("OpenCode · 缓存", "OpenCode · cache"),
                 CategoryId::AiAgents,
                 true,
@@ -319,11 +347,7 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             .iter()
             .find(|(key, _, _)| *key == name)
         {
-            t.push(target(
-                entry.path(),
-                Text::new(*zh, *en),
-                CategoryId::PackageCache,
-            ));
+            t.push(target(dir, Text::new(*zh, *en), CategoryId::PackageCache));
         } else if let Some((_, zh, en)) = SHOWN_ONLY_HOME_CACHE_DIRS
             .iter()
             .find(|(key, _, _)| *key == name)
@@ -331,14 +355,14 @@ pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             // 确实是包缓存，只是不能预选：类别不能掉进下面的 `UserTemp`
             // 兜底分支，否则用户在「包缓存」里根本找不到它。
             t.push(target_with_recommendation(
-                entry.path(),
+                dir,
                 Text::new(*zh, *en),
                 CategoryId::PackageCache,
                 false,
             ));
         } else {
             t.push(target_with_recommendation(
-                entry.path(),
+                dir,
                 format!("~/.cache/{name}"),
                 CategoryId::UserTemp,
                 false,
@@ -639,6 +663,47 @@ mod tests {
             recommended("example.freshapp"),
             Some(false),
             "刚下完的更新包必须仍然展示，但不能预选"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/.cache/<tool>` 命中 Chromium 数据目录时只收叶子。
+    ///
+    /// 实测案例：`~/.cache/chrome-devtools-mcp` 整个 228 MB，可重建的只有
+    /// 85 MB，剩下是那个浏览器 Profile 本体（Cookies / Login Data / DIPS）。
+    /// 整目录入表是拿登录态换空间，整条只展示不勾选又等于缓存永远清不掉。
+    #[test]
+    fn home_cache_chromium_profile_yields_leaves_not_the_root() {
+        let root = crate::core::testing::fixture("qc_home_cache_mcp");
+        let tool = root.join(".cache/chrome-devtools-mcp");
+        let profile = tool.join("chrome-profile/Default");
+        for leaf in ["Cache", "Code Cache", "GPUCache"] {
+            std::fs::create_dir_all(profile.join(leaf)).unwrap();
+            std::fs::write(profile.join(leaf).join("data"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(profile.join("Cookies")).unwrap();
+        std::fs::create_dir_all(tool.join("chrome-profile/IndexedDB")).unwrap();
+
+        let mut targets = Vec::new();
+        push_home_cache_targets(&mut targets, &root);
+        let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
+
+        assert_eq!(targets.len(), 3, "{paths:?}");
+        assert!(targets.iter().all(|t| t.category == CategoryId::UserCache));
+        assert!(targets.iter().all(|t| t.recommended), "缓存叶子该预选");
+        assert!(paths.contains(&&profile.join("Cache")), "{paths:?}");
+        for forbidden in [tool.clone(), tool.join("chrome-profile"), profile.clone()] {
+            assert!(
+                !paths.contains(&&forbidden),
+                "{:?} 是 Profile 本体，不能入表",
+                forbidden
+            );
+        }
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.ends_with("Cookies") || p.ends_with("IndexedDB")),
+            "登录态不能入表: {paths:?}"
         );
         let _ = std::fs::remove_dir_all(root);
     }

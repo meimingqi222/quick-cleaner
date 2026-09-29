@@ -594,6 +594,7 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                     confidence: conf,
                     source: ResidualSource::Shortcut,
                     identity: crate::core::model::capture_identity(p),
+                    owner_bundle_id: None,
                 });
             }
         }
@@ -699,6 +700,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                     },
                     source: ResidualSource::StartupEntry,
                     identity: None,
+                    owner_bundle_id: None,
                 });
             }
         }
@@ -1117,6 +1119,7 @@ fn scan_scheduled_tasks(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             },
             source: ResidualSource::ScheduledTask,
             identity: None,
+            owner_bundle_id: None,
         });
     }
 }
@@ -1262,6 +1265,7 @@ fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source
         confidence: conf,
         source,
         identity,
+        owner_bundle_id: None,
     });
 }
 

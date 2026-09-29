@@ -94,26 +94,29 @@ fn main() {
                     true
                 });
 
-                cx.new(|cx| {
-                    let mut root = Root::new(cx);
-                    // macOS 上若需要显示完全磁盘访问权限引导，先不自动扫描——
-                    // 否则扫描会立刻访问 ~/Library/Caches、Safari 缓存等受保护
-                    // 目录，在用户还没决定是否授权前就弹出一堆 TCC 权限窗口。
-                    // 引导弹窗里的「检查权限」或「稍后」会负责触发首次扫描。
-                    #[cfg(target_os = "macos")]
-                    if !root.show_fda_onboarding {
-                        root.start_scan(cx);
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        root.start_scan(cx);
-                    }
-                    // 软件列表扫描主要读 /Applications，不触发 TCC，可安全启动
-                    root.start_apps_scan(cx);
-                    // 发行安装才检查 GitHub；开发构建会在门禁处直接返回。
-                    root.start_update_scheduler(cx);
-                    root
+                let root = cx.new(Root::new);
+                let startup = root.clone();
+                // 先返回根视图，让窗口获得绘制机会；启动任务随后异步安排。
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                    startup
+                        .update(cx, |root, cx| {
+                            // FDA 引导由弹窗按钮触发首次扫描。
+                            #[cfg(target_os = "macos")]
+                            if !root.show_fda_onboarding {
+                                root.start_scan(cx);
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            root.start_scan(cx);
+                            root.start_apps_scan(cx);
+                            root.start_update_scheduler(cx);
+                        })
+                        .ok();
                 })
+                .detach();
+                root
             },
         )
         .unwrap();

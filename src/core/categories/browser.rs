@@ -167,23 +167,55 @@ pub(super) fn push_chromium_browser_targets(
     }
 }
 
+/// Chromium 系浏览器在 `~/Library/Application Support` 下的根目录：
+/// `(相对路径, 显示名)`。
+///
+/// 抽成常量是因为它现在有两个用途：这里逐浏览器产出缓存目标，
+/// `dev::push_chromium_app_caches` 则要靠它**跳过**这些目录——两边认的是
+/// 同一份事实，靠各自的名单对不上就是体积双算。
+///
+/// 不在 macOS 下也编译：跳过名单是纯字符串比较，跨平台共用一个判断比
+/// 写两个 `cfg` 分支靠谱（Windows 上浏览器的 userData 在 `%LOCALAPPDATA%`，
+/// 本就不在这张表覆盖的目录里，多比一次无害）。
+pub(super) const CHROMIUM_BROWSERS: &[(&str, &str)] = &[
+    ("Google/Chrome", "Chrome"),
+    ("Arc", "Arc"),
+    ("BraveSoftware/Brave-Browser", "Brave"),
+    ("Microsoft Edge", "Edge"),
+    ("Vivaldi", "Vivaldi"),
+    ("Opera", "Opera"),
+];
+
+/// `~/Library/Application Support` 的顶层目录是否整体由浏览器规则认领。
+/// `Google/Chrome` 只认领 Chrome，不能把 Google 的其他孩子一起跳过。
+pub(super) fn owns_app_support_dir(name: &str) -> bool {
+    CHROMIUM_BROWSERS.iter().any(|(dir, _)| *dir == name)
+}
+
+pub(super) fn claimed_browser_child(parent: &str, child: &str) -> bool {
+    CHROMIUM_BROWSERS.iter().any(|(dir, _)| {
+        dir.split_once('/')
+            .is_some_and(|(head, tail)| head == parent && tail == child)
+    })
+}
+
+pub(super) fn contains_claimed_browser_child(parent: &str) -> bool {
+    CHROMIUM_BROWSERS
+        .iter()
+        .any(|(dir, _)| dir.split_once('/').is_some_and(|(head, _)| head == parent))
+}
+
 /// Chromium 系浏览器在 `~/Library/Application Support` 下的缓存子目录。
 ///
 /// Chrome / Arc / Brave / Edge 等都基于 Chromium，缓存布局一致：
 /// `<UserDataDir>/<Profile>/Code Cache`、`GPUCache`、着色器缓存等。
 /// 这些不在 `~/Library/Caches` 下，需要单独发现。
+///
+/// 通用的 Chromium 缓存叶子识别在 `categories::chromium`；浏览器单独留一条
+/// 是因为这里多一步「`Crashpad/completed`」的细分——只收已完成的崩溃报告，
+/// 不收可能正在写的 `pending/`。
 #[cfg(target_os = "macos")]
 pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_support: &Path) {
-    // Chromium 系浏览器的根目录映射：(目录名, 显示名)
-    let chromium_browsers: &[(&str, &str)] = &[
-        ("Google/Chrome", "Chrome"),
-        ("Arc", "Arc"),
-        ("BraveSoftware/Brave-Browser", "Brave"),
-        ("Microsoft Edge", "Edge"),
-        ("Vivaldi", "Vivaldi"),
-        ("Opera", "Opera"),
-    ];
-
     // 每个 profile 下的缓存子目录
     let cache_subdirs: &[&str] = &[
         "Code Cache",
@@ -194,7 +226,7 @@ pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_suppo
         "ShaderCache",
     ];
 
-    for (dir, name) in chromium_browsers {
+    for (dir, name) in CHROMIUM_BROWSERS {
         let root = app_support.join(dir);
         if !root.is_dir() {
             continue;

@@ -442,18 +442,29 @@ fn delete_sqlite_family(members: Vec<(PathBuf, u64)>, p: &CleanProgress) -> usiz
         crate::core::safety::is_sqlite_companion_name(name)
     });
 
-    // 主库和伴随文件同时存在就是当前活库判据。macOS/Unix 允许 unlink
-    // 正被打开的文件，因此不能指望 remove_file 失败替我们挡住：递归到
-    // 嵌套目录时 clean_path 的顶层目录检查看不到这一组，必须在真正删除
-    // 每个家族的位置再次 fail closed。
+    // 主库和伴随文件同时存在是**活库形状**。macOS/Unix 允许 unlink 正被
+    // 打开的文件，因此不能指望 remove_file 失败替我们挡住：递归到嵌套目录
+    // 时 clean_path 的顶层目录检查看不到这一组，必须在真正删除每个家族的
+    // 位置再次 fail closed。
+    //
+    // 但形状本身不足以判死：崩溃/强杀会留下伴随文件（本机
+    // `~/Library/Caches/ms-playwright` 里躺着 4 月的 `-journal`），按形状
+    // 无条件拒删会让这些目录永远清不掉。所以这里问的是
+    // [`crate::core::safety::is_live_database`]——形状可疑**且**不能证明是
+    // 崩溃残留。与 `clean_path` 的目录级闸门同源，不另写一套判据。
     if !companions.is_empty() && !main.is_empty() {
-        for (path, _) in companions.iter().chain(main.iter()) {
-            record_fail_reason(path, FailReason::InUse);
-            note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
+        let live = main
+            .first()
+            .is_some_and(|(path, _)| crate::core::safety::is_live_database(path));
+        if live {
+            for (path, _) in companions.iter().chain(main.iter()) {
+                record_fail_reason(path, FailReason::InUse);
+                note_delete_failure(path, &LIVE_DATABASE_REFUSAL);
+            }
+            let refused = companions.len() + main.len();
+            p.failed.fetch_add(refused as u64, Ordering::Relaxed);
+            return refused;
         }
-        let blocked = companions.len() + main.len();
-        p.failed.fetch_add(blocked as u64, Ordering::Relaxed);
-        return blocked;
     }
 
     let mut undeleted = 0usize;
@@ -754,7 +765,7 @@ static DELETE_FAILURES_LOGGED: std::sync::atomic::AtomicUsize =
 /// 文件同时存在」这个活连接证据；出路是先彻底退出对应应用。实测教训
 /// （iStat Menus 残留）：只说「拒绝删除」，用户会把它当权限问题盲目
 /// 重试五轮——真正卡住的是 launchd KeepAlive 代理把进程秒拉起。
-pub(crate) const LIVE_DATABASE_REFUSAL: &str = "命中活数据库保护：目标里有正在使用的数据库文件（主库与事务伴随文件同时存在），对应应用或其后台代理可能仍在运行——先彻底退出该应用（含菜单栏常驻与后台代理）再清理";
+pub(crate) const LIVE_DATABASE_REFUSAL: &str = "命中活数据库保护：目标里的数据库文件此刻仍被占用，或最近一小时内还被写过（主库与事务伴随文件同时存在）——先彻底退出该应用（含菜单栏常驻与后台代理）再清理；应用确实已经退出的话，稍后重试即可";
 
 /// 清理单个路径本身（连同其内容）。
 ///
@@ -2128,6 +2139,56 @@ mod tests {
         assert!(!db.exists());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 崩溃残留的活库形状现在真的能删掉。
+    ///
+    /// 实测背景：`~/Library/Caches/ms-playwright`（1.6 GB）的 7 个
+    /// `mcp-chrome-*` 目录每个顶层都躺着一对 `first_party_sets.db` +
+    /// `-journal`（4 月的，chrome 实例半年没跑过），于是整个目录每次都在
+    /// 闸门被拒、日志还让用户「先退出应用」——而应用根本不在。
+    #[test]
+    fn clean_path_allows_stale_live_database_shapes() {
+        let base = crate::core::testing::fixture("qc_clean_path_stale_db");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db = base.join("first_party_sets.db");
+        let journal = base.join("first_party_sets.db-journal");
+        std::fs::write(&db, b"x").unwrap();
+        std::fs::write(&journal, b"").unwrap();
+        for path in [&base, &db, &journal] {
+            crate::core::testing::backdate(path, 7200);
+        }
+
+        let p = CleanProgress::default();
+        assert_eq!(
+            clean_path(&base, &p),
+            CleanResult::Ok,
+            "陈旧（崩溃残留）的活库形状不该永久拦住清理"
+        );
+        assert!(!base.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 残缺但陈旧的嵌套家族要能随树删掉，而不是让整个目录保持失败。
+    #[test]
+    fn delete_tree_cleans_stale_nested_sqlite_family() {
+        let base = crate::core::testing::fixture("qc_delete_tree_stale_family");
+        let _ = std::fs::remove_dir_all(&base);
+        let nested = base.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(base.join("plain.txt"), b"x").unwrap();
+        let db = nested.join("app.db");
+        let wal = nested.join("app.db-wal");
+        std::fs::write(&db, b"x").unwrap();
+        std::fs::write(&wal, b"x").unwrap();
+        for path in [&db, &wal, &nested, &base] {
+            crate::core::testing::backdate(path, 7200);
+        }
+
+        let p = CleanProgress::new(4, 4);
+        assert_eq!(clean_path(&base, &p), CleanResult::Ok);
+        assert!(!base.exists(), "陈旧家族应当整棵删掉");
     }
 
     /// `delete_sqlite_family` 的排序：伴随文件排在主库前面，方便调用方按

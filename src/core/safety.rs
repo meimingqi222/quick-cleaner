@@ -446,16 +446,139 @@ pub fn holds_live_database(dir: &Path) -> bool {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return true;
     };
-    rd.flatten().any(|e| {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let lower = name.to_ascii_lowercase();
-        SQLITE_COMPANION_SUFFIXES
+    for entry in rd {
+        let Ok(entry) = entry else {
+            return true;
+        };
+        if is_live_database_marker_name(&entry.file_name().to_string_lossy()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 这个文件名算不算活库标记：SQLite 主库扩展名，或事务侧伴随文件。
+///
+/// 只是**形状**判据——顶层出现标记就为真，不代表真有连接握着数据库。
+/// 差别与理由见 [`looks_like_crash_leftover`]。
+fn is_live_database_marker_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SQLITE_COMPANION_SUFFIXES
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+        || SQLITE_MAIN_EXTENSIONS
             .iter()
-            .any(|suffix| lower.ends_with(suffix))
-            || SQLITE_MAIN_EXTENSIONS
-                .iter()
-                .any(|ext| lower.ends_with(ext))
+            .any(|ext| lower.ends_with(ext))
+}
+
+/// 活数据库家族「最近被写过」的判定窗口。
+///
+/// 见 [`looks_like_crash_leftover`]。取一小时，与仓库里其他「可能正在进行
+/// 中」的窗口（更新锁）一致：应用刚退出或刚写完的代价只是多等一会儿，
+/// 而不是永远清不掉。
+const LIVE_DB_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// 活库形状能不能被证伪成「崩溃残留」。
+///
+/// 这是活数据库保护的**第二条证据**。伴随文件（`-wal`/`-shm`/`-journal`）
+/// 在崩溃或强杀之后会留下来，**它们的存在只说明「曾经有连接」**；把形状
+/// 直接当成活连接，后果是目录永久清不掉，而且用户没有任何出路——本机实测
+/// `~/Library/Caches/ms-playwright`（1.6 GB）就因为顶层躺着 4 月的
+/// `first_party_sets.db-journal`，`clean_path` 每次都在闸门被拒，日志还让
+/// 用户「先彻底退出该应用」，而那个应用半年没跑过了。
+///
+/// 两条证据同时成立才算「崩溃残留」，缺一条维持拒删：
+///
+/// 1. **它自己和同家族的伴随文件最近都没被写过**（[`LIVE_DB_STALE_AFTER`]）。
+///    活跃连接一定会把 mtime 顶上去，这一条先查，因为它只是一次 stat。
+/// 2. **没有任何进程打开它**（`lsof` 干净地回答为空）。测不出——超时、调用
+///    失败、结果不完整——不算。这一条兜的是 mtime 兜不住的情形：只读连接
+///    可以握着数据库一小时不写。
+///
+/// 顺序很重要：先 stat 后 `lsof`。后者一次 0.3 秒量级，而「刚被写过」的
+/// 家族（最常见：应用刚退出）应该当场拒掉，不付这个代价。
+///
+/// `path` 是文件时看它同目录同家族的全部成员（主库 + 伴随文件），是目录时
+/// 看它**顶层**的活库标记文件，外加目录自己的 mtime。
+pub fn looks_like_crash_leftover(path: &Path) -> bool {
+    crash_leftover_with_probe(newest_family_write_is_stale(path), || {
+        crate::core::inuse::is_open(path)
     })
+}
+
+fn crash_leftover_with_probe(stale: bool, probe: impl FnOnce() -> Option<bool>) -> bool {
+    stale && crash_leftover_from_evidence(true, probe())
+}
+
+/// 判定本身（纯函数，便于单测「证据不足时维持拒删」）。
+///
+/// `open == Some(false)` 是唯一的放行分支：`Some(true)`（有人在用）和
+/// `None`（测不出）都必须当作活库。
+fn crash_leftover_from_evidence(stale: bool, open: Option<bool>) -> bool {
+    stale && open == Some(false)
+}
+
+/// 这个路径（含同家族文件）最近一次写入已经超过 [`LIVE_DB_STALE_AFTER`]。
+///
+/// 拿不到 mtime、或读不到目录内容时一律返回 `false`（当成「刚写过」）——
+/// 判不出就维持拒删，与整个模块的 fail closed 一致。
+fn newest_family_write_is_stale(path: &Path) -> bool {
+    let Ok(md) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    let mut newest = md.modified().ok();
+
+    if md.is_dir() {
+        // 目录自己的 mtime 只在增删目录项时变，数据库往里写不会动它，所以
+        // 必须把顶层那些活库标记文件的 mtime 一并算上。
+        let Ok(rd) = std::fs::read_dir(path) else {
+            return false;
+        };
+        for entry in rd {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            if !is_live_database_marker_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+                return false;
+            };
+            newest = Some(newest.map_or(modified, |current| current.max(modified)));
+        }
+    } else {
+        let Some(key) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(sqlite_family_key)
+        else {
+            return false;
+        };
+        let Some(dir) = path.parent() else {
+            return false;
+        };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in rd {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if sqlite_family_key(&name).as_deref() != Some(key.as_str()) {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+                return false;
+            };
+            newest = Some(newest.map_or(modified, |current| current.max(modified)));
+        }
+    }
+
+    let Some(newest) = newest else {
+        return false;
+    };
+    newest.elapsed().is_ok_and(|age| age >= LIVE_DB_STALE_AFTER)
 }
 
 /// 单个文件是不是「正被某个数据库连接使用」的家族成员：自己是 SQLite 主库
@@ -517,6 +640,9 @@ fn is_active_sqlite_member(path: &Path) -> bool {
 /// **fail closed**：`symlink_metadata` 读不出来，一律当作「可能是活库」
 /// 拒绝，不是放行——判不出不等于安全。
 ///
+/// 形状可疑之后还有一道**可证伪通道**：[`looks_like_crash_leftover`]。
+/// 没有它，一次崩溃留下的伴随文件会让目标永久清不掉（实测案例见那个函数）。
+///
 /// 只在 `cleaner::clean_path` 入口查一次，不在 `delete_tree` 的每一层递归
 /// 里重复套用目录级的宽松判据——那会连坐 iOS 设备备份里每个子目录顶层都
 /// 放着的 `Manifest.db`（同样没有 `-wal`/`-shm`），把整个 iOS 备份类目变成
@@ -534,9 +660,9 @@ pub fn is_live_database(path: &Path) -> bool {
                 // 这里没有真正的数据库内容可判。
                 false
             } else if ft.is_dir() {
-                holds_live_database(path)
+                holds_live_database(path) && !looks_like_crash_leftover(path)
             } else {
-                is_active_sqlite_member(path)
+                is_active_sqlite_member(path) && !looks_like_crash_leftover(path)
             }
         }
     }
@@ -1006,6 +1132,79 @@ mod tests {
             holds_live_database(&missing),
             "read_dir 读不出来应当 fail closed"
         );
+    }
+
+    /// 把文件的 mtime 回填成「`age` 秒之前」。
+    fn backdate(path: &Path, age_secs: u64) {
+        crate::core::testing::backdate(path, age_secs);
+    }
+
+    /// 崩溃残留下来的伴随文件不能永久拦住清理。
+    ///
+    /// 实测背景：`~/Library/Caches/ms-playwright`（1.6 GB）顶层躺着 4 月的
+    /// `first_party_sets.db-journal`，整个目录每次都在闸门被拒，而对应的
+    /// chrome 实例半年没跑过了——用户没有任何出路。
+    #[test]
+    fn stale_companion_files_do_not_block_forever() {
+        let dir = temp_test_dir("stale_pair");
+        let db = dir.join("first_party_sets.db");
+        let journal = dir.join("first_party_sets.db-journal");
+        std::fs::write(&db, b"x").unwrap();
+        std::fs::write(&journal, b"").unwrap();
+
+        // 刚写完：仍然是活库形状，继续拒删
+        assert!(is_live_database(&dir), "刚被写过的家族必须继续拒删");
+        assert!(is_live_database(&db));
+
+        // 回填成两小时前，且没有任何进程打开 → 崩溃残留，可以清
+        backdate(&dir, 7200);
+        backdate(&db, 7200);
+        backdate(&journal, 7200);
+        assert!(!is_live_database(&dir), "崩溃残留不该永久拦住清理");
+        assert!(!is_live_database(&db));
+        assert!(looks_like_crash_leftover(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_family_member_cannot_prove_staleness() {
+        let dir = temp_test_dir("unreadable_family_member");
+        let db = dir.join("app.db");
+        std::fs::write(&db, b"db").unwrap();
+        std::os::unix::fs::symlink("missing", dir.join("app.db-journal")).unwrap();
+        backdate(&db, 7200);
+        backdate(&dir, 7200);
+
+        assert!(!newest_family_write_is_stale(&db));
+        assert!(!newest_family_write_is_stale(&dir));
+        assert!(is_live_database(&dir));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 证据不足时必须维持「拒删」。
+    ///
+    /// 「有进程握着」这条证据在单测里造不出来（定点复检会排除自己这一整棵
+    /// 进程树，见 `platform::macos::inuse`），所以直接测判据的取值表：只有
+    /// 「陈旧且确定没人打开」才放行，`Some(true)` 与 `None` 都不行。
+    #[test]
+    fn crash_leftover_requires_both_evidence() {
+        assert!(crash_leftover_from_evidence(true, Some(false)));
+        assert!(
+            !crash_leftover_from_evidence(true, Some(true)),
+            "有进程握着就不能因为 mtime 旧而放行"
+        );
+        assert!(
+            !crash_leftover_from_evidence(true, None),
+            "测不出打开状态时必须 fail closed"
+        );
+        assert!(
+            !crash_leftover_from_evidence(false, Some(false)),
+            "刚写过就不能按崩溃残留处理"
+        );
+        assert!(!crash_leftover_with_probe(false, || panic!(
+            "新鲜文件不应启动 lsof"
+        )));
     }
 
     #[cfg(windows)]

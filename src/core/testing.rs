@@ -41,6 +41,23 @@ pub(crate) fn file_path(tag: &str) -> PathBuf {
     root.join(format!("{tag}_{}", std::process::id()))
 }
 
+/// 把路径的 mtime 回填成「`age_secs` 秒之前」。
+///
+/// 给带时间窗口的判据写测试用（陈旧 / 刚写过两条分支）。用 std 的
+/// `File::set_modified`，不引第三方 crate；目录用只读打开也能改（`futimens`
+/// 只看属主权限，与打开模式无关）。
+pub(crate) fn backdate(path: &Path, age_secs: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+    let file = if path.is_dir() {
+        std::fs::File::open(path)
+    } else {
+        std::fs::File::options().write(true).open(path)
+    }
+    .unwrap_or_else(|e| panic!("打开 {path:?} 回填 mtime 失败：{e}"));
+    file.set_modified(when)
+        .unwrap_or_else(|e| panic!("回填 {path:?} 的 mtime 失败：{e}"));
+}
+
 /// 删掉 `{tag}_<pid>` 形式、且那个 pid 已经不在的那些遗留夹具（目录或文件）。
 fn reclaim_stale(root: &Path, tag: &str) {
     let Ok(rd) = std::fs::read_dir(root) else {

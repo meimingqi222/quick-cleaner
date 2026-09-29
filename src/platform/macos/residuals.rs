@@ -1178,6 +1178,249 @@ fn list_system_extensions() -> Option<Vec<(String, String)>> {
     )))
 }
 
+// ---------------------------------------------------------------------------
+// 孤儿残留：应用已经不在，`~/Library` 里还留着东西
+// ---------------------------------------------------------------------------
+//
+// 上面那套扫描全都要先有一个 `InstalledApp`：列表来自 `/Applications` 一类
+// 目录里的 `.app`，卸载流程也从那里出发。于是「用户自己把 app 删了」（拖进
+// 废纸篓、用别家的清理工具、跑厂商自己的卸载器）之后，那些 app 的残留就
+// 再也没有入口被扫到——实测案例：`~/Library/Preferences/com.dbeaver.
+// application.plist` 和 `~/Library/HTTPStorages/com.dbeaver.product.enterprise`
+// 在 DBeaver 本体没了之后一直留着，而 CleanMyMac 的残留模块能扫到。
+//
+// 这一节走的是反过来的路：枚举目录项 → 名字里还原本 Bundle ID → 问
+// Spotlight「这个 ID 对应的 app 还在吗」。方向定死了两条底线：
+//
+// - **只认名字本身就是 Bundle ID 的项**。按应用显示名去猜（`Caches/Qoder`）
+//   看起来能多报一倍，但那是模糊匹配，判错就是删掉活应用的数据。
+// - **测不出就不列、不删**，理由见 [`installed_bundle_ids`]。
+
+/// 孤儿扫描的目录白名单：`(相对 ~/Library 的路径, 来源)`。
+///
+/// 已安装应用的枚举无法保证覆盖未被 Spotlight 索引的自定义安装位置，
+/// 因此孤儿条目一律不预选，缓存和日志也只能由用户逐项选择。
+///
+/// **故意不收的三处**：`Containers`、`Group Containers`、`Application
+/// Scripts`。它们是沙盒应用的用户数据本体（本地数据库、用户写的自动化
+/// 脚本），量大且风险集中，要先有一个「按应用分组勾选」的界面才值得做。
+/// 少收的位置只让人漏清，多收的位置会删掉活人的数据。
+const ORPHAN_ROOTS: &[(&str, ResidualSource)] = &[
+    ("Caches", ResidualSource::CacheDir),
+    ("HTTPStorages", ResidualSource::Other),
+    ("Logs", ResidualSource::LogDir),
+    ("Saved Application State", ResidualSource::Other),
+    ("WebKit", ResidualSource::CacheDir),
+    ("Preferences", ResidualSource::PreferenceFile),
+    ("Preferences/ByHost", ResidualSource::PreferenceFile),
+    ("Application Support", ResidualSource::AppSupportDir),
+    ("LaunchAgents", ResidualSource::LaunchAgent),
+];
+
+/// 目录项名字里可以剥掉的扩展名后缀（全小写比较）。
+const ID_FILE_SUFFIXES: &[&str] = &[
+    ".plist",
+    ".binarycookies",
+    ".savedstate",
+    ".sfl2",
+    ".sfl3",
+    ".sfl4",
+];
+
+/// 扫描机器上所有「本体已不在、`~/Library` 里还留着东西」的软件。
+///
+/// 返回 `None` = **测不出**（Spotlight 索引不可用、`mdfind`/`mdls` 超时），
+/// 调用方要如实告诉用户「这次查不了」，不能把空结果当成「很干净」。
+pub fn scan_orphan_residuals() -> Option<ResidualScanResult> {
+    let home = super::user_env::user_home()?;
+    let installed = super::apps::installed_bundle_ids()?;
+    let installed_lower = lowercased(&installed);
+    Some(scan_orphan_residuals_in(&home, &installed_lower))
+}
+
+/// 扫描主体的可测版本：`installed_lower` 必须是已装 Bundle ID 的全小写集合。
+fn scan_orphan_residuals_in(
+    home: &Path,
+    installed_lower: &std::collections::HashSet<String>,
+) -> ResidualScanResult {
+    let library = home.join("Library");
+    let mut items = Vec::new();
+
+    for (subdir, source) in ORPHAN_ROOTS {
+        let Ok(entries) = std::fs::read_dir(library.join(subdir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(id) = bundle_id_from_entry_name(&name.to_string_lossy()) else {
+                continue;
+            };
+            if is_apple_owned_id(&id) || !is_orphan_id(&id, installed_lower) {
+                continue;
+            }
+            let path = entry.path();
+            let size = super::apps::dir_size(&path);
+            let kind = if path.is_dir() {
+                ResidualKind::Directory(path, size)
+            } else {
+                ResidualKind::File(path, size)
+            };
+            items.push(ResidualItem::possible(kind, *source).for_bundle(&id));
+        }
+    }
+
+    // 按体积降序：孤儿少的时候顺序无所谓，孤儿多的时候用户只看得进去前十行。
+    items.sort_by_key(|item| std::cmp::Reverse(item.size()));
+    let total_file_size = items.iter().map(ResidualItem::size).sum();
+
+    ResidualScanResult {
+        app_name: String::new(),
+        scope: crate::core::apps::ResidualScope::OrphanLeftovers,
+        app_id: String::new(),
+        items,
+        total_file_size,
+        occupancy: Default::default(),
+    }
+}
+
+/// 选中的孤儿残留，它们的主人是不是都已经确认不在这台机器上了。
+///
+/// 这是孤儿清理的最后一道判据，对应按应用扫描里的
+/// [`super::apps::bundle_is_still_installed`]。两个地方不一样：
+///
+/// - 一次要复核**多个**主人，所以用集合而不是逐项 fork `mdfind`。
+/// - 集合是**此刻现取**的，不复用扫描时那份：扫描到用户点确认之间可能过了
+///   很久，期间软件完全可能被重新装上。
+///
+/// 任一环节测不出（`installed_bundle_ids` 返回 `None`）、任何一个主人还在、
+/// 或者某条根本没有主人可查，全部返回 `false`——一次不删总比删错强。
+pub fn orphan_owners_all_gone(items: &[ResidualItem]) -> bool {
+    if items.is_empty() {
+        // 空选择不发子进程，也不给「都确认过了」这种空真结论。
+        return false;
+    }
+    let Some(installed) = super::apps::installed_bundle_ids() else {
+        return false;
+    };
+    orphan_owners_all_gone_in(items, &lowercased(&installed))
+}
+
+fn orphan_owners_all_gone_in(
+    items: &[ResidualItem],
+    installed_lower: &std::collections::HashSet<String>,
+) -> bool {
+    if items.is_empty() {
+        return false;
+    }
+    items.iter().all(|item| {
+        item.owner()
+            .is_some_and(|id| is_orphan_id(id, installed_lower))
+    })
+}
+
+fn lowercased(ids: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+    ids.iter().map(|id| id.to_ascii_lowercase()).collect()
+}
+
+/// 目录项名字里还原本 Bundle ID。认不出来就返回 `None`。
+///
+/// 认的名字形状只有两种：`<id>`，和 `<id>` 后面跟一个已知扩展名
+/// （`com.x.y.plist`、`com.x.y.savedState`），中间可以再夹一个本机 UUID
+/// （`Preferences/ByHost/com.x.y.<uuid>.plist`）。
+fn bundle_id_from_entry_name(name: &str) -> Option<String> {
+    if name.starts_with('.') {
+        // `.com.raycast.macos.backups`、`.wrangler` 这类隐藏项是应用自己的
+        // 私有文件，不是以 Bundle ID 命名的残留。
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    let stem = ID_FILE_SUFFIXES
+        .iter()
+        .find_map(|suffix| {
+            lower
+                .ends_with(suffix)
+                .then(|| &name[..name.len() - suffix.len()])
+        })
+        .unwrap_or(name);
+    let stem = match stem.rsplit_once('.') {
+        Some((head, tail)) if is_uuid_like(&tail.to_ascii_lowercase()) => head,
+        _ => stem,
+    };
+    (valid_bundle_id(stem) && looks_like_bundle_id(stem)).then(|| stem.to_ascii_lowercase())
+}
+
+/// 名字看起来像不像一个反向域名（`com.vendor.Product`）。
+///
+/// 这条判据是「宁可漏、不可错」的取舍：`~/Library` 里带点的普通文件名多得是
+/// （`Logs/warp.log`、`Application Support/default.store`、
+/// `WebKit/go-augment-hacker-darwin-universal-v2.1.0`），它们全都「不在场」，
+/// 不做形状检查就会全部变成「孤儿残留」。
+///
+/// 要求：首段像顶级域名（2–8 个纯字母），至少三段；两段的 ID
+/// （`cenmrev.V2RayX`）确实存在，但只在第二段带大写字母时才收——反向域名的
+/// 大小写习惯让这条对真 ID 友好，对 `warp.log` 这类文件名不友好。
+fn looks_like_bundle_id(id: &str) -> bool {
+    let parts: Vec<&str> = id.split('.').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let tld = parts[0];
+    if !(2..=8).contains(&tld.len()) || !tld.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    parts.len() > 2 || parts[1].bytes().any(|b| b.is_ascii_uppercase())
+}
+
+/// `com.apple.*` 之类的系统身份一律不算孤儿。
+///
+/// Apple 的系统组件（`com.apple.akd`、`com.apple.Spotlight` 这类守护进程和
+/// 服务）大多**没有**对应的 `.app`，「Spotlight 里查不到」对它们恒为真。
+/// 少了这条，一机器 Apple 服务的状态目录会被报成孤儿——而它们全都属于还在
+/// 运行的系统。中间段也认（`systemgroup.com.apple.*`）。
+fn is_apple_owned_id(id: &str) -> bool {
+    id.starts_with("com.apple.") || id.contains(".apple.") || id.ends_with(".apple")
+}
+
+/// 这个名字像 Bundle ID 的东西，主人是不是真的已经不在这台机器上了。
+///
+/// 三层判据，全部朝「宁可漏报」的方向倒：
+///
+/// 1. 这个 ID 自己不在场；
+/// 2. 它的任一层父前缀不在场——`com.docker.vmnetd` 是 **Docker 的**守护
+///    进程名，Docker 的 `.app` 叫 `com.docker.docker`，只比自己不在场就会把
+///    活着的 Docker 的 launchd plist 判成孤儿；
+/// 3. 没有在场 ID 以它为前缀——`Caches/com.google` 之于 `com.google.Chrome`
+///    是同一个道理，只是方向反过来。
+///
+/// 代价是「同厂商还有别的产品装着」时一律漏报：Photoshop 在，Adobe 的一堆
+/// 孤儿就都不报。这个方向的误差让人漏清，反方向的误差是删掉活应用的数据。
+/// `id` 与 `installed_lower` 都已小写：大小写敏感卷上历史版本会留下
+/// `ORG.CINDORI.SENSEI` 与 `org.cindori.Sensei` 两种写法，只比一个就把
+/// 活着的软件当成已卸载。
+fn is_orphan_id(id: &str, installed_lower: &std::collections::HashSet<String>) -> bool {
+    if installed_lower.contains(id) {
+        return false;
+    }
+    let parts: Vec<&str> = id.split('.').collect();
+    for depth in 2..parts.len() {
+        let prefix = parts[..depth].join(".");
+        if installed_lower.contains(&prefix) {
+            return false;
+        }
+        let family = format!("{prefix}.");
+        if installed_lower
+            .iter()
+            .any(|known| known.starts_with(&family))
+        {
+            return false;
+        }
+    }
+    let own_family = format!("{id}.");
+    !installed_lower
+        .iter()
+        .any(|known| known.starts_with(&own_family))
+}
+
 /// 把一组 Bundle ID 折算成去重后的厂商前缀。
 fn vendor_prefixes(bundle_ids: &[String]) -> Vec<String> {
     let mut prefixes: Vec<String> = Vec::new();
@@ -2211,6 +2454,272 @@ mod tests {
             "procs={:?} labels={:?}",
             none.processes,
             none.launchd_labels
+        );
+    }
+
+    // ---- 孤儿残留（已卸载软件）----
+
+    fn installed(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|id| id.to_ascii_lowercase()).collect()
+    }
+
+    #[test]
+    fn orphan_entry_name_parser_accepts_real_ids_and_rejects_lookalikes() {
+        // 真 ID：目录名、plist、Saved State、ByHost 里的 UUID 三种写法
+        assert_eq!(
+            bundle_id_from_entry_name("com.dbeaver.product.enterprise").as_deref(),
+            Some("com.dbeaver.product.enterprise")
+        );
+        assert_eq!(
+            bundle_id_from_entry_name("com.dbeaver.application.plist").as_deref(),
+            Some("com.dbeaver.application")
+        );
+        assert_eq!(
+            bundle_id_from_entry_name("org.cindori.Sensei.savedState").as_deref(),
+            Some("org.cindori.sensei")
+        );
+        assert_eq!(
+            bundle_id_from_entry_name("com.foo.Bar.5E9D1F0A-1B2C-3D4E-5F60-123456789ABC.plist")
+                .as_deref(),
+            Some("com.foo.bar")
+        );
+        // 大小写不同的历史写法要归一化，否则「还装着」的判据会漏
+        assert_eq!(
+            bundle_id_from_entry_name("ORG.CINDORI.SENSEI").as_deref(),
+            Some("org.cindori.sensei")
+        );
+        // 两段 ID 只在第二段带大写字母时才认
+        assert_eq!(
+            bundle_id_from_entry_name("cenmrev.V2RayX").as_deref(),
+            Some("cenmrev.v2rayx")
+        );
+
+        // 文件名同形噪声：全部都不是 Bundle ID
+        for noise in [
+            "warp.log",
+            "default.store",
+            ".com.raycast.macos.backups",
+            ".wrangler",
+            "go-augment-hacker-darwin-universal-v2.1.0",
+            "com.tencent.mac.marvis/icon_cache",
+            "MarvisAgent",
+            "ms-playwright",
+            "",
+        ] {
+            assert_eq!(
+                bundle_id_from_entry_name(noise),
+                None,
+                "{noise} 不该被当成 Bundle ID"
+            );
+        }
+
+        // Apple 自己的身份形状上是合法 ID，形状判据放行，由专门的一条拦下来。
+        assert_eq!(
+            bundle_id_from_entry_name("com.apple.sharedfilelist").as_deref(),
+            Some("com.apple.sharedfilelist")
+        );
+        assert!(is_apple_owned_id("com.apple.sharedfilelist"));
+        assert!(is_apple_owned_id("systemgroup.com.apple.notes"));
+        assert!(is_apple_owned_id("com.apple"));
+        assert!(!is_apple_owned_id("com.applepie.good"));
+        assert!(!is_apple_owned_id("com.dbeaver.application"));
+    }
+
+    #[test]
+    fn orphan_id_rule_keeps_live_owners_and_their_families() {
+        let held = installed(&[
+            "com.docker.docker",
+            "com.google.Chrome",
+            "cn.trae.app",
+            "org.cindori.Sensei",
+        ]);
+        // 精确在场
+        assert!(!is_orphan_id("com.docker.docker", &held));
+        // 父前缀是活着的兄弟产品：`com.docker.vmnetd` 是 Docker 自己的守护进程
+        assert!(!is_orphan_id("com.docker.vmnetd", &held));
+        // 反向：候选自己是活应用的前缀（`Caches/com.google`）
+        assert!(!is_orphan_id("com.google", &held));
+        // 辅助进程 ID：`cn.trae.app.helper` 的主人就是 `cn.trae.app`
+        assert!(!is_orphan_id("cn.trae.app.helper", &held));
+        assert!(!is_orphan_id("cn.trae.app.helper.gpu", &held));
+        // 大小写不同但确实是同一个软件
+        assert!(!is_orphan_id("org.cindori.sensei", &held));
+        // 厂商同姓但谁也认不下来：宁可漏报
+        assert!(!is_orphan_id("com.google.keystone.agent", &held));
+        // 真的没人了
+        assert!(is_orphan_id("com.dbeaver.application", &held));
+        assert!(is_orphan_id("com.dbeaver.product.enterprise", &held));
+    }
+
+    #[test]
+    fn orphan_scan_finds_removed_apps_and_skips_live_ones() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-orphans-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        let library = home.join("Library");
+
+        // 已卸载的软件：HTTP 存储、日志、偏好 plist
+        std::fs::create_dir_all(library.join("HTTPStorages/com.gone.product.enterprise")).unwrap();
+        std::fs::write(
+            library.join("HTTPStorages/com.gone.product.enterprise/localstorage"),
+            b"12345",
+        )
+        .unwrap();
+        std::fs::create_dir_all(library.join("Logs/com.gone.Widget")).unwrap();
+        std::fs::create_dir_all(
+            library.join("Saved Application State/com.gone.application.savedState"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(library.join("WebKit/com.gone.browser")).unwrap();
+        std::fs::create_dir_all(library.join("Preferences")).unwrap();
+        std::fs::write(
+            library.join("Preferences/com.gone.application.plist"),
+            b"plist",
+        )
+        .unwrap();
+        // 还装着的软件（连同它的辅助进程）不能被收
+        std::fs::write(library.join("Preferences/com.alive.Vendor.plist"), b"live").unwrap();
+        std::fs::create_dir_all(library.join("HTTPStorages/com.alive.Vendor.helper")).unwrap();
+        // 同形噪声
+        std::fs::create_dir_all(library.join("Caches")).unwrap();
+        std::fs::write(library.join("Caches/warp.log"), b"noise").unwrap();
+        // Apple 自己的服务身份
+        std::fs::create_dir_all(library.join("HTTPStorages/com.apple.akd")).unwrap();
+
+        let installed = installed(&["com.alive.Vendor"]);
+        let result = scan_orphan_residuals_in(&home, &installed);
+
+        let names: Vec<String> = result
+            .items
+            .iter()
+            .map(|item| match &item.kind {
+                ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                    p.file_name().unwrap().to_string_lossy().into_owned()
+                }
+                _ => String::new(),
+            })
+            .collect();
+        assert!(
+            names.contains(&"com.gone.product.enterprise".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"com.gone.application.plist".to_string()),
+            "{names:?}"
+        );
+        assert!(names.contains(&"com.gone.Widget".to_string()), "{names:?}");
+        assert!(names.contains(&"com.gone.application.savedState".to_string()));
+        assert!(names.contains(&"com.gone.browser".to_string()));
+        assert!(
+            !names.iter().any(|n| n.starts_with("com.alive")),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.starts_with("com.apple")),
+            "{names:?}"
+        );
+        assert!(!names.contains(&"warp.log".to_string()), "{names:?}");
+        assert_eq!(names.len(), 5, "{names:?}");
+
+        // 安装位置的枚举无法证明完整，孤儿缓存和日志也不自动勾选。
+        let certain_of = |name: &str| {
+            result
+                .items
+                .iter()
+                .find(|item| match &item.kind {
+                    ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                        p.file_name().unwrap().to_string_lossy() == name
+                    }
+                    _ => false,
+                })
+                .map(|item| item.confidence.is_certain())
+        };
+        assert_eq!(certain_of("com.gone.product.enterprise"), Some(false));
+        assert_eq!(certain_of("com.gone.Widget"), Some(false));
+        assert_eq!(certain_of("com.gone.application.plist"), Some(false));
+        assert_eq!(certain_of("com.gone.application.savedState"), Some(false));
+        assert_eq!(certain_of("com.gone.browser"), Some(false));
+        assert!(result.default_selection().is_empty());
+
+        // 每条都带着自己的主人，删除前才复核得了
+        assert!(result.items.iter().all(|item| item.owner()
+            == Some("com.gone.product.enterprise")
+            || item.owner() == Some("com.gone.widget")
+            || item.owner() == Some("com.gone.application")
+            || item.owner() == Some("com.gone.browser")));
+        assert_eq!(
+            result.scope,
+            crate::core::apps::ResidualScope::OrphanLeftovers
+        );
+        assert!(result.app_name.is_empty(), "孤儿扫描没有单一主人");
+        // 体积按降序，总量与逐项之和一致（具体字节数走分配块计口径，
+        // 小文件会向上取整到 4 KiB，所以不断言绝对值）
+        assert!(result.total_file_size > 0);
+        assert_eq!(
+            result.total_file_size,
+            result.items.iter().map(ResidualItem::size).sum::<u64>()
+        );
+        assert!(result
+            .items
+            .windows(2)
+            .all(|pair| pair[0].size() >= pair[1].size()));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn orphan_gate_refuses_when_any_owner_is_back_or_unknown() {
+        let item = |name: &str, owner: Option<&str>| {
+            let path = PathBuf::from("/tmp").join(name);
+            let base = ResidualItem::certain(ResidualKind::File(path, 1), ResidualSource::Other);
+            match owner {
+                Some(id) => base.for_bundle(id),
+                None => base,
+            }
+        };
+        let held = installed(&["com.alive.Vendor"]);
+
+        // 主人都不在 → 放行
+        assert!(orphan_owners_all_gone_in(
+            &[item("com.gone.a.plist", Some("com.gone.a"))],
+            &held
+        ));
+        // 其中一个主人被装回来了 → 整批不删
+        assert!(!orphan_owners_all_gone_in(
+            &[
+                item("com.gone.a.plist", Some("com.gone.a")),
+                item("com.alive.Vendor.plist", Some("com.alive.Vendor")),
+            ],
+            &held
+        ));
+        // 主人未知（模型里没记或记成了空串）→ 不许删
+        assert!(!orphan_owners_all_gone_in(
+            &[item("com.gone.a.plist", None)],
+            &held
+        ));
+        assert!(!orphan_owners_all_gone_in(
+            &[item("com.gone.a.plist", Some(""))],
+            &held
+        ));
+        // 空选择没有「都确认过了」这种说法
+        assert!(!orphan_owners_all_gone_in(&[], &held));
+        // 真实入口也要在空选择上拒删（不发子进程）
+        assert!(!orphan_owners_all_gone(&[]));
+    }
+
+    /// 按应用扫出来的结果必须带 `App` 范围：界面、清理闸门都按它选口径。
+    #[test]
+    fn app_scan_keeps_app_scope() {
+        let app = make_app("NonexistentApp12345", "com.nonexistent.app12345");
+        assert_eq!(
+            scan_residuals(&app).scope,
+            crate::core::apps::ResidualScope::App
         );
     }
 }
