@@ -96,6 +96,7 @@ pub struct Root {
     pub monitor: StatusState,
     /// 自动更新：GitHub Releases 检测、下载校验与安装交接。
     pub update: crate::ui::state::UpdateState,
+    pub rule_update: crate::ui::state::RuleUpdateState,
     /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
     /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
     /// 省掉 ~700MB 重复内存。
@@ -158,6 +159,7 @@ impl Root {
             show_exclusions: false,
 
             junk: JunkState {
+                rule_snapshot: crate::core::rules::snapshot(),
                 categories: Vec::new(),
                 scanned: false,
                 scanning: false,
@@ -191,6 +193,7 @@ impl Root {
             },
 
             residual: ResidualState {
+                uninstall_executions: Vec::new(),
                 result: None,
                 scanning: false,
                 task: None,
@@ -250,6 +253,7 @@ impl Root {
             monitor: StatusState::default(),
 
             update: crate::ui::state::UpdateState::default(),
+            rule_update: crate::ui::state::RuleUpdateState::default(),
 
             #[cfg(not(windows))]
             macos_root_index: None,

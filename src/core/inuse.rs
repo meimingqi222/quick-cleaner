@@ -109,10 +109,17 @@ pub fn spot_check(paths: &[PathBuf]) -> HashMap<PathBuf, SpotCheck> {
 /// 是把「一批」收成「一个可判定的三态」，给活数据库闸门用——它需要区分
 /// 「确实没人打开」和「查不出来」，而后者必须继续 fail closed。
 pub fn is_open(path: &Path) -> Option<bool> {
-    match spot_check(std::slice::from_ref(&path.to_path_buf())).get(path) {
-        Some(SpotCheck::Clear) => Some(false),
-        Some(SpotCheck::Busy) => Some(true),
-        _ => None,
+    #[cfg(windows)]
+    {
+        crate::platform::windows::inuse::is_open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        match spot_check(std::slice::from_ref(&path.to_path_buf())).get(path) {
+            Some(SpotCheck::Clear) => Some(false),
+            Some(SpotCheck::Busy) => Some(true),
+            _ => None,
+        }
     }
 }
 
@@ -172,6 +179,10 @@ mod tests {
         use crate::core::categories::CategoryId;
         use crate::core::scanner::ScanItem;
         let item = |p: &str| ScanItem {
+            plans: Vec::new(),
+            operation: crate::core::rules::Operation::Contents,
+            disposal: crate::core::cleaner::Disposal::Permanent,
+            rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(p),
             label: Text::same("x"),
             size: 1,

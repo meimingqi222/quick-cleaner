@@ -1,0 +1,171 @@
+id = "package-macos"
+version = 2
+platform = "macos"
+required = ["file", "owner"]
+
+# 整个 registry 一起清，不切到 registry/cache。删掉 cache 之后即使
+# registry/src 和 .cargo-ok 还在，cargo build --offline 仍会要求重新下载
+# .crate。registry 也可能含私有源，所以不预选。
+[[entries]]
+root = "home"
+path = ".cargo/registry"
+zh = "cargo 缓存"
+en = "cargo cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "home"
+path = ".npm/_cacache"
+zh = "npm 缓存"
+en = "npm cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".rustup/downloads"
+zh = "rustup 缓存"
+en = "rustup cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# 必须正好是 go/pkg/mod。cleaner 靠这个后缀路由到 go clean -modcache，
+# 指到子目录会退回裸删。私有模块也可能只在这里有一份，所以不预选。
+[[entries]]
+root = "home"
+path = "go/pkg/mod"
+zh = "go 缓存"
+en = "go cache"
+category = "PackageCache"
+operation = "go"
+disposal = "permanent"
+recommended = false
+
+# 私有仓构件的唯一副本，不预选。
+[[entries]]
+root = "home"
+path = ".gradle/caches"
+zh = "Gradle 缓存"
+en = "Gradle cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+# pnpm store 根随安装方式而变。只登记其中一个会让另一个完全不可见。
+[[entries]]
+root = "home"
+path = "Library/pnpm/store"
+zh = "pnpm store (Library)"
+en = "pnpm store (Library)"
+category = "PackageCache"
+operation = "pnpm"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".pnpm-store"
+zh = "pnpm store"
+en = "pnpm store"
+category = "PackageCache"
+operation = "pnpm"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/Homebrew"
+zh = "Homebrew 缓存"
+en = "Homebrew cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/bun"
+zh = "Bun 缓存"
+en = "Bun cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/go-build"
+zh = "Go 构建缓存"
+en = "Go build cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/go"
+zh = "Go 工具缓存"
+en = "Go tool cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/gopls"
+zh = "gopls 缓存"
+en = "gopls cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/goimports"
+zh = "goimports 缓存"
+en = "goimports cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/node-gyp"
+zh = "node-gyp 缓存"
+en = "node-gyp cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/pip"
+zh = "pip 缓存"
+en = "pip cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "Library/Caches/typescript"
+zh = "TypeScript 缓存"
+en = "TypeScript cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true

@@ -1,5 +1,37 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=rules");
+    let mut paths: Vec<_> = std::fs::read_dir("rules")
+        .expect("rules directory")
+        .map(|entry| entry.expect("rule file").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    paths.sort();
+    let definitions: Vec<serde_json::Value> = paths
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path).expect("read rule");
+            let value: toml::Value = toml::from_str(&text).expect("parse rule TOML");
+            serde_json::to_value(value).expect("encode rule")
+        })
+        .collect();
+    let schema: u32 = std::fs::read_to_string("rules/schema-version")
+        .expect("read schema version")
+        .trim()
+        .parse()
+        .expect("numeric schema version");
+    let bundle = serde_json::json!({"schema":schema,"sequence":1,"rules":definitions});
+    let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+    std::fs::write(
+        output.join("rule_schema.rs"),
+        format!("pub const SCHEMA: u32 = {schema};\n"),
+    )
+    .expect("embed schema version");
+    std::fs::write(
+        output.join("rules.json"),
+        serde_json::to_vec(&bundle).unwrap(),
+    )
+    .expect("embed rules");
 
     #[cfg(target_os = "macos")]
     {

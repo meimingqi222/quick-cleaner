@@ -51,10 +51,18 @@ pub fn current_user_sid() -> Option<String> {
             return None;
         }
 
+        let sid = token_user_sid(token);
+        CloseHandle(token);
+        sid
+    }
+}
+
+/// The caller owns a valid token and must keep it open for the duration of this call.
+pub(super) unsafe fn token_user_sid(token: HANDLE) -> Option<String> {
+    unsafe {
         let mut size: DWORD = 0;
         let _ = GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut size);
         if size == 0 {
-            CloseHandle(token);
             return None;
         }
 
@@ -66,7 +74,6 @@ pub fn current_user_sid() -> Option<String> {
             size,
             &mut size,
         );
-        CloseHandle(token);
         if ok == 0 {
             return None;
         }

@@ -17,6 +17,7 @@
 //! | `get_volume_space` | 卷的总容量 / 可用容量 |
 //! | `list_installed_apps` | 已安装软件枚举 |
 //! | `run_uninstaller_and_wait` | 调用官方卸载程序并等待退出 |
+//! | `run_uninstaller_reported` | 保留成功与失败的能力步骤报告 |
 //! | `scan_residuals` / `verify_residuals` / `clean_residuals` | 卸载残留的采集、复核与清理 |
 //! | `reveal_in_explorer` | 在系统文件管理器中定位路径 |
 //! | `move_to_trash` | 把单个路径移入回收站/废纸篓（可还原） |
@@ -65,6 +66,8 @@ macro_rules! platform_contract {
             let _: fn(&VolumeId) -> Option<(u64, u64)> = get_volume_space;
             let _: fn(&AtomicBool) -> Vec<InstalledApp> = list_installed_apps;
             let _: fn(&InstalledApp) -> Result<(), String> = run_uninstaller_and_wait;
+            let _: fn(&InstalledApp) -> crate::core::apps::UninstallOutcome =
+                run_uninstaller_reported;
             let _: fn(&InstalledApp) -> ResidualScanResult = scan_residuals;
             // 残留扫描的进程占用探测：macOS 上活库删除失败的原因用户看不
             // 懂（闸门拒的，不是系统报错），必须在扫描时给出证据。Windows
@@ -197,6 +200,20 @@ pub use macos::{
 };
 #[cfg(target_os = "macos")]
 platform_contract!();
+
+/// Legacy native adapters keep their completion checks while typed adapters retain step evidence.
+pub fn run_uninstaller_reported(
+    app: &crate::core::apps::InstalledApp,
+) -> crate::core::apps::UninstallOutcome {
+    #[cfg(windows)]
+    if app.discovery.is_some() {
+        return windows::run_discovered_uninstaller_reported(app);
+    }
+    crate::core::apps::UninstallOutcome {
+        result: run_uninstaller_and_wait(app),
+        plan_executions: Vec::new(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

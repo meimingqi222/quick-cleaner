@@ -398,6 +398,12 @@ mod tests {
 
     fn clean_target(path: &str, remove_dir: bool) -> CleanTarget {
         CleanTarget {
+            plans: Vec::new(),
+            rule: None,
+            operation: crate::core::rules::Operation::classify(
+                std::path::Path::new(path),
+                remove_dir,
+            ),
             path: PathBuf::from(path),
             remove_dir,
             size_hint: None,

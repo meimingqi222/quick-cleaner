@@ -15,12 +15,15 @@ pub(super) fn discover_via_walk_roots(
     roots: &[(PathBuf, usize)],
     live: &AtomicBool,
 ) -> Vec<ScanItem> {
+    let snapshot = crate::core::rules::current();
     // 各根目录之间并行；每个根内部的递归也会继续分叉。
     let hits: Vec<Hit> = roots
         .par_iter()
         .flat_map_iter(|(root, max_depth)| {
             let mut out = Vec::new();
-            collect(root, 0, *max_depth, live, &mut out);
+            crate::core::rules::with_snapshot(snapshot.clone(), || {
+                collect(root, 0, *max_depth, live, &mut out)
+            });
             out
         })
         .collect();
@@ -37,7 +40,18 @@ pub(super) fn discover_via_walk_roots(
             // 可以忽略不计。
             let identity = crate::core::model::capture_identity(&hit.path)?;
             Some(ScanItem {
-                label: item_label(hit.marker, &hit.path),
+                plans: Vec::new(),
+                operation: crate::core::rules::Operation::Tree,
+                disposal: crate::core::cleaner::Disposal::Permanent,
+                rule: crate::core::rules::RuleRef {
+                    snapshot: snapshot.clone(),
+                    id: "build".into(),
+                    scope: None,
+                    contributors: Vec::new(),
+                    blocked: None,
+                    observation: None,
+                },
+                label: item_label(&hit.marker, &hit.path),
                 path: hit.path.clone(),
                 size: acc.0,
                 file_count: acc.1,
@@ -90,14 +104,14 @@ pub(super) fn collect(
         }
         match MARKERS
             .iter()
-            .find(|m| m.dir == lower && has_sibling(&file_names, m.sibling_any))
+            .find(|m| m.dir == lower && has_sibling(&file_names, &m.sibling_any))
         {
             Some(marker) => out.push(Hit { path, marker }),
             // 名字没命中，但目录自己声明了「我是缓存」（CACHEDIR.TAG
             // 签名验证）——自声明比名字特征更强，见 devscan::CACHEDIR_SIGNATURE。
             None if super::has_cachedir_tag(&path) => out.push(Hit {
                 path,
-                marker: &super::CACHEDIR_MARKER,
+                marker: super::CACHEDIR_MARKER.clone(),
             }),
             // 命中的目录不再下钻；没命中的继续往下找
             None => collect(&path, depth + 1, max_depth, live, out),

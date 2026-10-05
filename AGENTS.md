@@ -28,23 +28,21 @@ CI 卡 `cargo fmt --check` 和 clippy `-D warnings`。提交前这几项都要�
 4. 核对结果写进自己的检查，不要默认「这次无关」。
 5. 新发现的、用户已经踩过、根因不直观、以后很容易改回去的问题，**补进 PITFALLS**，不要只写在 commit message 里。
 
-现在已有：
+现在已有清单见 [`docs/PITFALLS.md`](docs/PITFALLS.md)——它是唯一的 pitfalls 台账，编号以它为准（P10–P13 已废弃空缺）。有 `Note:` 指针的条目，决策理由和测试绑定在 `docs/agent-notes/` 对应的 note 里单点维护；`Note:` 指针由 `scripts/check-pitfall-notes.py` 校验（CI 已接线），note 归档或改名时必须同批更新指针。
 
-| ID | 一句话 |
-| --- | --- |
-| P1 | 未加引号的 `UninstallString` 不能把 `C:\Program Files` 这种目录当成 exe |
-| P2 | 补位用的隐形占位块要和真卡片一样有 `p_5` + `border_1`，否则同排卡片不等宽 |
-| P3 | 卡片徽章要在源头缩短并由卡片裁切，别指望 gpui 的文字省略号 |
-| P4 | WMI 方法入参的 `uint32` 要按 `VT_I4` 填，`VT_UI4` 一律 TYPE_MISMATCH |
-| P5 | File Provider 的 `SF_DATALESS` 目录 `stat` 正常但 `readdir` 永久卡死，要靠 `getattrlistbulk` 的 `ATTR_CMN_FLAGS` 识别跳过，不能按路径名猜 |
-| P6 | 索引不含被跳过的子树（dataless / hang 集），别把 SizeTree 的缺项当成文件不存在 |
-| P7 | Unix 身份复核只认 dev+ino，别把 mtime/len 加回去（会永久拒删活跃文件）|
-| P8 | `lsof +D` 复检目录批用独立的长超时，不能和文件批共用 3 秒 |
-| P9 | `vendor/gpui`（启动死锁补丁）和 `runtime_shaders`（免 Metal Toolchain）不能删 |
-| P10 | 孤儿残留（已卸载软件）只认 Bundle ID 名，家族判据和「测不出」都不能放宽 |
-| P11 | 应用缓存靠内容签名认（应用名只决定归类）；Profile 本体、旧版本当前版、空目录都有硬规矩 |
-| P12 | 活库闸门要留「崩溃残留」可证伪通道：伴随文件存在 ≠ 有活连接 |
-| P13 | 首次窗口绘制前不能同步生成清理目标；窗口级回调不能调用需要当前视图的 `request_animation_frame()` |
+## 回归记录（agent-notes）
+
+非平凡 bug 修复必须「同一次提交里附带一份 note + 一个回归测试」：note 记决策与备选，测试锁行为，`## Verification` 的 `Proved:` 行记红跑证据。写 note 前先 `python tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --find "<关键词>"` 查重。
+
+**改文件之前**，对要动的路径跑反查，被引用的 note 先读再改：
+
+```bash
+python tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --for-path <staged 或待改文件>
+```
+
+pre-commit 会对暂存文件自动打印命中提醒（不阻断）；CI 的 `agent-notes.yml` 跑格式校验 + PITFALLS 指针校验。
+
+红跑两种都算数，但都要留证据：修复前真实失败（TDD 先红）直接算数，`Proved:` 写明断言和证据位置；修复后才写的测试走制造型——只撤一处防护、只跑 focused、存 log、恢复后立即同 focused 确认绿。证据 log 提交到 `docs/agent-notes-evidence/`（`.gitignore` 已放行），不要 cite `target/` 里会被清理的路径。
 
 ## 改代码时
 

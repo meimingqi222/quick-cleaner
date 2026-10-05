@@ -44,12 +44,22 @@ impl DuplicateGroup {
 
 /// 高性能多阶段哈希检测重复文件（利用 FSIndexEngine 极速分桶 + 并发校验）
 pub fn scan_duplicate_files(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<DuplicateGroup> {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        scan_duplicate_files_inner(live, tree)
+    })
+}
+fn scan_duplicate_files_inner(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<DuplicateGroup> {
+    let snapshot = crate::core::rules::current();
     let search_roots = get_user_content_roots();
     let engine = FSIndexEngine::new(tree);
 
     // 阶段 1: 内存分桶 (体积 >= 64KB)
     // 每个桶值携带 mtime，避免阶段 2 再调 std::fs::metadata。
-    let candidate_size_map = engine.query_duplicate_buckets(&search_roots, 64 * 1024, live);
+    let candidate_size_map = engine.query_duplicate_buckets(
+        &search_roots,
+        super::policy("duplicate_min_size", 65536),
+        live,
+    );
 
     let mut candidate_sizes: Vec<(u64, Vec<(PathBuf, u64)>)> = candidate_size_map
         .into_iter()
@@ -59,7 +69,7 @@ pub fn scan_duplicate_files(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<D
     // 优先按潜在可清理体积排序（高收益桶优先）
     candidate_sizes
         .sort_by_key(|(size, paths)| std::cmp::Reverse(*size * (paths.len() as u64 - 1)));
-    candidate_sizes.truncate(500);
+    candidate_sizes.truncate(super::policy("duplicate_bucket_limit", 500) as usize);
 
     let total_candidate_sizes = candidate_sizes.len();
 
@@ -71,96 +81,98 @@ pub fn scan_duplicate_files(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<D
     let confirmed_groups: Vec<DuplicateGroup> = candidate_sizes
         .into_par_iter()
         .filter_map(|(size, paths)| {
-            if !live.load(Ordering::Relaxed) {
-                return None;
-            }
-
-            // 一次 open 算两个 hash，返回 (sample, full, mtime)
-            let hashed: Vec<(u64, u64, PathBuf, u64)> = paths
-                .into_iter()
-                .filter_map(|(p, mtime)| {
-                    if !live.load(Ordering::Relaxed) {
-                        return None;
-                    }
-                    compute_hashes(&p, size)
-                        .ok()
-                        .map(|(sample, full)| (sample, full, p, mtime))
-                })
-                .collect();
-
-            // 阶段 2: 用 sample hash 分桶
-            let mut sample_map: HashMap<u64, Vec<(u64, PathBuf, u64)>> = HashMap::new();
-            for (sample, full, p, mtime) in hashed {
-                sample_map.entry(sample).or_default().push((full, p, mtime));
-            }
-
-            let mut dup_groups = Vec::new();
-
-            for (_, sample_paths) in sample_map {
-                if sample_paths.len() <= 1 {
-                    continue;
+            crate::core::rules::with_snapshot(snapshot.clone(), || {
+                if !live.load(Ordering::Relaxed) {
+                    return None;
                 }
 
-                // 阶段 3: 用预计算的 full hash 校验碰撞（无需再 open）
-                let mut full_map: HashMap<u64, Vec<(PathBuf, u64)>> = HashMap::new();
-                for (full, p, mtime) in sample_paths {
-                    full_map.entry(full).or_default().push((p, mtime));
+                // 一次 open 算两个 hash，返回 (sample, full, mtime)
+                let hashed: Vec<(u64, u64, PathBuf, u64)> = paths
+                    .into_iter()
+                    .filter_map(|(p, mtime)| {
+                        if !live.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        compute_hashes(&p, size)
+                            .ok()
+                            .map(|(sample, full)| (sample, full, p, mtime))
+                    })
+                    .collect();
+
+                // 阶段 2: 用 sample hash 分桶
+                let mut sample_map: HashMap<u64, Vec<(u64, PathBuf, u64)>> = HashMap::new();
+                for (sample, full, p, mtime) in hashed {
+                    sample_map.entry(sample).or_default().push((full, p, mtime));
                 }
 
-                for (full_h, mut dup_paths) in full_map {
-                    if dup_paths.len() <= 1 {
+                let mut dup_groups = Vec::new();
+
+                for (_, sample_paths) in sample_map {
+                    if sample_paths.len() <= 1 {
                         continue;
                     }
 
-                    // 阶段 4: 按修改时间排序（最早的作为原件）
-                    dup_paths.sort_by_key(|(_, mtime)| *mtime);
+                    // 阶段 3: 用预计算的 full hash 校验碰撞（无需再 open）
+                    let mut full_map: HashMap<u64, Vec<(PathBuf, u64)>> = HashMap::new();
+                    for (full, p, mtime) in sample_paths {
+                        full_map.entry(full).or_default().push((p, mtime));
+                    }
 
-                    let first_filename = dup_paths[0]
-                        .0
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Duplicate".to_string());
+                    for (full_h, mut dup_paths) in full_map {
+                        if dup_paths.len() <= 1 {
+                            continue;
+                        }
 
-                    let ext = dup_paths[0]
-                        .0
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    let (cat_zh, cat_en) = classify_duplicate_category(&ext);
+                        // 阶段 4: 按修改时间排序（最早的作为原件）
+                        dup_paths.sort_by_key(|(_, mtime)| *mtime);
 
-                    let files = dup_paths
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, (p, mtime))| {
-                            let is_orig = idx == 0;
-                            DuplicateFileItem {
-                                path_display: p.to_string_lossy().to_string(),
-                                path: p,
-                                modified_at_str: format_timestamp_date(mtime),
-                                modified_at_secs: mtime,
-                                is_original: is_orig,
-                                selected: !is_orig,
-                            }
-                        })
-                        .collect();
+                        let first_filename = dup_paths[0]
+                            .0
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "Duplicate".to_string());
 
-                    dup_groups.push(DuplicateGroup {
-                        id: format!("dup-{size}-{full_h}"),
-                        filename: first_filename,
-                        category_zh: cat_zh,
-                        category_en: cat_en,
-                        size_per_copy: size,
-                        files,
-                    });
+                        let ext = dup_paths[0]
+                            .0
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        let (cat_zh, cat_en) = classify_duplicate_category(&ext);
+
+                        let files = dup_paths
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, (p, mtime))| {
+                                let is_orig = idx == 0;
+                                DuplicateFileItem {
+                                    path_display: p.to_string_lossy().to_string(),
+                                    path: p,
+                                    modified_at_str: format_timestamp_date(mtime),
+                                    modified_at_secs: mtime,
+                                    is_original: is_orig,
+                                    selected: !is_orig,
+                                }
+                            })
+                            .collect();
+
+                        dup_groups.push(DuplicateGroup {
+                            id: format!("dup-{size}-{full_h}"),
+                            filename: first_filename,
+                            category_zh: cat_zh,
+                            category_en: cat_en,
+                            size_per_copy: size,
+                            files,
+                        });
+                    }
                 }
-            }
 
-            if dup_groups.is_empty() {
-                None
-            } else {
-                Some(dup_groups)
-            }
+                if dup_groups.is_empty() {
+                    None
+                } else {
+                    Some(dup_groups)
+                }
+            })
         })
         .flatten()
         .collect();
@@ -239,18 +251,14 @@ fn compute_hashes(path: &Path, file_size: u64) -> std::io::Result<(u64, u64)> {
 }
 
 fn classify_duplicate_category(ext: &str) -> (&'static str, &'static str) {
-    match ext {
-        "jpg" | "jpeg" | "png" | "heic" | "webp" | "gif" | "svg" | "bmp" | "tiff" => {
-            ("图像照片", "Images")
-        }
-        "mp4" | "mov" | "mkv" | "avi" | "flv" | "wmv" | "webm" | "m4v" => ("视频影音", "Videos"),
-        "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" | "xz" | "bz2" | "dmg" | "iso" | "pkg" => {
-            ("归档文件", "Archives")
-        }
-        "pdf" | "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "txt" | "md" => {
-            ("文本文档", "Documents")
-        }
-        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" => ("音频音乐", "Audio"),
-        _ => ("其它文件", "Others"),
-    }
+    [
+        ("duplicate_image", ("图像照片", "Images")),
+        ("duplicate_video", ("视频影音", "Videos")),
+        ("duplicate_archive", ("归档文件", "Archives")),
+        ("duplicate_document", ("文本文档", "Documents")),
+        ("duplicate_audio", ("音频音乐", "Audio")),
+    ]
+    .into_iter()
+    .find_map(|(key, label)| super::extension_in(key, ext).then_some(label))
+    .unwrap_or(("其它文件", "Others"))
 }

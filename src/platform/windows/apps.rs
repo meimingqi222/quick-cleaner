@@ -56,6 +56,7 @@ pub fn list_installed_apps(live: &AtomicBool) -> Vec<InstalledApp> {
         ));
     }
 
+    apps.extend(super::app_discovery::discover_apps(&apps, live));
     dedup_and_enrich_apps(&mut apps);
     apps
 }
@@ -209,6 +210,7 @@ fn parse_app_entry(
     let estimated_size = (est_kb as u64) * 1024;
 
     Some(InstalledApp {
+        discovery: None,
         id: key_name.to_string(),
         name,
         version,
@@ -722,6 +724,12 @@ pub fn extract_app_tokens(name: &str) -> Vec<String> {
 /// 三种情况都算「能跑」：msiexec 走 MSI 数据库、不依赖单个文件；解析出的
 /// 路径确实存在；命令是 winget / powershell 这类靠 PATH 解析的裸命令名。
 fn uninstaller_is_missing(app: &InstalledApp) -> bool {
+    if let Some(discovery) = &app.discovery {
+        return discovery
+            .uninstaller
+            .as_ref()
+            .is_some_and(|u| !u.executable.is_file());
+    }
     let Some(cmd) = app
         .quiet_uninstall_string
         .as_ref()
@@ -771,7 +779,10 @@ fn measure_install_dir(loc: &Path) -> (u64, u64) {
 }
 
 /// 智能推断软件安装根目录（当注册表 InstallLocation 为空时通过 DisplayIcon、UninstallString 或标准安装路径推导）
-fn deduce_install_location(app: &InstalledApp) -> Option<PathBuf> {
+pub(super) fn deduce_install_location(app: &InstalledApp) -> Option<PathBuf> {
+    if app.discovery.is_some() {
+        return app.install_location.clone();
+    }
     if let Some(loc) = &app.install_location {
         if loc.exists() && !is_system_root_dir(loc) {
             return Some(loc.clone());
@@ -947,7 +958,11 @@ fn lookup_exe(ua: &UserAssistIndex, exe: &str) -> u64 {
 fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
     let mut map: std::collections::HashMap<String, InstalledApp> = std::collections::HashMap::new();
     for app in apps.drain(..) {
-        let key = format!("{}_{}", app.name.to_lowercase(), app.version.to_lowercase());
+        let key = if app.discovery.is_some() {
+            app.id.clone()
+        } else {
+            format!("{}_{}", app.name.to_lowercase(), app.version.to_lowercase())
+        };
         match map.entry(key) {
             std::collections::hash_map::Entry::Vacant(v) => {
                 v.insert(app);
@@ -1031,6 +1046,10 @@ fn dedup_and_enrich_apps(apps: &mut Vec<InstalledApp>) {
     let mut final_list: Vec<InstalledApp> = Vec::new();
 
     for app in list {
+        if app.discovery.is_some() {
+            final_list.push(app);
+            continue;
+        }
         if let Some(loc) = &app.install_location {
             if !is_system_root_dir(loc) {
                 match loc_map.entry(loc.clone()) {
@@ -1243,7 +1262,7 @@ fn prepare_uninstall_cmd(cmd: &str, app: &InstalledApp) -> String {
                 match app.registry_root {
                     AppRegRoot::Hkcu => out.push_str(" --scope user"),
                     AppRegRoot::Hklm | AppRegRoot::Hklm32 => out.push_str(" --scope machine"),
-                    AppRegRoot::SystemApp => {}
+                    AppRegRoot::SystemApp | AppRegRoot::Unregistered => {}
                 }
             }
             if !has_cli_token(&out, &["--disable-interactivity"]) {
@@ -1422,8 +1441,32 @@ fn has_related_process(install_dir: &str, uninstaller_stem: &str) -> bool {
     crate::platform::windows::process::has_related_process(install_dir, uninstaller_stem)
 }
 
+/// 删除前复核未登记安装的进程与程序路径所有权。
+pub fn validate_discovered_residual_clean(
+    app_id: &str,
+    items: &[crate::core::apps::ResidualItem],
+) -> Result<(), String> {
+    let snapshots: Vec<_> = items.iter().filter_map(|item| item.rule.as_ref()).collect();
+    if let Some(rule) = snapshots.first() {
+        if snapshots
+            .iter()
+            .any(|other| !std::sync::Arc::ptr_eq(&rule.snapshot, &other.snapshot))
+        {
+            return Err("Residuals belong to different rule snapshots".into());
+        }
+        crate::core::rules::with_snapshot(rule.snapshot.clone(), || {
+            super::app_discovery::validate_residual_clean(app_id, items)
+        })
+    } else {
+        super::app_discovery::validate_residual_clean(app_id, items)
+    }
+}
+
 /// 运行软件官方卸载向导并等待其退出
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
+    if app.discovery.is_some() {
+        return super::app_discovery::run_uninstaller(app);
+    }
     let raw = app
         .quiet_uninstall_string
         .as_ref()
@@ -1534,7 +1577,7 @@ fn is_app_registered(app: &InstalledApp) -> bool {
         AppRegRoot::Hklm => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_64KEY),
         AppRegRoot::Hklm32 => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_32KEY),
         AppRegRoot::Hkcu => (HKEY_CURRENT_USER, KEY_READ),
-        AppRegRoot::SystemApp => return false,
+        AppRegRoot::SystemApp | AppRegRoot::Unregistered => return false,
     };
     let path = to_wide(&app.registry_subpath);
     let mut key: HKEY = std::ptr::null_mut();
@@ -1620,6 +1663,7 @@ mod tests {
             1_700_000_000,
         );
         let mut app = InstalledApp {
+            discovery: None,
             id: "Chrome".into(),
             name: "Google Chrome".into(),
             version: "1".into(),
@@ -1674,6 +1718,7 @@ mod uninstall_cli {
 
     fn dummy_app(root: AppRegRoot) -> InstalledApp {
         InstalledApp {
+            discovery: None,
             id: "x".into(),
             name: "x".into(),
             version: "1".into(),

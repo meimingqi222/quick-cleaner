@@ -108,21 +108,100 @@ pub(crate) fn parse_cleanup_output(stdout: &str) -> Option<(u64, u64)> {
     }
 }
 
-/// 真实清理：`brew cleanup`。成功（退出码 0）时在 Settings 里记下时间
+/// 真实清理后再用 dry-run 核验没有可清资源，才在 Settings 里记下时间
 /// （供 [`should_offer`] 节流）；失败如实返回 false，由 `cleaner` 报
 /// Failed，不记时间——下次扫描还会再提示。
 pub fn run_cleanup() -> bool {
-    let Some(exe) = brew_exe() else {
-        return false;
-    };
-    let ok = crate::core::proc::run_with_timeout(exe, &["cleanup"], CLEANUP_TIMEOUT)
-        .is_some_and(|run| run.ok);
+    let ok = cleanup_action().is_ok()
+        && cleanup_completion() == crate::core::rules::facts::Evidence::Confirmed;
     if ok {
-        let mut settings = crate::core::settings::Settings::load();
-        settings.brew_cleanup_at = Some(chrono::Local::now().timestamp());
-        settings.save();
+        record_cleanup();
     }
     ok
+}
+
+pub(crate) fn cleanup_action() -> Result<(), String> {
+    let Some(exe) = brew_exe() else {
+        return Err("Homebrew executable unavailable".into());
+    };
+    cleanup_action_with(|args| crate::core::proc::run_with_timeout(exe, args, CLEANUP_TIMEOUT))
+}
+
+fn cleanup_action_with(
+    mut run: impl FnMut(&[&str]) -> Option<crate::core::proc::ProcRun>,
+) -> Result<(), String> {
+    let run = run(&["cleanup"]).ok_or("Homebrew cleanup unavailable or timed out")?;
+    if run.ok {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&run.stderr).trim().into())
+    }
+}
+
+pub(crate) fn cleanup_completion() -> crate::core::rules::facts::Evidence {
+    let Some(exe) = brew_exe() else {
+        return crate::core::rules::facts::Evidence::Unknown;
+    };
+    preview_completion(
+        crate::core::proc::run_with_timeout(exe, &["cleanup", "-n"], PREVIEW_TIMEOUT).as_ref(),
+    )
+}
+
+fn preview_completion(
+    run: Option<&crate::core::proc::ProcRun>,
+) -> crate::core::rules::facts::Evidence {
+    use crate::core::rules::facts::Evidence;
+    let Some(run) = run.filter(|run| run.ok) else {
+        return Evidence::Unknown;
+    };
+    let Ok(stdout) = std::str::from_utf8(&run.stdout) else {
+        return Evidence::Unknown;
+    };
+    if parse_cleanup_output(stdout).is_some()
+        || stdout.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with("Would remove")
+                || line.starts_with("Prune:")
+                || line.starts_with("Removing:")
+        })
+    {
+        return Evidence::Absent;
+    }
+    // Unknown output cannot prove there are no remaining resources.
+    if stdout.lines().all(|line| {
+        let line = line.trim();
+        if line.is_empty() || line == "Pruning symlinks..." {
+            return true;
+        }
+        let summary = line.strip_prefix("==> ").unwrap_or(line);
+        [
+            "This operation would free approximately ",
+            "This operation has freed approximately ",
+        ]
+        .into_iter()
+        .any(|prefix| {
+            summary
+                .strip_prefix(prefix)
+                .and_then(|size| size.strip_suffix(" of disk space."))
+                .is_some_and(|size| {
+                    parse_human_size(size) == Some(0)
+                        && size
+                            .find(|c: char| c.is_ascii_alphabetic())
+                            .and_then(|index| size[..index].parse::<f64>().ok())
+                            == Some(0.0)
+                })
+        })
+    }) {
+        Evidence::Confirmed
+    } else {
+        Evidence::Unknown
+    }
+}
+
+pub(crate) fn record_cleanup() {
+    let mut settings = crate::core::settings::Settings::load();
+    settings.brew_cleanup_at = Some(chrono::Local::now().timestamp());
+    settings.save();
 }
 
 /// 构造清理目标用的虚拟路径。
@@ -160,6 +239,77 @@ fn parse_human_size(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_action_is_fixed_and_failure_retains_command_error() {
+        assert!(cleanup_action_with(|args| {
+            assert_eq!(args, ["cleanup"]);
+            Some(crate::core::proc::ProcRun {
+                stdout: vec![],
+                stderr: vec![],
+                exit_code: Some(0),
+                ok: true,
+            })
+        })
+        .is_ok());
+        assert!(cleanup_action_with(|_| None)
+            .unwrap_err()
+            .contains("timed out"));
+        assert_eq!(
+            cleanup_action_with(|_| Some(crate::core::proc::ProcRun {
+                stdout: vec![],
+                stderr: b"fixture permission denied".to_vec(),
+                exit_code: Some(1),
+                ok: false
+            }))
+            .unwrap_err(),
+            "fixture permission denied"
+        );
+    }
+
+    #[test]
+    fn cleanup_completion_distinguishes_empty_remaining_and_unknown_preview() {
+        use crate::core::rules::facts::Evidence;
+        let response = |text: &str| crate::core::proc::ProcRun {
+            stdout: text.as_bytes().to_vec(),
+            stderr: vec![],
+            exit_code: Some(0),
+            ok: true,
+        };
+        for text in [
+            "",
+            "Pruning symlinks...\n",
+            "==> This operation would free approximately 0B of disk space.\n",
+            "This operation has freed approximately 0KB of disk space.\n",
+        ] {
+            assert_eq!(
+                preview_completion(Some(&response(text))),
+                Evidence::Confirmed
+            );
+        }
+        for text in [
+            "Would remove: /opt/homebrew/Cellar/foo/1.0\n",
+            "Prune: /usr/local/Cellar/foo/1.0\n",
+            "Would remove: /opt/homebrew/Cellar/foo/1.0\n==> This operation would free approximately 0B of disk space.\n",
+        ] {
+            assert_eq!(preview_completion(Some(&response(text))), Evidence::Absent);
+        }
+        for text in [
+            "changed output format",
+            "==> This operation would free approximately invalid",
+            "==> This operation would free approximately -1B of disk space.",
+            "==> This operation would free approximately 0.1B of disk space.",
+        ] {
+            assert_eq!(preview_completion(Some(&response(text))), Evidence::Unknown);
+        }
+        assert_eq!(preview_completion(None), Evidence::Unknown);
+        let mut failed = response("");
+        failed.ok = false;
+        assert_eq!(preview_completion(Some(&failed)), Evidence::Unknown);
+        failed.ok = true;
+        failed.stdout = vec![255];
+        assert_eq!(preview_completion(Some(&failed)), Evidence::Unknown);
+    }
 
     #[test]
     fn parse_human_size_covers_brew_units() {

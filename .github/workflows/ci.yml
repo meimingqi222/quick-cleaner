@@ -45,6 +45,17 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Run tests
         run: cargo test
+      # 绑定 anchor 必须是测试二进制里真实存在的用例：文件内 substring 校验
+      # 挡不住「改名后旧名字留在注释里」。#[cfg] 门控的用例只在对应平台的
+      # 二进制里存在，所以两个 job 各产一份 --list 产物，由 verify-anchors
+      # job 取并集校验。
+      - name: Dump test list
+        run: cargo test --lib -- --list > testlist-windows.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: testlist-windows
+          path: testlist-windows.txt
+          retention-days: 1
 
   # 只跑 Windows 的代价已经吃过一次：`src/bin/mftscan.rs` 无条件 import
   # `platform::mft`，macOS 上 `cargo build` 直接失败，却一直没人拦住。
@@ -64,3 +75,25 @@ jobs:
       # 废纸篓往返那个用例标了 #[ignore]：它会真的往运行者的废纸篓里写东西。
       - name: Run tests
         run: cargo test
+      - name: Dump test list
+        run: cargo test --lib -- --list > testlist-macos.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: testlist-macos
+          path: testlist-macos.txt
+          retention-days: 1
+
+  verify-anchors:
+    name: Bound anchors are real tests
+    needs: [test, test-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: testlist-*
+      - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --dump-anchors > anchors.txt
+      - run: python -X utf8 scripts/check-anchors-vs-tests.py anchors.txt testlist-windows/testlist-windows.txt testlist-macos/testlist-macos.txt

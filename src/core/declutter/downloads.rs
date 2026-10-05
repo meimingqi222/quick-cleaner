@@ -21,13 +21,19 @@ pub struct DownloadItem {
 
 /// 扫描用户的 Downloads 文件夹（通过 FSIndexEngine 统一引擎加速）
 pub fn scan_downloads_folder(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<DownloadItem> {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        scan_downloads_folder_inner(live, tree)
+    })
+}
+fn scan_downloads_folder_inner(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<DownloadItem> {
     let download_dir = match dirs::download_dir() {
         Some(d) if d.exists() => d,
         _ => return Vec::new(),
     };
 
     let engine = FSIndexEngine::new(tree);
-    let filter = QueryFilter::new(vec![download_dir]).max_depth(4);
+    let filter = QueryFilter::new(vec![download_dir])
+        .max_depth(super::policy("download_max_depth", 4) as usize);
     let files = engine.query_files(&filter, live);
 
     let now_secs = SystemTime::now()
@@ -76,18 +82,17 @@ fn classify_download_extension(path: &Path) -> (&'static str, &'static str) {
         .unwrap_or("")
         .to_lowercase();
 
-    match ext.as_str() {
-        "dmg" | "pkg" | "iso" | "app" => ("安装包", "Installer"),
-        "exe" | "msi" | "msix" | "bat" => ("安装包", "Installer"),
-        "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" | "xz" | "bz2" => ("压缩包", "Archive"),
-        "pdf" | "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "txt" | "md" | "csv" => {
-            ("文档", "Document")
-        }
-        "mp4" | "mov" | "mkv" | "avi" | "flv" | "wmv" | "webm" => ("视频", "Video"),
-        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" => ("音频", "Audio"),
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "heic" | "bmp" => ("图片", "Image"),
-        _ => ("其它文件", "Other"),
-    }
+    [
+        ("download_installer", ("安装包", "Installer")),
+        ("download_archive", ("压缩包", "Archive")),
+        ("download_document", ("文档", "Document")),
+        ("download_video", ("视频", "Video")),
+        ("download_audio", ("音频", "Audio")),
+        ("download_image", ("图片", "Image")),
+    ]
+    .into_iter()
+    .find_map(|(key, label)| super::extension_in(key, &ext).then_some(label))
+    .unwrap_or(("其它文件", "Other"))
 }
 
 /// 时间戳版本：先把 mtime 换算成「距今天数」，再委托给 [`super::format_age_text`]，

@@ -1,0 +1,45 @@
+id = "engine"
+version = 1
+platform = "all"
+required = ["file", "providers", "declutter"]
+
+[lists]
+providers = ["system", "cache", "browser", "development", "docker", "macos"]
+photo_extensions = ["jpg", "jpeg", "png", "heic", "webp", "tiff", "bmp", "raw", "cr2", "nef", "arw", "gif"]
+photo_camera_prefixes = ["img_", "dsc_", "pxl_", "sam_", "dji_", "photo_"]
+photo_ignored_directories = ["site", "help", "manuals"]
+download_installer = ["dmg", "pkg", "iso", "app", "exe", "msi", "msix", "bat"]
+download_archive = ["zip", "tar", "gz", "tgz", "7z", "rar", "xz", "bz2"]
+download_document = ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "csv"]
+download_video = ["mp4", "mov", "mkv", "avi", "flv", "wmv", "webm"]
+download_audio = ["mp3", "wav", "flac", "aac", "m4a", "ogg"]
+download_image = ["jpg", "jpeg", "png", "gif", "webp", "svg", "heic", "bmp"]
+large_video = ["mp4", "mov", "mkv", "avi", "flv", "wmv", "webm", "m4v"]
+large_archive = ["zip", "tar", "gz", "tgz", "7z", "rar", "xz", "bz2", "dmg", "iso", "pkg"]
+large_document = ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "epub"]
+duplicate_image = ["jpg", "jpeg", "png", "heic", "webp", "gif", "svg", "bmp", "tiff"]
+duplicate_video = ["mp4", "mov", "mkv", "avi", "flv", "wmv", "webm", "m4v"]
+duplicate_archive = ["zip", "tar", "gz", "tgz", "7z", "rar", "xz", "bz2", "dmg", "iso", "pkg"]
+duplicate_document = ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md"]
+duplicate_audio = ["mp3", "wav", "flac", "aac", "m4a", "ogg"]
+
+[numbers]
+photo_distance = 5
+photo_burst_distance = 8
+photo_burst_seconds = 10
+photo_min_size = 10000
+photo_max_size = 200000000
+photo_max_depth = 20
+photo_candidate_limit = 1500
+photo_group_limit = 30
+photo_group_size_limit = 12
+photo_supplement_below = 500
+duplicate_min_size = 65536
+duplicate_bucket_limit = 500
+large_result_limit = 500
+large_min_size = 50000000
+large_selected_age_days = 90
+download_max_depth = 4
+default_min_size_filter = 100000000
+default_age_filter_months = 3
+

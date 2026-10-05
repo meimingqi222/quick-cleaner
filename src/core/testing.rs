@@ -48,12 +48,26 @@ pub(crate) fn file_path(tag: &str) -> PathBuf {
 /// 只看属主权限，与打开模式无关）。
 pub(crate) fn backdate(path: &Path, age_secs: u64) {
     let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+    set_modified(path, when);
+}
+
+pub(crate) fn set_modified(path: &Path, when: std::time::SystemTime) {
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Windows directories require backup semantics; mtime needs WRITE_ATTRIBUTES only.
+        std::fs::File::options()
+            .access_mode(winapi::um::winnt::FILE_WRITE_ATTRIBUTES)
+            .custom_flags(winapi::um::winbase::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    };
+    #[cfg(not(windows))]
     let file = if path.is_dir() {
         std::fs::File::open(path)
     } else {
         std::fs::File::options().write(true).open(path)
-    }
-    .unwrap_or_else(|e| panic!("打开 {path:?} 回填 mtime 失败：{e}"));
+    };
+    let file = file.unwrap_or_else(|e| panic!("打开 {path:?} 回填 mtime 失败：{e}"));
     file.set_modified(when)
         .unwrap_or_else(|e| panic!("回填 {path:?} 的 mtime 失败：{e}"));
 }

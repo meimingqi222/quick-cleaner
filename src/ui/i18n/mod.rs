@@ -35,8 +35,49 @@
 
 mod declutter;
 pub use declutter::*;
+mod rules;
+pub use rules::*;
 
 use crate::core::i18n::Language;
+
+pub fn tr_discovered_uninstall_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "将卸载程序，并清理已确认属于这份安装的依赖、快捷方式和环境登记。配置、会话和密钥保留；被其他安装使用的工具保留。请先退出应用和安装器。",
+        Language::En => "Remove the program and its verified dependencies, shortcuts and environment registrations. Configuration, sessions, credentials and shared tools are preserved. Close the app and installer first.",
+    }
+}
+
+pub fn tr_status_discovered_cleanup_blocked(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "清理已暂停：请关闭应用和安装器，并重新扫描以确认文件归属。",
+        Language::En => {
+            "Cleanup paused. Close the app and installer, then rescan to verify file ownership."
+        }
+    }
+}
+
+pub fn tr_app_discovery_label(lang: Language, official: bool) -> &'static str {
+    match (lang, official) {
+        (Language::Zh, true) => "未登记 · 卸载与清理",
+        (Language::Zh, false) => "未登记 · 无官方卸载入口",
+        (Language::En, true) => "Unregistered · Uninstall and clean",
+        (Language::En, false) => "Unregistered · No official uninstaller",
+    }
+}
+
+pub fn tr_discovered_remove_files(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移除程序文件与快捷方式…",
+        Language::En => "Remove program files and shortcuts…",
+    }
+}
+
+pub fn tr_btn_remove_program(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "移除文件",
+        Language::En => "Remove files",
+    }
+}
 
 pub fn tr_view_dashboard(lang: Language) -> &'static str {
     match lang {
@@ -486,6 +527,9 @@ pub fn tr_status_uninstall_failed(lang: Language, name: &str) -> String {
         Language::En => format!("\"{name}\" uninstaller did not complete normally"),
     }
 }
+pub fn tr_status_uninstall_failed_reason(lang: Language, name: &str, reason: &str) -> String {
+    format!("{}：{}", tr_status_uninstall_failed(lang, name), reason)
+}
 
 pub fn tr_status_uninstall_residual(
     lang: Language,
@@ -602,9 +646,11 @@ pub fn tr_status_orphan_cleaned_manual(
 
 pub fn tr_status_orphan_cleaned_partial(lang: Language, size: &str, skipped: usize) -> String {
     match lang {
-        Language::Zh => format!("残留清除完成，释放 {size}（{skipped} 项被占用或权限不足已跳过）"),
+        Language::Zh => {
+            format!("残留仅部分清除，释放 {size}（{skipped} 项未清除，具体原因见日志）")
+        }
         Language::En => {
-            format!("Leftovers cleaned, freed {size} ({skipped} skipped — in use or access denied)")
+            format!("Leftovers partially cleaned, freed {size} ({skipped} not removed; see log for reasons)")
         }
     }
 }
@@ -848,10 +894,10 @@ pub fn tr_status_residual_cleaned_partial(
 ) -> String {
     match lang {
         Language::Zh => {
-            format!("「{name}」清除完成，释放 {size}（{skipped} 项被占用或权限不足已跳过）")
+            format!("「{name}」仅部分清除，释放 {size}（{skipped} 项未清除，具体原因见日志）")
         }
         Language::En => format!(
-            "\"{name}\" cleaned, freed {size} ({skipped} skipped — in use or access denied)"
+            "\"{name}\" partially cleaned, freed {size} ({skipped} not removed; see log for reasons)"
         ),
     }
 }
@@ -1154,6 +1200,22 @@ pub fn tr_fail_reason(lang: Language, reason: crate::core::cleaner::FailReason) 
         (Language::En, FailReason::Unverified) => "in-use check inconclusive",
         (Language::Zh, FailReason::Changed) => "扫描后已变更",
         (Language::En, FailReason::Changed) => "changed since scan",
+        (Language::Zh, FailReason::WorktreeDirty) => "保留：含未提交改动或未跟踪/忽略文件",
+        (Language::En, FailReason::WorktreeDirty) => {
+            "kept: uncommitted changes or untracked/ignored files"
+        }
+        (Language::Zh, FailReason::WorktreeLocked) => "保留：worktree 已锁定",
+        (Language::En, FailReason::WorktreeLocked) => "kept: worktree is locked",
+        (Language::Zh, FailReason::WorktreeManaged) => {
+            "保留：应用会话管理的 worktree，请在所属应用中清理"
+        }
+        (Language::En, FailReason::WorktreeManaged) => {
+            "kept: application-managed worktree; remove through its app"
+        }
+        (Language::Zh, FailReason::WorktreeUnverified) => "Git 登记或清理状态无法核验",
+        (Language::En, FailReason::WorktreeUnverified) => {
+            "Git registration or cleanup could not be verified"
+        }
         (Language::Zh, FailReason::Other) => "未能删除",
         (Language::En, FailReason::Other) => "not removed",
     }
@@ -1169,11 +1231,11 @@ pub fn tr_failed_item_detail(
 ) -> String {
     match lang {
         Language::Zh => format!(
-            "{path} · {size} · {}（{files} 个文件）",
+            "{} · {size}（{files} 个文件） · {path}",
             tr_fail_reason(lang, reason)
         ),
         Language::En => format!(
-            "{path} · {size} · {} ({files} files)",
+            "{} · {size} ({files} files) · {path}",
             tr_fail_reason(lang, reason)
         ),
     }
@@ -2178,5 +2240,35 @@ pub fn tr_update_install_busy_body(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "扫描或清理仍在进行。安装更新会退出应用并中断这些任务。",
         Language::En => "A scan or clean is still running. Installing will quit the app and interrupt that work.",
+    }
+}
+
+#[cfg(test)]
+mod failure_detail_tests {
+    use super::*;
+
+    #[test]
+    fn worktree_reason_precedes_long_path_in_both_languages() {
+        use crate::core::cleaner::FailReason;
+        let path = format!(
+            "C:\\Users\\user\\AppData\\Roaming\\Maka\\{}",
+            "long-workspace/".repeat(40)
+        );
+        for lang in [Language::Zh, Language::En] {
+            for reason in [
+                FailReason::WorktreeDirty,
+                FailReason::WorktreeLocked,
+                FailReason::WorktreeUnverified,
+            ] {
+                let detail = tr_failed_item_detail(lang, &path, "104 MB", reason, 3000);
+                assert!(detail.starts_with(tr_fail_reason(lang, reason)));
+                assert!(detail.ends_with(&path));
+                assert!(detail.contains("104 MB"));
+                assert_ne!(
+                    tr_fail_reason(lang, reason),
+                    tr_fail_reason(lang, FailReason::Unverified)
+                );
+            }
+        }
     }
 }

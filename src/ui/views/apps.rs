@@ -599,7 +599,7 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
     let app_for_copy = app.clone();
     let app_name_for_loc = app.name.clone();
 
-    let (ctx_open_folder, ctx_uninstall, ctx_force_clean, ctx_copy_path) = match lang {
+    let (ctx_open_folder, ctx_uninstall, mut ctx_force_clean, ctx_copy_path) = match lang {
         Language::Zh => (
             "打开安装目录",
             "官方常规卸载",
@@ -613,6 +613,9 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
             "Copy Install Path",
         ),
     };
+    if app.discovery.is_some() {
+        ctx_force_clean = tr_discovered_remove_files(lang);
+    }
 
     let menu_view = div()
         .id("apps-context-menu-backdrop")
@@ -666,6 +669,14 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
                                 .text_color(rgb(TEXT))
                                 .child(truncate(&app.name, 24)),
                         )
+                        .when(app.discovery.is_some(), |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(OUTLINE))
+                                    .child(tr_app_discovery_label(lang, can_uninstall)),
+                            )
+                        })
                         .when(!app.version.is_empty(), |d| {
                             d.child(
                                 div()

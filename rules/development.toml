@@ -1,0 +1,215 @@
+id = "development"
+version = 2
+platform = "all"
+required = ["chromium", "file"]
+[lists]
+ai_app_dirs = ["Claude", "Codex", "Cursor", "CursorStar", "Trae", "Trae CN", "TRAE SOLO CN", "Windsurf", "Windsurf - Next", "Kiro", "Zed", "Void", "CodeBuddy", "CodeRabbit", "Antigravity", "AutoGLM", "WorkBuddy", "@genie", "devin", "Devin - Next", "anythingllm-desktop", "crush-gui", "CatPawAI", "Maka", "MiniMax", "MiniMax Code", "Xiaomi MiMo", "Grok Bot", "Doubao", "LobsterAI", "xyz.chatboxapp.app", "com.qoder.app.stable", "Qoder", "Paseo"]
+vscode_hosts = ["Code", "Trae", "Trae CN", "Cursor", "Windsurf - Next"]
+
+[[catalogs.cli_agents]]
+path = ".claude"
+zh = "Claude Code"
+en = "Claude Code"
+children = [{path = "cache", recommended = true},{path = "paste-cache", recommended = true},{path = "shell-snapshots", recommended = true},{path = "file-history", recommended = false},{path = "projects", recommended = false},{path = "sessions", recommended = false},{path = "backups", recommended = false},{path = "session-env", recommended = false},{path = "jobs", recommended = false},{path = "tasks", recommended = false},{path = "daemon", recommended = false},{path = "ide", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".codex"
+zh = "Codex"
+en = "Codex"
+children = [{path = "cache", recommended = true},{path = "log", recommended = true},{path = "tmp", recommended = true},{path = ".tmp", recommended = true},{path = "shell_snapshots", recommended = true},{path = "sessions", recommended = false},{path = "archived_sessions", recommended = false},{path = "attachments", recommended = false},{path = "backup", recommended = false},{path = "dictation-history", recommended = false},{path = "visualizations", recommended = false},{path = "ambient-suggestions", recommended = false},{path = "computer-use", recommended = false},{path = "computer-use-turn-ended", recommended = false},{path = "node_repl", recommended = false},{path = "process_manager", recommended = false},{path = "mcp-oauth-locks", recommended = false},{path = "thread-writer-locks", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".gemini"
+zh = "Gemini CLI"
+en = "Gemini CLI"
+children = [{path = "tmp", recommended = true},{path = "chats", recommended = false},{path = "sessions", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".qwen"
+zh = "Qwen Code"
+en = "Qwen Code"
+children = [{path = "tmp", recommended = true},{path = "todos", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".augment"
+zh = "Augment"
+en = "Augment"
+children = [{path = "tmp", recommended = true},{path = "observability", recommended = true},{path = "sessions", recommended = false},{path = "backups", recommended = false},{path = "checkpoint-documents", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".copilot"
+zh = "Copilot CLI"
+en = "Copilot CLI"
+children = [{path = "logs", recommended = true},{path = "ide", recommended = false},{path = "session-state", recommended = false}]
+
+[[catalogs.cli_agents]]
+path = ".workbuddy"
+zh = "WorkBuddy"
+en = "WorkBuddy"
+children = [{path = "logs", recommended = true},{path = "shell-snapshots", recommended = true},{path = "sessions", recommended = false},{path = "file-history", recommended = false},{path = "backup", recommended = false},{path = "audit-log", recommended = false}]
+
+# `%LOCALAPPDATA%` / `~/Library/Caches` 下的 agent 缓存。子目录为空表示整目录都是缓存。
+[[catalogs.local_agents]]
+path = "claude-cli-nodejs"
+zh = "Claude Code Node"
+en = "Claude Code Node"
+children = [{path = "Cache", recommended = true}]
+
+[[catalogs.local_agents]]
+path = "amp"
+zh = "Amp"
+en = "Amp"
+children = [{path = "logs", recommended = true},{path = "traces", recommended = true}]
+
+[[catalogs.local_agents]]
+path = "Zed"
+zh = "Zed"
+en = "Zed"
+children = [{path = "logs", recommended = true},{path = "hang_traces", recommended = true}]
+
+[[catalogs.local_agents]]
+path = "WorkBuddy"
+zh = "WorkBuddy"
+en = "WorkBuddy"
+children = [{path = "logs", recommended = true}]
+
+# `User/globalStorage/<id>/tasks`。id 只是目录名，tasks 这一层由扫描代码补上。
+[[catalogs.vscode_extensions]]
+path = "saoudrizwan.claude-dev"
+zh = "Cline 会话缓存"
+en = "Cline sessions"
+
+[[catalogs.vscode_extensions]]
+path = "rooveterinaryinc.roo-cline"
+zh = "Roo Code 会话缓存"
+en = "Roo Code sessions"
+
+[[catalogs.vscode_extensions]]
+path = "kilocode.kilo-code"
+zh = "Kilo Code 会话缓存"
+en = "Kilo Code sessions"
+
+[[catalogs.vscode_extensions]]
+path = "github.copilot-chat"
+zh = "Copilot Chat 缓存"
+en = "Copilot Chat cache"
+
+# `~/.<agent>/worktrees` 与 `~/.<agent>/.worktrees` 两个名字都扫，由代码补上。
+[[catalogs.worktrees]]
+path = ".codex"
+zh = "Codex"
+en = "Codex"
+
+[[catalogs.worktrees]]
+path = ".windsurf"
+zh = "Windsurf"
+en = "Windsurf"
+
+[[catalogs.worktrees]]
+path = ".claude"
+zh = "Claude Code"
+en = "Claude Code"
+
+[[catalogs.worktrees]]
+path = ".cursor"
+zh = "Cursor"
+en = "Cursor"
+
+[[catalogs.worktrees]]
+path = ".trae"
+zh = "Trae"
+en = "Trae"
+
+[[catalogs.worktrees]]
+path = ".augment"
+zh = "Augment"
+en = "Augment"
+
+[[catalogs.worktrees]]
+path = ".workbuddy"
+zh = "WorkBuddy"
+en = "WorkBuddy"
+
+[[catalogs.worktrees]]
+path = ".gemini"
+zh = "Gemini CLI"
+en = "Gemini CLI"
+
+# `~/<root>/extensions/.obsolete`。不存在的根在扫描时直接跳过。
+[[catalogs.roaming_worktrees]]
+path = "Maka/workspaces"
+zh = "Maka"
+en = "Maka"
+
+[[catalogs.vscode_family]]
+path = ".vscode"
+zh = "VS Code"
+en = "VS Code"
+
+[[catalogs.vscode_family]]
+path = ".vscode-insiders"
+zh = "VS Code Insiders"
+en = "VS Code Insiders"
+
+[[catalogs.vscode_family]]
+path = ".cursor"
+zh = "Cursor"
+en = "Cursor"
+
+[[catalogs.vscode_family]]
+path = ".windsurf"
+zh = "Windsurf"
+en = "Windsurf"
+
+[[catalogs.vscode_family]]
+path = ".trae"
+zh = "Trae"
+en = "Trae"
+
+[[catalogs.vscode_family]]
+path = ".qoder"
+zh = "Qoder"
+en = "Qoder"
+
+[[catalogs.vscode_family]]
+path = ".kiro"
+zh = "Kiro"
+en = "Kiro"
+
+[[catalogs.vscode_family]]
+path = ".antigravity"
+zh = "Antigravity"
+en = "Antigravity"
+
+# 固定叶子。版本化的 Zed `node-v*` 缓存不在这里，扫描时读目录才知道版本号。
+# languages 是已下载的语言服务器，删了要重新拉，所以不预选。
+[[entries]]
+root = "home"
+path = ".grok/logs"
+zh = "Grok · 日志"
+en = "Grok · logs"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "roaming"
+path = "Zed/node/cache"
+zh = "Zed · npm 缓存"
+en = "Zed · npm cache"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "roaming"
+path = "Zed/languages"
+zh = "Zed · LSP 语言服务器"
+en = "Zed · LSP language servers"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+

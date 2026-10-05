@@ -50,12 +50,18 @@ pub fn run_with_timeout<S: AsRef<OsStr>>(
     args: &[S],
     timeout: Duration,
 ) -> Option<ProcRun> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Background owner commands must not allocate a console when launched by the GUI.
+        command.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().ok()?;
     let mut out_pipe = child.stdout.take()?;
     let mut err_pipe = child.stderr.take()?;
     let out_reader = std::thread::spawn(move || {
@@ -138,6 +144,26 @@ pub fn call_with_timeout<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_background_command_has_no_console_and_keeps_output_and_exit_code() {
+        let script = "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ConsoleProbe { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); }'; [Console]::Out.WriteLine([ConsoleProbe]::GetConsoleWindow().ToInt64()); [Console]::Error.WriteLine('stderr-probe'); exit 7";
+        let run = run_with_timeout(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            Duration::from_secs(30),
+        )
+        .expect("Windows console probe must run");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "0",
+            "child must have no console window"
+        );
+        assert!(String::from_utf8_lossy(&run.stderr).contains("stderr-probe"));
+        assert_eq!(run.exit_code, Some(7));
+        assert!(!run.ok);
+    }
 
     #[cfg(unix)]
     #[test]

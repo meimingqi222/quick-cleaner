@@ -1,8 +1,11 @@
 //! Windows 平台专用功能总装
 
+mod app_discovery;
+pub use app_discovery::explain_source_install;
 pub mod app_icons;
 pub mod apps;
 pub mod gpu;
+pub(crate) mod identity;
 pub mod inuse;
 pub mod mft;
 pub mod nvml;
@@ -12,6 +15,7 @@ pub mod recycle;
 pub(crate) mod registry;
 pub mod residuals;
 pub mod security;
+mod source_install;
 pub mod status;
 pub mod thermal;
 pub mod updater;
@@ -20,6 +24,11 @@ pub mod volume;
 pub mod wmi;
 
 pub use app_icons::{app_icon_from_bundle, app_icon_png};
+pub(super) fn run_discovered_uninstaller_reported(
+    app: &crate::core::apps::InstalledApp,
+) -> crate::core::apps::UninstallOutcome {
+    app_discovery::run_uninstaller_reported(app)
+}
 pub use apps::{
     dir_or_file_size, list_installed_apps, open_in_default_app, reveal_in_explorer,
     run_uninstaller_and_wait,

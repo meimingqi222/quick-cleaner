@@ -1,12 +1,11 @@
 //! 核心清理引擎与安全防护
 
-use crate::core::model::{snapshot_name, TargetIdentity};
+use crate::core::model::TargetIdentity;
 use crate::core::safety::is_protected;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
 /// 清理进度。后台线程边删边更新，UI 定时读快照渲染。
 #[derive(Debug, Default)]
@@ -157,6 +156,10 @@ pub enum FailReason {
     Unverified,
     /// 删除前身份复核与扫描期快照不一致：目标被替换或仍在被改写。
     Changed,
+    WorktreeDirty,
+    WorktreeLocked,
+    WorktreeUnverified,
+    WorktreeManaged,
     #[default]
     Other,
 }
@@ -164,6 +167,7 @@ pub enum FailReason {
 /// 一次清理的汇总结果。没删掉的目标会被记录下来供 UI 展示。
 #[derive(Clone, Debug, Default)]
 pub struct CleanReport {
+    pub plan_executions: Vec<crate::core::rules::flow::PlanExecution>,
     pub ok: usize,
     pub skipped: usize,
     /// 策略拒绝（保护路径、白名单、取消）的具体目标，供 UI 和「还在磁盘
@@ -211,6 +215,7 @@ impl CleanReport {
     }
 
     pub fn merge(&mut self, other: CleanReport) {
+        self.plan_executions.extend(other.plan_executions);
         self.ok += other.ok;
         self.skipped += other.skipped;
         self.skipped_items.extend(other.skipped_items);
@@ -662,7 +667,7 @@ fn classify_io_error(err: &std::io::Error) -> FailReason {
 /// 路径 → 失败原因。`audit` 开新批次时清空。
 static FAIL_REASONS: Mutex<Vec<(PathBuf, FailReason)>> = Mutex::new(Vec::new());
 
-fn record_fail_reason(path: &Path, reason: FailReason) {
+pub(crate) fn record_fail_reason(path: &Path, reason: FailReason) {
     if let Ok(mut g) = FAIL_REASONS.lock() {
         // 同路径后写覆盖前写：收尾只关心最终原因。
         if let Some(slot) = g.iter_mut().find(|(p, _)| p == path) {
@@ -780,18 +785,9 @@ pub(crate) const LIVE_DATABASE_REFUSAL: &str = "命中活数据库保护：目�
 ///    任何拦截——现在提到删除入口本身，不依赖调用方记得先查一遍。命中
 ///    记 [`CleanResult::Failed`]：这是安全机制拦住的删除，不是用户排除。
 pub fn clean_path(path: &Path, p: &CleanProgress) -> CleanResult {
-    // 虚拟路径：APFS 本地快照，用 tmutil deletelocalsnapshots 删除
-    if let Some(snapshot) = snapshot_name(path) {
-        p.note(path);
-        let status = crate::core::proc::run_with_timeout(
-            "tmutil",
-            &["deletelocalsnapshots", snapshot.as_str()],
-            Duration::from_secs(60),
-        );
-        return match status {
-            Some(run) if run.ok => CleanResult::Ok,
-            _ => CleanResult::Failed,
-        };
+    // Filesystem helpers cannot authorize native operations from a display URI.
+    if crate::core::model::is_virtual_path(path) {
+        return CleanResult::Skipped;
     }
 
     if std::fs::symlink_metadata(path).is_err() {
@@ -993,6 +989,9 @@ fn audit(action: &str, paths: impl Iterator<Item = PathBuf>) {
 /// 一个清理目标及其处置方式。
 #[derive(Clone, Debug)]
 pub struct CleanTarget {
+    pub plans: Vec<std::sync::Arc<crate::core::rules::CleanupPlan>>,
+    pub rule: Option<crate::core::rules::RuleRef>,
+    pub operation: crate::core::rules::Operation,
     pub path: PathBuf,
     /// 连目录本身一起删，还是只清空内容。
     ///
@@ -1031,6 +1030,9 @@ impl CleanTarget {
     /// 只清空内容，保留目录本身。
     pub fn empty(path: PathBuf) -> Self {
         Self {
+            plans: Vec::new(),
+            rule: None,
+            operation: crate::core::rules::Operation::classify(&path, false),
             path,
             remove_dir: false,
             size_hint: None,
@@ -1042,6 +1044,9 @@ impl CleanTarget {
     /// 连目录一起删。
     pub fn remove(path: PathBuf) -> Self {
         Self {
+            plans: Vec::new(),
+            rule: None,
+            operation: crate::core::rules::Operation::classify(&path, true),
             path,
             remove_dir: true,
             size_hint: None,
@@ -1053,6 +1058,8 @@ impl CleanTarget {
 
 /// 清理多个扫描目标。
 pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport {
+    let merged = merge_targets(targets);
+    let targets = merged.as_slice();
     audit("分类清理", targets.iter().map(|t| t.path.clone()));
 
     // 扫描阶段的占用检测是十几秒到几分钟前的快照（详见 core::inuse 顶部
@@ -1066,12 +1073,69 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
 
     let mut report = CleanReport::default();
     let mut bin_done = false;
+    let mut seen = std::collections::HashSet::new();
     for t in targets {
         if p.cancelled() {
             break;
         }
         let d = &t.path;
         p.note(d);
+        if crate::core::safety::is_managed_agent_worktree(d) {
+            record_fail_reason(d, FailReason::WorktreeManaged);
+            note_delete_failure(d, &"worktree-owned-by-application-session");
+            report.record(d, CleanResult::Failed);
+            continue;
+        }
+        let legacy;
+        let plans = if t.plans.is_empty() {
+            legacy = t
+                .rule
+                .as_ref()
+                .map(|rule| {
+                    std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+                        rule.clone(),
+                        vec![crate::core::rules::PlannedTarget {
+                            path: d.clone(),
+                            operation: t.operation.clone(),
+                            identity: t.identity,
+                            disposal: t.disposal,
+                        }],
+                    ))
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            &legacy
+        } else {
+            &t.plans
+        };
+        let merged_rule_error = t.rule.as_ref().and_then(|rule| rule.revalidate().err());
+        if let Some(reason) = merged_rule_error.or_else(|| {
+            plans.iter().find_map(|plan| {
+                plan.validate_binding(d, &t.operation, t.disposal, t.identity)
+                    .err()
+            })
+        }) {
+            record_fail_reason(d, FailReason::Unverified);
+            note_delete_failure(d, &reason);
+            report.record(d, CleanResult::Failed);
+            continue;
+        }
+        let key = t.operation.target_key(d);
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        // Typed operations cannot be used to bypass a platform owner route or change disposal by load order.
+        if !t.operation.validate_target(d, t.remove_dir)
+            || targets.iter().any(|other| {
+                other.operation.target_key(&other.path) == key
+                    && (other.operation != t.operation || other.disposal != t.disposal)
+            })
+        {
+            record_fail_reason(d, FailReason::Unverified);
+            note_delete_failure(d, &"conflicting-plan-operation");
+            report.record(d, CleanResult::Failed);
+            continue;
+        }
 
         match spot.get(d) {
             Some(crate::core::inuse::SpotCheck::Busy) => {
@@ -1092,7 +1156,7 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
         // 系统回收站/废纸篓：整目录一次清空，不逐条删。平台差异（Windows 的
         // `$Recycle.Bin` 与 macOS 的 `~/.Trash`）由门面契约的 `is_system_trash`
         // / `empty_trash` 吃掉，这里不再有 `#[cfg]` 分支。
-        if crate::platform::is_system_trash(d) {
+        if t.operation == crate::core::rules::Operation::Trash {
             if !bin_done {
                 report.merge(crate::platform::empty_trash(p));
                 bin_done = true;
@@ -1122,74 +1186,100 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             continue;
         }
 
-        // Docker 镜像：虚拟路径余文就是 rmi 引用参数，路由到
-        // `docker image rm`（机制与不用 --force 的理由见 `core::docker`）。
-        if let Some(rmi_ref) = crate::core::model::docker_rmi_ref(d) {
-            report.record_target(
-                CleanFailure::Path(d.clone()),
-                clean_docker_image(&rmi_ref, t.size_hint, p),
-            );
-            continue;
-        }
-
-        // brew 清理：与 Docker 同构的虚拟目标，路由到 `brew cleanup`
-        // （owner command——命令自己知道怎么安全收缩，见 `core::brew`）。
-        // 体积记账用扫描期的 size_hint：真实清掉的量由 brew 决定，与
-        // dry-run 的估算不完全一致，但这只影响「已释放 X」的显示精度。
-        if crate::core::brew::is_brew_virtual(d) {
-            let result = if crate::core::brew::run_cleanup() {
-                p.files.fetch_add(1, Ordering::Relaxed);
-                p.bytes
-                    .fetch_add(t.size_hint.unwrap_or(0), Ordering::Relaxed);
-                CleanResult::Ok
+        if matches!(
+            t.operation,
+            crate::core::rules::Operation::Docker { .. }
+                | crate::core::rules::Operation::Snapshot { .. }
+                | crate::core::rules::Operation::Brew
+        ) {
+            let native_plan;
+            let plan = if let Some(plan) = plans.first() {
+                plan
             } else {
-                p.failed.fetch_add(1, Ordering::Relaxed);
-                CleanResult::Failed
+                native_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+                    crate::core::rules::RuleRef::engine(),
+                    vec![crate::core::rules::PlannedTarget {
+                        path: d.clone(),
+                        operation: t.operation.clone(),
+                        identity: t.identity,
+                        disposal: t.disposal,
+                    }],
+                ));
+                &native_plan
             };
-            report.record(d, result);
+            if let Some(index) = plan.targets.iter().position(|target| {
+                target.operation.target_key(&target.path) == t.operation.target_key(d)
+            }) {
+                report.merge(crate::core::rules::flow::execute_native(
+                    plan,
+                    index,
+                    p,
+                    t.size_hint,
+                ));
+            } else {
+                report.record(d, CleanResult::Failed);
+            }
             continue;
         }
 
-        // Go module cache / pnpm store：owner command 路由（`core::owner`）。
-        // 这两个缓存的内部状态（Go 的只读位与索引、pnpm 的 store 元数据）
-        // 让裸删有留不一致的风险，优先让生态自己的命令收缩；探测不满足
-        // （工具链缺席、路径与命令作用域不一致）回退现有裸删。命令失败
-        // **不**回退：跑到一半的 store 状态未知，不能再动刀。
-        // 体积按扫描期的 size_hint 估算记账（命令收缩量与称重口径不完全
-        // 一致，只影响显示精度）。
-        let go_modcache = crate::core::owner::is_go_modcache(d);
-        let pnpm_store = crate::core::owner::is_pnpm_store(d);
-        if (go_modcache || pnpm_store) && !root_identity_holds(d, t.identity) {
-            record_fail_reason(d, FailReason::Changed);
-            note_delete_failure(d, &"identity-changed");
-            report.record(d, CleanResult::Failed);
+        if matches!(
+            t.operation,
+            crate::core::rules::Operation::Go | crate::core::rules::Operation::Pnpm
+        ) {
+            let owner_plan;
+            let plan = if let Some(plan) = plans.first() {
+                plan
+            } else {
+                owner_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+                    crate::core::rules::RuleRef::engine(),
+                    vec![crate::core::rules::PlannedTarget {
+                        path: d.clone(),
+                        operation: t.operation.clone(),
+                        identity: t.identity,
+                        disposal: t.disposal,
+                    }],
+                ));
+                &owner_plan
+            };
+            if let Some(index) = plan.targets.iter().position(|target| {
+                target.operation.target_key(&target.path) == t.operation.target_key(d)
+            }) {
+                report.merge(crate::core::rules::flow::execute_owner(
+                    plan,
+                    index,
+                    p,
+                    spot.get(d)
+                        .copied()
+                        .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
+                    t.size_hint,
+                ));
+            } else {
+                report.record(d, CleanResult::Failed);
+            }
             continue;
         }
-        let owner_result: Option<Option<bool>> = if go_modcache {
-            crate::core::owner::go_clean_modcache(d).map(Some)
-        } else if pnpm_store {
-            crate::core::owner::pnpm_store_prune(d).map(Some)
-        } else {
-            None
-        };
-        match owner_result {
-            // 命令明确失败：报 Failed，不回退裸删
-            Some(Some(false)) => {
-                note_delete_failure(d, &"owner-command-failed");
-                p.failed.fetch_add(1, Ordering::Relaxed);
-                report.record(d, CleanResult::Failed);
+
+        if matches!(
+            t.operation,
+            crate::core::rules::Operation::File
+                | crate::core::rules::Operation::Tree
+                | crate::core::rules::Operation::Contents
+        ) && !t.plans.is_empty()
+        {
+            let plan = &t.plans[0];
+            if let Some(index) = plan.targets.iter().position(|target| {
+                target.operation.target_key(&target.path) == t.operation.target_key(d)
+            }) {
+                report.merge(crate::core::rules::flow::execute_filesystem(
+                    plan,
+                    index,
+                    p,
+                    spot.get(d)
+                        .copied()
+                        .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
+                ));
                 continue;
             }
-            // 命令成功：按估算体积记账，跳过裸删
-            Some(Some(true)) => {
-                p.files.fetch_add(1, Ordering::Relaxed);
-                p.bytes
-                    .fetch_add(t.size_hint.unwrap_or(0), Ordering::Relaxed);
-                report.record(d, CleanResult::Ok);
-                continue;
-            }
-            // 探测不满足（None 外层）：回退现有裸删路径
-            _ => {}
         }
 
         if t.remove_dir {
@@ -1203,7 +1293,42 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
                 report.record(d, CleanResult::Failed);
                 continue;
             }
-            report.record(d, dispose(d, t.disposal, p));
+            if matches!(
+                t.operation,
+                crate::core::rules::Operation::GitWorktree { .. }
+            ) {
+                let worktree_plan;
+                let plan = if let Some(plan) = plans.first() {
+                    plan
+                } else {
+                    worktree_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+                        crate::core::rules::RuleRef::engine(),
+                        vec![crate::core::rules::PlannedTarget {
+                            path: d.clone(),
+                            operation: t.operation.clone(),
+                            identity: t.identity,
+                            disposal: t.disposal,
+                        }],
+                    ));
+                    &worktree_plan
+                };
+                if let Some(index) = plan.targets.iter().position(|target| {
+                    target.operation.target_key(&target.path) == t.operation.target_key(d)
+                }) {
+                    report.merge(crate::core::rules::flow::execute_worktree(
+                        plan,
+                        index,
+                        p,
+                        spot.get(d)
+                            .copied()
+                            .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
+                    ));
+                } else {
+                    report.record(d, CleanResult::Failed);
+                }
+            } else {
+                report.record(d, dispose(d, t.disposal, p));
+            }
         } else {
             report.merge(clean_dir_contents(d, p));
         }
@@ -1230,6 +1355,50 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
     report
 }
 
+pub(crate) fn merge_targets(targets: &[CleanTarget]) -> Vec<CleanTarget> {
+    let mut positions = std::collections::HashMap::new();
+    let mut merged: Vec<CleanTarget> = Vec::new();
+    for target in targets {
+        let key = target.operation.target_key(&target.path);
+        if let Some(&index) = positions.get(&key) {
+            let first: &mut CleanTarget = &mut merged[index];
+            let conflict = first.operation != target.operation
+                || first.disposal != target.disposal
+                || first.identity.is_some() != target.identity.is_some()
+                || first
+                    .identity
+                    .is_some_and(|identity| !identity.recheck(&first.path))
+                || target
+                    .identity
+                    .is_some_and(|identity| !identity.recheck(&target.path));
+            for plan in &target.plans {
+                if !first
+                    .plans
+                    .iter()
+                    .any(|existing| std::sync::Arc::ptr_eq(existing, plan))
+                {
+                    first.plans.push(plan.clone());
+                }
+            }
+            if first.rule.is_none() {
+                first.rule = target.rule.clone();
+            } else if let (Some(rule), Some(other)) = (&mut first.rule, &target.rule) {
+                rule.merge(other);
+            }
+            if conflict {
+                first
+                    .rule
+                    .get_or_insert_with(crate::core::rules::RuleRef::engine)
+                    .blocked = Some("Conflicting selected cleanup policies".into());
+            }
+        } else {
+            positions.insert(key, merged.len());
+            merged.push(target.clone());
+        }
+    }
+    merged
+}
+
 #[cfg(target_os = "macos")]
 fn is_launch_agent_plist(path: &Path) -> bool {
     if path.extension().is_none_or(|ext| ext != "plist") {
@@ -1243,35 +1412,9 @@ fn is_launch_agent_plist(path: &Path) -> bool {
             .is_some_and(|home| parent == home.join("Library/LaunchAgents"))
 }
 
-/// 删除一个 Docker 镜像引用。
-///
-/// 字节记账：`docker image rm` 对多标签镜像可能只摘标签（`Untagged:`）
-/// 而不删层（`Deleted:`），只有层真删了磁盘空间才释放，此时才往
-/// bytes 上加——「已释放 X」必须是真的释放了才算。
-fn clean_docker_image(rmi_ref: &str, size_hint: Option<u64>, p: &CleanProgress) -> CleanResult {
-    if p.cancelled() {
-        return CleanResult::Skipped;
-    }
-    match crate::core::docker::remove_image(rmi_ref) {
-        Ok(layers_deleted) => {
-            p.files.fetch_add(1, Ordering::Relaxed);
-            if layers_deleted {
-                if let Some(size) = size_hint {
-                    p.bytes.fetch_add(size, Ordering::Relaxed);
-                }
-            }
-            CleanResult::Ok
-        }
-        Err(err) => {
-            note_delete_failure(Path::new(rmi_ref), &err);
-            p.failed.fetch_add(1, Ordering::Relaxed);
-            CleanResult::Failed
-        }
-    }
-}
-
 /// 手选路径的处置方式。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Disposal {
     /// 直接抹掉，立刻释放空间。
     #[default]
@@ -1435,6 +1578,34 @@ fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn core_duplicate_merge_preserves_every_rule_in_both_orders() {
+        let root = crate::core::testing::fixture("core_rule_merge");
+        std::fs::create_dir_all(root.join("keep")).unwrap();
+        std::fs::write(root.join("keep/sentinel"), b"preserved").unwrap();
+        let mut bundle = crate::core::rules::snapshot().bundle.clone();
+        bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "engine")
+            .unwrap()
+            .preserve
+            .push("keep".into());
+        let snapshot = std::sync::Arc::new(crate::core::rules::RuleSnapshot { bundle });
+        let mut first = CleanTarget::remove(root.clone());
+        first.identity = crate::core::model::capture_identity(&root);
+        let mut second = first.clone();
+        second.rule = Some(crate::core::rules::with_snapshot(snapshot, || {
+            crate::core::rules::RuleRef::new("engine", Some(root.clone()))
+        }));
+        for targets in [[first.clone(), second.clone()], [second, first]] {
+            let report = clean_targets(&targets, &CleanProgress::default());
+            assert_eq!(report.failed.len(), 1);
+            assert_eq!(report.ok, 0);
+            assert!(root.join("keep/sentinel").is_file());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// 用户白名单是删除层的硬拦截：哪怕用户把白名单目标手动勾选
     /// （勾上 = 绕过所有 recommended 降级、强过确认弹窗），`clean_path`
@@ -1922,6 +2093,8 @@ mod tests {
         let parent_identity = crate::core::model::capture_identity(&base);
         let sibling_identity = crate::core::model::capture_identity(&sibling);
         let victim_identity = crate::core::model::capture_identity(&victim);
+        #[cfg(windows)]
+        let parent_modified = std::fs::metadata(&base).unwrap().modified().unwrap();
         assert!(parent_identity.is_some() && sibling_identity.is_some());
 
         // 攻击：read_dir 之后、真正删除之前，victim 被换成了别的内容；
@@ -1933,6 +2106,9 @@ mod tests {
         )
         .unwrap();
 
+        // Windows root identity includes mtime; keep the parent unchanged as this fixture promises.
+        #[cfg(windows)]
+        crate::core::testing::set_modified(&base, parent_modified);
         assert!(
             leaf_binding_holds(&base, parent_identity, &sibling, sibling_identity),
             "没被动过的兄弟节点不该被牵连"
@@ -2103,6 +2279,133 @@ mod tests {
         assert!(base.exists(), "活数据库目录必须原地保留");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scanned_filesystem_target_runs_reported_plan_lifecycle() {
+        let root = crate::core::testing::fixture("cleaner_plan_lifecycle");
+        let path = root.join("cache");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("sentinel"), b"fixture").unwrap();
+        let mut selected = CleanTarget::remove(path.clone());
+        selected.identity = crate::core::model::capture_identity(&path);
+        selected
+            .plans
+            .push(std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+                crate::core::rules::RuleRef::engine(),
+                vec![crate::core::rules::PlannedTarget {
+                    path: path.clone(),
+                    operation: selected.operation.clone(),
+                    identity: selected.identity,
+                    disposal: selected.disposal,
+                }],
+            )));
+        let report = clean_targets(&[selected], &CleanProgress::default());
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(report.plan_executions.len(), 1);
+        assert!(report.plan_executions[0]
+            .steps
+            .iter()
+            .all(|step| step.status == crate::core::rules::flow::StepStatus::Succeeded));
+        assert!(!path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicate_scanned_plans_keep_unknown_observations_and_selection_binding() {
+        use crate::core::rules::{CleanupPlan, PlannedTarget, RuleRef};
+        let root = crate::core::testing::fixture("scanned_plan_constraints");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("sentinel"), b"keep").unwrap();
+        let mut first = CleanTarget::remove(root.clone());
+        first.identity = crate::core::model::capture_identity(&root);
+        let planned = PlannedTarget {
+            path: root.clone(),
+            operation: first.operation.clone(),
+            identity: first.identity,
+            disposal: first.disposal,
+        };
+        first.plans.push(std::sync::Arc::new(CleanupPlan::new(
+            RuleRef::engine(),
+            vec![planned.clone()],
+        )));
+        let mut unknown = RuleRef::engine().observed();
+        std::sync::Arc::make_mut(unknown.observation.as_mut().unwrap()).detected =
+            crate::core::rules::facts::Evidence::Unknown;
+        let mut second = first.clone();
+        second.plans = vec![std::sync::Arc::new(CleanupPlan::new(
+            unknown,
+            vec![planned],
+        ))];
+        for input in [
+            vec![first.clone(), second.clone()],
+            vec![second, first.clone()],
+        ] {
+            let merged = merge_targets(&input);
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].plans.len(), 2);
+            assert_eq!(clean_targets(&input, &CleanProgress::default()).ok, 0);
+            assert!(root.join("sentinel").is_file());
+        }
+        first.disposal = Disposal::RecycleBin;
+        assert_eq!(clean_targets(&[first], &CleanProgress::default()).ok, 0);
+        assert!(root.join("sentinel").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn typed_plan_rejects_conflict_and_wrong_operation_without_deleting() {
+        let root = crate::core::testing::fixture("typed_plan_conflict");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("keep.txt"), b"fixture").unwrap();
+        let mut target = CleanTarget::remove(root.clone());
+        target.identity = crate::core::model::capture_identity(&root);
+        target.operation = crate::core::rules::Operation::Docker {
+            reference: "--invalid".into(),
+        };
+        assert_eq!(
+            clean_targets(&[target.clone()], &CleanProgress::default()).ok,
+            0
+        );
+        assert!(root.join("keep.txt").is_file());
+        target.operation = crate::core::rules::Operation::Tree;
+        let mut other = target.clone();
+        other.operation = crate::core::rules::Operation::Contents;
+        other.remove_dir = false;
+        assert_eq!(
+            clean_targets(&[target, other], &CleanProgress::default()).ok,
+            0
+        );
+        assert!(root.join("keep.txt").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_resource_dedupe_uses_parameters_and_filesystem_helpers_never_dispatch() {
+        use crate::core::rules::Operation;
+        let mut first = CleanTarget::empty(PathBuf::from("docker://image/label-one"));
+        first.operation = Operation::Docker {
+            reference: "example/app:2".into(),
+        };
+        let mut second = first.clone();
+        second.path = PathBuf::from("docker://image/label-two");
+        assert_eq!(merge_targets(&[first.clone(), second.clone()]).len(), 1);
+        assert_eq!(merge_targets(&[second.clone(), first.clone()]).len(), 1);
+        second.operation = Operation::Docker {
+            reference: "example/app:3".into(),
+        };
+        second.path = first.path.clone();
+        assert_eq!(merge_targets(&[first, second]).len(), 2);
+        for path in [
+            "tmutil://snapshot/2026-10-05-120000",
+            "docker://image/example/app:2",
+            "brew://cleanup",
+        ] {
+            assert_eq!(
+                clean_path(Path::new(path), &CleanProgress::default()),
+                CleanResult::Skipped
+            );
+        }
     }
 
     /// 主库 + 伴随文件同时存在：单独把主库文件本身作为清理目标也要被拒绝，

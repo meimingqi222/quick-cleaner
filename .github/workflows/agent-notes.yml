@@ -1,0 +1,17 @@
+name: Verify regression notes
+on:
+  push:
+    paths: ['docs/agent-notes/**', 'src/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
+  pull_request:
+    paths: ['docs/agent-notes/**', 'src/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors
+      - run: python -X utf8 scripts/check-pitfall-notes.py

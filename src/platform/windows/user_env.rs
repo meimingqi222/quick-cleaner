@@ -159,6 +159,19 @@ pub fn real_user_known_folders() -> &'static [PathBuf] {
     })
 }
 
+pub(super) fn real_user_desktop() -> Option<PathBuf> {
+    use winapi::um::winreg::HKEY_USERS;
+    real_user_home()?;
+    let sid = real_user_sid()?;
+    let subpath =
+        format!(r"{sid}\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders");
+    super::registry::enum_string_values(HKEY_USERS, &subpath, 0)
+        .into_iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Desktop"))
+        .and_then(|(_, raw)| expand_user_profile(&raw))
+        .filter(|path| path.is_absolute())
+}
+
 /// 展开 `User Shell Folders` 里的 `%USERPROFILE%` 前缀。
 ///
 /// 这些值是 `REG_EXPAND_SZ`，绝大多数形如 `%USERPROFILE%\Desktop`。展开时

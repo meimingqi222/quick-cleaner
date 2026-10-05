@@ -41,6 +41,7 @@ impl crate::ui::Root {
         self.junk.discover_task.take();
 
         self.junk.gen += 1;
+        self.junk.rule_snapshot = crate::core::rules::snapshot();
         let gen = self.junk.gen;
         self.junk.scanning = true;
         self.junk.scanned = false;
@@ -65,9 +66,11 @@ impl crate::ui::Root {
         // 阶段二在树上 DFS。索引复用后首次启动和后续启动都受益。
         let brew_cleanup_at = self.settings.brew_cleanup_at;
         let executor = cx.background_executor().clone();
+        let snapshot = self.junk.rule_snapshot.clone();
         let scan = cx.background_executor().spawn(async move {
             // 目标表会枚举大量应用缓存目录，必须和索引扫描一样离开 UI 线程。
-            let targets = all_targets(brew_cleanup_at);
+            let targets =
+                crate::core::rules::with_snapshot(snapshot, || all_targets(brew_cleanup_at));
             let busy_paths: Vec<std::path::PathBuf> =
                 targets.iter().map(|t| t.path.clone()).collect();
             let detect = executor.spawn(async move { crate::core::inuse::detect(&busy_paths) });
@@ -170,9 +173,10 @@ impl crate::ui::Root {
     ) {
         self.junk.discovering = true;
         let live = self.live.clone();
-        let discover = cx
-            .background_executor()
-            .spawn(async move { scan_discovered(&live, prescanned) });
+        let snapshot = self.junk.rule_snapshot.clone();
+        let discover = cx.background_executor().spawn(async move {
+            crate::core::rules::with_snapshot(snapshot, || scan_discovered(&live, prescanned))
+        });
 
         self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
             let (items, partial) = discover.await;
@@ -205,9 +209,10 @@ impl crate::ui::Root {
     ) {
         self.junk.discovering = true;
         let live = self.live.clone();
-        let discover = cx
-            .background_executor()
-            .spawn(async move { scan_discovered_arc(&live, prescanned) });
+        let snapshot = self.junk.rule_snapshot.clone();
+        let discover = cx.background_executor().spawn(async move {
+            crate::core::rules::with_snapshot(snapshot, || scan_discovered_arc(&live, prescanned))
+        });
 
         self.junk.discover_task = Some(cx.spawn(async move |this, cx| {
             let (items, partial) = discover.await;

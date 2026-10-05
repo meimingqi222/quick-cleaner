@@ -28,6 +28,15 @@ pub fn scan_large_old_files(
     min_size_bytes: u64,
     tree: Option<&SizeTree>,
 ) -> Vec<LargeFileItem> {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        scan_large_old_files_inner(live, min_size_bytes, tree)
+    })
+}
+fn scan_large_old_files_inner(
+    live: &AtomicBool,
+    min_size_bytes: u64,
+    tree: Option<&SizeTree>,
+) -> Vec<LargeFileItem> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -35,7 +44,12 @@ pub fn scan_large_old_files(
 
     let search_roots = get_user_content_roots();
     let engine = FSIndexEngine::new(tree);
-    let files = engine.query_large_files(&search_roots, min_size_bytes, 500, live);
+    let files = engine.query_large_files(
+        &search_roots,
+        min_size_bytes,
+        super::policy("large_result_limit", 500) as usize,
+        live,
+    );
 
     let mut all_files: Vec<LargeFileItem> = files
         .into_iter()
@@ -57,7 +71,7 @@ pub fn scan_large_old_files(
             let age_days = now.saturating_sub(f.mtime) / 86400;
             let last_accessed_str = format_age_text(age_days);
 
-            let selected = age_days >= 90;
+            let selected = age_days >= super::policy("large_selected_age_days", 90);
 
             LargeFileItem {
                 filename,
@@ -83,14 +97,12 @@ pub fn scan_large_old_files(
 }
 
 pub fn classify_large_file_type(ext: &str) -> (&'static str, &'static str, usize) {
-    match ext {
-        "mp4" | "mov" | "mkv" | "avi" | "flv" | "wmv" | "webm" | "m4v" => ("视频影音", "Videos", 0),
-        "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" | "xz" | "bz2" | "dmg" | "iso" | "pkg" => {
-            ("归档文件", "Archives", 1)
-        }
-        "pdf" | "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "txt" | "md" | "epub" => {
-            ("文本文档", "Documents", 2)
-        }
-        _ => ("其它文件", "Others", 3),
-    }
+    [
+        ("large_video", ("视频影音", "Videos", 0)),
+        ("large_archive", ("归档文件", "Archives", 1)),
+        ("large_document", ("文本文档", "Documents", 2)),
+    ]
+    .into_iter()
+    .find_map(|(key, label)| super::extension_in(key, ext).then_some(label))
+    .unwrap_or(("其它文件", "Others", 3))
 }

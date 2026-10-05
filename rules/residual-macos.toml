@@ -1,0 +1,152 @@
+id = "residual-macos"
+version = 1
+platform = "macos"
+required = ["file", "registration"]
+
+# Bundle-ID evidence and family exclusion algorithms remain fixed in Rust.
+[lists]
+helper_id_suffixes = [".helper.renderer", ".helper.plugin", ".helper.alerts", ".helper.gpu", ".helper.np", ".helper", ".shipit", ".sparkle", ".xpc"]
+shared_vendor_prefixes = ["com.apple", "com.google", "com.microsoft", "com.adobe", "com.amazon", "com.oracle", "com.jetbrains", "org.mozilla", "org.chromium", "com.electron", "net.java"]
+dot_config_parents = ["", ".config", ".cache", ".local/share", ".local/state"]
+protected_dot_dirs = ["config", "cache", "local", "ssh", "gnupg", "aws", "kube", "docker", "npm", "cargo", "rustup", "gradle", "nvm", "pyenv", "vim", "git", "trash"]
+id_file_suffixes = [".plist", ".binarycookies", ".savedstate", ".sfl2", ".sfl3", ".sfl4"]
+
+[[locations.satellite_dirs]]
+path = "Preferences"
+source = "PreferenceFile"
+
+[[locations.satellite_dirs]]
+path = "Preferences/ByHost"
+source = "PreferenceFile"
+
+[[locations.satellite_dirs]]
+path = "Caches"
+source = "CacheDir"
+
+[[locations.satellite_dirs]]
+path = "Logs"
+source = "LogDir"
+
+[[locations.satellite_dirs]]
+path = "HTTPStorages"
+source = "Other"
+
+[[locations.satellite_dirs]]
+path = "Saved Application State"
+source = "Other"
+
+[[locations.satellite_dirs]]
+path = "LaunchAgents"
+source = "LaunchAgent"
+
+[[locations.user_family_dirs]]
+path = "Application Support"
+source = "AppSupportDir"
+
+[[locations.user_family_dirs]]
+path = "Caches"
+source = "CacheDir"
+
+[[locations.user_family_dirs]]
+path = "Preferences"
+source = "PreferenceFile"
+
+[[locations.user_family_dirs]]
+path = "Preferences/ByHost"
+source = "PreferenceFile"
+
+[[locations.user_family_dirs]]
+path = "Logs"
+source = "LogDir"
+
+[[locations.user_family_dirs]]
+path = "HTTPStorages"
+source = "Other"
+
+[[locations.user_family_dirs]]
+path = "Containers"
+source = "ContainerDir"
+
+[[locations.user_family_dirs]]
+path = "Group Containers"
+source = "ContainerDir"
+
+[[locations.user_family_dirs]]
+path = "Application Scripts"
+source = "ApplicationScript"
+
+[[locations.user_family_dirs]]
+path = "Saved Application State"
+source = "Other"
+
+[[locations.user_family_dirs]]
+path = "LaunchAgents"
+source = "LaunchAgent"
+
+[[locations.system_family_dirs]]
+path = "Application Support"
+source = "AppSupportDir"
+
+[[locations.system_family_dirs]]
+path = "Caches"
+source = "CacheDir"
+
+[[locations.system_family_dirs]]
+path = "Preferences"
+source = "PreferenceFile"
+
+[[locations.system_family_dirs]]
+path = "Logs"
+source = "LogDir"
+
+[[locations.system_family_dirs]]
+path = "Application Scripts"
+source = "ApplicationScript"
+
+[[locations.system_family_dirs]]
+path = "LaunchAgents"
+source = "LaunchAgent"
+
+[[locations.system_family_dirs]]
+path = "LaunchDaemons"
+source = "LaunchDaemon"
+
+[[locations.system_family_dirs]]
+path = "PrivilegedHelperTools"
+source = "LaunchDaemon"
+
+[[locations.orphan_roots]]
+path = "Caches"
+source = "CacheDir"
+
+[[locations.orphan_roots]]
+path = "HTTPStorages"
+source = "Other"
+
+[[locations.orphan_roots]]
+path = "Logs"
+source = "LogDir"
+
+[[locations.orphan_roots]]
+path = "Saved Application State"
+source = "Other"
+
+[[locations.orphan_roots]]
+path = "WebKit"
+source = "CacheDir"
+
+[[locations.orphan_roots]]
+path = "Preferences"
+source = "PreferenceFile"
+
+[[locations.orphan_roots]]
+path = "Preferences/ByHost"
+source = "PreferenceFile"
+
+[[locations.orphan_roots]]
+path = "Application Support"
+source = "AppSupportDir"
+
+[[locations.orphan_roots]]
+path = "LaunchAgents"
+source = "LaunchAgent"

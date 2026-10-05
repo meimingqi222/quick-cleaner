@@ -17,9 +17,9 @@
 //!
 //! 与 brew（`core::brew`）不同，这两个**不做虚拟目标**：现有的
 //! `go/pkg/mod`、`pnpm/store` 目录目标保留（体积称重真实、用户能看到
-//! 大小），只在 `cleaner::clean_targets` 里把删除动作**路由**到命令。
-//! 探测失败（工具链不在 PATH、目标路径与命令作用域不一致）一律回退
-//! 现有裸删路径——行为不比改动前差。
+//! 大小），由统一能力执行器分开执行作用域预检、固定操作与完成核验。
+//! 未尝试命令且预检不可用时，按原授权范围清空内容并保留根目录；
+//! 步骤报告记录实际路线，尝试命令后失败禁止回退。
 
 use std::path::Path;
 use std::time::Duration;
@@ -28,6 +28,99 @@ use std::time::Duration;
 /// 由 cleaner 报 Failed（不回退裸删——命令跑到一半被杀已经动过 store，
 /// 再裸删等于在未知状态上继续动刀）。
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedOwner {
+    operation: crate::core::rules::Operation,
+    target: std::path::PathBuf,
+}
+impl PreparedOwner {
+    pub(crate) fn prepare(
+        target: &Path,
+        operation: &crate::core::rules::Operation,
+    ) -> Option<Self> {
+        Self::prepare_with(target, operation, |tool, args, timeout| {
+            crate::core::proc::run_with_timeout(tool, args, timeout)
+        })
+    }
+    fn prepare_with(
+        target: &Path,
+        operation: &crate::core::rules::Operation,
+        mut run: impl FnMut(&str, &[&str], Duration) -> Option<crate::core::proc::ProcRun>,
+    ) -> Option<Self> {
+        use crate::core::rules::Operation;
+        let (tool, args): (&str, &[&str]) = match operation {
+            Operation::Go => ("go", &["env", "GOMODCACHE"]),
+            Operation::Pnpm => ("pnpm", &["store", "path"]),
+            _ => return None,
+        };
+        let result = run(tool, args, Duration::from_secs(5))?;
+        if !result.ok {
+            return None;
+        }
+        let path = std::str::from_utf8(&result.stdout).ok()?.trim();
+        let owner = crate::core::safety::norm(Path::new(path));
+        let selected = crate::core::safety::norm(target);
+        if path.is_empty()
+            || !(owner == selected
+                || (*operation == Operation::Pnpm && owner.starts_with(&format!("{selected}\\"))))
+        {
+            return None;
+        }
+        Some(Self {
+            operation: operation.clone(),
+            target: target.into(),
+        })
+    }
+    pub(crate) fn apply(&self) -> Result<(), String> {
+        self.apply_with(|tool, args, timeout| {
+            crate::core::proc::run_with_timeout(tool, args, timeout)
+        })
+    }
+    fn apply_with(
+        &self,
+        mut run: impl FnMut(&str, &[&str], Duration) -> Option<crate::core::proc::ProcRun>,
+    ) -> Result<(), String> {
+        let (tool, args): (&str, &[&str]) = match self.operation {
+            crate::core::rules::Operation::Go => ("go", &["clean", "-modcache"]),
+            crate::core::rules::Operation::Pnpm => ("pnpm", &["store", "prune"]),
+            _ => return Err("Unsupported owner capability".into()),
+        };
+        let result = run(tool, args, COMMAND_TIMEOUT)
+            .ok_or("Owner cleanup unavailable or timed out after preparation")?;
+        if result.ok {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&result.stderr).trim().into())
+        }
+    }
+    pub(crate) fn completion(&self) -> crate::core::rules::facts::Evidence {
+        self.completion_with(|tool, args, timeout| {
+            crate::core::proc::run_with_timeout(tool, args, timeout)
+        })
+    }
+    fn completion_with(
+        &self,
+        mut run: impl FnMut(&str, &[&str], Duration) -> Option<crate::core::proc::ProcRun>,
+    ) -> crate::core::rules::facts::Evidence {
+        use crate::core::rules::facts::Evidence;
+        match self.operation {
+            crate::core::rules::Operation::Go => crate::core::rules::flow::filesystem_completion(
+                &crate::core::rules::CompletionCondition::PathAbsent {
+                    path: self.target.clone(),
+                },
+            ),
+            crate::core::rules::Operation::Pnpm => {
+                match run("pnpm", &["store", "status"], COMMAND_TIMEOUT) {
+                    Some(result) if result.ok => Evidence::Confirmed,
+                    Some(_) => Evidence::Absent,
+                    None => Evidence::Unknown,
+                }
+            }
+            _ => Evidence::Unknown,
+        }
+    }
+}
 
 /// `path` 是不是 Go module cache（`…/go/pkg/mod`）。
 ///
@@ -58,19 +151,26 @@ pub fn is_pnpm_store(path: &Path) -> bool {
 ///    时，命令的作用域是自定义路径，清 `~/go/pkg/mod` 的目标就
 ///    对不上号，这种情形必须回退裸删而不是清错地方。
 pub fn go_clean_modcache(target: &Path) -> Option<bool> {
-    let env_run =
-        crate::core::proc::run_with_timeout("go", &["env", "GOMODCACHE"], Duration::from_secs(5))?;
-    if !env_run.ok {
-        return None;
-    }
-    let gomodcache = String::from_utf8_lossy(&env_run.stdout).trim().to_string();
-    if gomodcache.is_empty()
-        || crate::core::safety::norm(Path::new(&gomodcache)) != crate::core::safety::norm(target)
-    {
-        return None;
-    }
-    let run = crate::core::proc::run_with_timeout("go", &["clean", "-modcache"], COMMAND_TIMEOUT)?;
-    Some(run.ok)
+    go_clean_modcache_with(target, |args, timeout| {
+        crate::core::proc::run_with_timeout("go", args, timeout)
+    })
+}
+fn go_clean_modcache_with(
+    target: &Path,
+    mut run: impl FnMut(&[&str], Duration) -> Option<crate::core::proc::ProcRun>,
+) -> Option<bool> {
+    let owner = PreparedOwner::prepare_with(
+        target,
+        &crate::core::rules::Operation::Go,
+        |_, args, timeout| run(args, timeout),
+    )?;
+    Some(
+        owner
+            .apply_with(|_, args, timeout| run(args, timeout))
+            .is_ok()
+            && owner.completion_with(|_, args, timeout| run(args, timeout))
+                == crate::core::rules::facts::Evidence::Confirmed,
+    )
 }
 
 /// 用 `pnpm store prune` 收缩 store。
@@ -80,33 +180,154 @@ pub fn go_clean_modcache(target: &Path) -> Option<bool> {
 /// `Some(false)`，由 cleaner 报 Failed，不静默回退裸删（理由见
 /// [`COMMAND_TIMEOUT`] 的注释）。
 pub fn pnpm_store_prune(target: &Path) -> Option<bool> {
-    let path_run =
-        crate::core::proc::run_with_timeout("pnpm", &["store", "path"], Duration::from_secs(5))?;
-    if !path_run.ok {
-        return None;
-    }
-    let store_path = String::from_utf8_lossy(&path_run.stdout).trim().to_string();
-    // 一致性（安全闸）：只在本工具要清的目标与 pnpm 自报的 store 一致时
-    // 才跑命令。pnpm 把版本目录挂在 store 下（`pnpm store path` 返回
-    // `…/.pnpm-store/v3`），而固定表产出的目标是 `…/.pnpm-store`（父）。
-    // 严格相等会失配、让优化永远不触发，因此放宽为「相等，或目标是 store
-    // 的父目录」——`pnpm store prune` 作用在整个 store，对父目录也安全。
-    // 用分隔符收尾的「前缀」判定，避免 `~/.pnpm-store` 误中 `~/.pnpm-store-evil`。
-    let store_norm = crate::core::safety::norm(Path::new(&store_path));
-    let target_norm = crate::core::safety::norm(target);
-    let matches =
-        store_norm == target_norm || store_norm.starts_with(&format!("{}\\", target_norm));
-    if store_path.is_empty() || !matches {
-        return None;
-    }
-    let run = crate::core::proc::run_with_timeout("pnpm", &["store", "prune"], COMMAND_TIMEOUT)?;
-    Some(run.ok)
+    pnpm_store_prune_with(target, |args, timeout| {
+        crate::core::proc::run_with_timeout("pnpm", args, timeout)
+    })
+}
+fn pnpm_store_prune_with(
+    target: &Path,
+    mut run: impl FnMut(&[&str], Duration) -> Option<crate::core::proc::ProcRun>,
+) -> Option<bool> {
+    let owner = PreparedOwner::prepare_with(
+        target,
+        &crate::core::rules::Operation::Pnpm,
+        |_, args, timeout| run(args, timeout),
+    )?;
+    Some(
+        owner
+            .apply_with(|_, args, timeout| run(args, timeout))
+            .is_ok()
+            && owner.completion_with(|_, args, timeout| run(args, timeout))
+                == crate::core::rules::facts::Evidence::Confirmed,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    fn response(path: &Path) -> crate::core::proc::ProcRun {
+        crate::core::proc::ProcRun {
+            stdout: path.to_string_lossy().as_bytes().to_vec(),
+            stderr: vec![],
+            exit_code: Some(0),
+            ok: true,
+        }
+    }
+    #[test]
+    fn attempted_owner_timeout_never_grants_filesystem_fallback() {
+        let root = crate::core::testing::fixture("owner_timeout");
+        std::fs::write(root.join("keep"), b"unknown store state").unwrap();
+        assert_eq!(
+            go_clean_modcache_with(&root, |args, _| if args == ["env", "GOMODCACHE"] {
+                Some(response(&root))
+            } else {
+                None
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            pnpm_store_prune_with(&root, |args, _| if args == ["store", "path"] {
+                Some(response(&root))
+            } else {
+                None
+            }),
+            Some(false)
+        );
+        assert!(root.join("keep").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn owner_completion_checks_resource_state_after_zero_exit() {
+        let root = crate::core::testing::fixture("owner_completion");
+        std::fs::write(root.join("keep"), b"not removed").unwrap();
+        assert_eq!(
+            go_clean_modcache_with(&root, |_, _| Some(response(&root))),
+            Some(false)
+        );
+        assert_eq!(
+            pnpm_store_prune_with(&root, |args, _| if args == ["store", "status"] {
+                None
+            } else {
+                Some(response(&root))
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            pnpm_store_prune_with(&root, |_, _| Some(response(&root))),
+            Some(true)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_owner_rejects_sibling_scope_and_invalid_utf8() {
+        let target = PathBuf::from("/Users/u/.pnpm-store");
+        let sibling = PathBuf::from("/Users/u/.pnpm-store-evil/v3");
+        assert!(PreparedOwner::prepare_with(
+            &target,
+            &crate::core::rules::Operation::Pnpm,
+            |tool, args, timeout| {
+                assert_eq!(tool, "pnpm");
+                assert_eq!(args, ["store", "path"]);
+                assert_eq!(timeout, Duration::from_secs(5));
+                Some(response(&sibling))
+            }
+        )
+        .is_none());
+        assert!(PreparedOwner::prepare_with(
+            &target,
+            &crate::core::rules::Operation::Pnpm,
+            |_, _, _| {
+                let mut output = response(&target);
+                output.stdout = vec![0xff];
+                Some(output)
+            }
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn prepared_owner_uses_fixed_commands_and_retains_mutation_errors() {
+        for (operation, tool, prepare, apply) in [
+            (
+                crate::core::rules::Operation::Go,
+                "go",
+                vec!["env", "GOMODCACHE"],
+                vec!["clean", "-modcache"],
+            ),
+            (
+                crate::core::rules::Operation::Pnpm,
+                "pnpm",
+                vec!["store", "path"],
+                vec!["store", "prune"],
+            ),
+        ] {
+            let target = PathBuf::from("/fixture/cache");
+            let owner = PreparedOwner::prepare_with(&target, &operation, |actual_tool, args, _| {
+                assert_eq!(actual_tool, tool);
+                assert_eq!(args, prepare);
+                Some(response(&target))
+            })
+            .unwrap();
+            let error = owner
+                .apply_with(|actual_tool, args, timeout| {
+                    assert_eq!(actual_tool, tool);
+                    assert_eq!(args, apply);
+                    assert_eq!(timeout, COMMAND_TIMEOUT);
+                    let mut result = response(&target);
+                    result.ok = false;
+                    result.stderr = b"permission denied".to_vec();
+                    Some(result)
+                })
+                .unwrap_err();
+            assert_eq!(error, "permission denied");
+            assert!(owner
+                .apply_with(|_, _, _| None)
+                .unwrap_err()
+                .contains("timed out"));
+        }
+    }
 
     #[test]
     fn go_modcache_recognized_by_suffix() {
@@ -131,11 +352,17 @@ mod tests {
     /// 否则默认布局下 owner command 优化永不触发。
     #[test]
     fn pnpm_store_prune_tolerates_version_suffix() {
-        // 模拟 `pnpm store path` 输出与目标的关系：需要真实跑命令才能
-        // 得到 Some(...) 或 None，这里直接验证一致性判定不会误杀父目录。
-        // go_clean_modcache / pnpm_store_prune 内部都调 proc::run_with_timeout，
-        // 没有工具链时返回 None（回退裸删），行为不退化，故只断言不会 panic。
-        let _ = go_clean_modcache(&PathBuf::from("/Users/u/go/pkg/mod"));
-        let _ = pnpm_store_prune(&PathBuf::from("/Users/u/.pnpm-store"));
+        let target = PathBuf::from("/Users/u/.pnpm-store");
+        let reported = target.join("v3");
+        assert_eq!(
+            pnpm_store_prune_with(&target, |args, _| {
+                Some(response(if args == ["store", "path"] {
+                    &reported
+                } else {
+                    &target
+                }))
+            }),
+            Some(true)
+        );
     }
 }

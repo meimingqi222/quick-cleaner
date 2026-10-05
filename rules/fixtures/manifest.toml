@@ -1,0 +1,34 @@
+id = "orion-fixture"
+version = 1
+platform = "all"
+required = ["file", "variables"]
+preserve = ["Orion/config"]
+
+[variables.app]
+kind = "path"
+path = "Orion"
+
+[variables.members]
+kind = "json_set"
+path = "${app}/manifest.json"
+pointer = "/members"
+
+[facts.owner]
+kind = "json"
+path = "${app}/manifest.json"
+pointer = "/owner"
+equals = "orion"
+
+[detect]
+kind = "fact"
+name = "owner"
+
+[[entries]]
+root = "home"
+path = "${app}/${members}"
+zh = "Orion 清单缓存"
+en = "Orion manifest cache"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = true

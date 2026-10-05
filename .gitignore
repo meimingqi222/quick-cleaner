@@ -11,7 +11,14 @@
 coverage/
 
 # 项目内部临时文档与交接文档
-/docs/
+/docs/*
+!/docs/PITFALLS.md
+!/docs/agent-notes/
+!/docs/compose/
+/docs/compose/*
+!/docs/compose/spec/
+/docs/compose/spec/*
+!/docs/compose/spec/windows-unregistered-apps.md
 
 # Stitch 设计稿（HTML + 大尺寸 PNG）。状态监控页的模块注释引用了它作为出处，
 # 但几百 KB 的位图不该进版本库，需要时从 Stitch 重新导出。
@@ -22,6 +29,11 @@ WizTree_*.csv
 *.tmp
 *.bak
 *.log
+
+# 回归证据日志是唯一例外：Proved: 行引用的红跑输出要进版本库，
+# 所以 evidence 目录的放行必须排在 *.log 之后。
+!/docs/agent-notes-evidence/
+!/docs/agent-notes-evidence/*.log
 
 # 操作系统自动生成文件
 # Windows
@@ -52,3 +64,4 @@ $RECYCLE.BIN/
 *.sublime-project
 .workbuddy
 .apodex
+tmp/

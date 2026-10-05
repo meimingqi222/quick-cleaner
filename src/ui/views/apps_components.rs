@@ -108,7 +108,20 @@ pub(super) fn render_app_row(
                                 .overflow_hidden()
                                 .child(truncate(&app.name, 38)),
                         )
-                        .when(!app.version.is_empty(), |d| {
+                        .when(app.discovery.is_some(), |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(OUTLINE))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .child(crate::ui::i18n::tr_app_discovery_label(
+                                        lang,
+                                        can_uninstall,
+                                    )),
+                            )
+                        })
+                        .when(app.discovery.is_none() && !app.version.is_empty(), |d| {
                             d.child(
                                 div()
                                     .text_xs()
@@ -200,7 +213,12 @@ pub(super) fn render_app_row(
                         div()
                             .id(SharedString::from(format!("clean-resid-{idx}")))
                             .child(small_button(
-                                crate::ui::i18n::tr_btn_force_clean(lang).to_string(),
+                                if app.discovery.is_some() {
+                                    crate::ui::i18n::tr_btn_remove_program(lang)
+                                } else {
+                                    crate::ui::i18n::tr_btn_force_clean(lang)
+                                }
+                                .to_string(),
                                 PRIMARY_FIXED,
                                 PRIMARY,
                                 resid_enabled,

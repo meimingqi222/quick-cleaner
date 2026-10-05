@@ -1,0 +1,14 @@
+id = "windows"
+version = 2
+platform = "windows"
+required = ["file"]
+
+[[entries]]
+root = "local"
+path = "Microsoft/Windows/Explorer"
+zh = "缩略图/图标缓存"
+en = "Thumbnail / icon cache"
+category = "Thumbnails"
+operation = "contents"
+disposal = "permanent"
+recommended = true

@@ -28,33 +28,20 @@ use std::path::{Path, PathBuf};
 ///
 /// `Cache` 单独一个不算——太多应用把「缓存」叫 `Cache`，`<App>/Cache` +
 /// `<App>/logs` 这种巧合必须挡在门外，否则普通应用的状态目录会被当缓存清。
-pub(super) const SIGNATURE_LEAVES: &[&str] = &[
-    "Cache",
-    "Code Cache",
-    "GPUCache",
-    "DawnCache",
-    "DawnGraphiteCache",
-    "DawnWebGPUCache",
-    "GrShaderCache",
-    "GraphiteDawnCache",
-    "ShaderCache",
-    "component_crx_cache",
-    "extensions_crx_cache",
-];
+pub(super) static SIGNATURE_LEAVES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "chromium",
+    key: "signature_leaves",
+};
 
 /// 签名成立之后才一起收的叶子：这些名字太通用，不能单独用来判定 Chromium，
 /// 但确认了是 Chromium 之后，它们装的确实是可重建数据。
 ///
 /// `blob_storage` 也在这里，但它**不预选**（见 [`leaf_recommended`]）——
 /// Electron 的 blob 存储可能承载未保存的附件或草稿。
-pub(super) const EXTRA_LEAVES: &[&str] = &[
-    "CachedData",
-    "CachedProfilesData",
-    "CachedExtensionVSIXs",
-    "blob_storage",
-    "fcache",
-    "logs",
-];
+pub(super) static EXTRA_LEAVES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "chromium",
+    key: "extra_leaves",
+};
 
 /// 名字本身就只可能来自 Chromium 内核（或 VS Code 这类 Electron 骨架）的
 /// 叶子：单独一个就足以认定它的宿主是应用数据目录。
@@ -63,11 +50,10 @@ pub(super) const EXTRA_LEAVES: &[&str] = &[
 /// 单项 1 GB，而 `Code` 目录下恰好只有「扩展包缓存 + 日志 + 崩溃转储」——
 /// 一个签名叶子都没有，靠「两个通用叶子」的门槛它整目录进不来。
 /// `component_crx_cache` / `extensions_crx_cache` 同理。
-pub(super) const STRONG_LEAVES: &[&str] = &[
-    "component_crx_cache",
-    "extensions_crx_cache",
-    "CachedExtensionVSIXs",
-];
+pub(super) static STRONG_LEAVES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "chromium",
+    key: "strong_leaves",
+};
 
 /// 认定「这是 Chromium 数据目录」需要的签名叶子个数。
 ///
@@ -75,7 +61,11 @@ pub(super) const STRONG_LEAVES: &[&str] = &[
 /// 出现基本只有 Chromium 内核干得出来；门限再抬高（3）会在精简过的 profile
 /// 上漏判（本机 `Maka` 只有 `Code Cache`+`GPUCache`+`DawnGraphiteCache`）。
 /// [`STRONG_LEAVES`] 里的名字不受这个门限约束。
-const SIGNATURE_MIN: usize = 2;
+fn signature_min() -> usize {
+    crate::core::rules::current()
+        .number("chromium", "signature_min", 2)
+        .max(2) as usize
+}
 
 /// Profile 目录名。`Default` / `Profile 1` 是 Chrome 系；`chrome-profile`、
 /// `<名字>-profile` 是 MCP server 一类工具自建的原生 profile 目录。
@@ -140,7 +130,7 @@ pub(super) fn cache_leaves(dir: &Path) -> Vec<PathBuf> {
 /// 这个目录看起来是不是 Chromium 的数据目录。
 fn is_chromium_dir(dir: &Path) -> bool {
     STRONG_LEAVES.iter().any(|leaf| dir.join(leaf).is_dir())
-        || count_signature_leaves(dir) >= SIGNATURE_MIN
+        || count_signature_leaves(dir) >= signature_min()
 }
 
 /// `dir` 下的 profile 目录。
@@ -277,7 +267,10 @@ mod tests {
         let leaves = cache_leaves(&tool);
         let joined: Vec<String> = leaves.iter().map(|p| p.display().to_string()).collect();
         assert_eq!(leaves.len(), 3, "{joined:?}");
-        assert!(joined.iter().all(|p| p.contains("/Default/")), "{joined:?}");
+        assert!(
+            leaves.iter().all(|p| p.parent() == Some(profile.as_path())),
+            "{joined:?}"
+        );
         assert!(
             !joined.iter().any(|p| p.ends_with("chrome-profile")),
             "profile 根不能入表: {joined:?}"
@@ -305,7 +298,9 @@ mod tests {
             .collect();
         assert_eq!(joined.len(), 3, "{joined:?}");
         assert!(
-            joined.iter().any(|p| p.ends_with("Default/GPUCache")),
+            cache_leaves(&app)
+                .iter()
+                .any(|p| p.ends_with(std::path::Path::new("Default").join("GPUCache"))),
             "{joined:?}"
         );
         let _ = std::fs::remove_dir_all(root);

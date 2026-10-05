@@ -39,12 +39,10 @@ pub(super) fn push_docker_targets(t: &mut Vec<ScanTarget>) {
                 ),
             ),
         };
-        let path = docker_image_path(&junk.rmi_ref());
-        t.push(target_with_size(
-            path,
-            label,
-            CategoryId::DockerImages,
-            junk.image.size,
-        ));
+        let reference = junk.rmi_ref();
+        let path = docker_image_path(&reference);
+        let mut target = target_with_size(path, label, CategoryId::DockerImages, junk.image.size);
+        target.operation = crate::core::rules::Operation::Docker { reference };
+        t.push(target);
     }
 }

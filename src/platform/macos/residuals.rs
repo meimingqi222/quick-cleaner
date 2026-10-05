@@ -19,6 +19,17 @@ use crate::core::proc::run_with_timeout;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+fn residual_locations(key: &str) -> Vec<(String, ResidualSource)> {
+    crate::core::rules::current()
+        .definition("residual-macos")
+        .locations
+        .get(key)
+        .into_iter()
+        .flatten()
+        .map(|row| (row.path.clone(), row.source))
+        .collect()
+}
+
 /// 扫描应用卸载后的残留文件和目录。
 ///
 /// 以 `CFBundleIdentifier`（存在 `app.registry_subpath`）为主键，
@@ -58,6 +69,15 @@ struct ScanRoots<'a> {
 }
 
 fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanResult {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        let mut result = scan_residuals_inner(app, roots);
+        for item in &mut result.items {
+            item.rule = Some(crate::core::rules::RuleRef::new("residual-macos", None));
+        }
+        result
+    })
+}
+fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanResult {
     let mut items = Vec::new();
 
     let home = roots.home;
@@ -72,8 +92,8 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
     // Login Item / XPC / appex 的 ID 必须在 .app 还在时从包里读。
     for (index, id) in bundle_ids.iter().enumerate() {
         let primary = index == 0;
-        for (subdir, source) in SATELLITE_DIRS {
-            add_bundle_satellites(&mut items, &library.join(subdir), id, *source);
+        for (subdir, source) in residual_locations("satellite_dirs") {
+            add_bundle_satellites(&mut items, &library.join(subdir), id, source);
         }
         if let Some(cache_root) = darwin_cache {
             add_bundle_satellites(&mut items, cache_root, id, ResidualSource::CacheDir);
@@ -403,28 +423,12 @@ fn parse_launchd_registered(output: &str, needle: &str) -> Vec<String> {
 /// 是两个各自独立的产品，前缀匹配会让前者把后者的数据一起带走。
 ///
 /// 长后缀在前，避免 `.helper` 先吃掉 `.helper.gpu`。
-const HELPER_ID_SUFFIXES: &[&str] = &[
-    ".helper.renderer",
-    ".helper.plugin",
-    ".helper.alerts",
-    ".helper.gpu",
-    ".helper.np",
-    ".helper",
-    ".shipit",
-    ".sparkle",
-    ".xpc",
-];
+static HELPER_ID_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "residual-macos",
+    key: "helper_id_suffixes",
+};
 
 /// 用户级目录里按「本 Bundle ID 的卫星名」收，命中标确定。
-const SATELLITE_DIRS: &[(&str, ResidualSource)] = &[
-    ("Preferences", ResidualSource::PreferenceFile),
-    ("Preferences/ByHost", ResidualSource::PreferenceFile),
-    ("Caches", ResidualSource::CacheDir),
-    ("Logs", ResidualSource::LogDir),
-    ("HTTPStorages", ResidualSource::Other),
-    ("Saved Application State", ResidualSource::Other),
-    ("LaunchAgents", ResidualSource::LaunchAgent),
-];
 
 /// 文件/目录名是不是本 Bundle ID 的卫星残留。
 ///
@@ -726,47 +730,15 @@ fn is_uuid_like(value: &str) -> bool {
 }
 
 /// 这些前缀下挂着大量互不相关的产品，按家族匹配会把别的软件一起带走。
-const SHARED_VENDOR_PREFIXES: &[&str] = &[
-    "com.apple",
-    "com.google",
-    "com.microsoft",
-    "com.adobe",
-    "com.amazon",
-    "com.oracle",
-    "com.jetbrains",
-    "org.mozilla",
-    "org.chromium",
-    "com.electron",
-    "net.java",
-];
+static SHARED_VENDOR_PREFIXES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "residual-macos",
+    key: "shared_vendor_prefixes",
+};
 
 /// `~/Library` 下按厂商前缀扫的目录，以及命中后标注的来源。
-const USER_FAMILY_DIRS: &[(&str, ResidualSource)] = &[
-    ("Application Support", ResidualSource::AppSupportDir),
-    ("Caches", ResidualSource::CacheDir),
-    ("Preferences", ResidualSource::PreferenceFile),
-    ("Preferences/ByHost", ResidualSource::PreferenceFile),
-    ("Logs", ResidualSource::LogDir),
-    ("HTTPStorages", ResidualSource::Other),
-    ("Containers", ResidualSource::ContainerDir),
-    ("Group Containers", ResidualSource::ContainerDir),
-    ("Application Scripts", ResidualSource::ApplicationScript),
-    ("Saved Application State", ResidualSource::Other),
-    ("LaunchAgents", ResidualSource::LaunchAgent),
-];
 
 /// `/Library` 下按厂商前缀扫的目录。这些位置全部 root 所有，命中项一律
 /// 标成「需要确认」，不会跟用户缓存一起被自动勾选。
-const SYSTEM_FAMILY_DIRS: &[(&str, ResidualSource)] = &[
-    ("Application Support", ResidualSource::AppSupportDir),
-    ("Caches", ResidualSource::CacheDir),
-    ("Preferences", ResidualSource::PreferenceFile),
-    ("Logs", ResidualSource::LogDir),
-    ("Application Scripts", ResidualSource::ApplicationScript),
-    ("LaunchAgents", ResidualSource::LaunchAgent),
-    ("LaunchDaemons", ResidualSource::LaunchDaemon),
-    ("PrivilegedHelperTools", ResidualSource::LaunchDaemon),
-];
 
 /// 从 Bundle ID 取厂商前缀：`org.pqrs.Karabiner-Elements.Settings` → `org.pqrs`。
 ///
@@ -814,16 +786,11 @@ fn add_vendor_family(
         return;
     }
 
-    for (subdir, source) in USER_FAMILY_DIRS {
-        add_family_entries(items, &library.join(subdir), &prefixes, *source);
+    for (subdir, source) in residual_locations("user_family_dirs") {
+        add_family_entries(items, &library.join(subdir), &prefixes, source);
     }
-    for (subdir, source) in SYSTEM_FAMILY_DIRS {
-        add_family_entries(
-            items,
-            &roots.system_library.join(subdir),
-            &prefixes,
-            *source,
-        );
+    for (subdir, source) in residual_locations("system_family_dirs") {
+        add_family_entries(items, &roots.system_library.join(subdir), &prefixes, source);
     }
     add_family_entries(
         items,
@@ -865,13 +832,16 @@ fn add_family_entries(
 }
 
 /// 点目录扫描的父目录，相对 `$HOME`。空字符串代表 `$HOME` 自身。
-const DOT_CONFIG_PARENTS: &[&str] = &["", ".config", ".cache", ".local/share", ".local/state"];
+static DOT_CONFIG_PARENTS: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "residual-macos",
+    key: "dot_config_parents",
+};
 
 /// 这些是多个软件共用的基础设施目录，名字再像也不能当成某个 App 的残留。
-const PROTECTED_DOT_DIRS: &[&str] = &[
-    "config", "cache", "local", "ssh", "gnupg", "aws", "kube", "docker", "npm", "cargo", "rustup",
-    "gradle", "nvm", "pyenv", "vim", "git", "trash",
-];
+static PROTECTED_DOT_DIRS: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "residual-macos",
+    key: "protected_dot_dirs",
+};
 
 /// 归一化成只剩小写字母数字，用来跨 `Karabiner-Elements` / `karabiner` 这类
 /// 分隔符和后缀差异做比较。
@@ -1006,7 +976,7 @@ fn add_dotfile_configs(
         let dir = if parent.is_empty() {
             home.to_path_buf()
         } else {
-            home.join(parent)
+            home.join(&parent)
         };
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -1205,27 +1175,12 @@ fn list_system_extensions() -> Option<Vec<(String, String)>> {
 /// Scripts`。它们是沙盒应用的用户数据本体（本地数据库、用户写的自动化
 /// 脚本），量大且风险集中，要先有一个「按应用分组勾选」的界面才值得做。
 /// 少收的位置只让人漏清，多收的位置会删掉活人的数据。
-const ORPHAN_ROOTS: &[(&str, ResidualSource)] = &[
-    ("Caches", ResidualSource::CacheDir),
-    ("HTTPStorages", ResidualSource::Other),
-    ("Logs", ResidualSource::LogDir),
-    ("Saved Application State", ResidualSource::Other),
-    ("WebKit", ResidualSource::CacheDir),
-    ("Preferences", ResidualSource::PreferenceFile),
-    ("Preferences/ByHost", ResidualSource::PreferenceFile),
-    ("Application Support", ResidualSource::AppSupportDir),
-    ("LaunchAgents", ResidualSource::LaunchAgent),
-];
 
 /// 目录项名字里可以剥掉的扩展名后缀（全小写比较）。
-const ID_FILE_SUFFIXES: &[&str] = &[
-    ".plist",
-    ".binarycookies",
-    ".savedstate",
-    ".sfl2",
-    ".sfl3",
-    ".sfl4",
-];
+static ID_FILE_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "residual-macos",
+    key: "id_file_suffixes",
+};
 
 /// 扫描机器上所有「本体已不在、`~/Library` 里还留着东西」的软件。
 ///
@@ -1243,10 +1198,22 @@ fn scan_orphan_residuals_in(
     home: &Path,
     installed_lower: &std::collections::HashSet<String>,
 ) -> ResidualScanResult {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        let mut result = scan_orphan_residuals_inner(home, installed_lower);
+        for item in &mut result.items {
+            item.rule = Some(crate::core::rules::RuleRef::new("residual-macos", None));
+        }
+        result
+    })
+}
+fn scan_orphan_residuals_inner(
+    home: &Path,
+    installed_lower: &std::collections::HashSet<String>,
+) -> ResidualScanResult {
     let library = home.join("Library");
     let mut items = Vec::new();
 
-    for (subdir, source) in ORPHAN_ROOTS {
+    for (subdir, source) in residual_locations("orphan_roots") {
         let Ok(entries) = std::fs::read_dir(library.join(subdir)) else {
             continue;
         };
@@ -1265,7 +1232,7 @@ fn scan_orphan_residuals_in(
             } else {
                 ResidualKind::File(path, size)
             };
-            items.push(ResidualItem::possible(kind, *source).for_bundle(&id));
+            items.push(ResidualItem::possible(kind, source).for_bundle(&id));
         }
     }
 
@@ -1338,7 +1305,7 @@ fn bundle_id_from_entry_name(name: &str) -> Option<String> {
         .iter()
         .find_map(|suffix| {
             lower
-                .ends_with(suffix)
+                .ends_with(suffix.as_str())
                 .then(|| &name[..name.len() - suffix.len()])
         })
         .unwrap_or(name);
@@ -1443,6 +1410,29 @@ fn vendor_prefixes(bundle_ids: &[String]) -> Vec<String> {
 /// 处理（合并成一个密码框，并且 launchd 项先 bootout 再删）；系统扩展没有
 /// 可删的路径，单独处理。
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
+    let snapshot = items
+        .iter()
+        .find_map(|item| item.rule.as_ref())
+        .map(|rule| rule.snapshot.clone())
+        .unwrap_or_else(crate::core::rules::current);
+    if items
+        .iter()
+        .filter_map(|item| item.rule.as_ref())
+        .any(|rule| {
+            !std::sync::Arc::ptr_eq(&snapshot, &rule.snapshot) || rule.revalidate().is_err()
+        })
+    {
+        let mut report = CleanReport::default();
+        for item in items {
+            report
+                .failed
+                .push(CleanFailure::Id(item.kind.display_label()));
+        }
+        return report;
+    }
+    crate::core::rules::with_snapshot(snapshot, || clean_residuals_inner(items, prog))
+}
+fn clean_residuals_inner(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
     let mut elevated: Vec<PathBuf> = Vec::new();
     let spot_paths: Vec<PathBuf> = items
@@ -1563,6 +1553,7 @@ mod tests {
 
     fn make_app(name: &str, bundle_id: &str) -> InstalledApp {
         InstalledApp {
+            discovery: None,
             id: bundle_id.to_string(),
             name: name.to_string(),
             version: String::new(),

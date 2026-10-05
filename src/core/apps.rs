@@ -12,6 +12,7 @@ pub enum AppRegRoot {
     Hklm32,
     Hkcu,
     SystemApp,
+    Unregistered,
 }
 
 impl AppRegRoot {
@@ -27,6 +28,7 @@ impl AppRegRoot {
             AppRegRoot::Hklm32 => "HKLM32",
             AppRegRoot::Hkcu => "HKCU",
             AppRegRoot::SystemApp => "SystemApp",
+            AppRegRoot::Unregistered => "Unregistered",
         }
     }
 
@@ -37,20 +39,50 @@ impl AppRegRoot {
                 AppRegRoot::Hklm32 => "HKLM (32位)",
                 AppRegRoot::Hkcu => "HKCU (当前用户)",
                 AppRegRoot::SystemApp => "系统/UWP",
+                AppRegRoot::Unregistered => "未登记应用",
             },
             Language::En => match self {
                 AppRegRoot::Hklm => "HKLM (64-bit)",
                 AppRegRoot::Hklm32 => "HKLM (32-bit)",
                 AppRegRoot::Hkcu => "HKCU (Current User)",
                 AppRegRoot::SystemApp => "System / UWP",
+                AppRegRoot::Unregistered => "Unregistered app",
             },
         }
     }
 }
 
+/// Discovery evidence is separate from directory ownership and uninstall authority.
+#[derive(Clone, Debug)]
+pub struct AppDiscovery {
+    pub plan: Option<std::sync::Arc<crate::core::rules::CleanupPlan>>,
+    pub rule: Option<crate::core::rules::RuleRef>,
+    pub executable: PathBuf,
+    pub shortcuts: Vec<PathBuf>,
+    pub program_paths: Vec<PathBuf>,
+    pub uninstaller: Option<OfficialUninstaller>,
+}
+
+/// Only platform adapters construct these commands; shortcut arguments are never executable policy.
+#[derive(Clone, Debug)]
+pub struct OfficialUninstaller {
+    pub provider: String,
+    pub executable: PathBuf,
+    pub arguments: Vec<String>,
+    pub working_directory: PathBuf,
+    pub installed_artifacts: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UninstallOutcome {
+    pub result: Result<(), String>,
+    pub plan_executions: Vec<crate::core::rules::flow::PlanExecution>,
+}
+
 /// 已安装软件信息模型
 #[derive(Clone, Debug)]
 pub struct InstalledApp {
+    pub discovery: Option<AppDiscovery>,
     pub id: String,
     pub name: String,
     pub version: String,
@@ -92,6 +124,9 @@ impl InstalledApp {
         }
         #[cfg(not(target_os = "macos"))]
         {
+            if let Some(discovery) = &self.discovery {
+                return discovery.uninstaller.is_some() && !self.uninstaller_missing;
+            }
             (self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some())
                 && !self.uninstaller_missing
         }
@@ -286,6 +321,9 @@ impl AppFilterPreset {
             // 光看「有没有卸载命令」没有意义——注册表里几乎每一项都有。
             // 真正需要关注的是命令跑不起来的：可执行文件已经没了。
             AppFilterPreset::Orphan => {
+                if app.discovery.is_some() {
+                    return app.uninstaller_missing;
+                }
                 (app.uninstall_string.is_none() && app.quiet_uninstall_string.is_none())
                     || app.uninstaller_missing
             }
@@ -414,7 +452,7 @@ impl ResidualKind {
 /// 以前直接存中文字符串，界面上的来源徽章因此在英文模式下也是中文；
 /// 而且测试要拿字符串字面量去比对，改一个字就断。改成枚举后文案统一在
 /// [`ResidualSource::label_lang`] 里翻译。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResidualSource {
     UninstallEntry,
     InstallDir,
@@ -561,6 +599,7 @@ impl ResidualSource {
 /// 一条残留记录：内容 + 把握程度 + 给用户看的来源说明。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResidualItem {
+    pub rule: Option<crate::core::rules::RuleRef>,
     pub kind: ResidualKind,
     pub confidence: Confidence,
     /// 这条是被哪个扫描器发现的
@@ -581,6 +620,7 @@ impl ResidualItem {
     pub fn certain(kind: ResidualKind, source: ResidualSource) -> Self {
         let identity = residual_identity(&kind);
         Self {
+            rule: None,
             kind,
             confidence: Confidence::Certain,
             source,
@@ -592,6 +632,7 @@ impl ResidualItem {
     pub fn possible(kind: ResidualKind, source: ResidualSource) -> Self {
         let identity = residual_identity(&kind);
         Self {
+            rule: None,
             kind,
             confidence: Confidence::Possible,
             source,
@@ -1030,6 +1071,7 @@ mod tests {
         last_used_raw: u64,
     ) -> InstalledApp {
         InstalledApp {
+            discovery: None,
             id: name.to_string(),
             name: name.to_string(),
             version: "1.0".to_string(),

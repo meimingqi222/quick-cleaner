@@ -1,9 +1,14 @@
 //! macOS 专属：损坏登录项、APFS 本地快照、外接卷废纸篓、Group Containers、.DS_Store
 
+#[cfg(target_os = "macos")]
 use super::{target, target_with_recommendation, ScanTarget};
+#[cfg(target_os = "macos")]
 use crate::core::categories::CategoryId;
+#[cfg(target_os = "macos")]
 use crate::core::i18n::Text;
+#[cfg(target_os = "macos")]
 use crate::core::model::snapshot_path;
+#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 
 /// macOS 专属清理目标
@@ -39,35 +44,29 @@ pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: Option<&Path>) {
     push_old_ide_targets(t, home);
 }
 
-/// JetBrains 收录进发现列表的产品表。表里存展示名，匹配时与目录名
-/// 一起折叠（去空格/连字符、转小写）。
-#[cfg(target_os = "macos")]
-const JETBRAINS_PRODUCTS: &[&str] = &[
-    "IntelliJ IDEA",
-    "PyCharm",
-    "WebStorm",
-    "CLion",
-    "GoLand",
-    "RubyMine",
-    "PhpStorm",
-    "DataGrip",
-    "Rider",
-    "RustRover",
-];
+#[cfg(any(target_os = "macos", test))]
+fn jetbrains_products() -> Vec<String> {
+    crate::core::rules::current()
+        .definition("macos")
+        .lists
+        .get("jetbrains_products")
+        .cloned()
+        .unwrap_or_default()
+}
 
 /// 解析 JetBrains 版本化目录名，返回 `(产品展示名, (年, 次版本))`。
 ///
 /// 目录名形如 `IntelliJIdea2026.2`（真实布局大小写不齐，折叠后匹配）。
 /// 解析不出的（`Daemon`、`Toolbox`、`PermanentDeviceId` 等共享目录和
-/// 文件）返回 `None`——分不清新旧的一律不列入。
-#[cfg(target_os = "macos")]
-fn parse_jetbrains_versioned_name(name: &str) -> Option<(&'static str, (u32, u32))> {
+/// 文件）返回 `None`——分不清新旧的一律不列入。产品名来自 macos 规则。
+#[cfg(any(target_os = "macos", test))]
+fn parse_jetbrains_versioned_name(name: &str) -> Option<(String, (u32, u32))> {
     let folded: String = name
         .to_lowercase()
         .chars()
         .filter(|c| *c != ' ' && *c != '-')
         .collect();
-    for product in JETBRAINS_PRODUCTS {
+    for product in jetbrains_products() {
         let key: String = product
             .to_lowercase()
             .chars()
@@ -94,7 +93,7 @@ fn parse_jetbrains_versioned_name(name: &str) -> Option<(&'static str, (u32, u32
         {
             continue;
         }
-        return Some((*product, (y.parse().ok()?, n.parse().ok()?)));
+        return Some((product, (y.parse().ok()?, n.parse().ok()?)));
     }
     None
 }
@@ -133,20 +132,20 @@ pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 ///
 /// 独立成纯函数以便单测；实际磁盘枚举在调用方。O(n²) 不在乎——
 /// JetBrains 目录下通常只有个位数条目。
-#[cfg(target_os = "macos")]
-fn select_old_versions(names: &[String]) -> Vec<(String, &'static str, (u32, u32))> {
-    let parsed: Vec<(usize, &'static str, (u32, u32))> = names
+#[cfg(any(target_os = "macos", test))]
+fn select_old_versions(names: &[String]) -> Vec<(String, String, (u32, u32))> {
+    let parsed: Vec<(usize, String, (u32, u32))> = names
         .iter()
         .enumerate()
         .filter_map(|(i, n)| parse_jetbrains_versioned_name(n).map(|(f, v)| (i, f, v)))
         .collect();
     let mut out = Vec::new();
-    for &(i, family, version) in &parsed {
+    for (i, family, version) in &parsed {
         let has_newer = parsed
             .iter()
-            .any(|&(_, f2, v2)| f2 == family && v2 > version);
+            .any(|(_, f2, v2)| f2 == family && v2 > version);
         if has_newer {
-            out.push((names[i].clone(), family, version));
+            out.push((names[*i].clone(), family.clone(), *version));
         }
     }
     out
@@ -211,14 +210,16 @@ pub(super) fn push_local_snapshots(t: &mut Vec<ScanTarget>) {
     for name in parse_snapshot_names(&stdout) {
         // 虚拟路径：scanner 跳过称重，cleaner 路由到 tmutil
         let virtual_path = snapshot_path(&name);
-        t.push(target(
+        let mut item = target(
             virtual_path,
             Text::new(
                 format!("本地快照 · {name}"),
                 format!("Local snapshot · {name}"),
             ),
             CategoryId::LocalSnapshots,
-        ));
+        );
+        item.operation = crate::core::rules::Operation::Snapshot { name };
+        t.push(item);
     }
 }
 
@@ -438,7 +439,7 @@ pub(super) fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod old_ide_tests {
     use super::{parse_jetbrains_versioned_name, select_old_versions};
 
@@ -448,20 +449,20 @@ mod old_ide_tests {
     fn parses_jetbrains_versioned_names() {
         assert_eq!(
             parse_jetbrains_versioned_name("IntelliJIdea2026.2"),
-            Some(("IntelliJ IDEA", (2026, 2)))
+            Some(("IntelliJ IDEA".to_string(), (2026, 2)))
         );
         assert_eq!(
             parse_jetbrains_versioned_name("DataGrip2025.1"),
-            Some(("DataGrip", (2025, 1)))
+            Some(("DataGrip".to_string(), (2025, 1)))
         );
         // 展示名形态（带空格）与三段版本号都要认
         assert_eq!(
             parse_jetbrains_versioned_name("IntelliJ IDEA 2025.2.1"),
-            Some(("IntelliJ IDEA", (2025, 2)))
+            Some(("IntelliJ IDEA".to_string(), (2025, 2)))
         );
         assert_eq!(
             parse_jetbrains_versioned_name("rustrover2026.1"),
-            Some(("RustRover", (2026, 1)))
+            Some(("RustRover".to_string(), (2026, 1)))
         );
 
         // 分不清新旧的一律 None：无版本的共享目录、表外名字、

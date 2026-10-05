@@ -56,7 +56,11 @@ pub(super) fn discover_via_mft(
                 continue;
             };
             out.push(ScanItem {
-                label: item_label(idx.1, &path),
+                plans: Vec::new(),
+                operation: crate::core::rules::Operation::Tree,
+                disposal: crate::core::cleaner::Disposal::Permanent,
+                rule: crate::core::rules::RuleRef::build(),
+                label: item_label(&idx.1, &path),
                 path,
                 size,
                 file_count: tree.file_count_of(idx.0),
@@ -80,7 +84,7 @@ pub(super) fn collect_mft(
     dir: u32,
     depth: usize,
     live: &AtomicBool,
-    out: &mut Vec<(u32, &'static Marker)>,
+    out: &mut Vec<(u32, std::sync::Arc<Marker>)>,
 ) {
     // 树在内存里，可以比遍历通道走得更深
     const MFT_MAX_DEPTH: usize = 12;
@@ -113,7 +117,7 @@ pub(super) fn collect_mft(
         }
         match MARKERS
             .iter()
-            .find(|m| m.dir == lower && has_sibling(&files, m.sibling_any))
+            .find(|m| m.dir == lower && has_sibling(&files, &m.sibling_any))
         {
             Some(marker) => out.push((child, marker)),
             None => {
@@ -130,7 +134,7 @@ pub(super) fn collect_mft(
                     let mut cache: HashMap<u32, String> = HashMap::new();
                     let path = std::path::PathBuf::from(tree.path_of_with(child, &mut cache));
                     if super::has_cachedir_tag(&path) {
-                        out.push((child, &super::CACHEDIR_MARKER));
+                        out.push((child, super::CACHEDIR_MARKER.clone()));
                         continue;
                     }
                 }

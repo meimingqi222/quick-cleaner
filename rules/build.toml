@@ -1,0 +1,148 @@
+id = "build"
+version = 1
+platform = "all"
+required = ["build_markers"]
+
+[[markers]]
+dir = "node_modules"
+zh = "Node 依赖"
+en = "Node dependencies"
+sibling_any = []
+
+[[markers]]
+dir = ".next"
+zh = "Next.js 构建缓存"
+en = "Next.js build cache"
+sibling_any = []
+
+[[markers]]
+dir = ".nuxt"
+zh = "Nuxt 构建缓存"
+en = "Nuxt build cache"
+sibling_any = []
+
+[[markers]]
+dir = ".svelte-kit"
+zh = "SvelteKit 构建缓存"
+en = "SvelteKit build cache"
+sibling_any = []
+
+[[markers]]
+dir = ".turbo"
+zh = "Turborepo 缓存"
+en = "Turborepo cache"
+sibling_any = []
+
+[[markers]]
+dir = ".parcel-cache"
+zh = "Parcel 缓存"
+en = "Parcel cache"
+sibling_any = []
+
+[[markers]]
+dir = ".angular"
+zh = "Angular 构建缓存"
+en = "Angular build cache"
+sibling_any = []
+
+[[markers]]
+dir = "dist"
+zh = "前端构建产物"
+en = "Frontend build output"
+sibling_any = ["package.json"]
+
+[[markers]]
+dir = "target"
+zh = "Rust 构建产物"
+en = "Rust build output"
+sibling_any = ["Cargo.toml"]
+
+[[markers]]
+dir = ".venv"
+zh = "Python 虚拟环境"
+en = "Python virtualenv"
+sibling_any = []
+
+[[markers]]
+dir = "venv"
+zh = "Python 虚拟环境"
+en = "Python virtualenv"
+sibling_any = []
+
+[[markers]]
+dir = "__pycache__"
+zh = "Python 字节码缓存"
+en = "Python bytecode cache"
+sibling_any = []
+
+[[markers]]
+dir = ".pytest_cache"
+zh = "pytest 缓存"
+en = "pytest cache"
+sibling_any = []
+
+[[markers]]
+dir = ".mypy_cache"
+zh = "mypy 缓存"
+en = "mypy cache"
+sibling_any = []
+
+[[markers]]
+dir = ".ruff_cache"
+zh = "ruff 缓存"
+en = "ruff cache"
+sibling_any = []
+
+[[markers]]
+dir = ".tox"
+zh = "tox 环境"
+en = "tox environments"
+sibling_any = []
+
+[[markers]]
+dir = "bin"
+zh = ".NET 构建产物"
+en = ".NET build output"
+sibling_any = [".csproj", ".vbproj", ".fsproj", ".sln"]
+
+[[markers]]
+dir = "obj"
+zh = ".NET 中间产物"
+en = ".NET intermediate output"
+sibling_any = [".csproj", ".vbproj", ".fsproj", ".sln"]
+
+[[markers]]
+dir = "build"
+zh = "C/C++ 构建产物"
+en = "C/C++ build output"
+sibling_any = ["CMakeLists.txt", "Makefile", "meson.build"]
+
+[[markers]]
+dir = "cmake-build-debug"
+zh = "CLion 构建产物"
+en = "CLion build output"
+sibling_any = []
+
+[[markers]]
+dir = "cmake-build-release"
+zh = "CLion 构建产物"
+en = "CLion build output"
+sibling_any = []
+
+[[markers]]
+dir = ".gradle"
+zh = "Gradle 项目缓存"
+en = "Gradle project cache"
+sibling_any = []
+
+[[markers]]
+dir = ".dart_tool"
+zh = "Dart/Flutter 缓存"
+en = "Dart/Flutter cache"
+sibling_any = []
+
+[[markers]]
+dir = "vendor"
+zh = "Go/PHP 依赖副本"
+en = "Go/PHP vendored deps"
+sibling_any = ["go.mod", "composer.json"]

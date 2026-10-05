@@ -1,0 +1,10 @@
+id = "chromium"
+version = 1
+platform = "all"
+required = ["chromium"]
+[lists]
+signature_leaves = ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "GraphiteDawnCache", "ShaderCache", "component_crx_cache", "extensions_crx_cache"]
+extra_leaves = ["CachedData", "CachedProfilesData", "CachedExtensionVSIXs", "blob_storage", "fcache", "logs"]
+strong_leaves = ["component_crx_cache", "extensions_crx_cache", "CachedExtensionVSIXs"]
+[numbers]
+signature_min = 2

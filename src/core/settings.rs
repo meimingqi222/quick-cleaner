@@ -59,6 +59,7 @@ pub struct Settings {
 
     /// 是否在启动/周期触发时自动检查 GitHub 上的新版本。
     pub auto_check_updates: bool,
+    pub auto_update_rules: bool,
 
     /// 用户点过「跳过此版本」的版本号；检测到同版本时不再弹窗。
     pub skipped_update_version: Option<String>,
@@ -76,6 +77,7 @@ impl Default for Settings {
             whitelist: Vec::new(),
             brew_cleanup_at: None,
             auto_check_updates: true,
+            auto_update_rules: true,
             skipped_update_version: None,
             last_update_check_at: None,
         }
@@ -177,6 +179,7 @@ mod tests {
             whitelist: vec!["/tmp/keep-this".to_string()],
             brew_cleanup_at: Some(1_700_000_000),
             auto_check_updates: false,
+            auto_update_rules: false,
             skipped_update_version: Some("0.0.8".into()),
             last_update_check_at: Some(1_700_000_001),
         };

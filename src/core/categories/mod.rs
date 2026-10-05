@@ -6,7 +6,6 @@ mod chromium;
 mod dev;
 mod docker;
 mod helpers;
-#[cfg(target_os = "macos")]
 mod macos;
 mod system;
 mod updater;
@@ -74,6 +73,11 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
+    pub fn from_rule(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|category| format!("{category:?}") == value)
+    }
     pub const ALL: [CategoryId; 17] = [
         CategoryId::SystemTemp,
         CategoryId::UserTemp,
@@ -396,6 +400,9 @@ impl CategoryId {
 /// 语言，而语言开关必须立刻生效、不能触发重扫。
 #[derive(Clone, Debug)]
 pub struct ScanTarget {
+    pub operation: crate::core::rules::Operation,
+    pub disposal: crate::core::cleaner::Disposal,
+    pub rule: crate::core::rules::RuleRef,
     pub path: PathBuf,
     pub label: Text,
     pub category: CategoryId,
@@ -413,7 +420,10 @@ pub struct ScanTarget {
 /// `brew_cleanup_at` 来自调用方已经加载的设置，避免目标构造过程中再次读取
 /// 配置文件并刷新全局白名单。
 pub fn all_targets(brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
-    collect_targets(crate::platform::user_home(), brew_cleanup_at)
+    let snapshot = crate::core::rules::current();
+    crate::core::rules::with_snapshot(snapshot, || {
+        collect_targets(crate::platform::user_home(), brew_cleanup_at)
+    })
 }
 
 /// 用户主目录拿不到时仍要产出与 home 无关的系统目标（Windows\\Temp、
@@ -422,30 +432,52 @@ pub fn all_targets(brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
 fn collect_targets(home: Option<PathBuf>, brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
     let mut t: Vec<ScanTarget> = Vec::new();
     let home = home.as_deref();
-    system::push_system_targets(&mut t, home);
-    cache::push_cache_targets(&mut t, home, brew_cleanup_at);
-    if let Some(home) = home {
-        browser::push_browser_targets(&mut t, home);
-        dev::push_dev_targets(&mut t, home);
+    for provider in crate::core::rules::list("engine", "providers") {
+        match provider.as_str() {
+            "system" => system::push_system_targets(&mut t, home),
+            "cache" => cache::push_cache_targets(&mut t, home, brew_cleanup_at),
+            "browser" => {
+                if let Some(home) = home {
+                    browser::push_browser_targets(&mut t, home)
+                }
+            }
+            "development" => {
+                if let Some(home) = home {
+                    dev::push_dev_targets(&mut t, home)
+                }
+            }
+            "docker" => docker::push_docker_targets(&mut t),
+            #[cfg(target_os = "macos")]
+            "macos" => macos::push_macos_targets(&mut t, home),
+            _ => {}
+        }
     }
-    docker::push_docker_targets(&mut t);
-    #[cfg(target_os = "macos")]
-    macos::push_macos_targets(&mut t, home);
+    crate::core::rules::append_path_targets(&mut t, home);
     dedupe_paths(&mut t);
     t
 }
 
-/// 同一条路径被两条规则同时入表时只留先入的那条。
-///
-/// 目标表是多条规则各自 push 出来的：父子双算靠各自的 `CLAIMED_*` 表挡着，
-/// 但**同一条路径**被两条规则收进来是纯浪费——`scan_fixed_inner` 逐目标
-/// 独立称重后直接相加，同一条路径会按两份体积计，列表里还会出现两行。
-///
-/// 保留先入表的那条：后入的规则都是更泛的兜底（形状识别、目录展开），
-/// 先入的是更具体的规则，标签也更具体。
+/// 展示和称重只保留一条；所有归属约束合并，删除方式冲突则拒绝。
 fn dedupe_paths(t: &mut Vec<ScanTarget>) {
-    let mut seen = std::collections::HashSet::new();
-    t.retain(|target| seen.insert(target.path.clone()));
+    let mut positions = std::collections::HashMap::new();
+    let mut merged: Vec<ScanTarget> = Vec::new();
+    for target in t.drain(..) {
+        let key = crate::core::safety::norm(&target.path);
+        if let Some(&index) = positions.get(&key) {
+            let first: &mut ScanTarget = &mut merged[index];
+            if first.operation != target.operation || first.disposal != target.disposal {
+                first.rule.blocked =
+                    Some("Conflicting cleanup policies for the same target".into());
+                first.recommended = false;
+            }
+            first.rule.merge(&target.rule);
+            first.recommended &= target.recommended;
+        } else {
+            positions.insert(key, merged.len());
+            merged.push(target);
+        }
+    }
+    *t = merged;
 }
 
 pub(super) fn target(path: PathBuf, label: impl Into<Text>, category: CategoryId) -> ScanTarget {
@@ -460,6 +492,9 @@ pub(super) fn target_with_recommendation(
     recommended: bool,
 ) -> ScanTarget {
     ScanTarget {
+        operation: crate::core::rules::Operation::classify(&path, category.removes_directory()),
+        disposal: category.disposal(),
+        rule: crate::core::rules::RuleRef::engine(),
         path,
         label: label.into(),
         category,
@@ -477,6 +512,9 @@ pub(super) fn target_with_size(
     size_hint: u64,
 ) -> ScanTarget {
     ScanTarget {
+        operation: crate::core::rules::Operation::classify(&path, category.removes_directory()),
+        disposal: category.disposal(),
+        rule: crate::core::rules::RuleRef::engine(),
         path,
         label: label.into(),
         category,

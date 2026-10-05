@@ -1,0 +1,53 @@
+id = "cache"
+version = 1
+platform = "all"
+required = ["file"]
+
+# ~/.cache 下确认能重建的包缓存：工具自带 cache clean，或删掉后下一次构建自己长回来。
+[[catalogs.packages]]
+path = "uv"
+zh = "uv 缓存"
+en = "uv cache"
+
+[[catalogs.packages]]
+path = "pip"
+zh = "pip 缓存"
+en = "pip cache"
+
+[[catalogs.packages]]
+path = "pre-commit"
+zh = "pre-commit 缓存"
+en = "pre-commit cache"
+
+[[catalogs.packages]]
+path = "node-gyp"
+zh = "node-gyp 缓存"
+en = "node-gyp cache"
+
+[[catalogs.packages]]
+path = "typescript"
+zh = "TypeScript 缓存"
+en = "TypeScript cache"
+
+[[catalogs.packages]]
+path = "go-build"
+zh = "Go 构建缓存"
+en = "Go build cache"
+
+[[catalogs.packages]]
+path = "gopls"
+zh = "gopls 缓存"
+en = "gopls cache"
+
+# 包缓存，但不能预选。pypoetry 里除了下载缓存还住着 virtualenvs/，
+# 重建是一次完整 install。纯下载子层的路径没有在本机确认过，所以整项降级，
+# 不切一个没验证过的路径。类别仍是包缓存，不能掉进认不出的临时目录。
+[[catalogs.shown]]
+path = "pypoetry"
+zh = "Poetry 缓存"
+en = "Poetry cache"
+
+[[catalogs.agents]]
+path = "opencode"
+zh = "OpenCode · 缓存"
+en = "OpenCode · cache"

@@ -1,0 +1,46 @@
+id = "hermes"
+version = 2
+platform = "windows"
+required = ["source_install", "python_module", "registration", "source_flow"]
+
+[app]
+actions = ["revalidate", "official_operation", "supplement_cleanup", "verify_completion", "remove_recovery_records"]
+completion = "artifacts_and_registrations_absent"
+name = "Hermes"
+default_home = "hermes"
+source = "hermes-agent"
+targets = ["hermes-agent/apps/desktop/release/win-unpacked/Hermes.exe", "bin/hermes.exe"]
+source_file = "pyproject.toml"
+source_signature = 'name = "hermes-agent"'
+constants = "hermes_constants.py"
+source_owner = ".git"
+stamp = "install-stamp.json"
+version_pointer = "/displayVersion"
+state_dir = "installs"
+state_facts = "facts.json"
+environment_pointer = "/packages/venv/environment"
+environments = "environments"
+environment_name = "venv"
+tools_dir = "tools"
+tool_facts = "facts.json"
+tool_lock = ".install.lock"
+launchers = ["bin/hermes.exe", "bin/hermes.cmd", "bin/hermes-acp.exe", "bin/hermes-acp.cmd"]
+profiles = "profiles"
+module = "hermes_cli.uninstall"
+module_file = "hermes_cli/uninstall.py"
+module_args = ["--mode", "lite"]
+home_variable = "HERMES_HOME"
+python_prefix = "python-"
+installer = "hermes-setup.exe"
+installer_signature = "hermes_bootstrap_lib"
+bootstrap_dir = "bootstrap-cache"
+bootstrap_prefix = "install-"
+bootstrap_extensions = ["ps1", "sh"]
+gateway_dir = "gateway-service"
+gateway_files = ["Hermes_Gateway.cmd", "Hermes_Gateway.vbs"]
+task_prefix = "Hermes_Gateway"
+path_prefixes = ["hermes-agent", "bin", "git", "node", "venv", "tools"]
+environment_variables = ["HERMES_HOME", "HERMES_GIT_BASH_PATH"]
+preserve = ["config.yaml", "sessions", ".env"]
+installer_process = "hermes-setup.exe"
+unknown_processes = ["hermes.exe", "python.exe", "pythonw.exe", "node.exe"]

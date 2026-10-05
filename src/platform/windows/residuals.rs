@@ -299,6 +299,20 @@ fn open_and_read(root: HKEY, subpath: &str, value: &str, sam: DWORD) -> Option<S
 
 /// 扫描指定软件在磁盘与注册表中的残留项
 pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
+    let rule = app
+        .discovery
+        .as_ref()
+        .and_then(|d| d.rule.clone())
+        .unwrap_or_else(crate::core::rules::RuleRef::engine);
+    crate::core::rules::with_snapshot(rule.snapshot.clone(), || {
+        let mut result = scan_residuals_inner(app);
+        for item in &mut result.items {
+            item.rule = Some(rule.clone());
+        }
+        result
+    })
+}
+fn scan_residuals_inner(app: &InstalledApp) -> ResidualScanResult {
     let ctx = Ctx::new(app);
     let mut items: Vec<ResidualItem> = Vec::new();
 
@@ -307,6 +321,19 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     scan_orphan_ancestors(app, &mut items);
     scan_data_dirs(&ctx, &mut items);
     scan_shortcuts(&ctx, &mut items);
+    if let Some(discovery) = &app.discovery {
+        for path in &discovery.shortcuts {
+            if path.is_file()
+                && !is_protected_residual_path(path)
+                && super::app_discovery::shortcut_targets(path, &discovery.executable)
+            {
+                items.push(ResidualItem::certain(
+                    ResidualKind::File(path.clone(), dir_or_file_size(path)),
+                    ResidualSource::Shortcut,
+                ));
+            }
+        }
+    }
     scan_software_keys(&ctx, &mut items);
     scan_vendor_keys_by_path(&ctx, &mut items);
     scan_app_paths(&ctx, &mut items);
@@ -325,6 +352,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     scan_crash_dumps(&ctx, &mut items);
     scan_uninstaller_leftover(app, &ctx, &mut items);
 
+    limit_discovered_residuals(app, &mut items);
     dedup_items(&mut items);
     // 「确定」的排在前面，用户先看到的就是可以放心删的
     items.sort_by_key(|b| std::cmp::Reverse(b.confidence));
@@ -339,6 +367,29 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
         // 着系统错误直接失败，原因已经到了用户面前，不像 macOS 活库闸门
         // 那样需要额外解释「为什么拒」。
         ..Default::default()
+    }
+}
+
+pub(super) fn limit_discovered_residuals(app: &InstalledApp, items: &mut [ResidualItem]) {
+    let Some(discovery) = &app.discovery else {
+        return;
+    };
+    // Names alone cannot confer deletion authority on a shortcut-discovered application.
+    for item in items {
+        let exact_program = item.source == ResidualSource::InstallDir;
+        let exact_shortcut = match &item.kind {
+            ResidualKind::File(path, _) => {
+                discovery
+                    .shortcuts
+                    .iter()
+                    .any(|p| crate::core::safety::norm(p) == crate::core::safety::norm(path))
+                    && super::app_discovery::shortcut_targets(path, &discovery.executable)
+            }
+            _ => false,
+        };
+        if !exact_program && !exact_shortcut {
+            item.confidence = Confidence::Possible;
+        }
     }
 }
 
@@ -362,7 +413,21 @@ fn scan_uninstall_entry(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
     }
 }
 
-fn scan_install_dir(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
+pub(super) fn scan_install_dir(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
+    if let Some(discovery) = &app.discovery {
+        for path in &discovery.program_paths {
+            if !path.exists() || is_protected_residual_path(path) {
+                continue;
+            }
+            let kind = if path.is_dir() {
+                ResidualKind::Directory(path.clone(), dir_or_file_size(path))
+            } else {
+                ResidualKind::File(path.clone(), dir_or_file_size(path))
+            };
+            out.push(ResidualItem::certain(kind, ResidualSource::InstallDir));
+        }
+        return;
+    }
     let Some(loc) = &app.install_location else {
         return;
     };
@@ -384,6 +449,9 @@ fn scan_install_dir(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
 /// 空壳继续留在根目录下。沿父链往上找，遇到「存在且不含任何文件」的
 /// 目录就报出来；一旦碰到非空目录或系统骨架目录就停，绝不越界。
 fn scan_orphan_ancestors(app: &InstalledApp, out: &mut Vec<ResidualItem>) {
+    if app.discovery.is_some() {
+        return;
+    }
     let Some(loc) = &app.install_location else {
         return;
     };
@@ -590,6 +658,7 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
             } else if name.to_ascii_lowercase().ends_with(".lnk") {
                 let size = dir_or_file_size(p);
                 out.push(ResidualItem {
+                    rule: None,
                     kind: ResidualKind::File(p.to_path_buf(), size),
                     confidence: conf,
                     source: ResidualSource::Shortcut,
@@ -692,6 +761,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                     continue;
                 }
                 out.push(ResidualItem {
+                    rule: None,
                     kind: ResidualKind::RegistryValue(reg_root, key.to_string(), name),
                     confidence: if certain {
                         Confidence::Certain
@@ -1111,6 +1181,7 @@ fn scan_scheduled_tasks(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         }
         let name = format!(r"\{rel_str}");
         out.push(ResidualItem {
+            rule: None,
             kind: ResidualKind::ScheduledTask(name),
             confidence: if hit_dir {
                 Confidence::Certain
@@ -1261,6 +1332,7 @@ fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source
     let size = dir_or_file_size(&path);
     let identity = crate::core::model::capture_identity(&path);
     out.push(ResidualItem {
+        rule: None,
         kind: ResidualKind::Directory(path, size),
         confidence: conf,
         source,
@@ -1604,6 +1676,7 @@ mod tests {
 
     fn app(name: &str, publisher: &str) -> InstalledApp {
         InstalledApp {
+            discovery: None,
             id: name.into(),
             name: name.into(),
             version: "1.0".into(),

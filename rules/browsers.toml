@@ -1,0 +1,102 @@
+id = "browsers"
+version = 1
+platform = "all"
+required = ["file"]
+
+# ~/Library/Application Support 下的浏览器根。发现 Application Support 缓存
+# 和开发扫描跳过认领目录都读这张表。Google/Chrome 只认领 Chrome，不认领
+# Google 的其他孩子。
+[[catalogs.app_support]]
+path = "Google/Chrome"
+zh = "Chrome"
+en = "Chrome"
+
+[[catalogs.app_support]]
+path = "Arc"
+zh = "Arc"
+en = "Arc"
+
+[[catalogs.app_support]]
+path = "BraveSoftware/Brave-Browser"
+zh = "Brave"
+en = "Brave"
+
+[[catalogs.app_support]]
+path = "Microsoft Edge"
+zh = "Edge"
+en = "Edge"
+
+[[catalogs.app_support]]
+path = "Vivaldi"
+zh = "Vivaldi"
+en = "Vivaldi"
+
+[[catalogs.app_support]]
+path = "Opera"
+zh = "Opera"
+en = "Opera"
+
+# ~/Library/Caches 下的产品目录。Chromium 系在 macOS 上把缓存放在产品名
+# 目录，不是 bundle id：Edge 的实际缓存是 "Microsoft Edge"。两段路径表示
+# 只认领孩子，父目录的其余孩子仍然入表。
+[[catalogs.library_caches]]
+path = "Google/Chrome"
+zh = "Chrome 缓存"
+en = "Chrome cache"
+
+[[catalogs.library_caches]]
+path = "com.apple.Safari"
+zh = "Safari 缓存"
+en = "Safari cache"
+
+[[catalogs.library_caches]]
+path = "Microsoft Edge"
+zh = "Edge 缓存"
+en = "Edge cache"
+
+[[catalogs.library_caches]]
+path = "Firefox"
+zh = "Firefox 缓存"
+en = "Firefox cache"
+
+[[catalogs.library_caches]]
+path = "BraveSoftware"
+zh = "Brave 缓存"
+en = "Brave cache"
+
+[[catalogs.library_caches]]
+path = "company.thebrowser.Browser"
+zh = "Arc 缓存"
+en = "Arc cache"
+
+[[catalogs.library_caches]]
+path = "Chromium"
+zh = "Chromium 缓存"
+en = "Chromium cache"
+
+[[catalogs.library_caches]]
+path = "com.operasoftware.Opera"
+zh = "Opera 缓存"
+en = "Opera cache"
+
+[[catalogs.library_caches]]
+path = "com.vivaldi.Vivaldi"
+zh = "Vivaldi 缓存"
+en = "Vivaldi cache"
+
+# Windows 上 %LOCALAPPDATA% 下的 User Data 根。目录不存在时不产出目标。
+# Profile 枚举和 Crashpad/completed 仍由扫描代码完成。
+[[catalogs.windows_user_data]]
+path = "Google/Chrome/User Data"
+zh = "Chrome"
+en = "Chrome"
+
+[[catalogs.windows_user_data]]
+path = "Microsoft/Edge/User Data"
+zh = "Edge"
+en = "Edge"
+
+[[catalogs.windows_user_data]]
+path = "BraveSoftware/Brave-Browser/User Data"
+zh = "Brave"
+en = "Brave"

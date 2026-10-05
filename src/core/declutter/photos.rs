@@ -48,11 +48,21 @@ impl PhotoGroup {
 
 /// 扫描相似图片与连拍（通过 FSIndexEngine 快速提取候选 + 并行 dHash 聚类）
 pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<PhotoGroup> {
+    crate::core::rules::with_snapshot(crate::core::rules::current(), || {
+        scan_similar_photos_inner(live, tree)
+    })
+}
+fn scan_similar_photos_inner(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<PhotoGroup> {
+    let similarity = SimilarityPolicy::current();
+    let candidate_limit = super::policy("photo_candidate_limit", 1500) as usize;
     let photo_roots = get_user_content_roots();
     let engine = FSIndexEngine::new(tree);
     let filter = QueryFilter::new(photo_roots)
-        .max_depth(20)
-        .size_range(10_000, 200_000_000);
+        .max_depth(super::policy("photo_max_depth", 20) as usize)
+        .size_range(
+            super::policy("photo_min_size", 10000),
+            super::policy("photo_max_size", 200000000),
+        );
 
     let all_files = engine.query_files(&filter, live);
 
@@ -93,11 +103,11 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
     }
 
     // 若同目录候选不足，补充其他大图/常见图片
-    if candidates_with_meta.len() < 500 {
+    if candidates_with_meta.len() < super::policy("photo_supplement_below", 500) as usize {
         for f in all_photo_files {
             if candidate_set.insert(f.path.clone()) {
                 candidates_with_meta.push((f.path.clone(), f.size, f.mtime));
-                if candidates_with_meta.len() >= 1500 {
+                if candidates_with_meta.len() >= candidate_limit {
                     break;
                 }
             }
@@ -108,7 +118,7 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
         return Vec::new();
     }
 
-    candidates_with_meta.truncate(1500);
+    candidates_with_meta.truncate(candidate_limit);
 
     // 2. 并行提取真实尺寸与感知哈希 (dHash)
     // size 和 mtime 已从索引获取，无需再调 std::fs::metadata。
@@ -157,19 +167,20 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
     // 3. 全互联紧密聚类 (Complete-Linkage Clustering)：
     // 组内每个成员必须与该组所有已有成员均满足严格相似，彻底杜绝传递性误合并与超级大组
     let mut group_list: Vec<Vec<PhotoCandidate>> = Vec::new();
+    let group_size_limit = super::policy("photo_group_size_limit", 12) as usize;
 
     for candidate in candidates {
         let mut matched_group_idx = None;
 
         for (g_idx, group) in group_list.iter().enumerate() {
             // 每组照片通常为 2~8 张，上限 12 张
-            if group.len() >= 12 {
+            if group.len() >= group_size_limit {
                 continue;
             }
             // 组内所有成员必须全部相似
             let fits_all = group
                 .iter()
-                .all(|member| are_photos_similar(member, &candidate));
+                .all(|member| are_photos_similar_with(member, &candidate, &similarity));
             if fits_all {
                 matched_group_idx = Some(g_idx);
                 break;
@@ -266,7 +277,7 @@ pub fn scan_similar_photos(live: &AtomicBool, tree: Option<&SizeTree>) -> Vec<Ph
         });
     }
 
-    result_groups.truncate(30);
+    result_groups.truncate(super::policy("photo_group_limit", 30) as usize);
     crate::log!(
         "[Declutter::Photos] 相似照片扫描完成: 候选 {} 张，聚类出 {} 组相似图片",
         total_candidates,
@@ -328,7 +339,31 @@ fn compute_dual_hash_from_image(img: &image::DynamicImage) -> Option<(u64, u64)>
 }
 
 /// 判断两张照片是否为真正的相似照片、连拍或同源变体
+struct SimilarityPolicy {
+    distance: u32,
+    burst_distance: u32,
+    burst_seconds: u64,
+    prefixes: Vec<String>,
+}
+impl SimilarityPolicy {
+    fn current() -> Self {
+        Self {
+            distance: super::policy("photo_distance", 5) as u32,
+            burst_distance: super::policy("photo_burst_distance", 8) as u32,
+            burst_seconds: super::policy("photo_burst_seconds", 10),
+            prefixes: crate::core::rules::list("engine", "photo_camera_prefixes"),
+        }
+    }
+}
+#[cfg(test)]
 fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
+    are_photos_similar_with(a, b, &SimilarityPolicy::current())
+}
+fn are_photos_similar_with(
+    a: &PhotoCandidate,
+    b: &PhotoCandidate,
+    policy: &SimilarityPolicy,
+) -> bool {
     let same_dir = a.parent == b.parent;
 
     let (w1, h1) = a.dimensions;
@@ -343,7 +378,12 @@ fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
 
     let stem_a = &a.stem_lower;
     let stem_b = &b.stem_lower;
-    let is_burst = is_sequential_camera_name(stem_a, stem_b);
+    let is_burst = !stem_a.is_empty()
+        && !stem_b.is_empty()
+        && policy
+            .prefixes
+            .iter()
+            .any(|prefix| stem_a.starts_with(prefix) && stem_b.starts_with(prefix));
     let same_stem = !stem_a.is_empty()
         && !stem_b.is_empty()
         && (stem_a == stem_b || stem_a.starts_with(stem_b) || stem_b.starts_with(stem_a));
@@ -354,12 +394,17 @@ fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
         let dist_a = (ah_a ^ ah_b).count_ones();
 
         // 强相似度：宽高比吻合 + 梯度相似 + 明暗分布相似
-        if same_aspect && dist_d <= 5 && dist_a <= 5 {
+        if same_aspect && dist_d <= policy.distance && dist_a <= policy.distance {
             return true;
         }
 
         // 同目录连拍/同源图：同目录 + 宽高比吻合 + (连拍序列或同基名) + 宽松阈值
-        if same_dir && same_aspect && (is_burst || same_stem) && dist_d <= 8 && dist_a <= 8 {
+        if same_dir
+            && same_aspect
+            && (is_burst || same_stem)
+            && dist_d <= policy.burst_distance
+            && dist_a <= policy.burst_distance
+        {
             return true;
         }
 
@@ -370,26 +415,10 @@ fn are_photos_similar(a: &PhotoCandidate, b: &PhotoCandidate) -> bool {
     if same_dir && same_aspect {
         let time_diff = a.mtime.abs_diff(b.mtime);
         let same_dims = a.dimensions == b.dimensions && a.dimensions.0 > 0;
-        if is_burst && same_dims && time_diff <= 10 {
+        if is_burst && same_dims && time_diff <= policy.burst_seconds {
             return true;
         }
         if same_stem && same_dims {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn is_sequential_camera_name(stem_a: &str, stem_b: &str) -> bool {
-    if stem_a.is_empty() || stem_b.is_empty() {
-        return false;
-    }
-
-    let prefixes = ["img_", "dsc_", "pxl_", "sam_", "dji_", "photo_"];
-
-    for prefix in prefixes {
-        if stem_a.starts_with(prefix) && stem_b.starts_with(prefix) {
             return true;
         }
     }
@@ -423,4 +452,42 @@ fn generate_gradient_seed(path: &Path) -> u32 {
         0x0284c7, 0x0369a1, 0x075985, 0x475569, 0x334155, 0x4f46e5, 0x4338ca, 0x0d9488, 0x0f766e,
     ];
     palettes[(h as usize) % palettes.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rule_threshold_changes_similarity_without_changing_hash_algorithm() {
+        let a = PhotoCandidate {
+            path: "a.jpg".into(),
+            size: 10000,
+            mtime: 10,
+            dimensions: (100, 100),
+            dual_hash: Some((0, 0)),
+            stem_lower: "a".into(),
+            parent: Some("one".into()),
+        };
+        let b = PhotoCandidate {
+            path: "b.jpg".into(),
+            dual_hash: Some((31, 31)),
+            stem_lower: "b".into(),
+            parent: Some("two".into()),
+            ..a.clone()
+        };
+        assert!(are_photos_similar(&a, &b));
+        let mut bundle = crate::core::rules::current().bundle.clone();
+        bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "engine")
+            .unwrap()
+            .numbers
+            .insert("photo_distance".into(), 4);
+        bundle.validate().unwrap();
+        crate::core::rules::with_snapshot(
+            std::sync::Arc::new(crate::core::rules::RuleSnapshot { bundle }),
+            || assert!(!are_photos_similar(&a, &b)),
+        );
+    }
 }

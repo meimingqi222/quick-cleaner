@@ -119,13 +119,100 @@ pub fn list_container_refs() -> Vec<String> {
 /// `Deleted:` 行，磁盘空间实际释放）；`Ok(false)` 表示只摘了标签
 /// （仅有 `Untagged:` 行，空间未释放）。
 pub fn remove_image(rmi_ref: &str) -> Result<bool, String> {
-    match docker_command(&["image", "rm", rmi_ref]).output() {
-        Ok(out) if out.status.success() => {
-            Ok(String::from_utf8_lossy(&out.stdout).contains("Deleted:"))
+    remove_image_with(rmi_ref, |args| {
+        crate::core::proc::run_with_timeout("docker", args, std::time::Duration::from_secs(120))
+    })
+}
+pub(crate) fn valid_reference(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= 512
+        && !reference.starts_with('-')
+        && reference.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'/' | b':' | b'@')
+        })
+}
+fn remove_image_with(
+    rmi_ref: &str,
+    mut run: impl FnMut(&[&str]) -> Option<crate::core::proc::ProcRun>,
+) -> Result<bool, String> {
+    let deleted = remove_image_action_with(rmi_ref, &mut run)?;
+    match reference_absence_with(rmi_ref, &mut run) {
+        crate::core::rules::facts::Evidence::Confirmed => Ok(deleted),
+        crate::core::rules::facts::Evidence::Absent => Err("Docker image reference remains".into()),
+        crate::core::rules::facts::Evidence::Unknown => {
+            Err("Docker resource verification unavailable or incomplete".into())
         }
-        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-        Err(e) => Err(format!("无法启动 docker：{e}")),
     }
+}
+
+pub(crate) fn remove_image_action(reference: &str) -> Result<bool, String> {
+    remove_image_action_with(reference, |args| {
+        crate::core::proc::run_with_timeout("docker", args, std::time::Duration::from_secs(120))
+    })
+}
+
+fn remove_image_action_with(
+    rmi_ref: &str,
+    mut run: impl FnMut(&[&str]) -> Option<crate::core::proc::ProcRun>,
+) -> Result<bool, String> {
+    if !valid_reference(rmi_ref) {
+        return Err("Invalid Docker reference".into());
+    }
+    let removed =
+        run(&["image", "rm", "--", rmi_ref]).ok_or("Docker removal unavailable or timed out")?;
+    if !removed.ok {
+        return Err(String::from_utf8_lossy(&removed.stderr).trim().into());
+    }
+    Ok(String::from_utf8_lossy(&removed.stdout).contains("Deleted:"))
+}
+
+pub(crate) fn reference_absence(reference: &str) -> crate::core::rules::facts::Evidence {
+    reference_absence_with(reference, |args| {
+        crate::core::proc::run_with_timeout("docker", args, std::time::Duration::from_secs(120))
+    })
+}
+
+fn reference_absence_with(
+    rmi_ref: &str,
+    mut run: impl FnMut(&[&str]) -> Option<crate::core::proc::ProcRun>,
+) -> crate::core::rules::facts::Evidence {
+    use crate::core::rules::facts::Evidence;
+    if !valid_reference(rmi_ref) {
+        return Evidence::Unknown;
+    }
+    let Some(inventory) = run(&["images", "--no-trunc", "--format", IMAGES_FORMAT]) else {
+        return Evidence::Unknown;
+    };
+    if !inventory.ok {
+        return Evidence::Unknown;
+    }
+    let Ok(stdout) = std::str::from_utf8(&inventory.stdout) else {
+        return Evidence::Unknown;
+    };
+    let images = parse_images(stdout);
+    if images.len()
+        != stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    {
+        return Evidence::Unknown;
+    }
+    let id = rmi_ref.strip_prefix("sha256:").unwrap_or(rmi_ref);
+    let id_reference = (12..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_hexdigit());
+    let reference = if !rmi_ref.contains([':', '@']) {
+        format!("{rmi_ref}:latest")
+    } else {
+        rmi_ref.into()
+    };
+    if images.iter().any(|image| {
+        (id_reference && image.id.starts_with(id))
+            || format!("{}:{}", image.repository, image.tag) == reference
+            || format!("{}@{}", image.repository, image.digest) == reference
+    }) {
+        return Evidence::Absent;
+    }
+    Evidence::Confirmed
 }
 
 /// 解析 `docker images --format` 的输出，一行一镜像，坏行跳过。
@@ -305,6 +392,98 @@ fn is_referenced(image: &DockerImage, container_refs: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_completion_probe_distinguishes_remaining_and_unknown_without_mutation() {
+        use crate::core::rules::facts::Evidence;
+        let response = |text: &str| crate::core::proc::ProcRun {
+            stdout: text.as_bytes().to_vec(),
+            stderr: vec![],
+            exit_code: Some(0),
+            ok: true,
+        };
+        let row = format!("{}|fixture/app|2|<none>|1MB\n", "a".repeat(64));
+        for (output, expected) in [
+            ("", Evidence::Confirmed),
+            (row.as_str(), Evidence::Absent),
+            ("invalid inventory", Evidence::Unknown),
+        ] {
+            assert_eq!(
+                reference_absence_with("fixture/app:2", |args| {
+                    assert_eq!(args[0], "images");
+                    Some(response(output))
+                }),
+                expected
+            );
+        }
+        assert_eq!(
+            reference_absence_with("fixture/app:2", |_| None),
+            Evidence::Unknown
+        );
+        assert_eq!(
+            reference_absence_with("--force", |_| panic!("invalid reference queried")),
+            Evidence::Unknown
+        );
+    }
+
+    #[test]
+    fn remove_verifies_exact_reference_and_rejects_unknown_inventory() {
+        let response = |text: &str| crate::core::proc::ProcRun {
+            stdout: text.as_bytes().to_vec(),
+            stderr: vec![],
+            exit_code: Some(0),
+            ok: true,
+        };
+        let id = "a".repeat(64);
+        let remaining = format!("{id}|example/app|keep|<none>|1MB\n");
+        let unchanged = format!("{id}|example/app|old|<none>|1MB\n");
+        assert!(remove_image_with("example/app:old", |args| Some(response(
+            if args[0] == "image" {
+                "Untagged: example/app:old"
+            } else {
+                &unchanged
+            }
+        )))
+        .is_err());
+        assert!(!remove_image_with("example/app:old", |args| Some(response(
+            if args[0] == "image" {
+                "Untagged: example/app:old"
+            } else {
+                &remaining
+            }
+        )))
+        .unwrap());
+        assert!(
+            remove_image_with(&id, |args| Some(response(if args[0] == "image" {
+                "Deleted: layer"
+            } else {
+                &remaining
+            })))
+            .is_err()
+        );
+        assert!(
+            remove_image_with("example/app:old", |args| if args[0] == "image" {
+                Some(response("Deleted: layer"))
+            } else {
+                None
+            })
+            .is_err()
+        );
+        assert!(remove_image_with("example/app:old", |args| Some(response(
+            if args[0] == "image" {
+                "Deleted: layer"
+            } else {
+                "unreadable inventory"
+            }
+        )))
+        .is_err());
+        let mut called = false;
+        assert!(remove_image_with("--force", |_| {
+            called = true;
+            None
+        })
+        .is_err());
+        assert!(!called);
+    }
 
     fn img(id: &str, repo: &str, tag: &str, size: u64) -> DockerImage {
         DockerImage {

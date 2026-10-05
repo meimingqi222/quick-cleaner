@@ -316,8 +316,77 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         ),
                 )
                 // 版本号 + 更新入口
-                .child(render_version_row(root, cx)),
+                .child(render_version_row(root, cx))
+                .child(render_rules_settings(root, cx)),
         )
+}
+
+fn render_rules_settings(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
+    let lang = root.language;
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .child(
+            div()
+                .id("rules-settings")
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .child(tr_rules_version(
+                    lang,
+                    crate::core::rules::snapshot().bundle.sequence,
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.rule_update.expanded = !this.rule_update.expanded;
+                    cx.notify();
+                })),
+        );
+    if root.rule_update.expanded {
+        panel = panel
+            .child(div().px_3().child(tr_rules_next_scan(lang)))
+            .child(
+                div()
+                    .id("rules-auto")
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .child(tr_rules_auto(lang, root.settings.auto_update_rules))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.auto_update_rules = !this.settings.auto_update_rules;
+                        this.settings.save();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("rules-check")
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .child(if root.rule_update.checking {
+                        tr_update_checking(lang)
+                    } else {
+                        tr_rules_check(lang)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.check_rule_update(cx))),
+            )
+            .child(
+                div()
+                    .id("rules-rollback")
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .child(tr_rules_rollback(lang))
+                    .on_click(cx.listener(|this, _, _, cx| this.rollback_rules(cx))),
+            );
+        if root.rule_update.error.is_some() {
+            panel = panel.child(div().px_3().child(tr_rules_failed(lang)));
+        }
+    }
+    panel.into_any_element()
 }
 
 /// 侧栏底栏版本行。

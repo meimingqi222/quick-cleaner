@@ -112,6 +112,7 @@ fn main() {
                             root.start_scan(cx);
                             root.start_apps_scan(cx);
                             root.start_update_scheduler(cx);
+                            root.start_rule_scheduler(cx);
                         })
                         .ok();
                 })

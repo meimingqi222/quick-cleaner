@@ -12,6 +12,10 @@ use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Debug)]
 pub struct ScanItem {
+    pub plans: Vec<std::sync::Arc<crate::core::rules::CleanupPlan>>,
+    pub operation: crate::core::rules::Operation,
+    pub disposal: crate::core::cleaner::Disposal,
+    pub rule: crate::core::rules::RuleRef,
     pub path: PathBuf,
     /// 双语标签，渲染时按当前语言取。扫描跑在后台线程上，那时还不知道
     /// 用户之后会切到哪种语言，而切语言不该触发重扫。
@@ -38,6 +42,25 @@ pub struct ScanItem {
     /// 虚拟目标没有文件系统身份，值为 `None`。真实目标只有成功取得身份
     /// 才会进入扫描结果；探测失败不是删除授权。
     pub identity: Option<crate::core::model::TargetIdentity>,
+}
+
+impl ScanItem {
+    pub fn freeze_plan(mut self) -> Self {
+        if self.plans.is_empty() {
+            let plan = crate::core::rules::CleanupPlan::new(
+                self.rule.clone(),
+                vec![crate::core::rules::PlannedTarget {
+                    path: self.path.clone(),
+                    operation: self.operation.clone(),
+                    identity: self.identity,
+                    disposal: self.disposal,
+                }],
+            );
+            self.rule = plan.rule.clone();
+            self.plans.push(std::sync::Arc::new(plan));
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +182,10 @@ fn scan_fixed_inner(
             if is_virtual_path(&t.path) {
                 return Some((
                     ScanItem {
+                        plans: Vec::new(),
+                        rule: t.rule.clone(),
+                        operation: t.operation.for_scanned_path(&t.path),
+                        disposal: t.disposal,
                         path: t.path.clone(),
                         label: t.label.clone(),
                         size: t.size_hint.unwrap_or(0),
@@ -187,6 +214,10 @@ fn scan_fixed_inner(
                 .map(|(size, files, newest)| {
                     (
                         ScanItem {
+                            plans: Vec::new(),
+                            rule: t.rule.clone(),
+                            operation: t.operation.for_scanned_path(&t.path),
+                            disposal: t.disposal,
                             path: t.path.clone(),
                             label: t.label.clone(),
                             size,
@@ -205,7 +236,10 @@ fn scan_fixed_inner(
 
     let top = slowest_targets(&measured, 5);
 
-    let results: Vec<ScanItem> = measured.into_iter().map(|(it, _)| it).collect();
+    let results: Vec<ScanItem> = measured
+        .into_iter()
+        .map(|(it, _)| it.freeze_plan())
+        .collect();
     let total: u64 = results.iter().map(|it| it.size).sum();
     crate::log!(
         "阶段一 scan_fixed 完成：{:?}，{}/{} 个目标命中，合计 {}；最慢 5 个：{}",
@@ -392,7 +426,10 @@ pub fn scan_discovered(
         items.len(),
         crate::core::model::fmt_size(total)
     );
-    (items, expired)
+    (
+        items.into_iter().map(ScanItem::freeze_plan).collect(),
+        expired,
+    )
 }
 
 /// macOS 专用：接受 `Arc<ScanResult>` 的 scan_discovered 变体。
@@ -421,7 +458,10 @@ pub fn scan_discovered_arc(
         items.len(),
         crate::core::model::fmt_size(total)
     );
-    (items, expired)
+    (
+        items.into_iter().map(ScanItem::freeze_plan).collect(),
+        expired,
+    )
 }
 
 /// 把第二阶段的结果并进已有的分类汇总。
@@ -719,6 +759,9 @@ mod tests {
     #[test]
     fn dominant_volume_picks_the_busiest_drive() {
         let mk = |p: &str| ScanTarget {
+            operation: crate::core::rules::Operation::Contents,
+            disposal: crate::core::cleaner::Disposal::Permanent,
+            rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(p),
             label: Text::same("t"),
             category: CategoryId::UserTemp,
@@ -780,6 +823,9 @@ mod tests {
         std::fs::write(target.join("keep"), b"x").unwrap();
         symlink(&target, &link).unwrap();
         let targets = [ScanTarget {
+            operation: crate::core::rules::Operation::Contents,
+            disposal: crate::core::cleaner::Disposal::Permanent,
+            rule: crate::core::rules::RuleRef::engine(),
             path: link,
             label: Text::same("link"),
             category: CategoryId::UserTemp,
@@ -795,6 +841,13 @@ mod tests {
 
     fn item(path: &str, size: u64, cat: CategoryId) -> ScanItem {
         ScanItem {
+            plans: Vec::new(),
+            operation: crate::core::rules::Operation::classify(
+                Path::new(path),
+                cat.removes_directory(),
+            ),
+            disposal: cat.disposal(),
+            rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(path),
             label: path.into(),
             size,

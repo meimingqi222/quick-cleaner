@@ -8,18 +8,39 @@ use crate::core::cleaner::{CleanFailure, CleanProgress};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
 use crate::platform::{
-    clean_residuals, detect_occupancy, list_installed_apps, run_uninstaller_and_wait,
+    clean_residuals, detect_occupancy, list_installed_apps, run_uninstaller_reported,
     scan_residuals, verify_residuals,
 };
 use crate::ui::components::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use crate::ui::{UninstallPhase, UninstallProgress};
+
 use gpui::Context;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
+
+fn status_with_uninstall_steps(
+    lang: Language,
+    mut status: String,
+    executions: &[crate::core::rules::flow::PlanExecution],
+) -> String {
+    let steps: Vec<_> = executions
+        .iter()
+        .flat_map(|execution| &execution.steps)
+        .collect();
+    if !steps.is_empty() {
+        let succeeded = steps
+            .iter()
+            .filter(|step| step.status == crate::core::rules::flow::StepStatus::Succeeded)
+            .count();
+        status.push('\n');
+        status.push_str(&tr_source_execution_result(lang, succeeded, steps.len()));
+    }
+    status
+}
 
 impl crate::ui::Root {
     /// 从内存里的已安装列表拿掉一款软件，并让虚拟列表失效重绘。
@@ -107,7 +128,7 @@ impl crate::ui::Root {
     /// 现在提前扫一遍留下候选集，卸载结束后再复核哪些还在，剩下的才是
     /// 官方卸载程序没清干净的部分。
     pub fn request_uninstall_app(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
-        if self.residual.scanning || self.clean.running {
+        if self.residual.scanning || self.clean.running || !app.can_uninstall() {
             return;
         }
         let lang = self.language;
@@ -118,7 +139,7 @@ impl crate::ui::Root {
             String::new()
         };
 
-        let (title, body, detail) = match lang {
+        let (title, body, mut detail) = match lang {
             Language::Zh => (
                 format!("确认卸载「{app_name}」？"),
                 if cfg!(target_os = "macos") {
@@ -138,6 +159,36 @@ impl crate::ui::Root {
                 "After a successful uninstall, only the leftover items you confirm will be cleaned.".to_string(),
             ),
         };
+        if app.discovery.is_some() {
+            detail = tr_discovered_uninstall_detail(lang).to_owned();
+        }
+        if let Some(discovery) = &app.discovery {
+            if let Some(reference) = discovery
+                .plan
+                .as_ref()
+                .map(|plan| &plan.rule)
+                .or(discovery.rule.as_ref())
+            {
+                let definition = reference.snapshot.definition(&reference.id);
+                if let Some(layout) = &definition.app {
+                    detail.push('\n');
+                    detail.push_str(&tr_source_rule_plan(
+                        lang,
+                        &reference.id,
+                        definition.version,
+                        reference.snapshot.bundle.sequence,
+                        discovery
+                            .plan
+                            .as_ref()
+                            .and_then(|plan| plan.installation.as_ref())
+                            .map_or(discovery.program_paths.len(), |instance| {
+                                instance.artifact_count()
+                            }),
+                        &layout.preserve.join(", "),
+                    ));
+                }
+            }
+        }
 
         self.confirm = Some(ConfirmRequest {
             title,
@@ -150,6 +201,7 @@ impl crate::ui::Root {
     }
 
     pub fn execute_uninstall_app(&mut self, app: InstalledApp, cx: &mut Context<Self>) {
+        self.residual.uninstall_executions.clear();
         let name = app.name.clone();
         let app_id = app.id.clone();
         let pre_target = app.clone();
@@ -169,7 +221,8 @@ impl crate::ui::Root {
             let pre = scan_residuals(&pre_target);
             // 2. 运行官方卸载程序并等它退出
             uninstall.set_phase(UninstallPhase::Removing);
-            let result = run_uninstaller_and_wait(&uninst_target);
+            let outcome = run_uninstaller_reported(&uninst_target);
+            let result = outcome.result;
             // 3. 复核：只留下卸载程序没清掉的；占用证据按「此刻」采集，
             //    不能用卸载前的快照——官方卸载器可能顺手杀掉了代理进程，
             //    拿旧证据弹「仍在运行」会把用户吓唬错。
@@ -186,19 +239,26 @@ impl crate::ui::Root {
             if let Some(wait) = minimum.checked_sub(shown_at.elapsed()) {
                 std::thread::sleep(wait);
             }
-            (result, remaining, occupancy)
+            (result, remaining, occupancy, outcome.plan_executions)
         });
 
         self.residual.task = Some(cx.spawn(async move |this, cx| {
-            let (result, remaining, occupancy) = work.await;
+            let (result, remaining, occupancy, executions) = work.await;
             this.update(cx, |this, cx| {
                 this.residual.scanning = false;
+                this.residual.uninstall_executions = executions;
                 this.residual.uninstall = None;
                 if let Err(reason) = &result {
                     crate::log!("卸载「{name}」失败：{reason}");
                     this.residual.selected.clear();
                     this.residual.result = None;
-                    this.status = bilingual(|l| tr_status_uninstall_failed(l, &name));
+                    this.status = bilingual(|l| {
+                        status_with_uninstall_steps(
+                            l,
+                            tr_status_uninstall_failed_reason(l, &name, reason),
+                            &this.residual.uninstall_executions,
+                        )
+                    });
                     cx.notify();
                     return;
                 }
@@ -214,7 +274,11 @@ impl crate::ui::Root {
                 let (count, size) = (res.items.len(), fmt_size(res.total_file_size));
                 this.status = bilingual(|l| {
                     let head = tr_status_uninstall_done(l, &name);
-                    tr_status_uninstall_residual(l, &head, count, &size)
+                    status_with_uninstall_steps(
+                        l,
+                        tr_status_uninstall_residual(l, &head, count, &size),
+                        &this.residual.uninstall_executions,
+                    )
                 });
                 this.residual.selected = res.default_selection();
                 this.residual.result = Some(res);
@@ -365,6 +429,7 @@ impl crate::ui::Root {
         let restore = res.clone();
         let restore_selected = selected_before.clone();
         let app_id_for_check = res.app_id.clone();
+        let is_discovered = app_id_for_check.starts_with("discovered:");
         let scope_for_check = res.scope;
 
         let clean = cx.background_executor().spawn(async move {
@@ -404,6 +469,15 @@ impl crate::ui::Root {
             #[cfg(not(target_os = "macos"))]
             let _ = &app_id_for_check;
 
+            #[cfg(windows)]
+            if let Err(reason) = crate::platform::windows::apps::validate_discovered_residual_clean(
+                &app_id_for_check,
+                &items_to_clean,
+            ) {
+                crate::log!("Residual cleanup blocked: {reason}");
+                return None;
+            }
+
             Some(clean_residuals(&items_to_clean, &prog))
         });
 
@@ -416,7 +490,11 @@ impl crate::ui::Root {
                     this.residual.selected = restore_selected;
                     this.status = bilingual(|l| match scope_for_check {
                         ResidualScope::App => {
-                            tr_status_residual_still_installed(l, &app_name_for_abort)
+                            if cfg!(windows) && is_discovered {
+                                tr_status_discovered_cleanup_blocked(l).to_owned()
+                            } else {
+                                tr_status_residual_still_installed(l, &app_name_for_abort)
+                            }
                         }
                         ResidualScope::OrphanLeftovers => {
                             tr_status_orphan_still_installed(l).to_string()

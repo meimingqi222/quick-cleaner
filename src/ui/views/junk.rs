@@ -110,11 +110,16 @@ fn render_category_items(
             let rows: Vec<ItemRowData> = range
                 .filter_map(|i| {
                     let item = summary.items.get(i)?;
-                    let busy = item
-                        .busy
-                        .as_ref()
-                        .and_then(|b| b.badge())
-                        .map(|(text, app_level)| (text.get(lang).to_string(), app_level));
+                    let busy =
+                        item.rule
+                            .blocked
+                            .as_ref()
+                            .map(|_| (tr_rules_conflict(lang).to_owned(), false))
+                            .or_else(|| {
+                                item.busy.as_ref().and_then(|b| b.badge()).map(
+                                    |(text, app_level)| (text.get(lang).to_string(), app_level),
+                                )
+                            });
                     Some((
                         i,
                         item.path.clone(),

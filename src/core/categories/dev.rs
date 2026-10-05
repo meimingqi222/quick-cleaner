@@ -14,34 +14,6 @@ pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         // AI 编程助手的会话记录与缓存
         push_ai_agent_targets(t, home, &cache, &data);
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        // §6.2 补充清理目标
-
-        // Xcode 开发产物（常达数十 GB）
-        let developer = home.join("Library/Developer");
-        t.push(target(
-            developer.join("Xcode/DerivedData"),
-            Text::new("Xcode DerivedData", "Xcode DerivedData"),
-            CategoryId::DevBuild,
-        ));
-        t.push(target(
-            developer.join("Xcode/iOS DeviceSupport"),
-            Text::new("Xcode iOS DeviceSupport", "Xcode iOS DeviceSupport"),
-            CategoryId::DevBuild,
-        ));
-        // Xcode/Archives 可能是唯一留存的发布归档；CoreSimulator/Devices
-        // 包含仍在使用的模拟器及其中的应用数据。两者都不能仅凭目录位置
-        // 判定为构建垃圾，因此不进入智能清理候选。
-
-        // iOS 备份（Danger：单个可达 100 GB+，删了不可恢复）
-        t.push(target(
-            home.join("Library/Application Support/MobileSync/Backup"),
-            Text::new("iOS 设备备份", "iOS Device Backup"),
-            CategoryId::IosBackup,
-        ));
-    }
 }
 
 /// CLI 型 agent：`~/.<目录>` 下可安全清理的子目录。
@@ -62,93 +34,33 @@ pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 /// 平台无关：目录名和子目录名在 Windows / macOS 上一致，只有根目录
 /// （`%USERPROFILE%` ↔ `~`）在调用方拼接。
 /// CLI agent 的一个可清理子目录：`(子目录名, 默认是否勾选)`。
-pub(super) type AgentSubdir = (&'static str, bool);
+pub(super) type AgentSubdir = (String, bool);
+pub(super) type CliAgent = (String, String, Vec<AgentSubdir>);
 
-/// 一个 CLI agent：`(主目录名, 显示名, 可清理子目录)`。
-pub(super) type CliAgent = (&'static str, &'static str, &'static [AgentSubdir]);
+fn layouts(catalog: &str) -> Vec<crate::core::rules::Layout> {
+    crate::core::rules::current()
+        .definition("development")
+        .catalogs
+        .get(catalog)
+        .cloned()
+        .unwrap_or_default()
+}
 
-pub(super) const CLI_AGENTS: &[CliAgent] = &[
-    (
-        ".claude",
-        "Claude Code",
-        // projects 是会话转录，file-history 是编辑快照，都属于历史而非配置；
-        // paste-cache / shell-snapshots 是纯临时。
-        &[
-            ("cache", true),
-            ("paste-cache", true),
-            ("shell-snapshots", true),
-            ("file-history", false),
-            ("projects", false),
-            ("sessions", false),
-            ("backups", false),
-            ("session-env", false),
-            ("jobs", false),
-            ("tasks", false),
-            ("daemon", false),
-            ("ide", false),
-        ],
-    ),
-    (
-        ".codex",
-        "Codex",
-        // shell_snapshots 用下划线（与本机实测一致），.claude/.workbuddy 用连字符。
-        // `.tmp` 本机 121 MB，是 Codex 自己的暂存目录。
-        &[
-            ("cache", true),
-            ("log", true),
-            ("tmp", true),
-            (".tmp", true),
-            ("shell_snapshots", true),
-            ("sessions", false),
-            ("archived_sessions", false),
-            ("attachments", false),
-            ("backup", false),
-            ("dictation-history", false),
-            ("visualizations", false),
-            ("ambient-suggestions", false),
-            ("computer-use", false),
-            ("computer-use-turn-ended", false),
-            ("node_repl", false),
-            ("process_manager", false),
-            ("mcp-oauth-locks", false),
-            ("thread-writer-locks", false),
-        ],
-    ),
-    (
-        ".gemini",
-        "Gemini CLI",
-        &[("tmp", true), ("chats", false), ("sessions", false)],
-    ),
-    (".qwen", "Qwen Code", &[("tmp", true), ("todos", false)]),
-    (
-        ".augment",
-        "Augment",
-        &[
-            ("tmp", true),
-            ("observability", true),
-            ("sessions", false),
-            ("backups", false),
-            ("checkpoint-documents", false),
-        ],
-    ),
-    (
-        ".copilot",
-        "Copilot CLI",
-        &[("logs", true), ("ide", false), ("session-state", false)],
-    ),
-    (
-        ".workbuddy",
-        "WorkBuddy",
-        &[
-            ("logs", true),
-            ("shell-snapshots", true),
-            ("sessions", false),
-            ("file-history", false),
-            ("backup", false),
-            ("audit-log", false),
-        ],
-    ),
-];
+fn cli_agents() -> Vec<CliAgent> {
+    layouts("cli_agents")
+        .into_iter()
+        .map(|row| {
+            (
+                row.path,
+                row.zh,
+                row.children
+                    .into_iter()
+                    .map(|child| (child.path, child.recommended))
+                    .collect(),
+            )
+        })
+        .collect()
+}
 
 /// Electron / Chromium 系 AI 编程应用在「 roaming 」根下的目录名。
 ///
@@ -159,42 +71,10 @@ pub(super) const CLI_AGENTS: &[CliAgent] = &[
 /// 永远清不掉——这正是旧设计最贵的地方。
 ///
 /// Windows 上根是 `%APPDATA%`，macOS 上是 `~/Library/Application Support`。
-pub(super) const AI_APP_DIRS: &[&str] = &[
-    "Claude",
-    "Codex",
-    "Cursor",
-    "CursorStar",
-    "Trae",
-    "Trae CN",
-    "TRAE SOLO CN",
-    "Windsurf",
-    "Windsurf - Next",
-    "Kiro",
-    "Zed",
-    "Void",
-    "CodeBuddy",
-    "CodeRabbit",
-    "Antigravity",
-    "AutoGLM",
-    "WorkBuddy",
-    "@genie",
-    "devin",
-    "Devin - Next",
-    "anythingllm-desktop",
-    "crush-gui",
-    "CatPawAI",
-    "Maka",
-    "MiniMax",
-    "MiniMax Code",
-    "Xiaomi MiMo",
-    "Grok Bot",
-    "Doubao",
-    "LobsterAI",
-    "xyz.chatboxapp.app",
-    "com.qoder.app.stable",
-    "Qoder",
-    "Paseo",
-];
+pub(super) static AI_APP_DIRS: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "development",
+    key: "ai_app_dirs",
+};
 
 /// 这个应用目录名算不算 AI 工具（只影响归类，见 [`AI_APP_DIRS`]）。
 fn is_ai_app_dir(name: &str) -> bool {
@@ -203,64 +83,25 @@ fn is_ai_app_dir(name: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(name))
 }
 
-/// 「 local 」根下的 agent 缓存目录：(目录名, 可清子目录, 中文展示名, 英文展示名)。
-/// 子目录为空表示整个目录都是缓存；中英一致的条目两列写同一个字符串。
+/// `%LOCALAPPDATA%` / `~/Library/Caches` 下已被 local agent 规则认领的子目录。
 ///
-/// Windows 上根是 `%LOCALAPPDATA%`，macOS 上是 `~/Library/Caches`。
-///
-/// electron-updater 的更新包目录不在这里：它们的处置和普通缓存不同（要按
-/// 子项拆开、还要过年龄门），两平台都由 `updater::push_updater_dirs_under`
-/// / `push_user_cache_dirs` 探测内容认领，按名字登记反而会漏掉新应用。
-pub(super) const LOCAL_AGENT_DIRS: &[(&str, &[&str], &str, &str)] = &[
-    (
-        "claude-cli-nodejs",
-        &["Cache"],
-        "Claude Code Node",
-        "Claude Code Node",
-    ),
-    ("amp", &["logs", "traces"], "Amp", "Amp"),
-    ("Zed", &["logs", "hang_traces"], "Zed", "Zed"),
-    ("WorkBuddy", &["logs"], "WorkBuddy", "WorkBuddy"),
-];
+/// macOS 扫 `~/Library/Caches` 时用它跳过这些孩子，避免和下面的目标双算。
+/// electron-updater 的更新包不在这张表里：它们靠内容签名认领。
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn local_agent_claimed_children(name: &str) -> Vec<String> {
+    layouts("local_agents")
+        .into_iter()
+        .find(|row| row.path == name)
+        .map(|row| row.children.into_iter().map(|child| child.path).collect())
+        .unwrap_or_default()
+}
 
 /// VS Code 系编辑器里 AI 插件的全局存储（会话缓存都存这儿）。
 /// 平台无关：`User/globalStorage/<ext-id>/tasks` 的相对结构两边一致。
-pub(super) const VSCODE_HOSTS: &[&str] = &["Code", "Trae", "Trae CN", "Cursor", "Windsurf - Next"];
-/// (插件 ID, 中文展示名, 英文展示名)
-pub(super) const VSCODE_AI_EXTENSIONS: &[(&str, &str, &str)] = &[
-    ("saoudrizwan.claude-dev", "Cline 会话缓存", "Cline sessions"),
-    (
-        "rooveterinaryinc.roo-cline",
-        "Roo Code 会话缓存",
-        "Roo Code sessions",
-    ),
-    (
-        "kilocode.kilo-code",
-        "Kilo Code 会话缓存",
-        "Kilo Code sessions",
-    ),
-    (
-        "github.copilot-chat",
-        "Copilot Chat 缓存",
-        "Copilot Chat cache",
-    ),
-];
-
-/// 各 agent 存放临时 git worktree 的位置。
-///
-/// worktree 都开在 agent 自己的目录下（本机可见 `~/.codex/worktrees`
-/// 与 `~/.windsurf/worktrees`），所以直接列固定路径即可，
-/// 不需要为它做全盘检索。平台无关：`~/.<agent>/worktrees` 两边一致。
-pub(super) const AGENT_WORKTREE_DIRS: &[(&str, &str)] = &[
-    (".codex", "Codex"),
-    (".windsurf", "Windsurf"),
-    (".claude", "Claude Code"),
-    (".cursor", "Cursor"),
-    (".trae", "Trae"),
-    (".augment", "Augment"),
-    (".workbuddy", "WorkBuddy"),
-    (".gemini", "Gemini CLI"),
-];
+pub(super) static VSCODE_HOSTS: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
+    rule: "development",
+    key: "vscode_hosts",
+};
 
 /// AI 编程助手的缓存、会话残留与临时 worktree。
 ///
@@ -284,8 +125,8 @@ pub(super) fn push_ai_agent_targets(
     const AGENT: CategoryId = CategoryId::AiAgents;
 
     // ---- CLI 型 agent ----
-    for (dir, label, subs) in CLI_AGENTS {
-        for (sub, recommended) in *subs {
+    for (dir, label, subs) in &cli_agents() {
+        for (sub, recommended) in subs {
             t.push(target_with_recommendation(
                 home.join(dir).join(sub),
                 format!("{label} · {sub}"),
@@ -297,7 +138,7 @@ pub(super) fn push_ai_agent_targets(
     push_agent_log_databases(t, home);
     // agent 目录下自建的浏览器 profile：`~/.gemini/antigravity-browser-profile`
     // 是 Chromium 的 userData 形状，同样只收叶子。
-    for (dir, label, _) in CLI_AGENTS {
+    for (dir, label, _) in &cli_agents() {
         push_chromium_leaves(t, &home.join(dir), label, AGENT);
     }
 
@@ -305,16 +146,23 @@ pub(super) fn push_ai_agent_targets(
     push_chromium_app_caches(t, roaming);
 
     // ---- local 根下的缓存与更新包 ----
-    for (dir, subs, zh, en) in LOCAL_AGENT_DIRS {
-        if subs.is_empty() {
-            t.push(target(local.join(dir), Text::new(*zh, *en), AGENT));
+    for row in layouts("local_agents") {
+        if row.children.is_empty() {
+            t.push(target(
+                local.join(&row.path),
+                Text::new(row.zh, row.en),
+                AGENT,
+            ));
         } else {
-            for sub in *subs {
+            for child in &row.children {
                 t.push(target_with_recommendation(
-                    local.join(dir).join(sub),
-                    Text::new(format!("{zh} · {sub}"), format!("{en} · {sub}")),
+                    local.join(&row.path).join(&child.path),
+                    Text::new(
+                        format!("{} · {}", row.zh, child.path),
+                        format!("{} · {}", row.en, child.path),
+                    ),
                     AGENT,
-                    true,
+                    child.recommended,
                 ));
             }
         }
@@ -329,25 +177,9 @@ pub(super) fn push_ai_agent_targets(
         super::updater::push_updater_dirs_under(t, local);
     }
 
-    // 明确限定到可重建叶子，避免把整个工具状态目录当缓存清掉。
-    t.push(target_with_recommendation(
-        home.join(".grok/logs"),
-        Text::new("Grok · 日志", "Grok · logs"),
-        AGENT,
-        true,
-    ));
-    t.push(target_with_recommendation(
-        roaming.join("Zed/node/cache"),
-        Text::new("Zed · npm 缓存", "Zed · npm cache"),
-        AGENT,
-        true,
-    ));
-    t.push(target_with_recommendation(
-        roaming.join("Zed/languages"),
-        Text::new("Zed · LSP 语言服务器", "Zed · LSP language servers"),
-        AGENT,
-        false,
-    ));
+    // 固定叶子在 development 规则的 entries 里。这里只补版本化的
+    // `node-v*` 缓存：版本号要读目录才知道，而且只能收 `cache`，
+    // 不能把整个工具状态目录当缓存清掉。
     let zed_node = roaming.join("Zed/node");
     for version in std::fs::read_dir(&zed_node).into_iter().flatten().flatten() {
         if !version.file_name().to_string_lossy().starts_with("node-v")
@@ -365,36 +197,50 @@ pub(super) fn push_ai_agent_targets(
 
     // ---- VS Code 系 AI 插件的全局存储 ----
     // `User/globalStorage/<ext-id>/tasks` 的相对结构两边一致，用 join 走平台分隔符。
+    let extensions = layouts("vscode_extensions");
     for host in VSCODE_HOSTS {
-        for (ext, zh, en) in VSCODE_AI_EXTENSIONS {
+        for row in &extensions {
             t.push(target(
                 roaming
-                    .join(host)
+                    .join(&host)
                     .join("User")
                     .join("globalStorage")
-                    .join(ext)
+                    .join(&row.path)
                     .join("tasks"),
-                Text::new(format!("{host} · {zh}"), format!("{host} · {en}")),
+                Text::new(
+                    format!("{host} · {}", row.zh),
+                    format!("{host} · {}", row.en),
+                ),
                 AGENT,
             ));
         }
     }
 
     // ---- AI agent 的临时 git worktree（单列一类，风险更高）----
-    for (dir, label) in AGENT_WORKTREE_DIRS {
+    for row in layouts("worktrees") {
         for name in ["worktrees", ".worktrees"] {
-            t.push(target(
-                home.join(dir).join(name),
-                format!("{label} · {name}"),
-                CategoryId::DevWorktrees,
-            ));
+            push_worktrees(t, &home.join(&row.path).join(name), &row.zh, &row.en);
         }
+    }
+    for row in layouts("roaming_worktrees") {
+        push_worktrees(t, &roaming.join(&row.path), &row.zh, &row.en);
     }
 
     push_devin_cli_versions(t, home, roaming);
     push_codex_cli_versions(t, home);
     push_obsolete_vscode_extensions(t, home);
     push_orphaned_editor_workspaces(t, home, roaming);
+}
+
+fn push_worktrees(t: &mut Vec<ScanTarget>, container: &Path, zh: &str, en: &str) {
+    for path in crate::core::worktrees::discover(container) {
+        if crate::core::safety::is_protected(&path) {
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let label = Text::new(format!("{zh} · {name}"), format!("{en} · {name}"));
+        t.push(target(path, label, CategoryId::DevWorktrees));
+    }
 }
 
 /// 应用目录（`~/Library/Application Support` / `%APPDATA%`）下所有 Chromium
@@ -478,7 +324,7 @@ fn push_chromium_leaves(t: &mut Vec<ScanTarget>, dir: &Path, owner: &str, catego
 /// （`safety::is_active_sqlite_member`）会直接拒删，预选只会制造一次必然
 /// 失败。用户关掉 agent 再手动勾，才删得掉。
 fn push_agent_log_databases(t: &mut Vec<ScanTarget>, home: &Path) {
-    for (dir, label, _) in CLI_AGENTS {
+    for (dir, label, _) in &cli_agents() {
         let Ok(entries) = std::fs::read_dir(home.join(dir)) else {
             continue;
         };
@@ -658,7 +504,7 @@ pub(super) fn push_orphaned_editor_workspaces(
     roaming: &Path,
 ) {
     for host in VSCODE_HOSTS {
-        let root = roaming.join(host).join("User/workspaceStorage");
+        let root = roaming.join(&host).join("User/workspaceStorage");
         let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
@@ -709,16 +555,9 @@ pub(super) fn push_orphaned_editor_workspaces(
 /// 只写死了 `.vscode`，另外五个的 `.obsolete` 完全没人看——`.qoder` 一家
 /// 就攒了 39 条记录。不存在的根会被 `read` 失败直接跳过，多列几个的代价
 /// 只是一次失败的文件读取。
-const VSCODE_FAMILY_EXTENSION_ROOTS: &[(&str, &str)] = &[
-    (".vscode", "VS Code"),
-    (".vscode-insiders", "VS Code Insiders"),
-    (".cursor", "Cursor"),
-    (".windsurf", "Windsurf"),
-    (".trae", "Trae"),
-    (".qoder", "Qoder"),
-    (".kiro", "Kiro"),
-    (".antigravity", "Antigravity"),
-];
+fn vscode_family() -> Vec<crate::core::rules::Layout> {
+    layouts("vscode_family")
+}
 
 /// 编辑器自己写入 `.obsolete` 的扩展版本已退出当前扩展集合，可以删除。
 /// 只信任清单中的单段目录名，并要求目录仍实际存在，避免把 JSON 内容当路径。
@@ -736,12 +575,22 @@ const VSCODE_FAMILY_EXTENSION_ROOTS: &[(&str, &str)] = &[
 /// 场景付这些复杂度不划算。真正会产生孤儿的是「更新到一半被杀掉」这类
 /// 异常，等真见到再补，判据留在这里备查。
 pub(super) fn push_obsolete_vscode_extensions(t: &mut Vec<ScanTarget>, home: &Path) {
-    for (dir, editor) in VSCODE_FAMILY_EXTENSION_ROOTS {
-        push_obsolete_extensions_for_root(t, &home.join(dir).join("extensions"), editor);
+    for row in vscode_family() {
+        push_obsolete_extensions_for_root(
+            t,
+            &home.join(&row.path).join("extensions"),
+            &row.zh,
+            &row.en,
+        );
     }
 }
 
-fn push_obsolete_extensions_for_root(t: &mut Vec<ScanTarget>, root: &Path, editor: &str) {
+fn push_obsolete_extensions_for_root(
+    t: &mut Vec<ScanTarget>,
+    root: &Path,
+    editor_zh: &str,
+    editor_en: &str,
+) {
     let Ok(bytes) = std::fs::read(root.join(".obsolete")) else {
         return;
     };
@@ -764,8 +613,8 @@ fn push_obsolete_extensions_for_root(t: &mut Vec<ScanTarget>, root: &Path, edito
         t.push(target_with_recommendation(
             path,
             Text::new(
-                format!("过期 {editor} 扩展 · {name}"),
-                format!("Obsolete {editor} extension · {name}"),
+                format!("过期 {editor_zh} 扩展 · {name}"),
+                format!("Obsolete {editor_en} extension · {name}"),
             ),
             CategoryId::DevBuild,
             true,
@@ -862,19 +711,22 @@ mod tests {
 
     #[test]
     fn ai_agent_targets_never_touch_config_or_credentials() {
-        for (dir, label, subs) in CLI_AGENTS {
-            for (sub, _) in *subs {
+        for (dir, label, subs) in &cli_agents() {
+            for (sub, _) in subs {
                 assert!(
-                    !NEVER_CLEAN.contains(sub),
+                    !NEVER_CLEAN.contains(&sub.as_str()),
                     "{label}（{dir}）把 {sub} 列成了可清理项，这会破坏用户配置"
                 );
             }
         }
-        for (dir, subs, label, _) in LOCAL_AGENT_DIRS {
-            for sub in *subs {
+        for row in layouts("local_agents") {
+            for child in &row.children {
                 assert!(
-                    !NEVER_CLEAN.contains(sub),
-                    "{label}（{dir}）把 {sub} 列成了可清理项"
+                    !NEVER_CLEAN.contains(&child.path.as_str()),
+                    "{}（{}）把 {} 列成了可清理项",
+                    row.zh,
+                    row.path,
+                    child.path
                 );
             }
         }
@@ -888,7 +740,7 @@ mod tests {
     #[test]
     fn temp_subdirs_are_recommended_and_history_is_not() {
         let recommended = |dir: &str, sub: &str| {
-            CLI_AGENTS
+            cli_agents()
                 .iter()
                 .find(|(name, _, _)| *name == dir)
                 .and_then(|(_, _, subs)| subs.iter().find(|(name, _)| *name == sub))
@@ -917,6 +769,136 @@ mod tests {
         ] {
             assert!(!recommended(dir, sub), "{dir}/{sub} 是历史/会话，不该预选");
         }
+    }
+
+    /// `.grok/logs` 和 Zed 的固定叶子走规则条目，不在扫描函数里再写一份。
+    #[test]
+    fn fixed_agent_leaves_stay_in_the_development_rule() {
+        let snapshot = crate::core::rules::current();
+        let entries = &snapshot.definition("development").entries;
+        let grok = entries
+            .iter()
+            .find(|entry| entry.path == ".grok/logs")
+            .expect(".grok/logs");
+        assert_eq!(grok.root, "home");
+        assert_eq!(grok.category, "AiAgents");
+        assert!(grok.recommended);
+        let cache = entries
+            .iter()
+            .find(|entry| entry.path == "Zed/node/cache")
+            .expect("Zed/node/cache");
+        assert_eq!(cache.root, "roaming");
+        assert!(cache.recommended);
+        let languages = entries
+            .iter()
+            .find(|entry| entry.path == "Zed/languages")
+            .expect("Zed/languages");
+        assert!(!languages.recommended);
+    }
+
+    /// 本地缓存、插件和 worktree 从常量迁到规则后，原来钉死的名字还要在。
+    #[test]
+    fn moved_catalogs_keep_the_previous_names() {
+        let paths = |catalog: &str| -> Vec<String> {
+            layouts(catalog).into_iter().map(|row| row.path).collect()
+        };
+        let local = paths("local_agents");
+        for name in ["claude-cli-nodejs", "amp", "Zed", "WorkBuddy"] {
+            assert!(local.iter().any(|path| path == name), "{name} missing");
+        }
+        let amp = layouts("local_agents")
+            .into_iter()
+            .find(|row| row.path == "amp")
+            .expect("amp");
+        assert_eq!(
+            amp.children
+                .iter()
+                .map(|child| child.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["logs", "traces"]
+        );
+        let extensions = paths("vscode_extensions");
+        for name in [
+            "saoudrizwan.claude-dev",
+            "rooveterinaryinc.roo-cline",
+            "kilocode.kilo-code",
+            "github.copilot-chat",
+        ] {
+            assert!(extensions.iter().any(|path| path == name), "{name} missing");
+        }
+        let trees = paths("worktrees");
+        assert!(paths("roaming_worktrees")
+            .iter()
+            .any(|path| path == "Maka/workspaces"));
+        for name in [
+            ".codex",
+            ".windsurf",
+            ".claude",
+            ".cursor",
+            ".trae",
+            ".augment",
+            ".workbuddy",
+            ".gemini",
+        ] {
+            assert!(trees.iter().any(|path| path == name), "{name} missing");
+        }
+        let family = paths("vscode_family");
+        for name in [
+            ".vscode",
+            ".vscode-insiders",
+            ".cursor",
+            ".windsurf",
+            ".trae",
+            ".qoder",
+            ".kiro",
+            ".antigravity",
+        ] {
+            assert!(family.iter().any(|path| path == name), "{name} missing");
+        }
+    }
+
+    #[test]
+    fn owned_agent_session_worktrees_are_filtered_by_core_safety() {
+        let root = crate::core::testing::fixture("agent_session_discovery_guard");
+        let workspace = root.join("workspace");
+        let container = workspace.join("subagent-worktrees");
+        let checkout = container.join("child");
+        let common = root.join("repo/.git");
+        let admin = common.join("worktrees/child");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(common.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("HEAD"), b"fixture\n").unwrap();
+        std::fs::write(admin.join("commondir"), b"../..\n").unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            checkout.join(".git").to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+        std::fs::write(checkout.join("sentinel"), b"session source").unwrap();
+        let mut targets = Vec::new();
+        push_worktrees(&mut targets, &container, "fixture", "fixture");
+        assert_eq!(
+            targets.len(),
+            1,
+            "fixture must be a discoverable linked checkout"
+        );
+        std::fs::write(workspace.join("runtime.sqlite"), b"owner metadata").unwrap();
+        targets.clear();
+        assert!(crate::core::safety::is_protected(&checkout));
+        push_worktrees(&mut targets, &container, "fixture", "fixture");
+        assert!(
+            targets.is_empty(),
+            "protected session checkout must not be offered for cleanup"
+        );
+        assert!(checkout.join("sentinel").is_file());
+        assert!(admin.join("HEAD").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

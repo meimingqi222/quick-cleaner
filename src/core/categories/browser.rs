@@ -15,14 +15,10 @@ pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
             return;
         };
 
-        // 浏览器缓存（全量覆盖 Default 及所有 Profile 1, Profile 2 ... 配置文件）
-        push_chromium_browser_targets(t, &local.join("Google\\Chrome\\User Data"), "Chrome");
-        push_chromium_browser_targets(t, &local.join("Microsoft\\Edge\\User Data"), "Edge");
-        push_chromium_browser_targets(
-            t,
-            &local.join("BraveSoftware\\Brave-Browser\\User Data"),
-            "Brave",
-        );
+        // 根目录在 browsers 规则的 windows_user_data。目录不存在时不产出目标。
+        for row in browser_catalog("windows_user_data") {
+            push_chromium_browser_targets(t, &local.join(&row.path), &row.zh, &row.en);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -30,64 +26,15 @@ pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         let cache = home.join("Library/Caches");
         let app_support = home.join("Library/Application Support");
 
-        // 浏览器缓存
-        //
-        // Chromium 系在 macOS 上把缓存放在 `~/Library/Caches/<产品名>` 而不是
-        // bundle id 目录下：Edge 的实际缓存是 `Microsoft Edge`（GB 级），
-        // `com.microsoft.edgemac` 只有 MB 级的零头。指错目录等于没清。
-        // 指到产品目录而不是某个 profile，才能覆盖多 profile 的情况。
-        t.push(target(
-            cache.join("Google/Chrome"),
-            Text::new("Chrome 缓存", "Chrome cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("com.apple.Safari"),
-            Text::new("Safari 缓存", "Safari cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("Microsoft Edge"),
-            Text::new("Edge 缓存", "Edge cache"),
-            CategoryId::BrowserCache,
-        ));
-
-        // §补充：参考 Mole 项目完善 macOS 清理目标
-
-        // 更多浏览器缓存（~/Library/Caches 下的产品目录）
-        // push_user_cache_dirs 已展开 ~/Library/Caches 下的所有子目录，
-        // 但它们被归到 UserTemp。这里把已知浏览器显式标为 BrowserCache，
-        // 同时加入 CLAIMED_USER_CACHE_DIRS 避免重复。
-        t.push(target(
-            cache.join("Firefox"),
-            Text::new("Firefox 缓存", "Firefox cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("BraveSoftware"),
-            Text::new("Brave 缓存", "Brave cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("company.thebrowser.Browser"),
-            Text::new("Arc 缓存", "Arc cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("Chromium"),
-            Text::new("Chromium 缓存", "Chromium cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("com.operasoftware.Opera"),
-            Text::new("Opera 缓存", "Opera cache"),
-            CategoryId::BrowserCache,
-        ));
-        t.push(target(
-            cache.join("com.vivaldi.Vivaldi"),
-            Text::new("Vivaldi 缓存", "Vivaldi cache"),
-            CategoryId::BrowserCache,
-        ));
+        // ~/Library/Caches/<产品名>。Edge 的实际缓存是产品名目录，不是 bundle id。
+        // 指到产品目录才能覆盖多 profile。这些名字同时用于跳过目录展开，避免双算。
+        for row in browser_catalog("library_caches") {
+            t.push(target(
+                cache.join(&row.path),
+                Text::new(row.zh.as_str(), row.en.as_str()),
+                CategoryId::BrowserCache,
+            ));
+        }
 
         // 浏览器 Application Support 下的缓存子目录
         // Chromium 系浏览器在 ~/Library/Application Support 下也存了大量缓存：
@@ -110,7 +57,8 @@ pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
 pub(super) fn push_chromium_browser_targets(
     t: &mut Vec<ScanTarget>,
     user_data_dir: &std::path::Path,
-    browser_name: &str,
+    name_zh: &str,
+    name_en: &str,
 ) {
     if !user_data_dir.exists() {
         return;
@@ -120,15 +68,12 @@ pub(super) fn push_chromium_browser_targets(
     let default_code_cache = user_data_dir.join("Default\\Code Cache");
     t.push(target(
         default_cache,
-        Text::new(
-            format!("{browser_name} 缓存"),
-            format!("{browser_name} cache"),
-        ),
+        Text::new(format!("{name_zh} 缓存"), format!("{name_en} cache")),
         CategoryId::BrowserCache,
     ));
     t.push(target(
         default_code_cache,
-        format!("{browser_name} Code Cache"),
+        format!("{name_en} Code Cache"),
         CategoryId::BrowserCache,
     ));
 
@@ -151,14 +96,14 @@ pub(super) fn push_chromium_browser_targets(
                     t.push(target(
                         cache,
                         Text::new(
-                            format!("{browser_name} 缓存 ({name})"),
-                            format!("{browser_name} cache ({name})"),
+                            format!("{name_zh} 缓存 ({name})"),
+                            format!("{name_en} cache ({name})"),
                         ),
                         CategoryId::BrowserCache,
                     ));
                     t.push(target(
                         code_cache,
-                        format!("{browser_name} Code Cache ({name})"),
+                        format!("{name_en} Code Cache ({name})"),
                         CategoryId::BrowserCache,
                     ));
                 }
@@ -177,32 +122,37 @@ pub(super) fn push_chromium_browser_targets(
 /// 不在 macOS 下也编译：跳过名单是纯字符串比较，跨平台共用一个判断比
 /// 写两个 `cfg` 分支靠谱（Windows 上浏览器的 userData 在 `%LOCALAPPDATA%`，
 /// 本就不在这张表覆盖的目录里，多比一次无害）。
-pub(super) const CHROMIUM_BROWSERS: &[(&str, &str)] = &[
-    ("Google/Chrome", "Chrome"),
-    ("Arc", "Arc"),
-    ("BraveSoftware/Brave-Browser", "Brave"),
-    ("Microsoft Edge", "Edge"),
-    ("Vivaldi", "Vivaldi"),
-    ("Opera", "Opera"),
-];
+fn browser_catalog(name: &str) -> Vec<crate::core::rules::Layout> {
+    crate::core::rules::current()
+        .definition("browsers")
+        .catalogs
+        .get(name)
+        .cloned()
+        .unwrap_or_default()
+}
 
 /// `~/Library/Application Support` 的顶层目录是否整体由浏览器规则认领。
 /// `Google/Chrome` 只认领 Chrome，不能把 Google 的其他孩子一起跳过。
 pub(super) fn owns_app_support_dir(name: &str) -> bool {
-    CHROMIUM_BROWSERS.iter().any(|(dir, _)| *dir == name)
+    browser_catalog("app_support")
+        .iter()
+        .any(|row| row.path == name)
 }
 
 pub(super) fn claimed_browser_child(parent: &str, child: &str) -> bool {
-    CHROMIUM_BROWSERS.iter().any(|(dir, _)| {
-        dir.split_once('/')
+    browser_catalog("app_support").iter().any(|row| {
+        row.path
+            .split_once('/')
             .is_some_and(|(head, tail)| head == parent && tail == child)
     })
 }
 
 pub(super) fn contains_claimed_browser_child(parent: &str) -> bool {
-    CHROMIUM_BROWSERS
-        .iter()
-        .any(|(dir, _)| dir.split_once('/').is_some_and(|(head, _)| head == parent))
+    browser_catalog("app_support").iter().any(|row| {
+        row.path
+            .split_once('/')
+            .is_some_and(|(head, _)| head == parent)
+    })
 }
 
 /// Chromium 系浏览器在 `~/Library/Application Support` 下的缓存子目录。
@@ -226,8 +176,10 @@ pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_suppo
         "ShaderCache",
     ];
 
-    for (dir, name) in CHROMIUM_BROWSERS {
-        let root = app_support.join(dir);
+    for row in browser_catalog("app_support") {
+        let name_zh = &row.zh;
+        let name_en = &row.en;
+        let root = app_support.join(&row.path);
         if !root.is_dir() {
             continue;
         }
@@ -249,8 +201,8 @@ pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_suppo
                     t.push(target(
                         cache_dir,
                         Text::new(
-                            format!("{name} · {profile_name} · {sub}"),
-                            format!("{name} · {profile_name} · {sub}"),
+                            format!("{name_zh} · {profile_name} · {sub}"),
+                            format!("{name_en} · {profile_name} · {sub}"),
                         ),
                         CategoryId::BrowserCache,
                     ));
@@ -266,7 +218,10 @@ pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_suppo
         if crashpad.is_dir() {
             t.push(target(
                 crashpad,
-                Text::new(format!("{name} · Crashpad"), format!("{name} · Crashpad")),
+                Text::new(
+                    format!("{name_zh} · Crashpad"),
+                    format!("{name_en} · Crashpad"),
+                ),
                 CategoryId::BrowserCache,
             ));
         }
@@ -303,5 +258,20 @@ pub(super) fn push_firefox_profile_caches(t: &mut Vec<ScanTarget>, app_support: 
                 CategoryId::BrowserCache,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 浏览器根目录不存在时不产出目标。Profile 枚举只发生在目录真的在的时候。
+    #[test]
+    #[cfg(windows)]
+    fn missing_browser_user_data_emits_nothing() {
+        let root = crate::core::testing::fixture("qc_missing_browser");
+        let missing = root.join("NoSuchBrowser/User Data");
+        let mut targets = Vec::new();
+        super::push_chromium_browser_targets(&mut targets, &missing, "Chrome", "Chrome");
+        assert!(targets.is_empty(), "{targets:?}");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

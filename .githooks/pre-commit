@@ -7,3 +7,22 @@ if ! cargo fmt --check; then
     echo "cargo fmt 已修改文件，请 git add 后重新提交" >&2
     exit 1
 fi
+
+# 反查提醒（不阻断）：暂存文件若有 note 锁定，打印出来提醒先读。
+VN=tools/regression-notes/verify-notes.py
+if [ -f "$VN" ]; then
+    if command -v python3 >/dev/null 2>&1; then PY="python3"; else PY="py -3"; fi
+    staged=$(git diff --cached --name-only --diff-filter=ACMR | tr '\n' ' ')
+    if [ -n "$staged" ]; then
+        out=$($PY "$VN" --notes-dir docs/agent-notes --for-path $staged 2>/dev/null)
+        case "$out" in
+            *"note(s) cite"*) ;;
+            *) out="" ;;
+        esac
+        if [ -n "$out" ] && ! echo "$out" | grep -q "^0 note(s)"; then
+            echo "== 以下暂存文件被回归 note 锁定，提交前确认已读 ==" >&2
+            echo "$out" | grep -v "note(s) cite" | grep . >&2
+        fi
+    fi
+fi
+exit 0

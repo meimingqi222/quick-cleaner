@@ -20,6 +20,16 @@ pub use photos::{scan_similar_photos, PhotoGroup, PhotoItem};
 use crate::core::i18n::Text;
 use std::path::PathBuf;
 
+pub(crate) fn policy(key: &str, default: u64) -> u64 {
+    crate::core::rules::current().number("engine", key, default)
+}
+pub(crate) fn extension_in(key: &str, extension: &str) -> bool {
+    crate::core::rules::current()
+        .list("engine", key)
+        .iter()
+        .any(|value| value == extension)
+}
+
 /// 获取用户主目录下的搜索根目录（覆盖整个用户主目录）
 pub(crate) fn get_user_content_roots() -> Vec<PathBuf> {
     crate::platform::user_home()
@@ -28,21 +38,10 @@ pub(crate) fn get_user_content_roots() -> Vec<PathBuf> {
 }
 
 pub(crate) fn is_photo_extension(ext: &str) -> bool {
-    matches!(
-        ext,
-        "jpg"
-            | "jpeg"
-            | "png"
-            | "heic"
-            | "webp"
-            | "tiff"
-            | "bmp"
-            | "raw"
-            | "cr2"
-            | "nef"
-            | "arw"
-            | "gif"
-    )
+    crate::core::rules::current()
+        .list("engine", "photo_extensions")
+        .iter()
+        .any(|candidate| candidate == ext)
 }
 
 pub(crate) fn format_timestamp_date(secs: u64) -> String {

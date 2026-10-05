@@ -59,7 +59,11 @@ pub(super) fn collect_tree_and_build_items(
             // Metadata，没法像 scanner::scan_fixed_inner 那样顺手拿。
             let identity = crate::core::model::capture_identity(&path)?;
             Some(ScanItem {
-                label: item_label(marker, &path),
+                plans: Vec::new(),
+                operation: crate::core::rules::Operation::Tree,
+                disposal: crate::core::cleaner::Disposal::Permanent,
+                rule: crate::core::rules::RuleRef::build(),
+                label: item_label(&marker, &path),
                 path,
                 size,
                 file_count: tree.file_count_of(idx),
@@ -932,7 +936,7 @@ pub(super) fn collect_tree(
     depth: usize,
     max_depth: usize,
     live: &AtomicBool,
-    out: &mut Vec<(u32, &'static Marker)>,
+    out: &mut Vec<(u32, std::sync::Arc<Marker>)>,
 ) {
     if depth > max_depth || !live.load(std::sync::atomic::Ordering::Relaxed) {
         return;
@@ -961,7 +965,7 @@ pub(super) fn collect_tree(
         }
         match MARKERS
             .iter()
-            .find(|m| m.dir == lower && has_sibling(&files, m.sibling_any))
+            .find(|m| m.dir == lower && has_sibling(&files, &m.sibling_any))
         {
             Some(marker) => out.push((child, marker)),
             None => {
@@ -978,7 +982,7 @@ pub(super) fn collect_tree(
                         std::collections::HashMap::new();
                     let path = std::path::PathBuf::from(tree.path_of_with(child, &mut cache));
                     if super::has_cachedir_tag(&path) {
-                        out.push((child, &super::CACHEDIR_MARKER));
+                        out.push((child, super::CACHEDIR_MARKER.clone()));
                         continue;
                     }
                 }

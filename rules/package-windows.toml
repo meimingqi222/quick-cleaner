@@ -1,0 +1,135 @@
+id = "package-windows"
+version = 2
+platform = "windows"
+required = ["file", "owner"]
+
+[[entries]]
+root = "local"
+path = "npm-cache"
+zh = "npm 缓存"
+en = "npm cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "npm-cache"
+zh = "npm 缓存 (home)"
+en = "npm cache (home)"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".pnpm-store"
+zh = "pnpm store"
+en = "pnpm store"
+category = "PackageCache"
+operation = "pnpm"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".pnpm-cache"
+zh = "pnpm cache"
+en = "pnpm cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".cargo/registry"
+zh = "cargo registry 缓存"
+en = "cargo registry cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "home"
+path = ".rustup/downloads"
+zh = "rustup 下载缓存"
+en = "rustup downloads"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = "go/pkg/mod"
+zh = "go module 缓存"
+en = "go module cache"
+category = "PackageCache"
+operation = "go"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "local"
+path = "go-build"
+zh = "go build 缓存"
+en = "go build cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".bun/install/cache"
+zh = "bun 缓存"
+en = "bun cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "home"
+path = ".gradle/caches"
+zh = "gradle 缓存"
+en = "gradle cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "home"
+path = ".nuget/packages"
+zh = "nuget 包缓存"
+en = "nuget package cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "local"
+path = "uv/cache"
+zh = "uv 缓存"
+en = "uv cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "local"
+path = "pip/cache"
+zh = "pip 缓存"
+en = "pip cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+

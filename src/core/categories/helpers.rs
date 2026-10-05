@@ -91,7 +91,7 @@ pub(super) fn holds_live_database(dir: &Path) -> bool {
 /// 这些目录涉及认证令牌、iCloud 数据、安全服务、账户信息等，
 /// 盲目清理会导致用户被登出、iCloud 同步中断、安全提示弹窗等问题。
 /// 它们虽然叫 "Caches"，但重建成本远高于普通应用缓存。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn is_sensitive_apple_cache(name: &str) -> bool {
     // 精确匹配的敏感目录名
     const SENSITIVE_EXACT: &[&str] = &[

@@ -50,6 +50,7 @@ impl DeclutterTab {
 }
 
 pub struct DeclutterState {
+    pub rule_snapshot: Option<std::sync::Arc<crate::core::rules::RuleSnapshot>>,
     pub tab: DeclutterTab,
     pub scanning: bool,
     pub scanned: bool,
@@ -76,6 +77,7 @@ pub struct DeclutterState {
 impl Default for DeclutterState {
     fn default() -> Self {
         Self {
+            rule_snapshot: None,
             tab: DeclutterTab::Overview,
             scanning: false,
             scanned: false,
@@ -84,8 +86,9 @@ impl Default for DeclutterState {
             duplicate_groups: Vec::new(),
             large_files: Vec::new(),
             download_items: Vec::new(),
-            min_size_filter: 100_000_000,
-            age_filter_months: 3,
+            min_size_filter: crate::core::declutter::policy("default_min_size_filter", 100000000),
+            age_filter_months: crate::core::declutter::policy("default_age_filter_months", 3)
+                as u32,
             kind_filter: None,
             context_menu: None,
             expanded_photo_groups: std::collections::HashSet::new(),

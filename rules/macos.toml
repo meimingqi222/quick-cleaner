@@ -1,0 +1,40 @@
+id = "macos"
+version = 2
+platform = "macos"
+required = ["file"]
+
+[lists]
+jetbrains_products = ["IntelliJ IDEA", "PyCharm", "WebStorm", "CLion", "GoLand", "RubyMine", "PhpStorm", "DataGrip", "Rider", "RustRover"]
+
+# Xcode/Archives 可能是唯一留存的发布归档。CoreSimulator/Devices 里是仍在
+# 使用的模拟器和应用数据。两者都不能仅凭目录位置当成构建垃圾，所以不入表。
+[[entries]]
+root = "home"
+path = "Library/Developer/Xcode/DerivedData"
+zh = "Xcode DerivedData"
+en = "Xcode DerivedData"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "home"
+path = "Library/Developer/Xcode/iOS DeviceSupport"
+zh = "Xcode iOS DeviceSupport"
+en = "Xcode iOS DeviceSupport"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = false
+
+# 单个备份可达 100 GB，删了不可恢复，只展示不预选。
+[[entries]]
+root = "home"
+path = "Library/Application Support/MobileSync/Backup"
+zh = "iOS 设备备份"
+en = "iOS Device Backup"
+category = "IosBackup"
+operation = "tree"
+disposal = "permanent"
+recommended = false

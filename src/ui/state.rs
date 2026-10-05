@@ -14,8 +14,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
+#[derive(Default)]
+pub struct RuleUpdateState {
+    pub task: Option<Task<()>>,
+    pub checking: bool,
+    pub expanded: bool,
+    pub error: Option<String>,
+}
+
 /// 智能清理页的状态。
 pub struct JunkState {
+    pub rule_snapshot: Arc<crate::core::rules::RuleSnapshot>,
     pub categories: Vec<CategorySummary>,
     pub scanned: bool,
     pub scanning: bool,
@@ -160,33 +169,41 @@ impl JunkState {
     /// 必须来自扫描阶段（`scanner::scan_fixed_inner` / `devscan` 各通道），
     /// 见 `ScanItem::identity` 的文档。
     pub fn selected_targets(&self) -> Vec<CleanTarget> {
-        self.selected_items()
+        let raw: Vec<CleanTarget> = self
+            .items()
+            .filter(|item| self.selected.contains(&item.path))
             .map(|i| {
-                // 固定规则也会产生单文件目标（如 .DS_Store）。文件必须走
-                // clean_path；clean_dir_contents 只适用于真实目录。
-                let is_file_or_link = std::fs::symlink_metadata(&i.path)
-                    .is_ok_and(|md| md.is_file() || md.file_type().is_symlink());
                 // 虚拟路径（Docker 镜像/brew）与 owner command 路由的缓存
                 // （Go modcache / pnpm store）删除时不逐文件累计体积，把
                 // 扫描阶段的称重带下去做一次性记账。其余真实路径用不到
                 // 这个字段，保持 None。
-                let size_hint = if crate::core::model::is_virtual_path(&i.path)
-                    || crate::core::owner::is_go_modcache(&i.path)
-                    || crate::core::owner::is_pnpm_store(&i.path)
-                {
+                let size_hint = if i.operation.is_native_resource()
+                    || matches!(
+                        i.operation,
+                        crate::core::rules::Operation::Go | crate::core::rules::Operation::Pnpm
+                    ) {
                     Some(i.size)
                 } else {
                     None
                 };
                 CleanTarget {
+                    plans: i.plans.clone(),
+                    rule: Some(i.rule.clone()),
+                    operation: i.operation.clone(),
                     path: i.path.clone(),
-                    remove_dir: i.category.removes_directory() || is_file_or_link,
+                    remove_dir: matches!(
+                        i.operation,
+                        crate::core::rules::Operation::File
+                            | crate::core::rules::Operation::Tree
+                            | crate::core::rules::Operation::GitWorktree { .. }
+                    ),
                     size_hint,
-                    disposal: i.category.disposal(),
+                    disposal: i.disposal,
                     identity: i.identity,
                 }
             })
-            .collect()
+            .collect();
+        crate::core::cleaner::merge_targets(&raw)
     }
 
     pub fn selected_size(&self) -> u64 {
@@ -207,8 +224,9 @@ impl JunkState {
         // 体积也会双算，失败横幅里还会出现两行完全相同的路径。
         // selected 本身按路径存，铺平类目时也按路径只取第一条。
         let mut seen = HashSet::new();
-        self.items()
-            .filter(move |i| self.selected.contains(&i.path) && seen.insert(i.path.clone()))
+        self.items().filter(move |i| {
+            self.selected.contains(&i.path) && seen.insert(crate::core::safety::norm(&i.path))
+        })
     }
 
     /// 某个类目的勾选态：全选 / 部分 / 未选。
@@ -371,6 +389,7 @@ pub struct AppsState {
 
 /// 深度卸载的残留扫描状态。
 pub struct ResidualState {
+    pub uninstall_executions: Vec<crate::core::rules::flow::PlanExecution>,
     pub result: Option<ResidualScanResult>,
     pub scanning: bool,
     pub task: Option<Task<()>>,
@@ -693,6 +712,14 @@ mod tests {
 
     fn item(path: &str, cat: CategoryId, size: u64, files: u64) -> ScanItem {
         ScanItem {
+            plans: Vec::new(),
+            operation: crate::core::rules::Operation::classify(
+                Path::new(path),
+                cat.removes_directory(),
+            )
+            .for_scanned_path(Path::new(path)),
+            disposal: cat.disposal(),
+            rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(path),
             label: bilingual(|_| path.to_string()),
             size,
@@ -710,6 +737,11 @@ mod tests {
     fn item_with_identity(path: &Path, cat: CategoryId, size: u64, files: u64) -> ScanItem {
         let identity = crate::core::model::capture_identity(path);
         ScanItem {
+            plans: Vec::new(),
+            operation: crate::core::rules::Operation::classify(path, cat.removes_directory())
+                .for_scanned_path(path),
+            disposal: cat.disposal(),
+            rule: crate::core::rules::RuleRef::engine(),
             path: path.to_path_buf(),
             label: bilingual(|_| path.display().to_string()),
             size,
@@ -736,6 +768,7 @@ mod tests {
             .expect("至少要有一个默认不勾的类目");
 
         JunkState {
+            rule_snapshot: crate::core::rules::snapshot(),
             categories: vec![
                 CategorySummary {
                     category: recommended,
@@ -928,6 +961,30 @@ mod tests {
     }
 
     #[test]
+    fn selected_targets_preserve_scanned_operation_even_when_category_differs() {
+        use crate::core::cleaner::Disposal;
+        use crate::core::rules::Operation;
+        let mut j = junk_fixture();
+        let item = &mut j.categories[0].items[0];
+        item.operation = Operation::Contents;
+        item.disposal = Disposal::RecycleBin;
+        item.category = CategoryId::DevBuild;
+        *item = item.clone().freeze_plan();
+        let plan = item.plans[0].clone();
+        let path = item.path.clone();
+        j.selected.insert(path.clone());
+        let target = j
+            .selected_targets()
+            .into_iter()
+            .find(|t| t.path == path)
+            .unwrap();
+        assert_eq!(target.operation, Operation::Contents);
+        assert!(!target.remove_dir);
+        assert_eq!(target.disposal, Disposal::RecycleBin);
+        assert!(std::sync::Arc::ptr_eq(&plan, &target.plans[0]));
+    }
+
+    #[test]
     fn duplicate_scan_paths_are_selected_only_once() {
         let mut j = junk_fixture();
         let path = PathBuf::from(r"C:\shared\cache");
@@ -944,6 +1001,37 @@ mod tests {
         assert_eq!(j.selected_paths(), vec![path.clone()]);
         assert_eq!(j.selected_targets().len(), 1);
         assert_eq!(j.selected_targets()[0].path, path);
+    }
+    #[test]
+    fn duplicate_scan_policies_cannot_silently_select_a_deletion_method() {
+        let root = crate::core::testing::fixture("qc_ui_rule_conflict");
+        std::fs::write(root.join("keep"), b"must survive").unwrap();
+        let mut junk = junk_fixture();
+        junk.categories = vec![
+            CategorySummary {
+                category: CategoryId::UserCache,
+                total_size: 12,
+                items: vec![item_with_identity(&root, CategoryId::UserCache, 12, 1)],
+                partial: false,
+            },
+            CategorySummary {
+                category: CategoryId::DevBuild,
+                total_size: 12,
+                items: vec![item_with_identity(&root, CategoryId::DevBuild, 12, 1)],
+                partial: false,
+            },
+        ];
+        junk.select_every();
+        let targets = junk.selected_targets();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].rule.as_ref().unwrap().revalidate().is_err());
+        let report = crate::core::cleaner::clean_targets(
+            &targets,
+            &crate::core::cleaner::CleanProgress::default(),
+        );
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(std::fs::read(root.join("keep")).unwrap(), b"must survive");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// `selected_targets()` 必须把 `ScanItem::identity` 原样搬进

@@ -36,6 +36,10 @@ pub struct RunningProcess {
 /// 取不到映像路径的（权限不足、系统进程）保留条目但 `image_path` 为空，
 /// 仍可按 `exe_name` 匹配。
 pub fn list_processes() -> Vec<RunningProcess> {
+    try_list_processes().unwrap_or_default()
+}
+
+pub(super) fn try_list_processes() -> Result<Vec<RunningProcess>, String> {
     let mut out = Vec::new();
     // SAFETY: 快照句柄只在 != INVALID_HANDLE_VALUE 时使用，并在返回前
     // CloseHandle。PROCESSENTRY32W 的 dwSize 按文档要求先填成结构体大小，
@@ -43,12 +47,16 @@ pub fn list_processes() -> Vec<RunningProcess> {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
-            return out;
+            return Err(format!(
+                "Process snapshot: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as DWORD;
 
+        let mut enumeration_error = None;
         if Process32FirstW(snap, &mut entry) != 0 {
             loop {
                 let len = entry
@@ -63,13 +71,22 @@ pub fn list_processes() -> Vec<RunningProcess> {
                     exe_name,
                 });
                 if Process32NextW(snap, &mut entry) == 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(18) {
+                        enumeration_error = Some(error);
+                    }
                     break;
                 }
             }
+        } else {
+            enumeration_error = Some(std::io::Error::last_os_error());
         }
         CloseHandle(snap);
+        if let Some(error) = enumeration_error {
+            return Err(format!("Process enumeration: {error}"));
+        }
     }
-    out
+    Ok(out)
 }
 
 fn image_path_of(pid: DWORD) -> String {
@@ -234,6 +251,179 @@ pub fn run_cmd_and_wait(cmdline: &str, hidden: bool, unelevated: bool) -> Result
         run_as_current(cmdline, hidden)
     }
 }
+
+/// Adapter commands bypass cmd.exe: paths and argv never become shell source.
+pub(super) fn run_official_command(
+    command: &crate::core::apps::OfficialUninstaller,
+) -> Result<u32, String> {
+    use std::os::windows::process::CommandExt;
+    let expected = super::user_env::real_user_sid().ok_or("Unknown install user SID")?;
+    if !super::security::is_elevated() {
+        if super::security::current_user_sid().as_deref() != Some(&expected) {
+            return Err("Uninstall user SID mismatch".into());
+        }
+        let status = std::process::Command::new(&command.executable)
+            .args(&command.arguments)
+            .current_dir(&command.working_directory)
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("Official uninstaller: {e}"))?;
+        return Ok(status.code().map(|c| c as u32).unwrap_or(1));
+    }
+    enable_impersonate_privilege();
+    let token = desktop_user_token()?;
+    // Fail closed when a fallback explorer/linked token belongs to a different account.
+    let result = (|| unsafe {
+        if super::security::token_user_sid(token).as_deref() != Some(&expected) {
+            Err("Uninstall user SID mismatch".into())
+        } else {
+            let app = command.executable.to_string_lossy();
+            let line = std::iter::once(app.as_ref())
+                .chain(command.arguments.iter().map(String::as_str))
+                .map(super::security::quote_win_arg)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let prepared = prepare_token_command(&app, &line, Some(&command.working_directory))?;
+            create_application_with_token(
+                token,
+                &prepared.application,
+                &prepared.line,
+                prepared.cwd.as_deref(),
+                true,
+            )
+        }
+    })();
+    unsafe {
+        CloseHandle(token);
+    }
+    result
+}
+
+// CreateProcessWithTokenW accepts only 1024 UTF-16 units, unlike ordinary CreateProcessW.
+// Long argv travels as JSON data to a fixed desktop-user dispatcher, never as generated shell code.
+struct TokenCommand {
+    application: String,
+    line: String,
+    cwd: Option<std::path::PathBuf>,
+    staging: Option<std::path::PathBuf>,
+}
+impl Drop for TokenCommand {
+    fn drop(&mut self) {
+        if let Some(root) = &self.staging {
+            for name in ["launch.ps1", "launch.ps1.json"] {
+                let _ = std::fs::remove_file(root.join(name));
+            }
+            let _ = std::fs::remove_dir(root);
+        }
+    }
+}
+fn prepare_token_command(
+    application: &str,
+    line: &str,
+    cwd: Option<&std::path::Path>,
+) -> Result<TokenCommand, String> {
+    if application.contains('\0') || line.contains('\0') || line.encode_utf16().count() >= 32767 {
+        return Err("Invalid native command line".into());
+    }
+    if line.encode_utf16().count() < 1024 {
+        return Ok(TokenCommand {
+            application: application.into(),
+            line: line.into(),
+            cwd: cwd.map(std::path::Path::to_path_buf),
+            staging: None,
+        });
+    }
+    let root = crate::platform::user_cache_dir()
+        .ok_or("Missing desktop-user command staging directory")?
+        .join("QuickCleaner/command-staging");
+    reject_staging_links(&root)?;
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    reject_staging_links(&root)?;
+    let powershell =
+        std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Missing SystemRoot")?)
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let generation = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let root = root.join(format!("{}-{generation}", std::process::id()));
+    std::fs::create_dir(&root).map_err(|e| e.to_string())?;
+    let script = root.join("launch.ps1");
+    let launch = std::iter::once(powershell.to_string_lossy().into_owned())
+        .chain([
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-ExecutionPolicy".into(),
+            "Bypass".into(),
+            "-File".into(),
+            script.to_string_lossy().into_owned(),
+        ])
+        .map(|arg| super::security::quote_win_arg(&arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let prepared = TokenCommand {
+        application: powershell.to_string_lossy().into_owned(),
+        line: launch,
+        cwd: cwd.map(std::path::Path::to_path_buf),
+        staging: Some(root.clone()),
+    };
+    if prepared.line.encode_utf16().count() >= 1024 {
+        return Err("Desktop-user dispatcher path exceeds native command limit".into());
+    }
+    // Preserve the already-quoted argument tail exactly; executable is supplied separately to ProcessStartInfo.
+    let executable_argument = super::security::quote_win_arg(application);
+    let arguments = line
+        .strip_prefix(&executable_argument)
+        .ok_or("Invalid structured command line")?
+        .trim_start();
+    let payload = serde_json::to_vec(
+        &serde_json::json!({"application":application,"arguments":arguments,"cwd":cwd}),
+    )
+    .map_err(|e| e.to_string())?;
+    write_staging_file(&root.join("launch.ps1.json"), &payload)?;
+    write_staging_file(&script, TOKEN_DISPATCHER.as_bytes())?;
+    Ok(prepared)
+}
+fn write_staging_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(|e| e.to_string())
+}
+fn reject_staging_links(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt;
+    for ancestor in path.ancestors() {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_attributes() & 0x400 != 0 => {
+                return Err("Linked command staging directory".into())
+            }
+            Ok(_) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+const TOKEN_DISPATCHER: &str = r#"$ErrorActionPreference = 'Stop'
+try {
+    $payload = Get-Content -LiteralPath ($PSCommandPath + '.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = [string]$payload.application
+    $info.Arguments = [string]$payload.arguments
+    if ($payload.cwd) { $info.WorkingDirectory = [string]$payload.cwd }
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    $process.WaitForExit()
+    $code = $process.ExitCode
+    $process.Dispose()
+    exit $code
+} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+"#;
 
 fn run_as_current(cmdline: &str, hidden: bool) -> Result<u32, String> {
     use std::os::windows::process::CommandExt;
@@ -446,6 +636,28 @@ unsafe fn create_process_with_token(
     cmdline: &str,
     hidden: bool,
 ) -> Result<u32, String> {
+    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let cmd_exe = format!("{sys}\\System32\\cmd.exe");
+    let line = format!("{} /c {cmdline}", super::security::quote_win_arg(&cmd_exe));
+    let prepared = prepare_token_command(&cmd_exe, &line, None)?;
+    unsafe {
+        create_application_with_token(
+            token,
+            &prepared.application,
+            &prepared.line,
+            prepared.cwd.as_deref(),
+            hidden,
+        )
+    }
+}
+
+unsafe fn create_application_with_token(
+    token: winapi::um::winnt::HANDLE,
+    application: &str,
+    cmdline: &str,
+    working_directory: Option<&std::path::Path>,
+    hidden: bool,
+) -> Result<u32, String> {
     use std::os::windows::ffi::OsStrExt;
     use winapi::um::processthreadsapi::{GetExitCodeProcess, PROCESS_INFORMATION, STARTUPINFOW};
     use winapi::um::synchapi::WaitForSingleObject;
@@ -454,16 +666,20 @@ unsafe fn create_process_with_token(
     };
     use winapi::um::winuser::SW_HIDE;
 
-    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let cmd_exe = format!("{sys}\\System32\\cmd.exe");
-    let app: Vec<u16> = std::ffi::OsStr::new(&cmd_exe)
+    let app: Vec<u16> = std::ffi::OsStr::new(application)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let mut cl: Vec<u16> = std::ffi::OsStr::new(&format!("cmd.exe /c {cmdline}"))
+    let mut cl: Vec<u16> = std::ffi::OsStr::new(cmdline)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let cwd = working_directory.map(|p| {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    });
 
     let mut si: STARTUPINFOW = std::mem::zeroed();
     si.cb = std::mem::size_of::<STARTUPINFOW>() as DWORD;
@@ -482,6 +698,12 @@ unsafe fn create_process_with_token(
     // 的包索引里找，用户范围的 crush 仍然「找不到」。
     let mut env: winapi::shared::minwindef::LPVOID = std::ptr::null_mut();
     let has_env = CreateEnvironmentBlock(&mut env, token, 0) != 0;
+    if !has_env || env.is_null() {
+        return Err(format!(
+            "无法构建卸载用户的环境: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
 
     // SAFETY: app / cl 以 NUL 结尾且活到调用返回；cl 按约定可变。
     // env 由 CreateEnvironmentBlock 分配，调用返回后 Destroy。
@@ -492,25 +714,34 @@ unsafe fn create_process_with_token(
         app.as_ptr(),
         cl.as_mut_ptr(),
         flags,
-        if has_env { env } else { std::ptr::null_mut() },
-        std::ptr::null(),
+        env,
+        cwd.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
         &mut si,
         &mut pi,
     );
+    let launch_error = if ok == 0 {
+        Some(std::io::Error::last_os_error())
+    } else {
+        None
+    };
     if has_env && !env.is_null() {
         DestroyEnvironmentBlock(env);
     }
-    if ok == 0 {
-        let err = std::io::Error::last_os_error();
+    if let Some(err) = launch_error {
         return Err(format!("降权启动卸载程序失败: {err}"));
     }
     if !pi.hThread.is_null() {
         CloseHandle(pi.hThread);
     }
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    let waited = WaitForSingleObject(pi.hProcess, INFINITE);
+    let wait_error = (waited != 0).then(std::io::Error::last_os_error);
     let mut code: DWORD = 1;
-    let _ = GetExitCodeProcess(pi.hProcess, &mut code);
+    let read_code = GetExitCodeProcess(pi.hProcess, &mut code);
+    let code_error = (read_code == 0).then(std::io::Error::last_os_error);
     CloseHandle(pi.hProcess);
+    if let Some(error) = wait_error.or(code_error) {
+        return Err(format!("Waiting for official uninstaller: {error}"));
+    }
     Ok(code)
 }
 
@@ -546,6 +777,123 @@ extern "system" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_desktop_command_preserves_arguments_cwd_exit_and_cleans_staging() {
+        use std::os::windows::process::CommandExt;
+        let root = crate::core::testing::fixture("qc_long_desktop_command");
+        let script = root.join("receipt.ps1");
+        let receipt = root.join("receipt.json");
+        std::fs::write(
+            &script,
+            r#"param([string]$Value, [string]$Receipt)
+$data = @{ value = $Value; cwd = [Environment]::CurrentDirectory } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText($Receipt, $data, (New-Object Text.UTF8Encoding($false)))
+exit 7
+"#,
+        )
+        .unwrap();
+        let application = format!(
+            r"{}\System32\WindowsPowerShell\v1.0\powershell.exe",
+            std::env::var("SystemRoot").unwrap()
+        );
+        let value = format!("{} 雪 & % ! \"quoted\" trailing\\", "payload".repeat(220));
+        let args = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            script.to_str().unwrap(),
+            &value,
+            receipt.to_str().unwrap(),
+        ];
+        let line = std::iter::once(application.as_str())
+            .chain(args)
+            .map(super::super::security::quote_win_arg)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let prepared = prepare_token_command(&application, &line, Some(&root)).unwrap();
+        let staging = prepared
+            .staging
+            .clone()
+            .expect("long command needs staging");
+        assert!(prepared.line.encode_utf16().count() < 1024);
+        let code = if super::super::security::is_elevated() {
+            enable_impersonate_privilege();
+            let token = desktop_user_token().unwrap();
+            let result = unsafe {
+                create_application_with_token(
+                    token,
+                    &prepared.application,
+                    &prepared.line,
+                    prepared.cwd.as_deref(),
+                    true,
+                )
+            };
+            unsafe {
+                CloseHandle(token);
+            }
+            result.unwrap()
+        } else {
+            let tail = prepared
+                .line
+                .strip_prefix(&super::super::security::quote_win_arg(
+                    &prepared.application,
+                ))
+                .unwrap()
+                .trim_start();
+            std::process::Command::new(&prepared.application)
+                .raw_arg(tail)
+                .current_dir(&root)
+                .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+                .status()
+                .unwrap()
+                .code()
+                .unwrap() as u32
+        };
+        assert_eq!(code, 7);
+        let data: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(data["value"], value);
+        assert_eq!(
+            std::path::Path::new(data["cwd"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            root.canonicalize().unwrap()
+        );
+        drop(prepared);
+        assert!(!staging.exists(), "staging must be reclaimed after waiting");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn token_command_rejects_nul_and_native_overflow() {
+        assert!(prepare_token_command("cmd.exe", "cmd.exe\0 /c exit", None).is_err());
+        assert!(prepare_token_command("cmd.exe", &"a".repeat(32767), None).is_err());
+    }
+
+    #[test]
+    #[ignore = "read-only diagnosis of this machine's discovered commands"]
+    fn inspect_local_official_command_lengths_without_running() {
+        let live = std::sync::atomic::AtomicBool::new(true);
+        for app in super::super::app_discovery::discover_apps(&[], &live) {
+            if let Some(command) = app.discovery.and_then(|d| d.uninstaller) {
+                let application = command.executable.to_string_lossy();
+                let line = std::iter::once(application.as_ref())
+                    .chain(command.arguments.iter().map(String::as_str))
+                    .map(super::super::security::quote_win_arg)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                println!(
+                    "{}: UTF16={} executable={}",
+                    app.name,
+                    line.encode_utf16().count(),
+                    application
+                );
+            }
+        }
+    }
 
     #[test]
     fn cmd_exit_zero_returns_zero() {

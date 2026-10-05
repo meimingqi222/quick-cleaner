@@ -180,7 +180,10 @@ pub fn is_photo_ignored_dir_name(name: &str) -> bool {
     if is_ignored_dir_name(name) {
         return true;
     }
-    matches!(name.to_lowercase().as_str(), "site" | "help" | "manuals")
+    crate::core::rules::current()
+        .list("engine", "photo_ignored_directories")
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(name))
 }
 
 /// 文件搜索结果条目。跨平台共用。

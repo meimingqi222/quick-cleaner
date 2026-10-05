@@ -13,6 +13,8 @@ impl crate::ui::Root {
             return;
         }
         self.declutter.scanning = true;
+        let rule_snapshot = crate::core::rules::snapshot();
+        self.declutter.rule_snapshot = Some(rule_snapshot.clone());
         self.status = bilingual(|l| match l {
             Language::Zh => "正在利用索引与多线程深度扫描大文件、重复文件与相似图片...".to_string(),
             Language::En => {
@@ -40,24 +42,45 @@ impl crate::ui::Root {
                         .or_else(|| macos_idx.as_ref().map(|s| &s.tree));
 
                     let (downloads, (large_files, (duplicates, photos))) = rayon::join(
-                        || crate::core::declutter::scan_downloads_folder(&live, tree_ref),
+                        || {
+                            crate::core::rules::with_snapshot(rule_snapshot.clone(), || {
+                                crate::core::declutter::scan_downloads_folder(&live, tree_ref)
+                            })
+                        },
                         || {
                             rayon::join(
                                 || {
-                                    crate::core::declutter::scan_large_old_files(
-                                        &live, 50_000_000, tree_ref,
-                                    )
+                                    crate::core::rules::with_snapshot(rule_snapshot.clone(), || {
+                                        crate::core::declutter::scan_large_old_files(
+                                            &live,
+                                            crate::core::declutter::policy(
+                                                "large_min_size",
+                                                50000000,
+                                            ),
+                                            tree_ref,
+                                        )
+                                    })
                                 },
                                 || {
                                     rayon::join(
                                         || {
-                                            crate::core::declutter::scan_duplicate_files(
-                                                &live, tree_ref,
+                                            crate::core::rules::with_snapshot(
+                                                rule_snapshot.clone(),
+                                                || {
+                                                    crate::core::declutter::scan_duplicate_files(
+                                                        &live, tree_ref,
+                                                    )
+                                                },
                                             )
                                         },
                                         || {
-                                            crate::core::declutter::scan_similar_photos(
-                                                &live, tree_ref,
+                                            crate::core::rules::with_snapshot(
+                                                rule_snapshot.clone(),
+                                                || {
+                                                    crate::core::declutter::scan_similar_photos(
+                                                        &live, tree_ref,
+                                                    )
+                                                },
                                             )
                                         },
                                     )

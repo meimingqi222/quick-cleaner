@@ -79,17 +79,18 @@ pub(super) const SKIP_DIRS: &[&str] = &[
 ];
 
 /// 一条开发垃圾的识别规则。
+#[derive(Clone)]
 pub(super) struct Marker {
     /// 目录名（小写比较）
-    pub(super) dir: &'static str,
+    pub(super) dir: String,
     /// 给用户看的说明（中文）
-    pub(super) label_zh: &'static str,
+    pub(super) label_zh: String,
     /// 给用户看的说明（英文）
-    pub(super) label_en: &'static str,
+    pub(super) label_en: String,
     pub(super) category: CategoryId,
     /// 需要在**同级**看到其中任意一个才算数；空数组表示名字本身足够特征化。
     /// 以 `.` 开头的条目按扩展名匹配（如 `.csproj`）。
-    pub(super) sibling_any: &'static [&'static str],
+    pub(super) sibling_any: Vec<String>,
 }
 
 /// CACHEDIR.TAG 规范签名（<https://bford.info/cachedir/>）：文件必须以
@@ -101,13 +102,16 @@ pub(super) const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06
 
 /// CACHEDIR.TAG 命中用的伪 Marker。不进 [`MARKERS`] 表（`dir` 占位符
 /// 不参与名字匹配），只在三通道各自的 CACHEDIR 分支里显式引用。
-pub(super) static CACHEDIR_MARKER: Marker = Marker {
-    dir: "<cachedir>",
-    label_zh: "缓存目录（CACHEDIR.TAG）",
-    label_en: "Cache directory (CACHEDIR.TAG)",
-    category: CategoryId::DevBuild,
-    sibling_any: &[],
-};
+pub(super) static CACHEDIR_MARKER: std::sync::LazyLock<std::sync::Arc<Marker>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(Marker {
+            dir: "<cachedir>".into(),
+            label_zh: "缓存目录（CACHEDIR.TAG）".into(),
+            label_en: "Cache directory (CACHEDIR.TAG)".into(),
+            category: CategoryId::DevBuild,
+            sibling_any: vec![],
+        })
+    });
 
 /// 目录里有没有一份**签名合法**的 `CACHEDIR.TAG`。
 ///
@@ -126,182 +130,64 @@ pub(super) fn has_cachedir_tag(dir: &Path) -> bool {
     buf[..n].starts_with(CACHEDIR_SIGNATURE)
 }
 
-pub(super) const MARKERS: &[Marker] = &[
-    // ---- Node / 前端 ----
-    Marker {
-        dir: "node_modules",
-        label_zh: "Node 依赖",
-        label_en: "Node dependencies",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".next",
-        label_zh: "Next.js 构建缓存",
-        label_en: "Next.js build cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".nuxt",
-        label_zh: "Nuxt 构建缓存",
-        label_en: "Nuxt build cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".svelte-kit",
-        label_zh: "SvelteKit 构建缓存",
-        label_en: "SvelteKit build cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".turbo",
-        label_zh: "Turborepo 缓存",
-        label_en: "Turborepo cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".parcel-cache",
-        label_zh: "Parcel 缓存",
-        label_en: "Parcel cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".angular",
-        label_zh: "Angular 构建缓存",
-        label_en: "Angular build cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: "dist",
-        label_zh: "前端构建产物",
-        label_en: "Frontend build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &["package.json"],
-    },
-    // ---- Rust ----
-    Marker {
-        dir: "target",
-        label_zh: "Rust 构建产物",
-        label_en: "Rust build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &["Cargo.toml"],
-    },
-    // ---- Python ----
-    Marker {
-        dir: ".venv",
-        label_zh: "Python 虚拟环境",
-        label_en: "Python virtualenv",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: "venv",
-        label_zh: "Python 虚拟环境",
-        label_en: "Python virtualenv",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: "__pycache__",
-        label_zh: "Python 字节码缓存",
-        label_en: "Python bytecode cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".pytest_cache",
-        label_zh: "pytest 缓存",
-        label_en: "pytest cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".mypy_cache",
-        label_zh: "mypy 缓存",
-        label_en: "mypy cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".ruff_cache",
-        label_zh: "ruff 缓存",
-        label_en: "ruff cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".tox",
-        label_zh: "tox 环境",
-        label_en: "tox environments",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    // ---- C# / .NET ----
-    Marker {
-        dir: "bin",
-        label_zh: ".NET 构建产物",
-        label_en: ".NET build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"],
-    },
-    Marker {
-        dir: "obj",
-        label_zh: ".NET 中间产物",
-        label_en: ".NET intermediate output",
-        category: CategoryId::DevBuild,
-        sibling_any: &[".csproj", ".vbproj", ".fsproj", ".sln"],
-    },
-    // ---- C / C++ ----
-    Marker {
-        dir: "build",
-        label_zh: "C/C++ 构建产物",
-        label_en: "C/C++ build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &["CMakeLists.txt", "Makefile", "meson.build"],
-    },
-    Marker {
-        dir: "cmake-build-debug",
-        label_zh: "CLion 构建产物",
-        label_en: "CLion build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: "cmake-build-release",
-        label_zh: "CLion 构建产物",
-        label_en: "CLion build output",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    // ---- JVM / 其它 ----
-    Marker {
-        dir: ".gradle",
-        label_zh: "Gradle 项目缓存",
-        label_en: "Gradle project cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: ".dart_tool",
-        label_zh: "Dart/Flutter 缓存",
-        label_en: "Dart/Flutter cache",
-        category: CategoryId::DevBuild,
-        sibling_any: &[],
-    },
-    Marker {
-        dir: "vendor",
-        label_zh: "Go/PHP 依赖副本",
-        label_en: "Go/PHP vendored deps",
-        category: CategoryId::DevBuild,
-        sibling_any: &["go.mod", "composer.json"],
-    },
-];
+pub(super) static MARKERS: &MarkerCatalog = &MarkerCatalog;
+
+pub(super) struct MarkerCatalog;
+impl MarkerCatalog {
+    pub(super) fn iter(&self) -> MarkerIter {
+        type Cache = (
+            std::sync::Arc<crate::core::rules::RuleSnapshot>,
+            std::sync::Arc<[std::sync::Arc<Marker>]>,
+        );
+        thread_local! {static CACHE:std::cell::RefCell<Option<Cache>>=const {std::cell::RefCell::new(None)};}
+        let snapshot = crate::core::rules::current();
+        let markers = CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache
+                .as_ref()
+                .is_none_or(|(old, _)| !std::sync::Arc::ptr_eq(old, &snapshot))
+            {
+                let markers = snapshot
+                    .definition("build")
+                    .markers
+                    .iter()
+                    .map(|m| {
+                        std::sync::Arc::new(Marker {
+                            dir: m.dir.clone(),
+                            label_zh: m.zh.clone(),
+                            label_en: m.en.clone(),
+                            category: CategoryId::DevBuild,
+                            sibling_any: m.sibling_any.clone(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into();
+                *cache = Some((snapshot, markers));
+            }
+            cache.as_ref().unwrap().1.clone()
+        });
+        MarkerIter { markers, index: 0 }
+    }
+}
+pub(super) struct MarkerIter {
+    markers: std::sync::Arc<[std::sync::Arc<Marker>]>,
+    index: usize,
+}
+impl Iterator for MarkerIter {
+    type Item = std::sync::Arc<Marker>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let marker = self.markers.get(self.index)?.clone();
+        self.index += 1;
+        Some(marker)
+    }
+}
+impl IntoIterator for &MarkerCatalog {
+    type Item = std::sync::Arc<Marker>;
+    type IntoIter = MarkerIter;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// 常见的代码根目录名，会在用户主目录和各固定磁盘根下探测。
 pub(super) const CODE_ROOT_NAMES: &[&str] = &[
@@ -359,7 +245,7 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
 pub(super) struct Hit {
     pub(super) path: PathBuf,
     /// 命中的规则本身。标签是双语的，直到建 `ScanItem` 时才展开。
-    pub(super) marker: &'static Marker,
+    pub(super) marker: std::sync::Arc<Marker>,
 }
 
 /// 发现所有开发垃圾目录并测算体积。
@@ -465,12 +351,12 @@ pub(super) fn item_label(marker: &Marker, path: &Path) -> Text {
     )
 }
 
-pub(super) fn has_sibling(file_names: &[String], required: &[&str]) -> bool {
+pub(super) fn has_sibling<S: AsRef<str>>(file_names: &[String], required: &[S]) -> bool {
     if required.is_empty() {
         return true;
     }
     required.iter().any(|want| {
-        let want = want.to_ascii_lowercase();
+        let want = want.as_ref().to_ascii_lowercase();
         if let Some(ext) = want.strip_prefix('.') {
             // 形如 ".csproj"：按扩展名匹配任意文件名
             file_names
@@ -539,16 +425,16 @@ mod tests {
             .iter()
             .find(|m| m.dir == "node_modules")
             .expect("node_modules 规则应该在表里");
-        let label = item_label(marker, Path::new(r"D:\code\demo\node_modules"));
+        let label = item_label(&marker, Path::new(r"D:\code\demo\node_modules"));
 
         let zh = label.get(Language::Zh);
         let en = label.get(Language::En);
         assert!(
-            zh.starts_with(marker.label_zh),
+            zh.starts_with(marker.label_zh.as_str()),
             "中文标签没拼上规则名：{zh}"
         );
         assert!(
-            en.starts_with(marker.label_en),
+            en.starts_with(marker.label_en.as_str()),
             "英文标签没拼上规则名：{en}"
         );
         assert_ne!(zh, en, "两种语言不该是同一串");
@@ -574,7 +460,7 @@ mod tests {
 
     #[test]
     fn empty_sibling_rule_always_matches() {
-        assert!(has_sibling(&[], &[]));
+        assert!(has_sibling(&[], &[] as &[&str]));
     }
 
     /// `.csproj` 这类扩展名规则不能被一个恰好叫 ".csproj" 的文件骗过

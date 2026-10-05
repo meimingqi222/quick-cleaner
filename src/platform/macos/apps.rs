@@ -94,6 +94,7 @@ fn parse_app_bundle(
     let uninstaller = find_uninstaller(path);
 
     Some(InstalledApp {
+        discovery: None,
         id,
         name: name.clone(),
         version: version.unwrap_or_default(),

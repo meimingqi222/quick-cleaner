@@ -271,6 +271,25 @@ pub fn is_protected_residual_path(path: &Path) -> bool {
     is_system_root_dir(path) || is_protected(path)
 }
 
+/// A clean checkout can still be required by an application's session recovery.
+/// Bare filesystem deletion cannot commit the owner's reference retirement.
+pub fn is_managed_agent_worktree(path: &Path) -> bool {
+    let Some(container) = path.ancestors().find(|ancestor| {
+        ancestor.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .eq_ignore_ascii_case("subagent-worktrees")
+        })
+    }) else {
+        return false;
+    };
+    let Some(workspace) = container.parent() else {
+        return true;
+    };
+    [".maka-storage-root.json", ".maka-host-composition.json", "runtime.sqlite"].iter().any(|marker| {
+        !matches!(std::fs::symlink_metadata(workspace.join(marker)), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
 /// 绝对不能删除的路径。
 ///
 /// 语义分两档：
@@ -281,6 +300,9 @@ pub fn is_protected_residual_path(path: &Path) -> bool {
 ///   应用数据根目录是最坏事故；内容不受影响，旧版 IDE 数据、卸载残留
 ///   等类目照常工作。
 pub fn is_protected(path: &Path) -> bool {
+    if is_managed_agent_worktree(path) {
+        return true;
+    }
     let lower = norm(path);
 
     // 盘符根目录，如 "c:" / "c:\"
