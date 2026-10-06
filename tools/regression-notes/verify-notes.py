@@ -423,7 +423,15 @@ def parse_header(lines, lifecycle, path):
 
 
 def note_digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """归档 note 的内容摘要，**行尾归一化后**再哈希。
+
+    仓库以 LF 存 blob；Windows 检出（core.autocrlf）会把工作区写成 CRLF。
+    按原始字节密封会让同一份内容在不同平台得出不同摘要——密封清单在
+    Windows 上生成、在 Linux CI 复核时报「archived note was modified after
+    sealing」（实际只是检出换行差异）。密封的语义是内容未变，行尾不算。
+    """
+    data = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def load_manifest(notes):
@@ -1227,13 +1235,17 @@ def main(argv=None):
         errors.append(f"{notes}/archived/{MANIFEST_NAME}: manifest must be a JSON object")
     else:
         if args.seal and not errors:
-            new = [(md, rel) for md, rel in archived if rel not in manifest]
-            for md, rel in new:
-                manifest[rel] = note_digest(md)
-            if new:
-                (notes / "archived" / MANIFEST_NAME).write_text(
-                    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                print(f"sealed {len(new)} archived note(s)")
+            # 同时覆盖「新增」与「摘要变化」两种：后者是显式的重封（例如行尾
+            # 归一化迁移、工具摘要算法升级）。逐条打印被重封的路径，改动在
+            # 评审里可见；其余校验错误仍然阻止密封（上面的 `not errors`）。
+            for md, rel in archived:
+                digest = note_digest(md)
+                if manifest.get(rel) == digest:
+                    continue
+                manifest[rel] = digest
+                print(f"sealed {rel}")
+            (notes / "archived" / MANIFEST_NAME).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         live = {rel for _, rel in archived}
         for rel in sorted(set(manifest) - live):
             errors.append(f"{notes}/{rel}: sealed archived note is missing")
