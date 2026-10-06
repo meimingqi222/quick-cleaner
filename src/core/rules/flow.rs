@@ -134,6 +134,7 @@ trait CapabilityExecutor {
     }
 }
 
+#[cfg(any(windows, test))]
 pub(crate) fn execute_source(
     plan: &CleanupPlan,
     index: usize,
@@ -148,6 +149,7 @@ pub(crate) fn execute_source(
         &mut SourceExecutor(run),
     )
 }
+#[cfg(any(windows, test))]
 struct SourceExecutor<F>(F);
 impl<F: FnMut(super::execution::SourceAction) -> Result<(), String>> CapabilityExecutor
     for SourceExecutor<F>
@@ -172,6 +174,7 @@ impl<F: FnMut(super::execution::SourceAction) -> Result<(), String>> CapabilityE
     }
 }
 
+#[cfg(windows)]
 /// Run a command-based uninstall (a registered app's official uninstaller) through the
 /// shared capability runner, so the UI gets the same step evidence as source installs.
 ///
@@ -198,6 +201,7 @@ pub(crate) fn execute_registered(
     )
 }
 
+#[cfg(windows)]
 struct RegisteredExecutor<R, V> {
     run: R,
     verify: V,
@@ -232,6 +236,7 @@ impl<R: FnMut() -> Result<(), String>, V: FnMut(&CompletionCondition) -> Evidenc
     }
 }
 
+#[cfg(windows)]
 /// Run a native-residue cleanup (registry key/value, scheduled task or system
 /// extension) through the shared capability runner, so the residual channel gets the
 /// same `Revalidate → Apply → Verify` step evidence as every other entry.
@@ -259,6 +264,7 @@ pub(crate) fn execute_native_residual(
     )
 }
 
+#[cfg(windows)]
 struct NativeResidualExecutor<A, V> {
     apply: A,
     verify: V,
@@ -294,6 +300,7 @@ where
     }
 }
 
+#[cfg(any(windows, test))]
 pub(crate) fn execution_result(report: &CleanReport) -> Result<(), String> {
     let steps: Vec<_> = report
         .plan_executions
@@ -711,6 +718,7 @@ fn execution_header(plan: &CleanupPlan, index: usize) -> PlanExecution {
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn blocked_execution(plan: &CleanupPlan, index: usize, reason: &str) -> PlanExecution {
     let mut execution = execution_header(plan, index);
     for step in plan.steps().into_iter().filter(|step| step.target == index) {

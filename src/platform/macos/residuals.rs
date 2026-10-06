@@ -17,7 +17,7 @@ use crate::core::cleaner::{
 };
 use crate::core::macos_text::{
     contains_ignore_ascii_case, parse_application_groups, parse_launchd_registered,
-    parse_system_extensions, quoted_label, valid_bundle_id,
+    parse_system_extensions, valid_bundle_id,
 };
 use crate::core::proc::run_with_timeout;
 use std::path::{Path, PathBuf};
@@ -351,8 +351,6 @@ static HELPER_ID_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::
     key: "helper_id_suffixes",
 };
 
-/// 用户级目录里按「本 Bundle ID 的卫星名」收，命中标确定。
-
 /// 文件/目录名是不是本 Bundle ID 的卫星残留。
 ///
 /// 只认精确 ID，以及 ID 后面跟封闭后缀（可再跟本机 UUID）：
@@ -623,11 +621,6 @@ static SHARED_VENDOR_PREFIXES: &crate::core::rules::RuleList = &crate::core::rul
     rule: "residual-macos",
     key: "shared_vendor_prefixes",
 };
-
-/// `~/Library` 下按厂商前缀扫的目录，以及命中后标注的来源。
-
-/// `/Library` 下按厂商前缀扫的目录。这些位置全部 root 所有，命中项一律
-/// 标成「需要确认」，不会跟用户缓存一起被自动勾选。
 
 /// 从 Bundle ID 取厂商前缀：`org.pqrs.Karabiner-Elements.Settings` → `org.pqrs`。
 ///
@@ -1047,16 +1040,6 @@ fn list_system_extensions() -> Option<Vec<(String, String)>> {
 // - **只认名字本身就是 Bundle ID 的项**。按应用显示名去猜（`Caches/Qoder`）
 //   看起来能多报一倍，但那是模糊匹配，判错就是删掉活应用的数据。
 // - **测不出就不列、不删**，理由见 [`installed_bundle_ids`]。
-
-/// 孤儿扫描的目录白名单：`(相对 ~/Library 的路径, 来源)`。
-///
-/// 已安装应用的枚举无法保证覆盖未被 Spotlight 索引的自定义安装位置，
-/// 因此孤儿条目一律不预选，缓存和日志也只能由用户逐项选择。
-///
-/// **故意不收的三处**：`Containers`、`Group Containers`、`Application
-/// Scripts`。它们是沙盒应用的用户数据本体（本地数据库、用户写的自动化
-/// 脚本），量大且风险集中，要先有一个「按应用分组勾选」的界面才值得做。
-/// 少收的位置只让人漏清，多收的位置会删掉活人的数据。
 
 /// 目录项名字里可以剥掉的扩展名后缀（全小写比较）。
 static ID_FILE_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::RuleList {

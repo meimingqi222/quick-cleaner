@@ -115,6 +115,14 @@ source = "LaunchDaemon"
 path = "PrivilegedHelperTools"
 source = "LaunchDaemon"
 
+# 孤儿扫描的目录白名单（`(相对 ~/Library 的路径, 来源)`）。已安装应用的枚举
+# 无法保证覆盖未被 Spotlight 索引的自定义安装位置，因此孤儿条目一律不预选，
+# 缓存和日志也只能由用户逐项选择。
+#
+# **故意不收的三处**：`Containers`、`Group Containers`、`Application Scripts`。
+# 它们是沙盒应用的用户数据本体（本地数据库、用户写的自动化脚本），量大且风险
+# 集中，要先有一个「按应用分组勾选」的界面才值得做。少收的位置只让人漏清，
+# 多收的位置会删掉活人的数据。
 [[locations.orphan_roots]]
 path = "Caches"
 source = "CacheDir"

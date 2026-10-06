@@ -1111,6 +1111,8 @@ impl InstallationInstance {
     pub fn artifact_count(&self) -> usize {
         self.artifacts.len()
     }
+    /// Windows 发现通道在计划固化前观察快捷方式；其他平台没有这条调用链。
+    #[cfg(windows)]
     pub(crate) fn observe_scan_paths(&mut self, paths: &[PathBuf]) -> Result<(), String> {
         if paths.is_empty() {
             return Ok(());

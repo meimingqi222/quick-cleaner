@@ -317,14 +317,18 @@ fn mtime_secs(md: &std::fs::Metadata) -> Option<i64> {
 /// 成千上万个文件可以忽略不计。
 pub fn capture_identity(path: &Path) -> Option<TargetIdentity> {
     let md = std::fs::symlink_metadata(path).ok()?;
-    let mut identity = TargetIdentity::from_metadata(&md)?;
+    let identity = TargetIdentity::from_metadata(&md)?;
+    // Windows 才有稳定身份这一步；`mut` 跟着 `cfg` 走，避免 macOS 构建里
+    // 出现「不需要 mut」的告警（clippy -D warnings 会因此失败）。
     #[cfg(windows)]
-    {
+    let identity = {
         // 把安装产物那套稳定身份推广到普通目标：卷序列号 + 文件索引。一次
         // 句柄打开换来「弱校验 + 稳定身份」的双重判据；拿不到（祖先含
         // reparse 点、超深、权限不足）就留 `None`，复核退回纯弱校验。
+        let mut identity = identity;
         identity.stable = crate::platform::windows::identity::object_id(path);
-    }
+        identity
+    };
     Some(identity)
 }
 
