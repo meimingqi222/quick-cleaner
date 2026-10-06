@@ -1,0 +1,20 @@
+=== CI macOS 原生验收证据 — run 37461367172 (commit 999076d) 2026-10-06T20:28:48+08:00 ===
+触发: push master; 结论: success
+
+✓ master CI · 37461367172
+Triggered via push about 18 minutes ago
+
+JOBS
+✓ Test (Windows) in 8m23s (ID 112261481251)
+✓ Test (macOS) in 6m34s (ID 112261481514)
+✓ Bound anchors are real tests in 10s (ID 112264782856)
+
+ANNOTATIONS
+
+--- 各平台测试统计（原始日志行）
+Test (Windows)	Run tests	2026-10-06T12:18:38.6029546Z test result: ok. 608 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 117.78s
+Test (Windows)	Run tests	2026-10-06T12:18:38.6272804Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Test (Windows)	Run tests	2026-10-06T12:18:39.5909561Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Test (macOS)	Run tests	2026-10-06T12:16:45.3435500Z test result: ok. 631 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out; finished in 128.94s
+Test (macOS)	Run tests	2026-10-06T12:16:45.3957140Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Test (macOS)	Run tests	2026-10-06T12:16:49.1617550Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s

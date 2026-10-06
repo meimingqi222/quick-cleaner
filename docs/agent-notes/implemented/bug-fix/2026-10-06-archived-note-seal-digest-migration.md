@@ -1,0 +1,67 @@
+# Agent Note: Archived-note seals survive a checkout, and digest migrations are explicit
+
+Status: implemented
+
+## Problem
+
+`archived/manifest.json` sealed each archived note with `sha256(path.read_bytes())`.
+The blobs live in git with LF endings, but a Windows checkout (`core.autocrlf`) writes
+CRLF into the working tree — so a manifest sealed on Windows failed on the Linux CI
+runner with "archived note was modified after sealing", for content nobody had touched.
+The first push of this repository's sealed notes hit exactly that: the notes workflow went
+red on three notes while the identical command passed locally.
+
+A second, latent defect: `--seal` only appended entries for notes missing from the
+manifest, and refused to run at all while any note was reported modified. With digests
+that are checkout-dependent, that made the EOL migration unrepairable through the
+documented path.
+
+## Decision
+
+- `note_digest` hashes the **LF-normalised** bytes, so line endings are never mistaken
+  for a modification; the seal means "content unchanged", not "bytes unchanged".
+- `--seal` stays **append-only** (adds missing entries, prints each one, never rewrites a
+  recorded hash). A note modified after sealing still stays red — fix forward with a new
+  note, as the skill documents.
+- New `--reseal` is the explicit escape hatch for **tooling migrations** (a
+  digest-algorithm change, an EOL rollout): it rewrites the entries whose digest no longer
+  matches and prints `resealed <path>` for each, so the rewrite is visible in review.
+
+The fix lives in the vendored tool `tools/regression-notes/verify-notes.py` and in its
+source of truth, the regression-notes skill (`regression-notes/scripts/verify-notes.py`,
+version 0.4.2), kept byte-identical.
+
+## Alternatives considered
+
+Deleting the manifest and re-sealing from scratch — rejected: it discards the whole
+seal record to repair three entries. Rewriting hashes inside plain `--seal` — rejected:
+it would let "run --seal" launder a genuine post-seal edit; the explicit `--reseal`
+flag keeps the append-only guarantee and makes the migration auditable. Making the
+comparison ignore CRLF only on Windows — rejected: the manifest is shared across
+checkouts, so the digest itself has to be checkout-independent.
+
+## Consequences
+
+A repository can seal notes on Windows and verify them on Linux/macOS (and vice versa).
+Recovering from a future digest-format change is one documented command whose output
+lists exactly which entries moved. The repo's own manifest was re-sealed once with
+`--reseal` during this migration; the archived notes themselves were not edited (the
+seal exists to prevent that).
+
+## Verification
+
+- Skill test suite (source of truth for the tool; run in
+  `D:\code\my-agent-skills\regression-notes`): 85 tests OK, including the new
+  `test_digest_ignores_line_endings`,
+  `test_seal_never_rewrites_but_reseal_migrates`, and
+  `test_dump_anchors_skips_archived_notes`; the installed copy at
+  `~/.agents/skills/regression-notes` runs the same suite green after syncing.
+- Repo side: `tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes
+  --strict-anchors` passes on the CRLF working tree and on an LF copy that simulates the
+  CI checkout (evidence docs/agent-notes-evidence/2026-10-06-seal-eol-fix.log).
+- Field evidence: the notes workflow run 37445291328 failed on three sealed notes before
+  this fix and runs 37460107300/37461367172 pass after it.
+
+Bug-fix note. The regression tests are the skill suite above; they are Python tests in a
+separate repository and therefore are not bound as `path::anchor` anchors here (the anchor
+check resolves anchors against repo files).

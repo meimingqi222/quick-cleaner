@@ -3,7 +3,7 @@
 
 Usage:
     python3 verify-notes.py [--notes-dir .agents/notes] [--repo-root .]
-                            [--no-strict] [--allow-missing] [--seal]
+                            [--no-strict] [--allow-missing] [--seal] [--reseal]
                             [--strict-anchors] [--no-name-heuristic]
                             [--no-bare-resolution] [--find REGEX]
                             [--for-path PATH [...]] [--dump-anchors]
@@ -15,7 +15,13 @@ Usage:
 Exit non-zero on any error. With --no-strict, a missing regression-test
 path degrades to a warning; with --allow-missing, a missing notes directory
 does not fail. --seal verifies the tree, then records every archived note's
-SHA-256 in `archived/manifest.json`; once sealed, any later modification or
+SHA-256 in `archived/manifest.json` and is append-only: it adds missing entries
+but never rewrites a recorded hash, so a note modified after sealing stays red
+(fix forward with a new note). The digest is computed over LF-normalised content,
+so a checkout's line endings never look like a modification. --reseal is the
+explicit escape hatch for tooling migrations (for example a digest-algorithm
+change): it rewrites the entries whose digest no longer matches and prints each
+one, so the rewrite is visible in review. Once sealed, any later modification or
 deletion of an archived note fails verification.
 
 --find REGEX prints the notes matching REGEX and exits without verifying; use it
@@ -31,7 +37,9 @@ guarding them surface before the edit, not after.
 section, one per line, and exits. Feed it to a repo-side check that intersects
 the anchors with the real test list (`cargo test -- --list`, `pytest
 --collect-only`, ...) so CI can catch a renamed test that survives as an
-orphan substring.
+orphan substring. Notes under `archived/` are skipped: they are sealed and
+frozen, so they cannot be edited to follow a renamed or retired test, and their
+history may legitimately name tests that were later removed.
 
 --audit-commits [N] is an advisory scan of the last N commits (default 100,
 0 = all history): it warns on commits whose subject looks like a fix and that
@@ -1038,6 +1046,14 @@ def main(argv=None):
         help="record the SHA-256 of every archived note in archived/manifest.json",
     )
     ap.add_argument(
+        "--reseal",
+        action="store_true",
+        help=(
+            "rewrite digests that no longer match, printing each one; for tooling "
+            "migrations (e.g. a digest-algorithm change), never for editing history"
+        ),
+    )
+    ap.add_argument(
         "--strict-anchors",
         action="store_true",
         help="make a `path::anchor` whose anchor is missing from that file an error",
@@ -1242,18 +1258,25 @@ def main(argv=None):
     if manifest is None:
         errors.append(f"{notes}/archived/{MANIFEST_NAME}: manifest must be a JSON object")
     else:
-        if args.seal and not errors:
-            # 同时覆盖「新增」与「摘要变化」两种：后者是显式的重封（例如行尾
-            # 归一化迁移、工具摘要算法升级）。逐条打印被重封的路径，改动在
-            # 评审里可见；其余校验错误仍然阻止密封（上面的 `not errors`）。
+        if (args.seal or args.reseal) and not errors:
+            # `--seal` 是 append-only：只补缺失条目，绝不改写已记录的哈希——
+            # 密封后被改过的 note 就该一直红着，修正靠新 note，不靠改历史。
+            # `--reseal` 是**工具迁移**的显式出口（例如摘要算法从原始字节改为
+            # 行尾归一化）：它改写不一致的摘要并逐条打印路径，改动在评审里可见。
+            sealed = []
             for md, rel in archived:
                 digest = note_digest(md)
-                if manifest.get(rel) == digest:
-                    continue
-                manifest[rel] = digest
-                print(f"sealed {rel}")
-            (notes / "archived" / MANIFEST_NAME).write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                if rel not in manifest:
+                    manifest[rel] = digest
+                    sealed.append(("sealed", rel))
+                elif args.reseal and manifest[rel] != digest:
+                    manifest[rel] = digest
+                    sealed.append(("resealed", rel))
+            if sealed:
+                (notes / "archived" / MANIFEST_NAME).write_text(
+                    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                for action, rel in sealed:
+                    print(f"{action} {rel}")
         live = {rel for _, rel in archived}
         for rel in sorted(set(manifest) - live):
             errors.append(f"{notes}/{rel}: sealed archived note is missing")
