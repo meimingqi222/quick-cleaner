@@ -1,0 +1,37 @@
+FFF..
+======================================================================
+FAIL: test_author_today_is_not_future_on_utc_runner (test_date_timezone.TestDateTimezone.test_author_today_is_not_future_on_utc_runner) (archived=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<WORKSPACE>\tools\regression-notes\tests\test_date_timezone.py", line 76, in test_author_today_is_not_future_on_utc_runner
+    self.assertEqual(code, 0, output)
+AssertionError: 1 != 0 :
+1 error(s):
+  <TEMP>\notes\implemented\bug-fix\2026-10-07-fixture.md: filename date cannot be in the future
+
+
+======================================================================
+FAIL: test_author_today_is_not_future_on_utc_runner (test_date_timezone.TestDateTimezone.test_author_today_is_not_future_on_utc_runner) (archived='2026-10-07')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<WORKSPACE>\tools\regression-notes\tests\test_date_timezone.py", line 76, in test_author_today_is_not_future_on_utc_runner
+    self.assertEqual(code, 0, output)
+AssertionError: 1 != 0 :
+3 error(s):
+  <TEMP>\notes\archived\bug-fix\2026-10-07-fixture.md: archived date cannot be in the future
+  <TEMP>\notes\archived\bug-fix\2026-10-07-fixture.md: filename date cannot be in the future
+  <TEMP>\notes/archived/bug-fix/2026-10-07-fixture.md: archived note is not sealed (run with --seal)
+
+
+======================================================================
+FAIL: test_calendar_and_archive_order_remain_strict (test_date_timezone.TestDateTimezone.test_calendar_and_archive_order_remain_strict)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<WORKSPACE>\tools\regression-notes\tests\test_date_timezone.py", line 102, in test_calendar_and_archive_order_remain_strict
+    self.assertIn(message, output)
+AssertionError: 'is before filename date' not found in '\n2 error(s):\n  <TEMP>\\notes\\archived\\bug-fix\\2026-10-07-fixture.md: filename date cannot be in the future\n  <TEMP>\\notes/archived/bug-fix/2026-10-07-fixture.md: archived note is not sealed (run with --seal)\n'
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.176s
+
+FAILED (failures=3)

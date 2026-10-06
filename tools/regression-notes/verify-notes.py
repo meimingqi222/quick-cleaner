@@ -87,6 +87,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def latest_civil_date():
+    """Date-only records may have been authored anywhere, including UTC+14."""
+    easternmost = datetime.timezone(datetime.timedelta(hours=14))
+    return datetime.datetime.now(easternmost).date()
+
 LIFECYCLES = ("proposed", "implemented", "rejected", "archived")
 CLASSES = ("bug-fix", "feature", "architecture", "process", "testing", "simplification")
 FILENAME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-.+\.md$")
@@ -406,7 +412,7 @@ def parse_header(lines, lifecycle, path):
             errors.append(f"{path}: L4 must be `Archived: YYYY-MM-DD`")
         else:
             archive_date = valid_date(*archived_match.groups())
-            today = datetime.date.today()
+            today = latest_civil_date()
             if not archive_date:
                 errors.append(f"{path}: archived date is not a valid calendar date")
             elif archive_date > today:
@@ -651,7 +657,7 @@ def check_file(path, lifecycle, cls, repo_root, strict, opts, bare_index,
     filename_match = FILENAME_RE.match(path.name)
     if filename_match:
         file_date = valid_date(*filename_match.groups())
-        today = datetime.date.today()
+        today = latest_civil_date()
         if not file_date:
             errors.append(f"{path}: filename date is not a valid calendar date")
         elif file_date > today:

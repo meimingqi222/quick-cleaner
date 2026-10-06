@@ -658,3 +658,12 @@ Note: `2026-10-07-command-process-tree-deadline.md`
 - **防护**：Windows 挂起启动、入 Job 后恢复，结束关闭 Job；Unix 新进程组。输出非阻塞轮询，父退出与两个 EOF 均受截止时间限制。
 - **测试**：review_timeout_kills_shim_descendants_and_closes_pipes、review_exited_parent_does_not_bypass_the_pipe_deadline，含实际后代启动与延迟写入回执。
 - **禁止回退**：不能退回只杀 cmd、普通启动后再挂 Job、无限 join 或脱离修改线程冒充取消。
+
+## P47 日期记录不能拿 CI 所在时区的今天判断未来
+
+Note: `2026-10-07-note-date-timezone.md`
+
+- **症状**：台北当天写的 note，本地验证通过，UTC runner 报 filename date cannot be in the future。
+- **根因**：文件名和 Archived 只有日期，没有时区；runner 的 date.today() 比作者落后一天。
+- **防护**：两个未来日期检查共用 UTC+14 的当前民用日期；日期无效、归档早于记录和全球仍未到达的日期继续拒绝。回归测试冻结 UTC 时间覆盖这些边界。
+- **禁止回退**：不能改回本地 date.today()，不能无条件允许明天、删掉未来检查，或把合法 note 改成昨天来绕过 CI。
