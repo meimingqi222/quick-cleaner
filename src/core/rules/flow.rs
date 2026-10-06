@@ -151,6 +151,7 @@ pub(crate) fn execute_source(
 }
 #[cfg(any(windows, test))]
 struct SourceExecutor<F>(F);
+#[cfg(any(windows, test))]
 impl<F: FnMut(super::execution::SourceAction) -> Result<(), String>> CapabilityExecutor
     for SourceExecutor<F>
 {
@@ -207,6 +208,7 @@ struct RegisteredExecutor<R, V> {
     verify: V,
     error: Option<String>,
 }
+#[cfg(windows)]
 impl<R: FnMut() -> Result<(), String>, V: FnMut(&CompletionCondition) -> Evidence>
     CapabilityExecutor for RegisteredExecutor<R, V>
 {
@@ -270,6 +272,7 @@ struct NativeResidualExecutor<A, V> {
     verify: V,
     error: Option<String>,
 }
+#[cfg(windows)]
 impl<A, V> CapabilityExecutor for NativeResidualExecutor<A, V>
 where
     A: FnMut(&PlannedTarget) -> Result<(), String>,
