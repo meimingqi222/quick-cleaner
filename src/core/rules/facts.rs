@@ -1,7 +1,7 @@
 //! Bounded evidence evaluation. Unknown evidence never grants cleanup authority.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Evidence {
@@ -244,26 +244,32 @@ fn confined(root: &Path, target: &Path, file_only: bool) -> Result<bool, String>
     {
         return Err("Evidence escapes root".into());
     }
-    for ancestor in root.ancestors() {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(md) if is_link(&md) => return Err("Redirected evidence ancestor".into()),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(e.to_string()),
-        }
+    // 根自身被换成链接：拒绝（夹具或安装目录都可能被整体替换）。
+    let root_md = match std::fs::symlink_metadata(root) {
+        Ok(md) if is_link(&md) => return Err("Redirected evidence root".into()),
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.to_string()),
+    };
+    // 祖先链只看**真实路径**。macOS 的系统临时目录位于 `/var → /private/var`
+    // 之后，而 `env::temp_dir()` 给的是别名路径——按文本祖先判定会在那里看到
+    // 链接，把整条发现链误判成 Unknown（DNS/QuickLook 与全部夹具都挂在这条
+    // 路上）。canonicalize 解开系统别名后再逐跳复核：根以下任何一跳被换成
+    // 链接仍然拒绝，安全性不变。
+    let root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let components: Vec<std::path::Component> = relative.components().collect();
+    if components.is_empty() {
+        return Ok(root_md.is_file() || (!file_only && root_md.is_dir()));
     }
-    let mut path = PathBuf::from(root);
-    // Check root too: a fixture or an installation can itself be replaced by a link.
-    for component in std::iter::once(None).chain(relative.components().map(Some)) {
-        if let Some(component) = component {
-            path.push(component);
-        }
+    let mut path = root;
+    for (index, component) in components.iter().enumerate() {
+        path.push(component);
         match std::fs::symlink_metadata(&path) {
             Ok(md) => {
                 if is_link(&md) {
                     return Err("Redirected evidence".into());
                 }
-                if path == target {
+                if index + 1 == components.len() {
                     return Ok(md.is_file() || (!file_only && md.is_dir()));
                 }
                 if !md.is_dir() {
@@ -317,6 +323,72 @@ mod tests {
             Evidence::Unknown
         );
     }
+    /// 根的**祖先**被安排成别名（macOS `/var → /private/var`、Windows 上把
+    /// TEMP 重定向到别的盘的 junction）不应打断发现链；根自身是链接、或根以下
+    /// 任何一跳是链接，仍然拒绝。三种形状都在同一夹具里断言。
+    #[test]
+    fn confined_path_tolerates_an_aliased_ancestor_but_rejects_redirected_links() {
+        use crate::core::testing::fixture;
+        let base = fixture("rules_confined_links");
+        let real = base.join("real");
+        let sub = real.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("child.txt"), b"x").unwrap();
+
+        let link = base.join("alias");
+        if !create_directory_link(&real, &link) {
+            eprintln!("跳过：本机无法创建目录链接（RedirectionGuard 权限）");
+            return;
+        }
+
+        // 祖先（link）是别名、根自身不是链接：必须照常判定。
+        let aliased_root = link.join("sub");
+        assert_eq!(
+            confined_path(&aliased_root, &aliased_root.join("child.txt")),
+            Ok(true),
+            "祖先别名不该被当成重定向证据"
+        );
+        assert_eq!(
+            confined_path(&aliased_root, &aliased_root.join("missing.txt")),
+            Ok(false)
+        );
+
+        // 根自身是链接：仍然拒绝（安装目录被整体替换的防护）。
+        assert_eq!(
+            confined_path(&link, &link.join("child.txt")),
+            Err("Redirected evidence root".into())
+        );
+
+        // 根以下的某一跳是链接：仍然拒绝。
+        let inner = sub.join("inner");
+        if create_directory_link(&real, &inner) {
+            assert_eq!(
+                confined_path(&aliased_root, &aliased_root.join("inner").join("child.txt")),
+                Err("Redirected evidence".into()),
+                "根以下的重定向必须继续拒绝"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 建一个指向目录的链接：Windows 用免特权的 junction，Unix 用 symlink。
+    fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(std::process::Stdio::null())
+                .status();
+            status.is_ok_and(|s| s.success())
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
     #[test]
     fn evidence_is_bounded_and_confined() {
         let root = crate::core::testing::fixture("rules_evidence");

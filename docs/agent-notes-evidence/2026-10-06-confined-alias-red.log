@@ -1,0 +1,6 @@
+failures:
+    core::rules::facts::tests::confined_path_tolerates_an_aliased_ancestor_but_rejects_redirected_links
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 615 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `--lib`
