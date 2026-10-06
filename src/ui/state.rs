@@ -14,11 +14,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-#[derive(Default)]
-pub struct RulePanelState {
-    pub expanded: bool,
-}
-
 /// 智能清理页的状态。
 pub struct JunkState {
     pub rule_snapshot: Arc<crate::core::rules::RuleSnapshot>,
@@ -215,11 +210,13 @@ impl JunkState {
         self.selected_items().count()
     }
 
-    /// 本次确认实际会执行的规则（`id@版本`）、操作与被阻止原因。
+    /// 本次确认实际会执行的规则（只报 id）、操作与被阻止原因。
     ///
     /// 只读取扫描期冻结的计划，不重新推断来源——确认界面和执行必须拿同一份
     /// 计划，否则两边可能对「会删什么、会不会被阻止」给出不同答案。被阻止的
-    /// 计划在扫描期就带着原因冻结，这里只做去重展示。
+    /// 计划在扫描期就带着原因冻结，这里只做去重展示。规则不带版本：规则随
+    /// 程序版本发布，规则自身的修订号只存在于快照（计划一致性的内部校验），
+    /// 不是用户可对照的概念。
     pub fn selected_plan_summary(
         &self,
     ) -> (Vec<String>, Vec<crate::core::rules::Operation>, Vec<String>) {
@@ -228,8 +225,7 @@ impl JunkState {
         let mut blocked: Vec<String> = Vec::new();
         for item in self.selected_items() {
             for plan in &item.plans {
-                let version = plan.rule.snapshot.definition(&plan.rule.id).version;
-                let label = format!("{}@{}", plan.rule.id, version);
+                let label = plan.rule.id.to_string();
                 if !rules.contains(&label) {
                     rules.push(label);
                 }
@@ -1107,10 +1103,10 @@ mod tests {
         let _ = std::fs::remove_file(&real);
     }
 
-    /// 确认前的计划摘要：列出实际会执行的规则（`id@版本`），并带出被阻止的
-    /// 条目原因。只读已冻结计划，不重新推断。
+    /// 确认前的计划摘要：列出实际会执行的规则（只报 id）与操作，并带出被阻止的
+    /// 条目原因。只读已冻结计划，不重新推断；规则不带版本号。
     #[test]
-    fn selected_plan_summary_lists_rule_versions_and_blocked_reasons() {
+    fn selected_plan_summary_lists_rules_and_blocked_reasons() {
         let real = crate::core::testing::file_path("qc_ui_plan_summary");
         std::fs::write(&real, b"x").unwrap();
         let mut item = item_with_identity(&real, CategoryId::UserTemp, 1, 1);
@@ -1137,8 +1133,7 @@ mod tests {
         j.select_every();
 
         let (rules, operations, blocked) = j.selected_plan_summary();
-        let engine_version = crate::core::rules::current().definition("engine").version;
-        assert_eq!(rules, vec![format!("engine@{engine_version}")]);
+        assert_eq!(rules, vec!["engine".to_string()]);
         assert_eq!(operations, vec![crate::core::rules::Operation::Contents]);
         assert_eq!(
             blocked,

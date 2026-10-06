@@ -13,5 +13,8 @@
  "owner_result": "Go/pnpm 迁移中被替换的旧 cleaner 分支；历史恢复点记述",
  "push_firefox_profile_caches": "Firefox cache2 迁入 named_directories 时删除的旧函数；历史恢复点记述",
  "rules/trusted-keys.json": "历史检查点对远程信任根的记述（该文件随后被删除，见同节作废说明）",
- "rules_only_release_reaches_the_next_scan_without_recompiling": "已删除的远程规则-only 闭环测试；历史恢复点记述"
+ "rules_only_release_reaches_the_next_scan_without_recompiling": "已删除的远程规则-only 闭环测试；历史恢复点记述",
+ "selected_plan_summary_lists_rule_versions_and_blocked_reasons": "确认摘要改为只报规则 id 后重命名的测试；带日期的历史小节保留原名记述",
+ "tr_rules_bundled": "按用户决定从 UI 删除的侧栏规则说明文案；历史小节记述",
+ "tr_rules_version": "按用户决定从 UI 删除的侧栏规则版本文案；历史小节记述"
 }

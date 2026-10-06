@@ -315,39 +315,11 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 ),
                         ),
                 )
-                // 版本号 + 更新入口
-                .child(render_version_row(root, cx))
-                .child(render_rules_settings(root, cx)),
+                // 版本号 + 更新入口。规则不在这里单列：规则随程序版本发布，
+                // 没有独立版本可展示（`build.rs` 内嵌，`rules check` 里那份序号
+                // 是快照一致性校验用的内部值）。
+                .child(render_version_row(root, cx)),
         )
-}
-
-fn render_rules_settings(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElement {
-    let lang = root.language;
-    let mut panel = div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .text_xs()
-        .text_color(rgb(MUTED))
-        .child(
-            div()
-                .id("rules-settings")
-                .px_3()
-                .py_1()
-                .cursor_pointer()
-                .child(tr_rules_version(
-                    lang,
-                    crate::core::rules::snapshot().bundle.sequence,
-                ))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.rule_panel.expanded = !this.rule_panel.expanded;
-                    cx.notify();
-                })),
-        );
-    if root.rule_panel.expanded {
-        panel = panel.child(div().px_3().child(tr_rules_bundled(lang)));
-    }
-    panel.into_any_element()
 }
 
 /// 侧栏底栏版本行。

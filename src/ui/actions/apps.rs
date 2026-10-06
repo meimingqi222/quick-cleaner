@@ -175,8 +175,6 @@ impl crate::ui::Root {
                     detail.push_str(&tr_source_rule_plan(
                         lang,
                         &reference.id,
-                        definition.version,
-                        reference.snapshot.bundle.sequence,
                         discovery
                             .plan
                             .as_ref()

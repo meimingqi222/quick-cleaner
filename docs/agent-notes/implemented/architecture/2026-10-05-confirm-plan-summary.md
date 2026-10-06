@@ -1,6 +1,7 @@
 # Agent Note: Confirmation shows the frozen plan summary before cleanup
 
 Status: implemented
+Partly-superseded-by: 2026-10-06-rules-carry-no-user-facing-version.md
 
 ## Problem
 
@@ -51,10 +52,19 @@ languages. No execution behavior changes.
 
 ## Verification
 
-- `src/ui/state.rs::selected_plan_summary_lists_rule_versions_and_blocked_reasons`
+- `src/ui/state.rs::selected_plan_summary_lists_rules_and_blocked_reasons`
   (asserts rule labels, the distinct operations and blocked reasons)
 - `src/ui/i18n/mod.rs::scope_detail_lists_paths_and_marks_truncation`
 - `src/ui/i18n/mod.rs::path_operation_distinguishes_folder_and_file`
 
 Model/UI migration, not an organic bug fix; no red-run proof claimed. Actual unified
 gate results and limitations are recorded in RULES_REFACTOR_STATUS.
+
+## Superseded
+
+The `id@version` rule label is superseded by
+`2026-10-06-rules-carry-no-user-facing-version.md`: the summary now names the contributing
+rule ids only, because rules ship with the app and carry no user-facing version. Everything
+else holds — the summary still reads the frozen plans verbatim, still lists the distinct
+operations and the deduplicated blocked reasons, and the disk-lens scope detail is
+unchanged. The test above is the same test under its current name.
