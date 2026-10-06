@@ -979,8 +979,10 @@ mod tests {
             expected[1].contains("contributors=3"),
             "父子各条贡献的规则引用都要保留：{expected:?}"
         );
+        // 前缀按实际路径构造：分隔符随平台（Windows `\`、macOS/Linux `/`）。
+        let parent_prefix = format!("{}|Contents|Permanent|false", root.join("parent").display());
         assert!(
-            expected[1].starts_with("C:/fixture/nested\\parent|Contents|Permanent|false"),
+            expected[1].starts_with(&parent_prefix),
             "推荐取交集：父目标本身不预选就不因合并变成预选：{expected:?}"
         );
         for order in [

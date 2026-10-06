@@ -1,0 +1,10 @@
+=== macos-tests-r2 batch 2026-10-06T19:38:38+08:00 ===
+fmt=0
+test=101
+test result: FAILED. 607 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 8.60s
+clippy=0
+build=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors=0
+OK: 358 identifier(s) resolved (616 test names); 3 doc(s) path-clean
+diff_clean

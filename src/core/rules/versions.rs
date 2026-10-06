@@ -613,6 +613,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let snapshot = super::super::snapshot();
+        let current = if cfg!(windows) { "windows" } else { "unix" };
         let mut actual = Vec::new();
         for layout in snapshot.definition("development").version_layouts.clone() {
             if !layout.platform.matches() {
@@ -622,6 +623,7 @@ mod tests {
             for target in scan(&root, layout.clone()) {
                 actual.push(serde_json::json!({
                     "layout": layout.id,
+                    "platform": format!("{:?}", layout.platform).to_lowercase(),
                     "path": target.path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"),
                     "category": format!("{:?}", target.category),
                     "operation": target.operation,
@@ -636,10 +638,19 @@ mod tests {
                 row["path"].as_str().unwrap().to_owned(),
             )
         });
+        // 金样同时收两套平台的布局：本机只对照适用于本平台的那些行（`all`
+        // 恒适用），否则 macOS 会拿 Windows 的 `devin_windows` 行来比。
         let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
             "../../../rules/fixtures/version-layout-baseline.json"
         ))
         .unwrap();
+        let expected: Vec<serde_json::Value> = expected
+            .into_iter()
+            .filter(|row| {
+                let platform = row["platform"].as_str().unwrap_or("all");
+                platform == "all" || platform == current
+            })
+            .collect();
         assert_eq!(actual, expected);
         let _ = std::fs::remove_dir_all(&root);
     }

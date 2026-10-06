@@ -1,32 +1,57 @@
 [
   {
+    "category": "AiAgents",
+    "disposal": "permanent",
     "layout": "codex_cli",
+    "operation": {
+      "kind": "contents"
+    },
     "path": ".codex/packages/standalone/releases/9.9.9",
-    "category": "AiAgents",
-    "operation": {
-      "kind": "contents"
-    },
-    "disposal": "permanent",
+    "platform": "all",
     "recommended": false
   },
   {
+    "category": "AiAgents",
+    "disposal": "permanent",
     "layout": "devin_windows",
+    "operation": {
+      "kind": "contents"
+    },
     "path": "devin/cli/_versions/9.9.9",
-    "category": "AiAgents",
-    "operation": {
-      "kind": "contents"
-    },
-    "disposal": "permanent",
+    "platform": "windows",
     "recommended": false
   },
   {
-    "layout": "devin_windows",
-    "path": "devin/cli/_versions/_download/installer.tar.gz",
     "category": "AiAgents",
+    "disposal": "permanent",
+    "layout": "devin_windows",
     "operation": {
       "kind": "file"
     },
+    "path": "devin/cli/_versions/_download/installer.tar.gz",
+    "platform": "windows",
+    "recommended": false
+  },
+  {
+    "category": "AiAgents",
     "disposal": "permanent",
+    "layout": "devin_unix",
+    "operation": {
+      "kind": "contents"
+    },
+    "path": ".local/share/devin/cli/_versions/9.9.9",
+    "platform": "unix",
+    "recommended": false
+  },
+  {
+    "category": "AiAgents",
+    "disposal": "permanent",
+    "layout": "devin_unix",
+    "operation": {
+      "kind": "file"
+    },
+    "path": ".local/share/devin/cli/_versions/_download/installer.tar.gz",
+    "platform": "unix",
     "recommended": false
   }
 ]

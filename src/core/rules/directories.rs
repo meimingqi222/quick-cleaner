@@ -2117,6 +2117,11 @@ mod tests {
         std::os::unix::fs::symlink(&external, &link).unwrap();
         assert!(scan(&super::super::snapshot(), &home, None).0.is_empty());
         assert!(external.join(".DS_Store").exists());
+        // Unix 的符号链接用 remove_file（rmdir 对 symlink 报 ENOTDIR）；
+        // Windows 的 junction 是目录型 reparse point，用 remove_dir。
+        #[cfg(unix)]
+        std::fs::remove_file(&link).unwrap();
+        #[cfg(windows)]
         std::fs::remove_dir(&link).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }

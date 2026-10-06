@@ -1756,12 +1756,28 @@ pub fn append_path_targets(
     home: Option<&std::path::Path>,
 ) {
     let snapshot = current();
-    let local = crate::platform::user_cache_dir();
+    // 用户级根的解析方式按平台区分：
+    // - Windows 从登记表解析**真实前台用户**的目录（`real_user_*`），与 home
+    //   锚点相互独立——home 未知时 LOCALAPPDATA 仍可能可信（缩略图缓存就靠
+    //   它），未知则各自返回 None；
+    // - macOS 没有独立账户模型，用户目录一律由调用方的 home 推导：home 未知
+    //   就整块不展开用户路径，而不是回退到 `dirs::*` 指向的进程账户
+    //   （那会在「不扫用户目录」的前提下扫用户目录）。
+    #[cfg(windows)]
+    let (local, roaming) = (
+        crate::platform::user_cache_dir(),
+        crate::platform::user_data_dir(),
+    );
+    #[cfg(not(windows))]
+    let (local, roaming) = (
+        home.map(|h| h.join("Library/Caches")),
+        home.map(|h| h.join("Library/Application Support")),
+    );
     let mut roots = BTreeMap::from([
         ("home".into(), home.map(std::path::Path::to_path_buf)),
         ("local".into(), local.clone()),
         ("cache".into(), local),
-        ("roaming".into(), crate::platform::user_data_dir()),
+        ("roaming".into(), roaming),
         ("temp".into(), Some(std::env::temp_dir())),
         ("user_temp".into(), crate::platform::user_temp_dir()),
         (

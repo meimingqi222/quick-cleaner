@@ -1183,7 +1183,15 @@ mod tests {
                 }
             );
             assert!(path.is_dir());
+            // 记账口径按平台：Windows 用逻辑长度，Unix 用分配块（小文件占一个
+            // 4 KiB 块）。断言写成两平台各自的事实，而不是让 macOS 将就 Windows。
+            #[cfg(windows)]
             assert_eq!(progress.bytes.load(std::sync::atomic::Ordering::Relaxed), 5);
+            #[cfg(unix)]
+            assert_eq!(
+                progress.bytes.load(std::sync::atomic::Ordering::Relaxed),
+                4096
+            );
             std::fs::remove_dir_all(root).unwrap();
         }
     }
