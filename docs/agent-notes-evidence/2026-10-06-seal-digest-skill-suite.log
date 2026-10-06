@@ -1,0 +1,81 @@
+== manufactured red: skill suite seal-digest class vs pre-fix tool (HEAD:regression-notes/scripts/verify-notes.py), working tree untouched ==
+   protections reverted in that copy: LF-normalised note_digest, --reseal, archived-note anchor exemption
+test_digest_ignores_line_endings (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_digest_ignores_line_endings)
+A checkout's line endings are not a modification: the seal hashes ... FAIL
+test_dump_anchors_skips_archived_notes (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_dump_anchors_skips_archived_notes)
+Archived notes are frozen and sealed, so they cannot follow a renamed ... FAIL
+test_seal_never_rewrites_but_reseal_migrates (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_seal_never_rewrites_but_reseal_migrates)
+--seal is append-only (a tampered note stays red and the manifest is ... FAIL
+
+======================================================================
+FAIL: test_digest_ignores_line_endings (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_digest_ignores_line_endings)
+A checkout's line endings are not a modification: the seal hashes
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\meimingqi222\AppData\Local\Temp\skill-red-sim\tests\test_verify_notes.py", line 1285, in test_digest_ignores_line_endings
+    self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : 
+1 error(s):
+  C:\Users\MEIMIN~1\AppData\Local\Temp\tmptjoxe8h9\notes/archived/bug-fix/2026-09-01-login-retry-race.md: archived note was modified after sealing
+
+
+======================================================================
+FAIL: test_dump_anchors_skips_archived_notes (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_dump_anchors_skips_archived_notes)
+Archived notes are frozen and sealed, so they cannot follow a renamed
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\meimingqi222\AppData\Local\Temp\skill-red-sim\tests\test_verify_notes.py", line 1333, in test_dump_anchors_skips_archived_notes
+    self.assertEqual(dumped.returncode, 0, dumped.stdout + dumped.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 0 : usage: verify-notes.py [-h] [--notes-dir NOTES_DIR] [--repo-root REPO_ROOT]
+                       [--no-strict] [--allow-missing] [--seal]
+                       [--strict-anchors] [--no-name-heuristic]
+                       [--no-bare-resolution] [--find REGEX] [--baseline FILE]
+                       [--update-baseline] [--changed-only] [--base BASE]
+                       [--check-install]
+verify-notes.py: error: unrecognized arguments: --dump-anchors
+
+
+======================================================================
+FAIL: test_seal_never_rewrites_but_reseal_migrates (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_seal_never_rewrites_but_reseal_migrates)
+--seal is append-only (a tampered note stays red and the manifest is
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\meimingqi222\AppData\Local\Temp\skill-red-sim\tests\test_verify_notes.py", line 1304, in test_seal_never_rewrites_but_reseal_migrates
+    self.assertEqual(migrated.returncode, 0, migrated.stdout + migrated.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 0 : usage: verify-notes.py [-h] [--notes-dir NOTES_DIR] [--repo-root REPO_ROOT]
+                       [--no-strict] [--allow-missing] [--seal]
+                       [--strict-anchors] [--no-name-heuristic]
+                       [--no-bare-resolution] [--find REGEX] [--baseline FILE]
+                       [--update-baseline] [--changed-only] [--base BASE]
+                       [--check-install]
+verify-notes.py: error: unrecognized arguments: --reseal
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.879s
+
+FAILED (failures=3)
+exit=1
+
+== green: same class in the skill working tree (fixed tool) ==
+test_digest_ignores_line_endings (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_digest_ignores_line_endings)
+A checkout's line endings are not a modification: the seal hashes ... ok
+test_dump_anchors_skips_archived_notes (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_dump_anchors_skips_archived_notes)
+Archived notes are frozen and sealed, so they cannot follow a renamed ... ok
+test_seal_never_rewrites_but_reseal_migrates (tests.test_verify_notes.TestSealDigestAndArchivedAnchors.test_seal_never_rewrites_but_reseal_migrates)
+--seal is append-only (a tampered note stays red and the manifest is ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.957s
+
+OK
+exit=0
+
+== green: full skill suite (working tree) ==
+----------------------------------------------------------------------
+Ran 85 tests in 16.190s
+
+OK

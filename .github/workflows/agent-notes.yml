@@ -14,5 +14,7 @@ jobs:
         with:
           python-version: '3.x'
       - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors
+      # 这个工具本身也是门禁：它的回归测试随仓库走，别让它带着已知缺陷继续放行 note。
+      - run: python -X utf8 -m unittest discover -s tools/regression-notes/tests
       - run: python -X utf8 scripts/check-pitfall-notes.py
       - run: python -X utf8 scripts/check-ui-localization.py

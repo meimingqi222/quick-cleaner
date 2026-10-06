@@ -1,0 +1,7 @@
+=== 密封 EOL 红：notes workflow run 37445291328（修复前） 2026-10-06T20:30:05+08:00 ===
+断言：三份归档 note 在 CI（LF 检出）被判 modified after sealing，而同一命令在本机 CRLF 工作区通过。
+Run python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors	2026-10-06T09:46:45.5037415Z 3 error(s):
+Run python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors	2026-10-06T09:46:45.5038516Z   docs/agent-notes/archived/architecture/2026-10-05-rules-channel-transport-seam.md: archived note was modified after sealing
+Run python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors	2026-10-06T09:46:45.5039801Z   docs/agent-notes/archived/bug-fix/2026-10-05-rule-state-replay-watermark.md: archived note was modified after sealing
+Run python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors	2026-10-06T09:46:45.5041392Z   docs/agent-notes/archived/process/2026-10-05-refactor-scope-closure.md: archived note was modified after sealing
+Run python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors	2026-10-06T09:46:45.5149281Z ##[error]Process completed with exit code 1.

@@ -50,18 +50,35 @@ seal exists to prevent that).
 
 ## Verification
 
+- Repo-side regression suite: `tools/regression-notes/tests/test_seal_digest.py` — the
+  LF/CRLF digest stability, append-only `--seal` versus explicit `--reseal`, and the
+  archived-note exemption from `--dump-anchors`; red against the pre-fix tool and green
+  against the fixed one in the same run
+  (docs/agent-notes-evidence/2026-10-06-seal-digest-inrepo-test.log). CI runs it in the
+  notes workflow, next to the verifier it guards.
 - Skill test suite (source of truth for the tool; run in
-  `D:\code\my-agent-skills\regression-notes`): 85 tests OK, including the new
-  `test_digest_ignores_line_endings`,
-  `test_seal_never_rewrites_but_reseal_migrates`, and
-  `test_dump_anchors_skips_archived_notes`; the installed copy at
-  `~/.agents/skills/regression-notes` runs the same suite green after syncing.
+  `D:\code\my-agent-skills\regression-notes`): 85 tests OK, carrying the same three cases
+  red-then-green (docs/agent-notes-evidence/2026-10-06-seal-digest-skill-suite.log); both
+  installed copies under the agents skills directories were re-synced and run green.
 - Repo side: `tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes
   --strict-anchors` passes on the CRLF working tree and on an LF copy that simulates the
   CI checkout (evidence docs/agent-notes-evidence/2026-10-06-seal-eol-fix.log).
 - Field evidence: the notes workflow run 37445291328 failed on three sealed notes before
-  this fix and runs 37460107300/37461367172 pass after it.
+  this fix and runs 37460107300/37461367172 pass after it
+  (docs/agent-notes-evidence/2026-10-06-seal-eol-ci-red.log).
 
-Bug-fix note. The regression tests are the skill suite above; they are Python tests in a
-separate repository and therefore are not bound as `path::anchor` anchors here (the anchor
-check resolves anchors against repo files).
+Proved: before the fix the CI notes workflow failed with three
+"archived note was modified after sealing" errors while the identical
+`--strict-anchors` command passed on the Windows working tree — the digest compared raw
+bytes, so the checkout's line endings read as a modification
+(docs/agent-notes-evidence/2026-10-06-seal-eol-ci-red.log, run 37445291328); after the
+LF-normalised digest and the one-off re-seal the same workflow passes (run 37460107300)
+and the repo's own strict run is green on both a CRLF tree and an LF copy
+(docs/agent-notes-evidence/2026-10-06-seal-eol-fix.log). The manufactured red that pins
+this now: `tools/regression-notes/tests/test_seal_digest.py` run against the pre-fix tool
+fails all three cases with the same "modified after sealing" symptom, and passes against
+the fixed tool (docs/agent-notes-evidence/2026-10-06-seal-digest-inrepo-test.log).
+
+Bug-fix note. The regression test is cited as a path, not bound as a `path::anchor`: the
+anchor intersection in CI unions the Rust test lists, so a Python test anchor could never
+resolve there.
