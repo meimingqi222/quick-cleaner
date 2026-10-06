@@ -1,6 +1,8 @@
 # Agent Note: Fixed-target table is deterministic and duplicate-free
 
 Status: implemented
+Archived: 2026-10-06
+Superseded-by: 2026-10-06-environment-dependent-ci-assertions.md
 
 ## Problem
 

@@ -145,16 +145,40 @@ pub fn call_with_timeout<T: Send + 'static>(
 mod tests {
     use super::*;
 
+    /// 探测起不来时的定位信息。共享 runner 在重负载下见过 `CreateProcess`
+    /// 返回「找不到指定的文件」（同一镜像的相邻一轮同用例是绿的）；不重试、
+    /// 不跳过——探测没跑就不能算过——但把 PATH 与解析结果带进 panic，下次红
+    /// 了能一眼分出环境抖动与真实回归（例如 powershell 真被移出镜像）。
+    #[cfg(windows)]
+    fn powershell_resolution() -> String {
+        let path = std::env::var("PATH").unwrap_or_else(|_| "<未设置>".into());
+        let resolved = std::process::Command::new("where.exe")
+            .arg("powershell.exe")
+            .output()
+            .map(|out| {
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                format!("{stdout} {stderr}").trim().to_string()
+            })
+            .unwrap_or_else(|error| format!("where.exe 自身也起不来：{error}"));
+        format!("powershell.exe 解析结果：{resolved}；PATH={path}")
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_background_command_has_no_console_and_keeps_output_and_exit_code() {
         let script = "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ConsoleProbe { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); }'; [Console]::Out.WriteLine([ConsoleProbe]::GetConsoleWindow().ToInt64()); [Console]::Error.WriteLine('stderr-probe'); exit 7";
-        let run = run_with_timeout(
+        let run = match run_with_timeout(
             "powershell.exe",
             &["-NoProfile", "-NonInteractive", "-Command", script],
             Duration::from_secs(30),
-        )
-        .expect("Windows console probe must run");
+        ) {
+            Some(run) => run,
+            None => panic!(
+                "Windows console probe must run; {}",
+                powershell_resolution()
+            ),
+        };
         assert_eq!(
             String::from_utf8_lossy(&run.stdout).trim(),
             "0",

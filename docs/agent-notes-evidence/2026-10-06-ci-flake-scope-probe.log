@@ -1,0 +1,20 @@
+=== 证据：同一提交 cf9654f 的两次运行 + 本机复现（路径已脱敏） ===
+
+-- 1) run 37465106555 首跑：两个 job 都红 ==
+Test (Windows)  Run tests  failed: core::proc::tests::windows_background_command_has_no_console_and_keeps_output_and_exit_code
+  panicked at src\core\proc.rs: Windows console probe must run（powershell.exe 起不来，CreateProcess 报「找不到指定的文件」；同轮另有两个无关用例跑了 60s+，runner 处于重负载）
+Test (macOS)    Run tests  failed: core::categories::tests::production_target_table_is_deterministic_and_duplicate_free
+  assertion `left == right` failed: 固定目标表逐次一致
+  两次调用的差集恰好一条（217 vs 218）：/Users/runner/Library/Group Containers/com.apple.siri.oddexperimentationextension/Library/Caches
+  —— macOS 在两次调用之间真的新建了这个 Group Container（扫描窗口内的真实变化）
+
+-- 2) 同一提交 cf9654f 的 rerun（同一棵树，无代码改动）：全绿 6m41s ==
+gh run list: completed success 'test(notes): run the vendored tool own suite in CI' CI master push 37465106555 6m41s
+结论：两次失败是环境相关，不是代码回归。
+
+-- 3) 本机复现：两次调用之间在 ~/.cache 下新建一个目录（临时探针，未提交） ==
+旧断言 probe_old_assertion_fails_when_the_filesystem_grows → FAILED
+  差集恰好一条：c:\users\<user>\.cache\qc-probe-old-<pid>
+新不变量 probe_new_invariants_survive_a_growing_filesystem → ok（同一扰动下）
+  PROBE grew by: ["c:\users\<user>\.cache\qc-probe-new-<pid>"]
+且探针目录已删除，本机 ~/.cache 无残留。

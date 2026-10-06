@@ -1075,8 +1075,15 @@ mod tests {
         assert_eq!(nested.len(), 0, "{nested:?}");
     }
 
-    /// 固定目标表逐次构造一致、且没有重复物理目标——「相同物理目标只统计一次」
-    /// 的表级不变量，也是「无重复全盘扫描」的前提。
+    /// 固定目标表的两条表级不变量：「没有重复物理目标」（相同物理目标只统计
+    /// 一次，也是「无重复全盘扫描」的前提），以及「同一路径两次构造得到同一
+    /// 规则与处置」。
+    ///
+    /// 这里**不**比较两次调用的完整路径集合：目标表是「规则 × 调用时刻枚举到
+    /// 的文件系统」的函数。macOS runner 上实测系统进程会在两次调用之间新建
+    /// Group Container（`com.apple.siri.oddexperimentationextension` 的
+    /// `Library/Caches`），那是扫描窗口内的真实变化，不是构造不确定。构造
+    /// 不确定会表现为同一路径拿到不同规则或处置——那一条必须继续查死。
     #[test]
     fn production_target_table_is_deterministic_and_duplicate_free() {
         let paths = |targets: &[ScanTarget]| {
@@ -1089,11 +1096,41 @@ mod tests {
         };
         let first = paths(&all_targets(None));
         assert!(!first.is_empty());
-        let second = paths(&all_targets(None));
-        assert_eq!(first, second, "固定目标表逐次一致");
         let mut unique = first.clone();
         unique.dedup();
         assert_eq!(unique.len(), first.len(), "固定目标表无重复路径：{first:?}");
+
+        // 路径 → 该路径拿到的规则与处置（有意不含 size_hint：Docker 镜像体积
+        // 这类真实读数会在两次调用之间变化，与本条不变量无关）。
+        let policy = |targets: &[ScanTarget]| {
+            targets
+                .iter()
+                .map(|target| {
+                    (
+                        crate::core::safety::norm(&target.path),
+                        format!(
+                            "rule={:?} operation={:?} disposal={:?} category={:?} recommended={} label={:?}",
+                            target.rule,
+                            target.operation,
+                            target.disposal,
+                            target.category,
+                            target.recommended,
+                            target.label,
+                        ),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let first_policy = policy(&all_targets(None));
+        let second_policy = policy(&all_targets(None));
+        for (path, first) in &first_policy {
+            if let Some(second) = second_policy.get(path) {
+                assert_eq!(
+                    first, second,
+                    "同一路径两次构造必须得到同一规则与处置：{path}"
+                );
+            }
+        }
     }
 
     /// 被覆盖的子目标仍把它的保留项带进父目标：父目标的计划必须因此被阻止，
