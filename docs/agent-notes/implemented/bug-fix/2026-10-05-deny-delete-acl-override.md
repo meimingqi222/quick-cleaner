@@ -1,10 +1,11 @@
 # Agent Note: Deny-Delete DACLs are stripped with takeown plus /remove:d, never /grant alone
 
 Status: implemented
+Partly-superseded-by: 2026-10-07-windows-delete-retry-stall.md
 
 ## Problem
 
-Applications write Deny-Delete DACLs on their log directories as tamper protection (WorkBuddy form observed on a real machine: `LAPTOP-…\meimingqi222  Deny  DeleteSubdirectoriesAndFiles, Delete`). The process is long gone, so a handle is not the cause; `Remove-Item` fails with access denied and cleanup logs show `os error 5`, not `os error 32`. An elevated process could strip the Deny and delete — failing to do so reports "the system prevents this" when the required steps simply were not taken.
+Applications write Deny-Delete DACLs on their log directories as tamper protection (WorkBuddy form observed on a real machine: `LAPTOP-…\USER  Deny  DeleteSubdirectoriesAndFiles, Delete`). The process is long gone, so a handle is not the cause; `Remove-Item` fails with access denied and cleanup logs show `os error 5`, not `os error 32`. An elevated process could strip the Deny and delete — failing to do so reports "the system prevents this" when the required steps simply were not taken.
 
 ## Decision
 
@@ -13,6 +14,10 @@ Applications write Deny-Delete DACLs on their log directories as tamper protecti
 ## Alternatives considered
 
 `/grant` alone does not work: Windows AccessCheck treats a matching Deny as authoritative and later Allow entries never override it — the real machine had Deny Delete and Allow FullControl coexisting and stayed undeletable. Running takeown for every failure class slows whole batches and triggers UAC when not elevated; `force_delete_access` returns false immediately when not elevated (macOS is constant false, same signature).
+
+## Superseded
+
+The successor replaces recursive ACL repair with bounded repair of the failing node and its eligible parent. `/r`, `/t` and inheritable grants are retired; the directory-wide retry after any failure is removed. Removing Deny before granting Allow, localized SID use, elevation gating and the parent DeleteChild check remain required.
 
 ## Consequences
 

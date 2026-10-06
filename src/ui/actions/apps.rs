@@ -1,8 +1,8 @@
 //! 软件管理与深度卸载动作
 
 use crate::core::apps::{
-    app_gone_after_residual_clean, residual_clean_follow_up, InstalledApp, ResidualItem,
-    ResidualOccupancy, ResidualScanResult, ResidualScope,
+    app_gone_after_residual_clean, discovered_program_files_absent, residual_clean_follow_up,
+    InstalledApp, ResidualItem, ResidualOccupancy, ResidualScanResult, ResidualScope,
 };
 use crate::core::cleaner::{CleanFailure, CleanProgress};
 use crate::core::i18n::{bilingual, Language};
@@ -50,6 +50,495 @@ impl crate::ui::Root {
         if self.apps.list.len() != before {
             self.apps.gen += 1;
         }
+    }
+
+    /// 请求移除一个开发环境资产：先走应用内确认。
+    ///
+    /// 这里只负责把「要干什么、谁来干」讲清楚；真正的判定在
+    /// `core::dev_env::remove` 里独立做，界面上的 `can_remove` 只是提前告知。
+    pub fn request_remove_dev_asset(
+        &mut self,
+        item: crate::core::dev_env::DevAssetItem,
+        cx: &mut Context<Self>,
+    ) {
+        if self.apps.dev.removing.is_some() {
+            return;
+        }
+        if !crate::core::dev_env::remove::can_remove(&item) {
+            return;
+        }
+        let lang = self.language;
+        let name = item.display_name().to_string();
+        let what = tr_dev_what(lang, &item.kind);
+        // venv 走的是整目录删除，措辞必须照实说；其余条目仍是生态卸载命令。
+        let body = match &item.kind {
+            crate::core::dev_env::DevAssetKind::VirtualEnv { .. } => {
+                tr_dev_confirm_body_directory(lang, &what)
+            }
+            _ => tr_dev_confirm_body(lang, &what),
+        };
+        // pip 包的体积扫描期没有单独测算，详情如实给版本号，不拿 0 冒充。
+        let detail = match &item.kind {
+            crate::core::dev_env::DevAssetKind::PipPackage { version, .. } => {
+                tr_dev_confirm_detail_version(
+                    lang,
+                    &item.path.display().to_string(),
+                    version.as_deref().unwrap_or("-"),
+                )
+            }
+            _ => tr_dev_confirm_detail(
+                lang,
+                &item.path.display().to_string(),
+                &fmt_size(item.size.exclusive_reclaimable_bytes),
+            ),
+        };
+        self.confirm = Some(ConfirmRequest {
+            title: tr_dev_confirm_title(lang, &name),
+            body,
+            detail,
+            kind: ConfirmKind::RemoveDevAsset(Box::new(item)),
+            // **不能**借 `app_data` 表达「这条很重要」：那个标记的含义是
+            // 「目标位于 macOS `~/Library/Application Support`」，会渲染出
+            // 「这里存放应用数据（聊天记录、密码库…）」那段 Danger 提示。
+            // 一个 Windows 上的 npm 全局包套上它，弹窗就会指着
+            // `C:\nvm4w\nodejs\node_modules\...` 说它在 `~/Library` 下——
+            // 真机核对时正是这么撞上的。严重性已经写在 body 里。
+            app_data: false,
+        });
+        cx.notify();
+    }
+
+    /// 执行移除：生态命令 → 核验 → 按结果重扫与报告。
+    ///
+    /// 结果分三类，必须分开报：已移除、**未执行**（拒绝，目标未被触碰）、
+    /// **执行了但没通过核验**（状态未知，需要用户手工确认）。后两类混为一谈
+    /// 会让用户在「其实还在」和「可能删了一半」之间失去判断依据。
+    pub fn execute_remove_dev_asset(
+        &mut self,
+        item: crate::core::dev_env::DevAssetItem,
+        cx: &mut Context<Self>,
+    ) {
+        let lang = self.language;
+        let name = item.display_name().to_string();
+        let id = item.id.clone();
+        // pip 包不占主列表的行，摘除走的是父行的就地更新而不是 drop_asset。
+        let is_pip_package = matches!(
+            item.kind,
+            crate::core::dev_env::DevAssetKind::PipPackage { .. }
+        );
+        self.apps.dev.removing = Some(name.clone());
+        self.status = crate::core::i18n::bilingual(|l| tr_dev_status_removing(l, &name));
+        cx.notify();
+
+        let path = item.path.clone();
+        self.apps.dev.removal_task = Some(cx.spawn(async move |this, cx| {
+            let work = item.clone();
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { crate::core::dev_env::remove::remove_asset(&work) })
+                .await;
+
+            let (ok, failed, status) = match &outcome {
+                crate::core::dev_env::remove::RemovalOutcome::Removed => {
+                    (1usize, 0usize, tr_dev_status_removed(lang, &name))
+                }
+                crate::core::dev_env::remove::RemovalOutcome::Refused(reason) => {
+                    (0, 0, tr_dev_status_refused(lang, &name, *reason))
+                }
+                crate::core::dev_env::remove::RemovalOutcome::Failed(failure) => {
+                    (0, 1, tr_dev_status_failed(lang, &name, &failure.detail))
+                }
+            };
+            crate::core::history::record("dev_asset_remove", &[path], ok, 0, failed, 0);
+
+            // 移除成功后**不重扫**：我们确切知道那一条没了，重扫一遍要再走
+            // 几万个文件（一次十几秒），而结论不会变。就地摘掉这一行并扣掉
+            // 它记录过的体积即可——这是 `drop_app_from_list` 对已安装软件用
+            // 的同一套做法。
+            //
+            // 只有「状态未知」才值得重扫：命令可能动了一半，清单已经不可信。
+            let rescan = matches!(
+                outcome,
+                crate::core::dev_env::remove::RemovalOutcome::Failed(_)
+            );
+            let removed = matches!(
+                outcome,
+                crate::core::dev_env::remove::RemovalOutcome::Removed
+            );
+            let _ = this.update(cx, |this, cx| {
+                this.apps.dev.removing = None;
+                if removed {
+                    if is_pip_package {
+                        this.apps.dev.drop_pip_package(&id);
+                    } else {
+                        this.apps.dev.drop_asset(&id);
+                    }
+                }
+                // 状态按当前语言重新渲染，而不是把这一轮的语种固定下来。
+                this.status = crate::core::i18n::bilingual(move |_| status.clone());
+                cx.notify();
+                if rescan && !this.apps.dev.scanning {
+                    this.start_dev_env_scan(cx);
+                }
+            });
+        }));
+    }
+
+    /// 请求批量移除当前所有已勾选的开发环境资产。
+    pub fn request_remove_selected_dev_assets(&mut self, cx: &mut Context<Self>) {
+        if self.apps.dev.removing.is_some() {
+            return;
+        }
+        let selected_ids = self.apps.dev.selected.clone();
+        if selected_ids.is_empty() {
+            return;
+        }
+
+        // 收集所有匹配且可移除的条目对象
+        let mut targets: Vec<crate::core::dev_env::DevAssetItem> = Vec::new();
+        for group in [
+            &self.apps.dev.conda_envs,
+            &self.apps.dev.python_envs,
+            &self.apps.dev.node_packages,
+            &self.apps.dev.python_tools,
+        ] {
+            for item in group {
+                if selected_ids.contains(&item.id) && crate::core::dev_env::remove::can_remove(item)
+                {
+                    targets.push(item.clone());
+                }
+            }
+        }
+        for packages in self.apps.dev.site_packages.values() {
+            for item in packages {
+                if selected_ids.contains(&item.id) && crate::core::dev_env::remove::can_remove(item)
+                {
+                    targets.push(item.clone());
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            return;
+        }
+
+        if targets.len() == 1 {
+            self.request_remove_dev_asset(targets.remove(0), cx);
+            return;
+        }
+
+        let lang = self.language;
+        let count = targets.len();
+        let total_size: u64 = targets
+            .iter()
+            .map(|t| t.size.exclusive_reclaimable_bytes)
+            .sum();
+        let size_str = fmt_size(total_size);
+
+        let mut preview_lines: Vec<String> = targets
+            .iter()
+            .take(6)
+            .map(|t| format!("· {}", t.display_name()))
+            .collect();
+        if count > 6 {
+            preview_lines.push(format!("...等共 {count} 项"));
+        }
+        let detail = format!(
+            "预计可释放：{size_str}\n\n待移除清单：\n{}",
+            preview_lines.join("\n")
+        );
+
+        self.confirm = Some(ConfirmRequest {
+            title: tr_dev_batch_confirm_title(lang, count),
+            body: tr_dev_batch_confirm_body(lang).to_string(),
+            detail,
+            kind: ConfirmKind::BatchRemoveDevAssets(targets),
+            app_data: false,
+        });
+        cx.notify();
+    }
+
+    /// 执行批量移除：串行调用各生态官方卸载命令并核验。
+    pub fn execute_batch_remove_dev_assets(
+        &mut self,
+        items: Vec<crate::core::dev_env::DevAssetItem>,
+        cx: &mut Context<Self>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+        let total_count = items.len();
+        self.apps.dev.removing = Some(format!("{total_count} 项"));
+        self.status =
+            crate::core::i18n::bilingual(move |_| format!("正在批量移除 {total_count} 项…"));
+        cx.notify();
+
+        self.apps.dev.removal_task = Some(cx.spawn(async move |this, cx| {
+            let mut removed_count = 0usize;
+            let mut failed_count = 0usize;
+            let mut refused_count = 0usize;
+            let mut freed_bytes = 0u64;
+
+            for (idx, item) in items.into_iter().enumerate() {
+                let name = item.display_name().to_string();
+                let status_name = name.clone();
+                let current_idx = idx + 1;
+                let _ = this.update(cx, |this, cx| {
+                    this.status = crate::core::i18n::bilingual(move |_| {
+                        format!("正在移除 ({current_idx}/{total_count}): {status_name}")
+                    });
+                    cx.notify();
+                });
+
+                let work = item.clone();
+                let outcome = cx
+                    .background_executor()
+                    .spawn(async move { crate::core::dev_env::remove::remove_asset(&work) })
+                    .await;
+
+                let id = item.id.clone();
+                let is_pip_package = matches!(
+                    item.kind,
+                    crate::core::dev_env::DevAssetKind::PipPackage { .. }
+                );
+
+                match &outcome {
+                    crate::core::dev_env::remove::RemovalOutcome::Removed => {
+                        removed_count += 1;
+                        freed_bytes = freed_bytes
+                            .saturating_add(item.size.exclusive_reclaimable_bytes);
+                        crate::core::history::record(
+                            "dev_asset_remove",
+                            std::slice::from_ref(&item.path),
+                            1,
+                            0,
+                            0,
+                            item.size.exclusive_reclaimable_bytes,
+                        );
+                        let _ = this.update(cx, |this, cx| {
+                            if is_pip_package {
+                                this.apps.dev.drop_pip_package(&id);
+                            } else {
+                                this.apps.dev.drop_asset(&id);
+                            }
+                            cx.notify();
+                        });
+                    }
+                    crate::core::dev_env::remove::RemovalOutcome::Refused(reason) => {
+                        refused_count += 1;
+                        crate::log!("批量移除跳过「{name}」：{reason:?}");
+                        crate::core::history::record(
+                            "dev_asset_remove",
+                            std::slice::from_ref(&item.path),
+                            0,
+                            0,
+                            0,
+                            0,
+                        );
+                    }
+                    crate::core::dev_env::remove::RemovalOutcome::Failed(failure) => {
+                        failed_count += 1;
+                        crate::log!("批量移除失败「{name}」：{}", failure.detail);
+                        crate::core::history::record(
+                            "dev_asset_remove",
+                            std::slice::from_ref(&item.path),
+                            0,
+                            0,
+                            1,
+                            0,
+                        );
+                    }
+                }
+            }
+
+            let _ = this.update(cx, |this, cx| {
+                this.apps.dev.removing = None;
+                let freed_str = fmt_size(freed_bytes);
+                this.status = crate::core::i18n::bilingual(move |l| {
+                    match l {
+                        Language::Zh => {
+                            if failed_count > 0 {
+                                format!("批量移除完成：已移除 {removed_count} 项，释放 {freed_str}，失败 {failed_count} 项")
+                            } else if refused_count > 0 {
+                                format!("批量移除完成：已移除 {removed_count} 项，释放 {freed_str}，跳过 {refused_count} 项")
+                            } else {
+                                format!("批量移除完成：已成功移除 {removed_count} 项，释放 {freed_str}")
+                            }
+                        }
+                        Language::En => {
+                            if failed_count > 0 {
+                                format!("Batch remove finished: {removed_count} removed ({freed_str}), {failed_count} failed")
+                            } else {
+                                format!("Batch remove finished: {removed_count} removed ({freed_str})")
+                            }
+                        }
+                    }
+                });
+                cx.notify();
+                if failed_count > 0 && !this.apps.dev.scanning {
+                    this.start_dev_env_scan(cx);
+                }
+            });
+        }));
+    }
+
+    /// 展开/收起一个 site 行（用户级包目录行或虚拟环境行）的 pip 包列表。
+    ///
+    /// 包列表是展开时从磁盘枚举的（读 dist-info 登记，无子进程），收起只
+    /// 折叠视图、缓存留着，再展开不重读。重扫后整份缓存过期，随结果清空。
+    pub fn select_active_dev_env(&mut self, env_id: String, cx: &mut Context<Self>) {
+        self.apps.dev.active_env_id = Some(env_id.clone());
+        self.load_dev_env_packages_if_needed(&env_id, cx);
+        cx.notify();
+    }
+
+    pub fn load_dev_env_packages_if_needed(&mut self, env_id: &str, cx: &mut Context<Self>) {
+        let dev = &mut self.apps.dev;
+        if dev.scanning || dev.removing.is_some() || dev.loading_site.is_some() {
+            return;
+        }
+        if dev.site_packages.contains_key(env_id) {
+            return;
+        }
+        let Some(row) = dev.python_envs.iter().find(|item| item.id == env_id) else {
+            return;
+        };
+        let target = match &row.kind {
+            crate::core::dev_env::DevAssetKind::PythonInterpreter {
+                scope,
+                site_packages: Some(site),
+                python,
+                ..
+            } if *scope == crate::core::dev_env::SiteScope::User => {
+                Some((site.clone(), python.clone()))
+            }
+            crate::core::dev_env::DevAssetKind::VirtualEnv { .. } => {
+                let site = crate::core::dev_env::python::venv_site_packages(&row.path);
+                let python = crate::core::dev_env::python::venv_python(&row.path);
+                match (site, python) {
+                    (Some(site), Some(python)) => Some((site, python)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((site_dir, python)) = target else {
+            return;
+        };
+        let site_id = env_id.to_string();
+        dev.loading_site = Some(site_id.clone());
+        cx.notify();
+
+        let read = cx
+            .background_executor()
+            .spawn(async move { crate::core::dev_env::python::pip_packages(&site_dir, &python) });
+        dev.packages_task = Some(cx.spawn(async move |this, cx| {
+            let packages = read.await;
+            let _ = this.update(cx, |this, cx| {
+                let dev = &mut this.apps.dev;
+                dev.loading_site = None;
+                dev.site_packages.insert(site_id, packages);
+                cx.notify();
+            });
+        }));
+    }
+
+    pub fn toggle_dev_site_packages(&mut self, site_id: String, cx: &mut Context<Self>) {
+        let dev = &mut self.apps.dev;
+        if dev.scanning || dev.removing.is_some() || dev.loading_site.is_some() {
+            return;
+        }
+        if !dev.expanded_sites.remove(&site_id) {
+            let Some(row) = dev.python_envs.iter().find(|item| item.id == site_id) else {
+                return;
+            };
+            // 展开需要两样东西：包目录在哪、用哪个解释器卸载。安装级包目录
+            // 行不在可展开之列（P41：那是解释器的一部分，整行只读）。
+            let target = match &row.kind {
+                crate::core::dev_env::DevAssetKind::PythonInterpreter {
+                    scope,
+                    site_packages: Some(site),
+                    python,
+                    ..
+                } if *scope == crate::core::dev_env::SiteScope::User => {
+                    Some((site.clone(), python.clone()))
+                }
+                crate::core::dev_env::DevAssetKind::VirtualEnv { .. } => {
+                    let site = crate::core::dev_env::python::venv_site_packages(&row.path);
+                    let python = crate::core::dev_env::python::venv_python(&row.path);
+                    match (site, python) {
+                        (Some(site), Some(python)) => Some((site, python)),
+                        // 缺 site 或缺 python 就没有按包卸载的通道；整行删除
+                        // 不受影响。
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let Some((site_dir, python)) = target else {
+                return;
+            };
+            dev.expanded_sites.insert(site_id.clone());
+            dev.loading_site = Some(site_id.clone());
+            cx.notify();
+
+            let read = cx.background_executor().spawn(async move {
+                crate::core::dev_env::python::pip_packages(&site_dir, &python)
+            });
+            dev.packages_task = Some(cx.spawn(async move |this, cx| {
+                let packages = read.await;
+                let _ = this.update(cx, |this, cx| {
+                    let dev = &mut this.apps.dev;
+                    dev.loading_site = None;
+                    dev.site_packages.insert(site_id, packages);
+                    cx.notify();
+                });
+            }));
+            return;
+        }
+        cx.notify();
+    }
+
+    pub fn start_dev_env_scan(&mut self, cx: &mut Context<Self>) {
+        if self.apps.dev.scanning {
+            return;
+        }
+        self.apps.dev.scanning = true;
+        self.apps.dev.scanned = false;
+        self.start_tick(cx);
+        cx.notify();
+        let scan_fut = cx
+            .background_executor()
+            .spawn(async move { crate::core::dev_env::discovery::discover_all() });
+        self.apps.dev.task = Some(cx.spawn(async move |this, cx| {
+            let result = scan_fut.await;
+            let _ = this.update(cx, |this, cx| {
+                // 总计直接取批量测定的结果，不在界面层逐项相加：conda 的
+                // `pkgs` 缓存与环境之间大量使用硬链接，逐项相加会把同一份
+                // 数据算两遍以上。
+                let total_logical = result.total.logical_bytes;
+                // 「可释放」只算进得了移除通道的部分，见 `removable_exclusive`。
+                let total_exclusive = result.removable_exclusive;
+                this.apps.dev.conda_envs = result.conda_envs;
+                this.apps.dev.python_envs = result.python_envs;
+                this.apps.dev.node_packages = result.node_packages;
+                this.apps.dev.python_tools = result.python_tools;
+                this.apps.dev.total_logical_size = total_logical;
+                this.apps.dev.total_exclusive_size = total_exclusive;
+                // 展开着的包列表是上一轮扫描间隙从磁盘枚举的，重扫后全部
+                // 过期：整份清掉，收起所有展开行。
+                this.apps.dev.expanded_sites.clear();
+                this.apps.dev.site_packages.clear();
+                this.apps.dev.loading_site = None;
+                this.apps.dev.scanned = true;
+                this.apps.dev.scanning = false;
+                this.apps.dev.ensure_active_env();
+                if let Some(active_id) = this.apps.dev.active_env_id.clone() {
+                    this.load_dev_env_packages_if_needed(&active_id, cx);
+                }
+                cx.notify();
+            });
+        }));
     }
 
     pub fn start_apps_scan(&mut self, cx: &mut Context<Self>) {
@@ -427,6 +916,12 @@ impl crate::ui::Root {
         let restore = res.clone();
         let restore_selected = selected_before.clone();
         let app_id_for_check = res.app_id.clone();
+        let discovery_for_check = self
+            .apps
+            .list
+            .iter()
+            .find(|app| app.id == res.app_id)
+            .and_then(|app| app.discovery.clone());
         let is_discovered = app_id_for_check.starts_with("discovered:");
         let scope_for_check = res.scope;
 
@@ -476,11 +971,15 @@ impl crate::ui::Root {
                 return None;
             }
 
-            Some(clean_residuals(&items_to_clean, &prog))
+            let report = clean_residuals(&items_to_clean, &prog);
+            let discovered_gone = discovery_for_check
+                .as_ref()
+                .map(discovered_program_files_absent);
+            Some((report, discovered_gone))
         });
 
         self.residual.task = Some(cx.spawn(async move |this, cx| {
-            let Some(report) = clean.await else {
+            let Some((report, discovered_gone)) = clean.await else {
                 this.update(cx, |this, cx| {
                     this.residual.scanning = false;
                     // 原样还原：一个字节都没删，列表和勾选不该丢。
@@ -544,7 +1043,13 @@ impl crate::ui::Root {
                 // 就已经 drop 了应用。这里失败项非空时保留列表项，避免
                 // 残留扫描流程里 InstallDir 清掉、AppData 失败却再也找不到入口。
                 if follow.retry_items.is_empty()
-                    && app_gone_after_residual_clean(&original_items, &follow.leftover_for_app)
+                    && discovered_gone.unwrap_or_else(|| {
+                        !is_discovered
+                            && app_gone_after_residual_clean(
+                                &original_items,
+                                &follow.leftover_for_app,
+                            )
+                    })
                 {
                     this.drop_app_from_list(&res.app_id);
                 }

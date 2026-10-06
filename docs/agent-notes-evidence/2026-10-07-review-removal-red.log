@@ -1,0 +1,80 @@
+[privacy] Personal paths and local inventory details redacted; failure assertions and test results retained.
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+   Compiling quick-cleaner v0.0.9 (<WORKSPACE>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.30s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-a2e9477569695c40.exe)
+
+running 6 tests
+test core::dev_env::remove::tests::review_mamba_inventory_freezes_mamba_executor ... FAILED
+test core::dev_env::remove::tests::review_venv_junction_root_and_ancestor_are_refused ... FAILED
+test core::dev_env::remove::tests::review_venv_preserves_protected_children ... FAILED
+test core::dev_env::remove::tests::review_venv_replaced_after_scan_is_refused ... FAILED
+test core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes ... FAILED
+test platform::windows::command::tests::review_shim_preserves_spaces_and_trailing_backslash ... FAILED
+
+failures:
+
+---- core::dev_env::remove::tests::review_mamba_inventory_freezes_mamba_executor stdout ----
+
+thread 'core::dev_env::remove::tests::review_mamba_inventory_freezes_mamba_executor' (52496) panicked at src\core\dev_env\remove.rs:1205:9:
+["conda info --json", "mamba info --json", "conda remove --prefix C:/qc-review/envs/old --all --yes"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- core::dev_env::remove::tests::review_venv_junction_root_and_ancestor_are_refused stdout ----
+
+thread 'core::dev_env::remove::tests::review_venv_junction_root_and_ancestor_are_refused' (13168) panicked at src\core\dev_env\remove.rs:1191:9:
+assertion `left == right` failed
+  left: Removed
+ right: Refused(NotRegistered)
+
+---- core::dev_env::remove::tests::review_venv_preserves_protected_children stdout ----
+
+thread 'core::dev_env::remove::tests::review_venv_preserves_protected_children' (12024) panicked at src\core\dev_env\remove.rs:1146:9:
+assertion `left == right` failed
+  left: None
+ right: Some([109, 117, 115, 116, 32, 115, 117, 114, 118, 105, 118, 101])
+
+---- core::dev_env::remove::tests::review_venv_replaced_after_scan_is_refused stdout ----
+
+thread 'core::dev_env::remove::tests::review_venv_replaced_after_scan_is_refused' (9968) panicked at src\core\dev_env\remove.rs:1165:9:
+assertion `left == right` failed
+  left: Removed
+ right: Refused(NotRegistered)
+
+---- core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes stdout ----
+
+thread 'core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes' (72448) panicked at src\core\proc.rs:194:9:
+elapsed: 4.5056921s
+
+---- platform::windows::command::tests::review_shim_preserves_spaces_and_trailing_backslash stdout ----
+
+thread 'platform::windows::command::tests::review_shim_preserves_spaces_and_trailing_backslash' (60708) panicked at src\platform\windows\command.rs:276:9:
+Output { status: ExitStatus(ExitStatus(1)), stdout: "", stderr: "'\\\"<TEMP>\\qc review shim spaces_38664\\probe shim.cmd\\\"' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n" }
+
+
+failures:
+    core::dev_env::remove::tests::review_mamba_inventory_freezes_mamba_executor
+    core::dev_env::remove::tests::review_venv_junction_root_and_ancestor_are_refused
+    core::dev_env::remove::tests::review_venv_preserves_protected_children
+    core::dev_env::remove::tests::review_venv_replaced_after_scan_is_refused
+    core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes
+    platform::windows::command::tests::review_shim_preserves_spaces_and_trailing_backslash
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 702 filtered out; finished in 8.76s
+
+error: test failed, to rerun pass `--lib`

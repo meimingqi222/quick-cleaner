@@ -1,0 +1,25 @@
+[privacy] Personal paths and local inventory details redacted; failure assertions and test results retained.
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+   Compiling quick-cleaner v0.0.9 (<WORKSPACE>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.22s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-a2e9477569695c40.exe)
+
+running 1 test
+test core::apps::command_tests::discovered_cleanup_verifies_program_paths_without_source_labels ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 701 filtered out; finished in 0.01s

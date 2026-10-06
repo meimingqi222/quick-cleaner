@@ -4,6 +4,8 @@ mod app_discovery;
 pub use app_discovery::explain_source_install;
 pub mod app_icons;
 pub mod apps;
+pub mod command;
+pub use command::{resolve_tool_program, tool_command};
 pub mod gpu;
 pub(crate) mod identity;
 pub mod inuse;

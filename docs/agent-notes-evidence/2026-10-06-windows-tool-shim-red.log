@@ -1,0 +1,7 @@
+[privacy] Personal paths and local inventory details redacted; failure assertions and test results retained.
+=== 撤掉 PATHEXT：只按 CreateProcess 的规则找（名字 + .exe）===
+live probe: 0 conda, 4 node, 3 tools
+
+=== npm 是否在 PATH 上 ===
+[privacy] Installed-tool names and paths omitted; original aggregate counts retained.
+[privacy] PATH probe found npm.cmd; absolute paths omitted.

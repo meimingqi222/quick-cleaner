@@ -151,7 +151,7 @@ Note: `2026-10-05-deny-delete-acl-override.md`
 - **症状**：WorkBuddy 进程早已退出（`Get-Process` 查不到），但
   `~/.workbuddy/logs/2026-09-06` 仍删不掉。`Get-Acl` 能看到：
   ```text
-  LAPTOP-…\meimingqi222  Deny  DeleteSubdirectoriesAndFiles, Delete
+  LAPTOP-…\USER  Deny  DeleteSubdirectoriesAndFiles, Delete
   ```
   手动 `Remove-Item` 报 Access denied。清理日志里是
   `拒绝访问 (os error 5)`，不是 `os error 32`（句柄占用）。
@@ -161,8 +161,9 @@ Note: `2026-10-05-deny-delete-acl-override.md`
   占用时这不是「系统不让删」，是我们没走完该走的步骤。
 - **防护**：
   - [`force_delete_access`](../src/platform/windows/security.rs)：takeown
-    `/a /r` + **`icacls /remove:d`（当前用户 SID + Everyone）** +
-    `icacls /grant *S-1-5-32-544:(OI)(CI)F /t /c /q`。用 SID 不用组名
+    `/a` + **`icacls /remove:d`（当前用户 SID + Everyone）** +
+    `icacls /grant *S-1-5-32-544:F /c /q /l`，只修当前节点，每条命令最多两秒。
+    禁用递归与继承授权（P43）。用 SID 不用组名
     （中文系统上「Administrators」本地化后按名字授权会静默失败）。
   - **不能只 `/grant`**：Windows AccessCheck 把命中的 Deny 当权威，
     后面的 Allow 盖不回去。WorkBuddy 日志实机就是「Deny Delete + Allow
@@ -475,3 +476,185 @@ Note: `2026-10-05-windows-residual-identity-gate.md`
 - **防护**：Windows `clean_residuals` 的 `File`/`Directory` 分支在 `dispose` 前要求 `item.identity.is_some_and(|identity| identity.recheck(path))`；失败记 `CleanResult::Failed` 并跳过，身份缺失同样拒绝（fail closed），**绝不回退裸删**。与 macOS 共用同一道闸门。
 - **测试**：`residual_cleanup_rejects_path_replaced_after_scan`（Windows 与 macOS 各一份）。红跑证据 `docs/agent-notes-evidence/2026-10-05-windows-residual-identity-red.log`（撤闸门 → 失败），恢复后 `...-green.log`。
 - **禁止回退**：不要为了「能删掉」去掉身份复核或改成只在文件缺失时跳过；不要把批次级快照检查当作逐项复核的替代。
+
+## P38 开发资产的清单只能来自生态自己，按目录列出来的条目只能展示
+
+Note: `2026-10-06-dev-asset-inventory-authority.md`
+
+- **症状**：开发环境页把 `node_modules` 的每个直接子目录都列成一个「用户装的全局包」。
+  本机实测 bun 的清单声明 3 个全局包，目录里躺着 132 个目录——另外 129 个是那 3 个的
+  传递依赖，全部以同等样貌出现在列表里，且看起来一样可删。删掉 `@babel/parser`
+  会打断依赖它的工具，而用户不知道它是谁装的。同类错误还包括：`~/.conda` 被当成
+  conda 安装根，凭空多出一个名叫 base 的假环境；Windows 上取
+  `user_cache_dir().parent()` 得到 `AppData`，探的是 `AppData\miniconda3` 而不是
+  `%LOCALAPPDATA%\miniconda3`。
+- **根因**：目录结构不携带「谁装的」这一信息。传递依赖与用户显式安装的包在
+  `node_modules` 里没有任何可靠区别；生态早就把答案写在自己的清单里
+  （`node_modules` 旁边的 `package.json` 的 `dependencies`、`conda info --json` 的
+  `envs` 与 `root_prefix`、`pipx list --json`），我们却去数目录。
+- **防护**：清单只有两级来源，条目自己带着这个事实（`core::dev_env::AssetSource`）：
+  `Tool` = 生态自己声明的，`Layout` = 命令与声明都拿不到时的降级扫描。只有 `Tool`
+  来源的条目进移除通道（`remove::channel_for` 是「哪个生态能删」的唯一名单，界面用的
+  `can_remove` 与执行用的 `PreparedRemoval` 都从它取）。解析只有一份，在
+  `core::dev_env::inventory`，发现层与移除层共用——两份解析会给出「界面上有这个包、
+  点删除却说不存在」。base 环境由 conda 报的 `root_prefix` 认定，不猜安装根。
+  清单回退到 mamba 时必须冻结并执行 mamba，不得又调用 conda；
+  `review_mamba_inventory_freezes_mamba_executor` 锁定此行为。
+  生态写在自己安装目录里的**登记文件**也算生态声明，不算「按目录列」：pip 的
+  `*.dist-info`（PEP 376）与 venv 的 `pyvenv.cfg`（PEP 405）是这两个生态自己写的
+  账本，枚举它们与跑命令读清单是同一权威（见
+  `core::dev_env::python::pip_packages` 的文档）。
+- **测试**：`a_transitive_dependency_is_not_mistaken_for_an_installed_package`、
+  `bun_items_are_never_removable_even_when_its_manifest_declares_them`、
+  `without_a_manifest_the_listing_falls_back_to_the_directory`、
+  `dot_conda_directory_is_never_listed_as_an_environment`、
+  `a_layout_sourced_item_has_no_removal_channel`。红跑证据
+  `docs/agent-notes-evidence/2026-10-06-dev-asset-inventory-authority-red.log`。
+- **禁止回退**：不要把「按目录列」当成等价实现加回来（包括「按目录列但灰掉」——
+  灰掉同样需要自己反推依赖图）；不要让 `Layout` 来源的条目获得移除入口（venv 例外：
+  它的凭据是 `pyvenv.cfg` 本身，预检重验，见 `remove::Channel::VenvDirectory`）；不要在
+  `discovery` 与 `remove` 里各写一份清单解析；`dependencies` 键不存在时不得当作
+  「一个都没装」，退回按目录列并降为 `Layout`；不要把「读 `*.dist-info` /
+  `pyvenv.cfg` 登记」与「按目录猜安装」混为一谈——前者是读生态的账本，后者才是
+  这条禁止的。
+
+## P39 目录 mtime 不是「最后使用时间」，atime 未经证实
+
+Note: `2026-10-06-dev-asset-inventory-authority.md`
+
+- **症状**：一个天天在用的 conda 环境，界面显示「3 个月前」；用户据此认为它闲置并
+  删掉。反过来，一个装完就没碰过的环境因为刚装过依赖而显示「今天」。既有的
+  `core/declutter/large_files.rs` 已经把 mtime 当「最后访问时间」呈现给用户
+  （`tr_declutter_col_last_accessed`），是同一处措辞与事实不符。
+- **根因**：目录的 mtime 只在**直接子项被增删**时变化，往里写文件不会动它；因此它
+  反映「最后一次装/卸」，不反映「最后一次用」。atime 在本仓库完全没有验证过，而且
+  Windows 默认不更新最后访问时间（NTFS 的 LastAccessUpdate 策略）——拿它当使用时间
+  等于在没有依据的地方给一个数字。
+- **防护**：`core::dev_env::TimedEvidence` 把时间点与来源绑在一起
+  （`TimestampSource`：conda 事务记录 / 包的 `package.json` / 工具元数据 / 目录项），
+  界面按来源措辞并显示依据，列名是「最后变更」而不是「最近使用」。时间**不参与
+  预选**、不参与任何删除判定。没有依据时显示「无记录」，不拿别的字段凑。
+- **测试**：`timestamps_only_come_from_tool_authored_sources`、
+  `inspect_conda_meta_reads_version_count_and_transaction_time`、
+  `a_read_error_is_not_absence`（读失败同样不是证据）。
+- **禁止回退**：不要用 `atime` 判定闲置；不要把目录 mtime 写成「最后使用」；不要给
+  `minimum_age` 之类的阈值配上自动勾选；不要删掉 `TimestampSource` 只留一个裸时间戳。
+
+## P40 Windows 工具链命令要先做 PATHEXT 解析，`Command::new("npm")` 找不到 `.cmd` 垫片
+
+Note: `2026-10-06-windows-tool-shim-launch.md`
+
+- **症状**：`npm` 明明在 PATH 上，开发环境页的 npm 通道却是空的；`uv`、`node` 这类有真
+  `.exe` 的命令一切正常，所以看起来像「有些生态认得出来、有些认不出」。同一个缺陷让
+  `npm uninstall --global` 也跑不起来——界面给了移除入口也只会永远拒绝。
+- **根因**：`CreateProcess` **不查 `PATHEXT`**，只找名字与 `name.exe`。npm 在 Windows 上
+  装出来的是 `npm`、`npm.cmd`、`npm.ps1`，没有 `npm.exe`，所以启动失败、返回 `None`，
+  而失败没有报错，只表现成「这个生态什么都查不到」。pnpm（`pnpm.CMD`）、pipx 同理。
+- **防护**：`platform::tool_command` 是工具链命令的唯一入口（`core::proc::run_tool_with_timeout`），
+  内部先经 `resolve_tool_program` 按 `PATH` × `PATHEXT` 解析，顺序交给 `PATHEXT`。
+  `.cmd` / `.bat` 显式经 `cmd.exe /d /s /c` 启动：实测 `CreateProcess` 的隐式批处理处理
+  也能跑，但只有显式路径给得了 `/d`（关掉注册表 `AutoRun`，那是别人写的代码）。两条路
+  cmd 都会重新解析参数，所以含 `" & | < > ^ % !` 的参数一律拒绝而不是转义。
+  完整命令用 `raw_arg` 和 `/s /c` 最外层引号，不得再用 `.arg(line)` 触发 CRT
+  转义；`review_shim_preserves_spaces_and_trailing_backslash` 真实执行带空格脚本，
+  锁定空格、尾反斜杠与空参数的传递。
+- **测试**：`a_command_that_only_exists_as_a_shim_is_still_found`、
+  `pathext_order_decides_which_candidate_wins`、
+  `a_name_that_already_has_an_extension_is_not_extended_again`、
+  `a_script_shim_is_launched_through_cmd`、`an_argument_with_cmd_metacharacters_is_refused`。
+  红跑证据 `docs/agent-notes-evidence/2026-10-06-windows-tool-shim-red.log`（退回
+  `CreateProcess` 的解析规则后 npm 通道 0 条）。
+- **禁止回退**：不要把工具链命令改回 `Command::new(name)` 或 `run_with_timeout`；
+  不要为 `.cmd` 开特例而让两条解析规则并存；不要在 `cmd_line` 里改成「转义元字符」
+  放行；新增工具链生态时必须走 `run_tool_with_timeout`（传 runner 时直接用函数本身，
+  不要包一层闭包——本轮就出现过探针包了旧 runner 从而看到假象）。
+
+## P41 Python 有两个包目录，界面必须分开报，数量才对得上 `pip list`
+
+Note: `2026-10-07-python-two-package-directories.md`
+
+- **症状**：开发环境页的 Python 那组显示「1 个包」，同一台机器上 `pip list` 报 145 个；
+  用户看到的是「明明装了东西，界面说没有」。
+- **根因**：一个解释器有**两个**包目录——自带的 `Lib/site-packages` 与用户级
+  `site.getusersitepackages()`。微软商店版 / 系统 Python 的安装目录只读，用户
+  `pip install` 的东西只可能落在用户级目录，于是两个目录的份额极端不均（本机
+  1 : 144）。模型只认一个目录，就量到了那个几乎空的安装目录。
+  同一轮还有一个坑：`site.getsitepackages()` 返回**列表**，商店版上它的第 0 个
+  元素是 prefix（整个安装目录），照 `[0]` 取会把几百 MB 的安装目录算成包的体积。
+- **防护**：`core/dev_env/python` 的 `InterpreterFacts` 同时持有两个目录，
+  `interpreter_rows` 对每个存在的目录出一行并标出 `SiteScope`；包数量本地数
+  `*.dist-info` 而不是跑子进程枚举发行版；包目录一律从
+  `sysconfig.get_paths()["purelib"]` 与 `site.getusersitepackages()` 取，列表形态
+  一律不认（留空，不取 `[0]`）。
+- **测试**：`one_row_per_package_directory_so_the_count_matches_pip_list`、
+  `probe_reads_version_prefix_and_both_package_dirs`、
+  `an_array_shaped_package_dir_is_rejected_rather_than_indexed`。红跑证据
+  `docs/agent-notes-evidence/2026-10-07-python-two-site-rows-red.log`。
+- **禁止回退**：不要把两个目录合并成一行或只报其中一个；不要把 `site.getsitepackages()`
+  的第 0 个元素当包目录。移除入口的划分在 2026-10-07 之后收窄为：**安装级行整行
+  只读**（`site-packages` 是解释器的一部分，且商店版在文件系统层就不可写，
+  `core/safety.rs` 也不保护 `C:\Program Files` 之下的子目录）；用户级行与 venv 行
+  本身仍不是删除单位，但可展开，行内的 pip 包条目逐个走 `python -m pip uninstall`
+  卸载，venv 整体以 `pyvenv.cfg` 为凭删除（见
+  `2026-10-07-pip-package-and-venv-removal.md`）。不要让安装级行或「整目录删除
+  site-packages」回来。
+
+## P42 开发环境的体积测算每个文件要两次元数据调用，别把它改回单线程
+
+Note: `2026-10-07-dev-asset-measurement-parallelism.md`
+
+- **症状**：开发环境页一次扫描要十几秒到半分钟，界面只有一个转圈，用户以为卡死。
+- **根因**：唯一走遍每个文件的一步是体积测算，而它每个文件至少两次元数据级系统
+  调用：遍历一次（`read_dir` + `symlink_metadata`）、取硬链接数再一次
+  （Windows 上必须 `CreateFileW` + `GetFileInformationByHandle`——`WIN32_FIND_DATA`
+  里没有链接数字段）。本机实测每次约 300µs，4 万个文件顺序执行就是二十多秒。
+  慢的不是某个调用写错了，是调用次数。
+- **防护**：遍历与句柄两段都并行（`core/dev_env/storage` 里 rayon 递归 + `par_iter`），
+  跨目录去重仍顺序做；`per_dir` 与入参顺序对齐（调用方按位置贴回体积）；
+  Python 解释器只量包目录，不量整个安装目录。
+- **测试**：`per_dir_sizes_stay_aligned_with_the_input_order`、
+  `test_measure_real_dir_and_hardlink`（硬链接语义不变）。计时证据
+  `docs/agent-notes-evidence/2026-10-07-devenv-scan-performance-green.log`。
+- **禁止回退**：不要把这段改回单线程循环，不要为每个文件再加元数据调用，不要
+  把「独占可释放」换成不查链接数的近似值（conda 的 pkgs 缓存与环境、pnpm / uv
+  的 store 与安装之间都是硬链接，近似值会系统性高估可释放量）。改动前后都跑一次
+  `live_probe_lists_the_assets_on_this_machine` 的计时输出对比。
+
+## P43 Windows 非空目录不能触发整树 ACL 恢复与重复删除
+
+Note: `2026-10-07-windows-delete-retry-stall.md`
+
+- **症状**：永久删除接近完成后长时间停顿，已有占用失败；停止后还会重扫剩余目标。
+- **根因**：锁住叶子使祖先目录非空，每层无条件修复整树 ACL 并重试子树，失败与遍历次数随深度倍增；权限工具无超时。
+- **防护**：叶子与目录出口仅在 AccessDenied 时修复当前节点或未受保护的父节点，工具等待有界；取消后不再启动剩余目标称重。决策与测试绑定见 Note。
+- **禁止回退**：不能以 error 145/32 触发权限恢复，不能恢复递归 `/r`、`/t`、继承授权或祖先重试整棵失败子树，不能以脱离后台线程冒充中止 ACL 修改。
+
+## P44 未登记应用清理后的列表完成判定不能只认残留来源标签
+
+Note: `2026-10-07-discovered-cleanup-list-completion.md`
+
+- **症状**：Magpie 文件清理记录没有失败，程序文件与快捷方式确实消失，软件列表仍显示旧条目。
+- **根因**：旧列表完成判定只认 `InstallDir` / `UninstallEntry` 标签；范围去重或重新扫描缺失文件后，标签不能代表原先发现的程序是否仍在。现场未持久化原始勾选，不能据此断言具体是哪条标签丢失。
+- **防护**：未登记应用在清理后后台复核原发现证据的非空 `program_paths`，逐个只认 `NotFound`；任何仍在或未知都保留条目。所选失败项仍保留重试入口。
+- **测试**：`discovered_cleanup_verifies_program_paths_without_source_labels`；红绿证据与决策见 Note。
+- **禁止回退**：不能把清理返回成功直接当成应用消失，不能凭残留来源标签替代程序路径核验，不能扩大到 exe 的父目录树删除，不能放宽身份或路径保护。
+
+## P45 venv 整树删除必须逐节点保护并绑定扫描期目录身份
+
+Note: `2026-10-07-pip-package-and-venv-removal.md`
+
+- **症状**：父目录不受保护，但白名单子目录被删；根 Junction 的目标文件被删；同名 cfg 的重建环境被旧扫描结果删掉。
+- **根因**：局部递归只检查根保护，read_dir 穿透根重定向，cfg 存在不能证明对象没被替换。
+- **防护**：复用 cleaner::delete_tree 的逐节点 safety，发现与删除前复核稳定身份并拒绝根/祖先 symlink 或 reparse。身份未知拒绝，原地内容变动不算替换。
+- **测试**：review_venv_preserves_protected_children、review_venv_replaced_after_scan_is_refused、review_venv_junction_root_and_ancestor_are_refused，红绿证据见 Note。
+- **禁止回退**：不能写第二条不查 safety 的递归删除，不能用 cfg/mtime 代替稳定对象身份，不能先 canonicalize 待删链接再授权目标树。
+
+## P46 命令超时必须终止进程树，输出管道也受同一截止时间约束
+
+Note: `2026-10-07-command-process-tree-deadline.md`
+
+- **症状**：cmd 被杀后真实工具仍继续卸载；读取线程 join 等后代管道，超时实际无限等待。
+- **根因**：仅 kill 直接子进程，父退出后无期限 read_to_end。
+- **防护**：Windows 挂起启动、入 Job 后恢复，结束关闭 Job；Unix 新进程组。输出非阻塞轮询，父退出与两个 EOF 均受截止时间限制。
+- **测试**：review_timeout_kills_shim_descendants_and_closes_pipes、review_exited_parent_does_not_bypass_the_pipe_deadline，含实际后代启动与延迟写入回执。
+- **禁止回退**：不能退回只杀 cmd、普通启动后再挂 Job、无限 join 或脱离修改线程冒充取消。

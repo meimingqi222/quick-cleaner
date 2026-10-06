@@ -933,6 +933,14 @@ pub fn app_gone_after_residual_clean(
     gone(ResidualSource::UninstallEntry) || gone(ResidualSource::InstallDir)
 }
 
+/// Completion uses frozen ownership paths; residual deduplication can discard source labels.
+pub fn discovered_program_files_absent(discovery: &AppDiscovery) -> bool {
+    !discovery.program_paths.is_empty()
+        && discovery.program_paths.iter().all(|path| {
+            matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        })
+}
+
 /// 「彻底清除所选」之后的收尾判定。
 ///
 /// `retry_items` 记录勾选了却仍留在磁盘上的项——**不再用于自动重开对话框**
@@ -1842,6 +1850,62 @@ mod command_tests {
             ResidualSource::InstallDir,
         )];
         assert!(app_gone_after_residual_clean(&original, &[]));
+    }
+
+    #[test]
+    fn discovered_cleanup_verifies_program_paths_without_source_labels() {
+        let root =
+            std::env::temp_dir().join(format!("qc_discovered_completion_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("portable.exe");
+        let companion = root.join("companion.dll");
+        std::fs::write(&executable, b"program").unwrap();
+        std::fs::write(&companion, b"companion").unwrap();
+        let mut residuals = vec![
+            ResidualItem::certain(
+                ResidualKind::File(executable.clone(), 7),
+                ResidualSource::InstallDir,
+            ),
+            ResidualItem::possible(
+                ResidualKind::Directory(root.clone(), 16),
+                ResidualSource::AppDataDir,
+            ),
+        ];
+        dedupe_residuals(&mut residuals);
+        assert_eq!(residuals.len(), 1);
+        assert_eq!(residuals[0].source, ResidualSource::AppDataDir);
+        assert!(!app_gone_after_residual_clean(&residuals, &[]));
+        let mut discovery = AppDiscovery {
+            executable: executable.clone(),
+            program_paths: vec![executable.clone(), companion.clone()],
+            shortcuts: Vec::new(),
+            uninstaller: None,
+            rule: None,
+            plan: None,
+        };
+        assert!(!discovered_program_files_absent(&discovery));
+        std::fs::remove_file(&executable).unwrap();
+        assert!(
+            !discovered_program_files_absent(&discovery),
+            "remaining program artifacts must keep the row"
+        );
+        std::fs::remove_file(&companion).unwrap();
+        // Scope collapse can discard the InstallDir label; filesystem evidence survives it.
+        assert!(
+            discovered_program_files_absent(&discovery),
+            "removed portable app must leave the list even without InstallDir labels"
+        );
+        discovery.program_paths.clear();
+        assert!(
+            !discovered_program_files_absent(&discovery),
+            "an empty ownership list proves nothing"
+        );
+        discovery.program_paths.push(root.clone());
+        assert!(
+            !discovered_program_files_absent(&discovery),
+            "an existing directory is still an artifact"
+        );
+        std::fs::remove_dir(&root).unwrap();
     }
 
     fn sample_residual_items() -> Vec<ResidualItem> {

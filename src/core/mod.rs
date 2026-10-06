@@ -7,6 +7,7 @@ pub mod brew;
 pub mod categories;
 pub mod cleaner;
 pub mod declutter;
+pub mod dev_env;
 pub mod devscan;
 pub mod disk;
 mod disk_selection;

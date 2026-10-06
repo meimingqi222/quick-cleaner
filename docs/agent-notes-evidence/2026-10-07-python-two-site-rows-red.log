@@ -1,0 +1,9 @@
+=== 撤掉「用户级包目录单独成行」之后 ===
+本机事实：pip list 报 145 个包，其中 144 个在用户级 site-packages、1 个在安装目录
+
+test core::dev_env::python::tests::one_row_per_package_directory_so_the_count_matches_pip_list ... FAILED
+thread 'core::dev_env::python::tests::one_row_per_package_directory_so_the_count_matches_pip_list' (47052) panicked at src\core\dev_env\python.rs:512:9:
+assertion `left == right` failed: 两个包目录应当各成一行：[DevAssetItem { id: "python:c:\\python313\\python.exe", kind: PythonInterpreter { name: "Python 3.13.14", version: Some("3.13.14"), scope: Install, package_count: None, site_packages: None }, path: "C:/Python313/python.exe", size: AssetStorageSize { logical_bytes: 0, exclusive_reclaimable_bytes: 0, file_count: 0 }, last_change: None, in_use: Clear, is_active_env: false, source: Layout }]
+  left: 1
+ right: 2
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 677 filtered out; finished in 0.00s

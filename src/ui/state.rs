@@ -394,8 +394,292 @@ impl TextInputState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AppsTab {
+    #[default]
+    Desktop,
+    DevEnvironments,
+}
+
+/// 开发环境页面的生态分类过滤 Tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DevEnvFilterTab {
+    #[default]
+    All,
+    PythonConda,
+    Node,
+    Tools,
+}
+
+/// 开发环境与包管理状态。
+#[derive(Default)]
+pub struct DevEnvState {
+    pub scanned: bool,
+    pub scanning: bool,
+    pub task: Option<Task<()>>,
+    /// 正在移除的条目名。有值时移除入口整体禁用——同一个生态的两条命令
+    /// 同时跑会互相干扰包管理器的锁。
+    pub removing: Option<String>,
+    /// 移除任务与扫描任务分开持有：重扫不该把进行中的移除连带取消掉。
+    pub removal_task: Option<Task<()>>,
+    pub conda_envs: Vec<crate::core::dev_env::DevAssetItem>,
+    /// Python 解释器与虚拟环境。解释器的用户级包目录行与虚拟环境行可以
+    /// 展开，看里面的 pip 包。
+    pub python_envs: Vec<crate::core::dev_env::DevAssetItem>,
+    pub node_packages: Vec<crate::core::dev_env::DevAssetItem>,
+    pub python_tools: Vec<crate::core::dev_env::DevAssetItem>,
+    pub total_logical_size: u64,
+    pub total_exclusive_size: u64,
+    /// 当前选中的生态分类 Tab
+    pub filter_tab: DevEnvFilterTab,
+    /// 勾选准备批量移除的条目 id（包括顶级资产项与展开后的各环境 pip 包）。
+    pub selected: HashSet<String>,
+    /// 展开显示 pip 包列表的行（site 行 id）。
+    pub expanded_sites: HashSet<String>,
+    /// 展开行的包列表，键 = site 行 id。包列表是展开时从磁盘枚举的，
+    /// 重扫后全部过期，随扫描结果一起清空。
+    pub site_packages: std::collections::HashMap<String, Vec<crate::core::dev_env::DevAssetItem>>,
+    /// 正在读取包列表的行 id。有值时展开入口整体禁用，避免两个枚举任务
+    /// 往同一个键里写。
+    pub loading_site: Option<String>,
+    pub packages_task: Option<Task<()>>,
+    /// 当前在详情面板（右侧）展示的环境/资产 ID。
+    pub active_env_id: Option<String>,
+}
+
+impl DevEnvState {
+    /// 获取当前在右侧详情面板中激活的环境或资产。
+    pub fn active_env(&self) -> Option<&crate::core::dev_env::DevAssetItem> {
+        let active_id = self.active_env_id.as_deref()?;
+        for group in [
+            &self.conda_envs,
+            &self.python_envs,
+            &self.node_packages,
+            &self.python_tools,
+        ] {
+            if let Some(item) = group.iter().find(|i| i.id == active_id) {
+                return Some(item);
+            }
+        }
+        None
+    }
+    /// 把一个已确认移除的条目就地摘掉，并扣掉它记录过的体积。
+    ///
+    /// 不重扫：重扫一遍要再走几万个文件，而结论不会变。体积用扫描期记下的
+    /// 值相减，所以 conda 那种与环境共享硬链接的场景下剩余数字会略微保守，
+    /// 下一次「重新检测」即可校正。
+    pub fn drop_asset(&mut self, id: &str) {
+        let mut dropped: Option<(u64, u64)> = None;
+        for group in [
+            &mut self.conda_envs,
+            &mut self.python_envs,
+            &mut self.node_packages,
+            &mut self.python_tools,
+        ] {
+            if let Some(index) = group.iter().position(|item| item.id == id) {
+                let item = group.remove(index);
+                dropped = Some((
+                    item.size.logical_bytes,
+                    item.size.exclusive_reclaimable_bytes,
+                ));
+                break;
+            }
+        }
+        if let Some((logical, exclusive)) = dropped {
+            self.total_logical_size = self.total_logical_size.saturating_sub(logical);
+            self.total_exclusive_size = self.total_exclusive_size.saturating_sub(exclusive);
+        }
+        // 被摘掉的若是一个 site 行，它的展开状态与包列表一并失效。
+        self.expanded_sites.remove(id);
+        self.site_packages.remove(id);
+        self.selected.remove(id);
+        if self.active_env_id.as_deref() == Some(id) {
+            self.active_env_id = None;
+            self.ensure_active_env();
+        }
+    }
+
+    /// 保证 active_env_id 指向一个存在的有效资产。
+    pub fn ensure_active_env(&mut self) {
+        if self.active_env().is_none() {
+            self.active_env_id = self
+                .python_envs
+                .first()
+                .or_else(|| self.conda_envs.first())
+                .or_else(|| self.node_packages.first())
+                .or_else(|| self.python_tools.first())
+                .map(|item| item.id.clone());
+        }
+    }
+
+    /// 就地摘掉一个已确认卸载的 pip 包：从父行的列表里删掉，父行的包计数
+    /// 减一。不重扫：dist-info 已确认消失，结论是确定的；父行的体积暂不
+    /// 变（包的体积扫描期没有单独测算），下一次「重新检测」刷新。
+    pub fn drop_pip_package(&mut self, id: &str) {
+        let Some(site_id) = self
+            .site_packages
+            .iter()
+            .find(|(_, packages)| packages.iter().any(|item| item.id == id))
+            .map(|(site_id, _)| site_id.clone())
+        else {
+            return;
+        };
+        if let Some(packages) = self.site_packages.get_mut(&site_id) {
+            packages.retain(|item| item.id != id);
+        }
+        self.selected.remove(id);
+        if let Some(row) = self.python_envs.iter_mut().find(|row| row.id == site_id) {
+            let count = match &mut row.kind {
+                crate::core::dev_env::DevAssetKind::PythonInterpreter { package_count, .. }
+                | crate::core::dev_env::DevAssetKind::VirtualEnv { package_count, .. } => {
+                    package_count.as_mut()
+                }
+                _ => None,
+            };
+            if let Some(count) = count {
+                *count = count.saturating_sub(1);
+            }
+        }
+    }
+
+    /// 当前勾选中的条目总数与预计可释放独占体积总和。
+    pub fn selection_summary(&self) -> (usize, u64) {
+        let mut count = 0;
+        let mut size = 0u64;
+        let mut counted = HashSet::new();
+
+        for group in [
+            &self.conda_envs,
+            &self.python_envs,
+            &self.node_packages,
+            &self.python_tools,
+        ] {
+            for item in group {
+                if self.selected.contains(&item.id) && counted.insert(item.id.clone()) {
+                    count += 1;
+                    size = size.saturating_add(item.size.exclusive_reclaimable_bytes);
+                }
+            }
+        }
+
+        for packages in self.site_packages.values() {
+            for item in packages {
+                if self.selected.contains(&item.id) && counted.insert(item.id.clone()) {
+                    count += 1;
+                    size = size.saturating_add(item.size.exclusive_reclaimable_bytes);
+                }
+            }
+        }
+
+        (count, size)
+    }
+
+    pub fn is_selected(&self, id: &str) -> bool {
+        self.selected.contains(id)
+    }
+
+    pub fn toggle_select(&mut self, id: &str) {
+        if self.selected.contains(id) {
+            self.selected.remove(id);
+        } else {
+            self.selected.insert(id.to_string());
+        }
+    }
+
+    /// 全选所有当前已扫描到的可移除项。
+    pub fn select_all(&mut self) {
+        for group in [
+            &self.conda_envs,
+            &self.python_envs,
+            &self.node_packages,
+            &self.python_tools,
+        ] {
+            for item in group {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    self.selected.insert(item.id.clone());
+                }
+            }
+        }
+        for packages in self.site_packages.values() {
+            for item in packages {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    self.selected.insert(item.id.clone());
+                }
+            }
+        }
+    }
+
+    /// 反选所有可移除项。
+    pub fn invert_selection(&mut self) {
+        let mut all_removable = Vec::new();
+        for group in [
+            &self.conda_envs,
+            &self.python_envs,
+            &self.node_packages,
+            &self.python_tools,
+        ] {
+            for item in group {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    all_removable.push(item.id.clone());
+                }
+            }
+        }
+        for packages in self.site_packages.values() {
+            for item in packages {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    all_removable.push(item.id.clone());
+                }
+            }
+        }
+        for id in all_removable {
+            if self.selected.contains(&id) {
+                self.selected.remove(&id);
+            } else {
+                self.selected.insert(id);
+            }
+        }
+    }
+
+    /// 清空所有勾选。
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+    }
+
+    /// 针对特定环境下的所有包进行全选或全不选。
+    pub fn select_site_packages(&mut self, site_id: &str, select: bool) {
+        if let Some(packages) = self.site_packages.get(site_id) {
+            for item in packages {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    if select {
+                        self.selected.insert(item.id.clone());
+                    } else {
+                        self.selected.remove(&item.id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 针对特定环境下的所有包进行反选。
+    pub fn invert_site_packages(&mut self, site_id: &str) {
+        if let Some(packages) = self.site_packages.get(site_id) {
+            for item in packages {
+                if crate::core::dev_env::remove::can_remove(item) {
+                    if self.selected.contains(&item.id) {
+                        self.selected.remove(&item.id);
+                    } else {
+                        self.selected.insert(item.id.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 软件管理页的状态（Geek Uninstaller 风格）。
 pub struct AppsState {
+    pub tab: AppsTab,
+    pub dev: DevEnvState,
     pub list: Vec<InstalledApp>,
     pub scanned: bool,
     pub scanning: bool,
@@ -737,6 +1021,225 @@ pub struct AppsContextMenu {
 mod tests {
     use super::*;
     use crate::core::i18n::bilingual;
+
+    /// 移除成功后不重扫：就地摘掉那一行并扣掉它记录过的体积。这两件事都必须
+    /// 真的发生——只摘行不扣体积会让汇总数字永远偏大，只扣体积不摘行会让用户
+    /// 以为没删掉。
+    #[test]
+    fn dropping_a_removed_asset_removes_the_row_and_subtracts_its_size() {
+        fn asset(id: &str, logical: u64, exclusive: u64) -> crate::core::dev_env::DevAssetItem {
+            crate::core::dev_env::DevAssetItem {
+                id: id.to_string(),
+                kind: crate::core::dev_env::DevAssetKind::NodeGlobalPackage {
+                    manager: "npm".into(),
+                    name: id.to_string(),
+                    version: "1.0.0".into(),
+                    bin_shims: Vec::new(),
+                },
+                path: std::path::PathBuf::from(format!("C:/npm/{id}")),
+                size: crate::core::dev_env::AssetStorageSize {
+                    logical_bytes: logical,
+                    exclusive_reclaimable_bytes: exclusive,
+                    file_count: 1,
+                },
+                last_change: None,
+                in_use: crate::core::inuse::SpotCheck::Clear,
+                is_active_env: false,
+                source: crate::core::dev_env::AssetSource::Tool,
+            }
+        }
+
+        let mut dev = DevEnvState {
+            node_packages: vec![asset("gone", 300, 200), asset("stays", 50, 40)],
+            total_logical_size: 350,
+            total_exclusive_size: 240,
+            ..DevEnvState::default()
+        };
+
+        dev.drop_asset("gone");
+
+        assert_eq!(dev.node_packages.len(), 1);
+        assert_eq!(dev.node_packages[0].id, "stays");
+        assert_eq!(dev.total_logical_size, 50, "被移除那条的逻辑体积要扣掉");
+        assert_eq!(dev.total_exclusive_size, 40);
+
+        // 找不到的 id 不该动任何数字。
+        dev.drop_asset("never-existed");
+        assert_eq!(dev.total_logical_size, 50);
+        assert_eq!(dev.total_exclusive_size, 40);
+    }
+
+    #[test]
+    fn dropping_a_pip_package_removes_it_and_deducts_parent_package_count() {
+        let parent = crate::core::dev_env::DevAssetItem {
+            id: "py-env-1".to_string(),
+            kind: crate::core::dev_env::DevAssetKind::VirtualEnv {
+                name: "py-env-1".into(),
+                version: Some("3.11".into()),
+                base_python: None,
+                package_count: Some(2),
+                manager: crate::core::dev_env::VenvManager::Poetry,
+                identity: None,
+            },
+            path: std::path::PathBuf::from("C:/py"),
+            size: crate::core::dev_env::AssetStorageSize {
+                logical_bytes: 500,
+                exclusive_reclaimable_bytes: 400,
+                file_count: 50,
+            },
+            last_change: None,
+            in_use: crate::core::inuse::SpotCheck::Clear,
+            is_active_env: false,
+            source: crate::core::dev_env::AssetSource::Tool,
+        };
+
+        let pkg1 = crate::core::dev_env::DevAssetItem {
+            id: "pkg-1".to_string(),
+            kind: crate::core::dev_env::DevAssetKind::PipPackage {
+                python: std::path::PathBuf::from("C:/py/Scripts/python.exe"),
+                name: "requests".into(),
+                version: Some("2.31.0".into()),
+            },
+            path: std::path::PathBuf::from("C:/py/Lib/site-packages/requests"),
+            size: crate::core::dev_env::AssetStorageSize {
+                logical_bytes: 100,
+                exclusive_reclaimable_bytes: 100,
+                file_count: 10,
+            },
+            last_change: None,
+            in_use: crate::core::inuse::SpotCheck::Clear,
+            is_active_env: false,
+            source: crate::core::dev_env::AssetSource::Tool,
+        };
+
+        let pkg2 = crate::core::dev_env::DevAssetItem {
+            id: "pkg-2".to_string(),
+            kind: crate::core::dev_env::DevAssetKind::PipPackage {
+                python: std::path::PathBuf::from("C:/py/Scripts/python.exe"),
+                name: "urllib3".into(),
+                version: Some("2.0.0".into()),
+            },
+            path: std::path::PathBuf::from("C:/py/Lib/site-packages/urllib3"),
+            size: crate::core::dev_env::AssetStorageSize {
+                logical_bytes: 80,
+                exclusive_reclaimable_bytes: 80,
+                file_count: 8,
+            },
+            last_change: None,
+            in_use: crate::core::inuse::SpotCheck::Clear,
+            is_active_env: false,
+            source: crate::core::dev_env::AssetSource::Tool,
+        };
+
+        let mut site_packages = std::collections::HashMap::new();
+        site_packages.insert("py-env-1".to_string(), vec![pkg1, pkg2]);
+
+        let mut dev = DevEnvState {
+            python_envs: vec![parent],
+            site_packages,
+            total_logical_size: 500,
+            total_exclusive_size: 400,
+            selected: ["pkg-1".to_string()].into_iter().collect(),
+            ..DevEnvState::default()
+        };
+
+        dev.drop_pip_package("pkg-1");
+
+        assert_eq!(dev.site_packages["py-env-1"].len(), 1);
+        assert_eq!(dev.site_packages["py-env-1"][0].id, "pkg-2");
+        match &dev.python_envs[0].kind {
+            crate::core::dev_env::DevAssetKind::VirtualEnv { package_count, .. } => {
+                assert_eq!(*package_count, Some(1), "父行包计数应该减 1");
+            }
+            _ => panic!("类型不匹配"),
+        }
+        assert!(
+            !dev.is_selected("pkg-1"),
+            "被移除的包必须同时从勾选集合中剔除"
+        );
+    }
+
+    #[test]
+    fn dev_env_selection_helpers_support_batch_operations() {
+        let env_path = crate::core::testing::fixture("qc_dev_selection_venv")
+            .canonicalize()
+            .unwrap();
+        let env_item = crate::core::dev_env::DevAssetItem {
+            id: "venv-a".to_string(),
+            kind: crate::core::dev_env::DevAssetKind::VirtualEnv {
+                name: "venv-a".into(),
+                version: Some("3.12".into()),
+                base_python: None,
+                package_count: Some(1),
+                manager: crate::core::dev_env::VenvManager::Poetry,
+                identity: Some(crate::core::dev_env::VenvIdentity::capture(&env_path).unwrap()),
+            },
+            path: env_path.clone(),
+            size: crate::core::dev_env::AssetStorageSize {
+                logical_bytes: 200,
+                exclusive_reclaimable_bytes: 200,
+                file_count: 20,
+            },
+            last_change: None,
+            in_use: crate::core::inuse::SpotCheck::Clear,
+            is_active_env: false,
+            source: crate::core::dev_env::AssetSource::Tool,
+        };
+
+        let pkg_item = crate::core::dev_env::DevAssetItem {
+            id: "pkg-a".to_string(),
+            kind: crate::core::dev_env::DevAssetKind::PipPackage {
+                python: std::path::PathBuf::from("C:/venv-a/Scripts/python.exe"),
+                name: "click".into(),
+                version: Some("8.0".into()),
+            },
+            path: std::path::PathBuf::from("C:/venv-a/site-packages/click"),
+            size: crate::core::dev_env::AssetStorageSize {
+                logical_bytes: 50,
+                exclusive_reclaimable_bytes: 50,
+                file_count: 5,
+            },
+            last_change: None,
+            in_use: crate::core::inuse::SpotCheck::Clear,
+            is_active_env: false,
+            source: crate::core::dev_env::AssetSource::Tool,
+        };
+
+        let mut site_packages = std::collections::HashMap::new();
+        site_packages.insert("venv-a".to_string(), vec![pkg_item]);
+
+        let mut dev = DevEnvState {
+            python_envs: vec![env_item],
+            site_packages,
+            ..DevEnvState::default()
+        };
+
+        // 全选
+        dev.select_all();
+        let (count, bytes) = dev.selection_summary();
+        assert_eq!(count, 2);
+        assert_eq!(bytes, 250);
+
+        // 反选
+        dev.invert_selection();
+        let (count, _) = dev.selection_summary();
+        assert_eq!(count, 0);
+
+        // 单环境全选
+        dev.select_site_packages("venv-a", true);
+        assert!(dev.is_selected("pkg-a"));
+        assert!(!dev.is_selected("venv-a"));
+
+        // 单环境反选
+        dev.invert_site_packages("venv-a");
+        assert!(!dev.is_selected("pkg-a"));
+
+        // 清空
+        dev.select_all();
+        dev.clear_selection();
+        assert_eq!(dev.selected.len(), 0);
+        std::fs::remove_dir_all(env_path).unwrap();
+    }
 
     fn item(path: &str, cat: CategoryId, size: u64, files: u64) -> ScanItem {
         ScanItem {

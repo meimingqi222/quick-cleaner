@@ -3,6 +3,8 @@
 //! 导出的函数集合必须与 `platform::mod` 的门面契约完全一致，
 //! 由 `platform_contract!` 在编译期校验。
 
+pub mod command;
+pub use command::{resolve_tool_program, tool_command};
 pub mod app_icons;
 pub mod apps;
 pub mod cache;

@@ -21,6 +21,11 @@ pub enum ConfirmKind {
     /// 冗余整理（相似照片/重复文件/大文件/下载）把选中的条目移入废纸篓。
     CleanDeclutter(crate::ui::views::declutter::DeclutterTab),
     UninstallApp(Box<InstalledApp>),
+    /// 移除一个开发环境资产（conda 环境 / 全局包 / CLI 工具）。走生态自己的
+    /// 卸载命令，不是文件删除。
+    RemoveDevAsset(Box<crate::core::dev_env::DevAssetItem>),
+    /// 批量移除一组开发环境资产。
+    BatchRemoveDevAssets(Vec<crate::core::dev_env::DevAssetItem>),
     /// 结束一个进程（状态监控页）。`pid` + 进程名。
     KillProcess {
         pid: u32,

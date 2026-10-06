@@ -5,21 +5,13 @@
 //! 会让调用线程无限期等下去，而这些调用都在「用户点了按钮正在等结果」的
 //! 路径上。
 //!
-//! 两个容易写错、这里已经处理掉的细节：
-//!
-//! 1. **stdout/stderr 必须各起一个线程读到底**。如果只在父线程里等
-//!    `try_wait()`、最后才读管道，子进程写满管道缓冲区（macOS 上通常
-//!    64KB）之后会阻塞在 write 上永远不退出，而父线程在等它退出——两边
-//!    互相等，超时逻辑本身也救不回来（`kill` 之前就已经卡在 join 上了）。
-//! 2. **超时后要 `kill` 再 `wait`**。只 `kill` 不 `wait` 会留下僵尸进程。
-//!
-//! 这份实现原本长在 `core::inuse` 里、写死了 `lsof` 的路径。抽出来是因为
-//! 残留清理的 `mdfind` 反查需要同一套逻辑——本仓库对「同一份判断存两份」
-//! 有过教训（见 `core::safety` 头注释），进程超时这种带死锁陷阱的代码更
-//! 不该有第二份拷贝。
+//! 命令必须在进程树约束建立后才运行，超时终止整棵树。输出管道以非阻塞
+//! 方式轮询，父进程退出但后代仍持有管道时，仍受同一截止时间约束。
+
+#[path = "process_tree.rs"]
+mod process_tree;
 
 use std::ffi::OsStr;
-use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -61,52 +53,83 @@ pub fn run_with_timeout<S: AsRef<OsStr>>(
         // Background owner commands must not allocate a console when launched by the GUI.
         command.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
     }
-    let mut child = command.spawn().ok()?;
-    let mut out_pipe = child.stdout.take()?;
-    let mut err_pipe = child.stderr.take()?;
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = out_pipe.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err_pipe.read_to_end(&mut buf);
-        buf
-    });
+    run_command(command, timeout)
+}
 
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+/// 跑一条**用户工具链命令**（npm / pnpm / pipx / conda 这类），最多等 `timeout`。
+///
+/// 与 [`run_with_timeout`] 只差一件事：程序名先经
+/// [`platform::tool_command`](crate::platform::tool_command) 解析。Windows 上
+/// 这类命令常常只有 `.cmd` 垫片而没有 `.exe`，`CreateProcess` 起不了批处理——
+/// 直接 `Command::new("npm")` 会失败，于是 npm / pnpm / pipx 三条通道整体
+/// 失效（清单查不到、卸载也跑不起来），而失败表现是「什么都查不到」而不是
+/// 报错。
+///
+/// 返回 `None` 的语义与 `run_with_timeout` 一致：命令不存在、超时被杀、
+/// `try_wait` 报错，都按「测不出」处理。工具链这边额外多一种：解析出的垫片
+/// 需要经 `cmd.exe` 而参数里出现 cmd 元字符时，同样返回 `None` 拒绝执行。
+pub fn run_tool_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<ProcRun> {
+    let mut command = crate::platform::tool_command(program, args)?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
+    }
+    run_command(command, timeout)
+}
+
+/// 进程退出和输出 EOF 都必须在同一截止时间内完成。
+fn run_command(mut command: Command, timeout: Duration) -> Option<ProcRun> {
+    let deadline = Instant::now().checked_add(timeout)?;
+    let (mut child, tree) = process_tree::spawn(&mut command)?;
+    let result = (|| {
+        let mut out = child.stdout.take()?;
+        let mut err = child.stderr.take()?;
+        process_tree::prepare_pipe(&out).ok()?;
+        process_tree::prepare_pipe(&err).ok()?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut status = None;
+        let mut out_eof = false;
+        let mut err_eof = false;
+        loop {
+            if Instant::now() >= deadline {
+                return None;
             }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+            let mut bytes = 0;
+            if !out_eof {
+                let (eof, count) = process_tree::drain_pipe(&mut out, &mut stdout).ok()?;
+                out_eof = eof;
+                bytes += count;
             }
-            Err(_) => {
-                // try_wait 失败同样意味着已经失去对子进程状态的可靠判断。
-                // 不能直接去 join 管道读取线程：子进程若仍活着，管道不会
-                // 关闭，join 会把这个“带超时”函数永久卡住。
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+            if !err_eof {
+                let (eof, count) = process_tree::drain_pipe(&mut err, &mut stderr).ok()?;
+                err_eof = eof;
+                bytes += count;
+            }
+            if status.is_none() {
+                status = child.try_wait().ok()?;
+            }
+            if let Some(status) = status {
+                if out_eof && err_eof {
+                    return Some(ProcRun {
+                        stdout,
+                        stderr,
+                        exit_code: status.code(),
+                        ok: status.success(),
+                    });
+                }
+            }
+            if bytes == 0 {
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
-    };
-
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
-    let status = status?;
-    Some(ProcRun {
-        stdout,
-        stderr,
-        exit_code: status.code(),
-        ok: status.success(),
-    })
+    })();
+    drop(tree);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 /// 跑一个闭包，最多等 `timeout`。超时返回 `None`，调用方按失败处理。
@@ -144,6 +167,68 @@ pub fn call_with_timeout<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn review_timeout_kills_shim_descendants_and_closes_pipes() {
+        let dir = crate::core::testing::fixture("qc_review_process_timeout");
+        let shim = dir.join("probe.cmd");
+        let marker = dir.join("finished.txt");
+        let ready = dir.join("started.txt");
+        std::fs::write(&shim, format!("@echo off\r\npowershell.exe -NoProfile -NonInteractive -Command \"[IO.File]::WriteAllText('{}', 'started'); Start-Sleep -Seconds 4; [IO.File]::WriteAllText('{}', 'still running')\"\r\n", ready.display(), marker.display())).unwrap();
+        let start = Instant::now();
+        let run = run_tool_with_timeout(&shim.to_string_lossy(), &[], Duration::from_secs(2));
+        let elapsed = start.elapsed();
+        std::thread::sleep(Duration::from_secs(4));
+        let mutated = marker.exists();
+        let started = ready.exists();
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(run.is_none());
+        assert!(started, "test must actually launch the descendant");
+        assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
+        assert!(
+            !mutated,
+            "descendant must stop modifying files after timeout"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn review_exited_parent_does_not_bypass_the_pipe_deadline() {
+        let dir = crate::core::testing::fixture("qc_review_exited_parent");
+        let shim = dir.join("probe.cmd");
+        let script = dir.join("child.ps1");
+        let ready = dir.join("started.txt");
+        let marker = dir.join("finished.txt");
+        std::fs::write(&script, format!("[IO.File]::WriteAllText('{}', 'started'); Start-Sleep -Seconds 4; [IO.File]::WriteAllText('{}', 'still running')", ready.display(), marker.display())).unwrap();
+        std::fs::write(&shim, format!("@echo off\r\nstart /b \"\" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"\r\nexit /b 0\r\n", script.display())).unwrap();
+        let start = Instant::now();
+        let run = run_tool_with_timeout(&shim.to_string_lossy(), &[], Duration::from_secs(2));
+        let elapsed = start.elapsed();
+        std::thread::sleep(Duration::from_secs(4));
+        let started = ready.exists();
+        let mutated = marker.exists();
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(started, "test must actually launch the descendant");
+        assert!(run.is_none(), "EOF is required as well as parent exit");
+        assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
+        assert!(!mutated);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn review_large_stdout_and_stderr_are_drained_without_deadlock() {
+        let script = "$s = 'x' * 100; for ($i=0; $i -lt 5000; $i++) { [Console]::Out.WriteLine($s); [Console]::Error.WriteLine($s) }; exit 7";
+        let run = run_with_timeout(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            Duration::from_secs(30),
+        )
+        .expect("both pipes must be drained");
+        assert_eq!(run.exit_code, Some(7));
+        assert_eq!(run.stdout.len(), 510_000);
+        assert_eq!(run.stderr.len(), 510_000);
+    }
 
     /// 探测起不来时的定位信息。共享 runner 在重负载下见过 `CreateProcess`
     /// 返回「找不到指定的文件」（同一镜像的相邻一轮同用例是绿的）；不重试、

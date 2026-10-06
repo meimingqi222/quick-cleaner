@@ -135,7 +135,8 @@ pub fn quote_win_arg(arg: &str) -> String {
 /// 那是句柄锁，改 ACL 也解不开。
 ///
 /// 仅在已提权时有意义；未提权直接返回 false，不空跑子进程。
-/// `/t` 递归、`/c` 遇错继续：目标子树里混着系统文件时不要整批中断。
+/// 只修复当前节点：递归和子项保护由 core 负责，不能从失败叶子的父目录
+/// 再递归改写整棵树的 ACL。每个命令最多等待两秒。
 ///
 /// **为什么不能只 `/grant`**：Windows AccessCheck 把「命中的 Deny」当作
 /// 权威，后面的 Allow 不会把它盖回去。只给 Administrators 加 FullControl
@@ -152,21 +153,18 @@ pub fn force_delete_access(path: &std::path::Path) -> bool {
     use std::process::{Command, Stdio};
 
     let display = path.display().to_string();
-    let quiet = |cmd: &mut Command| {
+    let run = |cmd: &mut Command| {
         cmd.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        cmd.spawn()
+            .is_ok_and(|mut child| wait_acl_command(&mut child, std::time::Duration::from_secs(2)))
     };
 
     // takeown 先做：Deny ACE 的宿主可能不是我们，没有所有权就改不动 DACL。
     // `/a` 落到 Administrators 组而不是当前用户，和后面 icacls 的授权主体一致。
-    let takeown = Command::new("takeown")
-        .args(["/f", &display, "/a", "/r", "/d", "y"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
-        .status();
-    let _ = takeown;
+    let _ = run(Command::new("takeown").args(["/f", &display, "/a"]));
 
     // 摘 Deny：当前用户 SID + Everyone。用 SID 而不是名字——中文系统上
     // 组名本地化后按名字匹配会静默失败。一个 trustee 一条 /remove:d。
@@ -177,26 +175,34 @@ pub fn force_delete_access(path: &std::path::Path) -> bool {
         remove_deny.args(["/remove:d", &format!("*{sid}")]);
     }
     remove_deny.args(["/remove:d", "*S-1-1-0"]);
-    remove_deny.args(["/t", "/c", "/q"]);
-    quiet(&mut remove_deny);
-    let removed = matches!(remove_deny.status(), Ok(s) if s.success());
+    remove_deny.args(["/c", "/q", "/l"]);
+    let removed = run(&mut remove_deny);
 
     // Deny 摘掉后再补 Administrators 完全控制，兜住「摘了 Deny 但没 Allow」
     // 的半截状态。SID 而不是名字，理由同上。
     let mut icacls = Command::new("icacls");
-    icacls.args([
-        &display,
-        "/grant",
-        "*S-1-5-32-544:(OI)(CI)F",
-        "/t",
-        "/c",
-        "/q",
-    ]);
-    quiet(&mut icacls);
-    let granted = matches!(icacls.status(), Ok(s) if s.success());
+    icacls.args([&display, "/grant", "*S-1-5-32-544:F", "/c", "/q", "/l"]);
+    let granted = run(&mut icacls);
     // 两步任一成功都值得重试删除：/remove:d 成功但 /grant 失败时，
     // 原来的 Allow（用户 FullControl）往往还在，照样删得掉。
     removed || granted
+}
+
+fn wait_acl_command(child: &mut std::process::Child, timeout: std::time::Duration) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winbase::WAIT_OBJECT_0;
+
+    let millis = timeout.as_millis().min(u32::MAX as u128 - 1) as u32;
+    // SAFETY: Child owns this process handle throughout the bounded wait.
+    let ready = unsafe { WaitForSingleObject(child.as_raw_handle() as HANDLE, millis) };
+    if ready == WAIT_OBJECT_0 {
+        return child.wait().is_ok_and(|status| status.success());
+    }
+    // 无管道、无子进程：杀掉权限工具再回收，不留下后台继续改 ACL 的任务。
+    let _ = child.kill();
+    let _ = child.wait();
+    false
 }
 
 /// 若当前未提权，通过 Windows UAC (runas) 自重启当前进程并退出当前无权限进程。
@@ -279,6 +285,33 @@ pub fn relaunch_as_admin_if_needed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stalled_acl_command_is_terminated_at_deadline() {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let mut child = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        assert!(!wait_acl_command(&mut child, Duration::from_millis(150)));
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(
+            child.try_wait().unwrap().is_some(),
+            "超时必须终止并回收子进程"
+        );
+    }
 
     #[test]
     fn test_quote_win_arg_simple() {

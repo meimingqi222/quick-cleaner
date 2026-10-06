@@ -1,0 +1,10 @@
+=== 撤掉「按生态清单取顶层」的过滤 ===
+test core::dev_env::discovery::tests::a_transitive_dependency_is_not_mistaken_for_an_installed_package ... FAILED
+assertion `left == right` failed: its-dep 是传递依赖，不该入表
+  left: ["its-dep", "tool"]
+ right: ["tool"]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 665 filtered out; finished in 0.01s
+
+=== 本机实探（同机对比）===
+live probe: 0 conda, 139 node, 3 tools
+-- 139 条里有 129 条是 3 个 bun 全局包的传递依赖 --

@@ -1,0 +1,4 @@
+[privacy] Personal paths and local inventory details redacted; failure assertions and test results retained.
+=== 恢复 PATHEXT 解析后（同一台机器、同一条命令）===
+live probe: 0 conda, 11 node, 3 tools
+[privacy] Installed-tool names and paths omitted; original aggregate counts retained.

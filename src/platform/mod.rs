@@ -55,6 +55,7 @@ macro_rules! platform_contract {
             use std::collections::HashMap;
             use std::path::Path;
             use std::path::PathBuf;
+            use std::process::Command;
             use std::sync::atomic::AtomicBool;
 
             let _: fn() -> bool = is_elevated;
@@ -75,6 +76,12 @@ macro_rules! platform_contract {
             let _: fn(&InstalledApp) -> crate::core::apps::ResidualOccupancy = detect_occupancy;
             let _: fn(&[ResidualItem], &CleanProgress) -> CleanReport = clean_residuals;
             let _: fn(Vec<ResidualItem>) -> Vec<ResidualItem> = verify_residuals;
+            // 工具链命令（npm / pnpm / conda 这类）在 Windows 上常只有 .cmd
+            // 垫片，必须经 cmd.exe 启动；两个平台都得提供这个入口。
+            let _: fn(&str, &[&str]) -> Option<Command> = tool_command;
+            // 只要「这个命令在不在」的调用方（例如 Python 解释器探测）用它，
+            // 不必为了问一句先构造一个 Command。
+            let _: fn(&str) -> Option<PathBuf> = resolve_tool_program;
             let _: fn(&Path) = reveal_in_explorer;
             // 「送回收站」以前不在契约里：两个平台各有实现，但 core 的
             // recycle_path 只 cfg 到了 Windows 那份，非 Windows 分支直接退化成
@@ -175,10 +182,10 @@ pub use windows::{
     force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
     open_url, process_unique_id, read_battery, read_gpus, read_thermal,
-    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
-    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
-    uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
-    user_temp_dir, verify_residuals,
+    relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
+    system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
+    user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -193,10 +200,10 @@ pub use macos::{
     force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
     open_url, process_unique_id, read_battery, read_gpus, read_thermal,
-    relaunch_as_admin_if_needed, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
-    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
-    uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
-    user_temp_dir, verify_residuals,
+    relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
+    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
+    system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
+    user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();

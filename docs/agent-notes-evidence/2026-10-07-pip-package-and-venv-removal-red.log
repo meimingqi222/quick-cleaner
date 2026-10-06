@@ -1,0 +1,18 @@
+[privacy] Personal paths and local inventory details redacted; failure assertions and test results retained.
+
+thread 'core::dev_env::remove::tests::a_venv_deletion_that_leaves_the_directory_is_a_failure' (53328) panicked at src\core\dev_env\remove.rs:1379:9:
+实际 Failed(RemovalFailure { code: "directory-removal-failed", detail: "<TEMP>\\qc_venv_delete_liar could not be fully deleted" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    core::dev_env::remove::tests::a_venv_deletion_that_leaves_the_directory_is_a_failure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+test core::dev_env::remove::tests::a_venv_deletion_that_leaves_the_directory_is_a_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+
+== restored, same focused test ==

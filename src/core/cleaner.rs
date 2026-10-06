@@ -324,27 +324,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
-    #[cfg(windows)]
-    let (files_failed, subs_failed, dir_removed) = {
-        let mut files_failed = files_failed;
-        let mut subs_failed = subs_failed;
-        let mut dir_removed = remove_dir_forcing(path);
-        // 目录级 Deny DeleteChild：子文件失败时错误码不一定是 PermissionDenied。
-        // 只在 Windows 走：macOS 没有这种 Deny，重试会把无写权限子目录误删掉。
-        if !dir_removed {
-            let _ = crate::platform::force_delete_access(path);
-            if let Some(left) = leftover_files(path) {
-                files_failed = delete_file_groups(left, p);
-            }
-            subs_failed = subdirs
-                .iter()
-                .filter(|d| d.exists() && delete_tree(d, p) == CleanResult::Failed)
-                .count();
-            dir_removed = remove_dir_forcing(path);
-        }
-        (files_failed, subs_failed, dir_removed)
-    };
-    #[cfg(not(windows))]
+    // 叶子已按错误类型恢复权限；非空目录不能触发整树 ACL 改写和重复删除。
     let dir_removed = remove_dir_forcing(path);
     if dir_removed && files_failed == 0 && subs_failed == 0 {
         CleanResult::Ok
@@ -534,24 +514,6 @@ fn delete_file_groups(files: Vec<(PathBuf, u64)>, p: &CleanProgress) -> usize {
         .sum()
 }
 
-#[cfg(windows)]
-fn leftover_files(dir: &Path) -> Option<Vec<(PathBuf, u64)>> {
-    let rd = std::fs::read_dir(dir).ok()?;
-    let mut out = Vec::new();
-    for entry in rd.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_symlink() || ft.is_dir() {
-            continue;
-        }
-        let size = entry
-            .metadata()
-            .map(|metadata| allocated_file_size(&metadata))
-            .unwrap_or(0);
-        out.push((entry.path(), size));
-    }
-    Some(out)
-}
-
 fn remove_file_forcing(path: &Path) -> bool {
     match remove_file_with_readonly_retry(path) {
         Ok(()) => true,
@@ -578,7 +540,8 @@ fn remove_file_forcing(path: &Path) -> bool {
     }
 }
 
-fn remove_file_with_readonly_retry(path: &Path) -> std::io::Result<()> {
+/// `pub(crate)`：dev_env 的 venv 整体删除复用同一个文件出口（P5 同源）。
+pub(crate) fn remove_file_with_readonly_retry(path: &Path) -> std::io::Result<()> {
     if let Err(_err) = std::fs::remove_file(path) {
         if let Ok(md) = std::fs::symlink_metadata(path) {
             clear_readonly(path, &md);
@@ -595,7 +558,10 @@ fn remove_file_with_readonly_retry(path: &Path) -> std::io::Result<()> {
 /// 设的）。`RemoveDirectory` 对只读目录直接 ERROR_ACCESS_DENIED——文件侧
 /// 早已清只读，目录侧以前漏了，结果是 go/pkg/mod 里文件删光、空壳目录
 /// 却留下，父目录也因「不是空的」报错。
-fn remove_dir_forcing(path: &Path) -> bool {
+///
+/// `pub(crate)`：dev_env 的 venv 整体删除（`dev_env::remove::remove_tree`）
+/// 也走这里——P5 的规则是所有「先删内容再删自己」的路径，出口只有这一个。
+pub(crate) fn remove_dir_forcing(path: &Path) -> bool {
     match remove_dir_with_readonly_retry(path) {
         Ok(()) => true,
         Err(err) => {
@@ -733,8 +699,7 @@ fn summarize_failures(
 
 /// 对清理后仍留在磁盘上的顶层目标重新称重。
 ///
-/// 跳过虚拟路径（Docker/brew 没有真实文件系统对象）。取消场景下未处理到的
-/// 目标也会进来——它们体积未变，重测结果等于原值，无害。
+/// 跳过虚拟路径。取消后保留扫描期体积，不再遍历未处理的目标。
 fn measure_remaining(
     targets: &[CleanTarget],
     failures: &[CleanFailure],
@@ -744,11 +709,13 @@ fn measure_remaining(
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for t in targets {
+        if p.cancelled() {
+            break;
+        }
         let still = failures
             .iter()
             .filter_map(CleanFailure::as_path)
-            .any(|f| f == t.path || (!t.remove_dir && f.starts_with(&t.path)))
-            || p.cancelled() && t.path.exists();
+            .any(|f| f == t.path || (!t.remove_dir && f.starts_with(&t.path)));
         if !still || !seen.insert(t.path.clone()) {
             continue;
         }
@@ -1959,6 +1926,47 @@ mod tests {
         assert_eq!(snap.files, 0);
         assert!(base.exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_leaf_is_not_retried_at_every_ancestor() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = crate::core::testing::fixture("qc_locked_leaf_single_attempt");
+        let nested = base.join("one/two/three");
+        std::fs::create_dir_all(&nested).unwrap();
+        let locked = nested.join("locked.bin");
+        let removable = nested.join("removable.bin");
+        std::fs::write(&locked, b"locked").unwrap();
+        std::fs::write(&removable, b"remove").unwrap();
+        let guard = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked)
+            .unwrap();
+        let progress = CleanProgress::default();
+        assert_eq!(delete_tree(&base, &progress), CleanResult::Failed);
+        assert!(locked.is_file());
+        assert!(!removable.exists());
+        // 一次叶子失败 + 四个非空祖先；不能指数级重复遍历失败子树。
+        assert_eq!(progress.snapshot().failed, 5);
+        drop(guard);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn cancelled_cleanup_does_not_remeasure_remaining_targets() {
+        let base = make_tree("cancel_remeasure", 3, 128);
+        let progress = CleanProgress::default();
+        progress.request_cancel();
+        let remaining = measure_remaining(
+            &[CleanTarget::empty(base.clone())],
+            &[CleanFailure::Path(base.clone())],
+            &progress,
+        );
+        assert!(remaining.is_empty(), "停止后不能启动新的递归称重");
+        assert!(base.is_dir());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[cfg(windows)]

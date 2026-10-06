@@ -69,6 +69,87 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         }
     };
 
+    use crate::ui::state::AppsTab;
+
+    let tab_bar = div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .p(px(2.))
+        .rounded(px(8.))
+        .bg(rgb(SURF_HIGH))
+        .child(
+            div()
+                .id("tab-desktop-btn")
+                .px_3()
+                .py(px(5.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(if root.apps.tab == AppsTab::Desktop {
+                    gpui::FontWeight::BOLD
+                } else {
+                    gpui::FontWeight::MEDIUM
+                })
+                .text_color(if root.apps.tab == AppsTab::Desktop {
+                    rgb(TEXT)
+                } else {
+                    rgb(OUTLINE)
+                })
+                .when(root.apps.tab == AppsTab::Desktop, |d| {
+                    d.bg(rgb(CARD)).shadow_sm()
+                })
+                .hover(|h| {
+                    if root.apps.tab != AppsTab::Desktop {
+                        h.text_color(rgb(TEXT))
+                    } else {
+                        h
+                    }
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apps.tab = AppsTab::Desktop;
+                    cx.notify();
+                }))
+                .child(tr_apps_tab_desktop(lang)),
+        )
+        .child(
+            div()
+                .id("tab-dev-btn")
+                .px_3()
+                .py(px(5.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(if root.apps.tab == AppsTab::DevEnvironments {
+                    gpui::FontWeight::BOLD
+                } else {
+                    gpui::FontWeight::MEDIUM
+                })
+                .text_color(if root.apps.tab == AppsTab::DevEnvironments {
+                    rgb(TEXT)
+                } else {
+                    rgb(OUTLINE)
+                })
+                .when(root.apps.tab == AppsTab::DevEnvironments, |d| {
+                    d.bg(rgb(CARD)).shadow_sm()
+                })
+                .hover(|h| {
+                    if root.apps.tab != AppsTab::DevEnvironments {
+                        h.text_color(rgb(TEXT))
+                    } else {
+                        h
+                    }
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apps.tab = AppsTab::DevEnvironments;
+                    if !this.apps.dev.scanned && !this.apps.dev.scanning {
+                        this.start_dev_env_scan(cx);
+                    }
+                    cx.notify();
+                }))
+                .child(tr_apps_tab_dev(lang)),
+        );
+
     let header = div()
         .flex()
         .justify_between()
@@ -78,7 +159,28 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             tr_apps_heading(lang),
             tr_apps_subheading(lang),
         )))
-        .children(orphan_scan_button);
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(tab_bar)
+                .children(orphan_scan_button),
+        );
+
+    if root.apps.tab == AppsTab::DevEnvironments {
+        return div()
+            .id("apps-view")
+            .size_full()
+            .min_w(px(0.))
+            .p_8()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(header)
+            .child(super::render_dev_environments_view(root, window, cx))
+            .into_any_element();
+    }
 
     let (label_storage, label_total_count, label_stale_count) = match lang {
         Language::Zh => ("估算总占用空间", "已安装应用总数", "长期未用软件 (>90天)"),

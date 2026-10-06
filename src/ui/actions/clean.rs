@@ -95,6 +95,10 @@ impl crate::ui::Root {
             ConfirmKind::CleanDiskSelected => self.start_clean_disk_selected(cx),
             ConfirmKind::CleanDeclutter(tab) => self.run_declutter_clean(tab, cx),
             ConfirmKind::UninstallApp(app) => self.execute_uninstall_app(*app, cx),
+            ConfirmKind::RemoveDevAsset(item) => self.execute_remove_dev_asset(*item, cx),
+            ConfirmKind::BatchRemoveDevAssets(items) => {
+                self.execute_batch_remove_dev_assets(items, cx)
+            }
             ConfirmKind::KillProcess {
                 pid,
                 start_time,

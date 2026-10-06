@@ -1,0 +1,10 @@
+=== 恢复后 ===
+test core::dev_env::python::tests::one_row_per_package_directory_so_the_count_matches_pip_list ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 677 filtered out; finished in 0.01s
+
+=== 本机实探（同一条命令、同一台机器）===
+phases: conda 144.6762ms, python 985.6856ms, node 1.9386686s, tools 209.9081ms
+measure: 4.9441824s for 14 dirs, 57449 files, logical 3074855564
+live probe: 0 conda, 2 python, 10 node, 2 tools
+
+对照：引入「按目录并行」之前，同样的 13 个目录 43438 个文件，measure 单线程 24.1s

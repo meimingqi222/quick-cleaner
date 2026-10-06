@@ -176,6 +176,8 @@ impl Root {
             },
 
             apps: AppsState {
+                tab: AppsTab::Desktop,
+                dev: DevEnvState::default(),
                 list: Vec::new(),
                 scanned: false,
                 scanning: false,
@@ -672,6 +674,7 @@ impl Root {
             || self.junk.scanning
             || self.junk.discovering
             || self.apps.scanning
+            || self.apps.dev.scanning
             || self.disk.scanning
             || self.residual.scanning
     }

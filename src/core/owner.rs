@@ -40,7 +40,7 @@ impl PreparedOwner {
         operation: &crate::core::rules::Operation,
     ) -> Option<Self> {
         Self::prepare_with(target, operation, |tool, args, timeout| {
-            crate::core::proc::run_with_timeout(tool, args, timeout)
+            crate::core::proc::run_tool_with_timeout(tool, args, timeout)
         })
     }
     fn prepare_with(
