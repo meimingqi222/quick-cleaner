@@ -156,26 +156,15 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             ),
         }
     } else if scanned && total > 0 {
-        match lang {
-            Language::Zh => format!(
-                "已在 {} 个类别中发现 {} 可清理内容。",
-                root.junk
-                    .categories
-                    .iter()
-                    .filter(|c| c.total_size > 0)
-                    .count(),
-                fmt_size(total)
-            ),
-            Language::En => format!(
-                "Found {} cleanable items across {} categories.",
-                fmt_size(total),
-                root.junk
-                    .categories
-                    .iter()
-                    .filter(|c| c.total_size > 0)
-                    .count()
-            ),
-        }
+        tr_dashboard_junk_found(
+            lang,
+            root.junk
+                .categories
+                .iter()
+                .filter(|c| c.total_size > 0)
+                .count(),
+            &fmt_size(total),
+        )
     } else if scanned {
         match lang {
             Language::Zh => String::from("未发现可清理的冗余缓存，系统状态良好。"),
@@ -227,10 +216,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                             if root.junk.scanned {
                                 fmt_size(total)
                             } else {
-                                match lang {
-                                    Language::Zh => "一键清理".into(),
-                                    Language::En => "Clean Junk".into(),
-                                }
+                                tr_dashboard_clean_junk(lang).into()
                             },
                         )),
                 )
@@ -268,15 +254,9 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                         )
                         .child(div().text_xs().text_color(rgb(OUTLINE)).child(
                             if root.apps.scanned {
-                                match lang {
-                                    Language::Zh => format!("已发现 {} 款", root.apps.list.len()),
-                                    Language::En => format!("{} Apps", root.apps.list.len()),
-                                }
+                                tr_dashboard_apps_found(lang, root.apps.list.len())
                             } else {
-                                match lang {
-                                    Language::Zh => "卸载分析".into(),
-                                    Language::En => "Uninstall".into(),
-                                }
+                                tr_dashboard_uninstall_analysis(lang).into()
                             },
                         )),
                 )
@@ -319,10 +299,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                             if let Some(s) = &root.disk.mft {
                                 fmt_size(s.total_size)
                             } else {
-                                match lang {
-                                    Language::Zh => "空间透镜".into(),
-                                    Language::En => "Storage".into(),
-                                }
+                                tr_dashboard_storage_lens(lang).into()
                             },
                         )),
                 )
@@ -359,15 +336,14 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
-                                .child(match lang {
-                                    Language::Zh => "冗余整理",
-                                    Language::En => "Declutter",
-                                }),
+                                .child(tr_dashboard_declutter(lang)),
                         )
-                        .child(div().text_xs().text_color(rgb(OUTLINE)).child(match lang {
-                            Language::Zh => "重复/大文件",
-                            Language::En => "Duplicates/Photos",
-                        })),
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(OUTLINE))
+                                .child(tr_dashboard_declutter_sub(lang)),
+                        ),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.view = View::Declutter;

@@ -112,7 +112,10 @@ struct Guards {
     /// macOS「自身禁止」档：`~`、`~/Library`、`~/Library/Application Support`
     /// 三个目录**本身**的归一化路径。对齐 Windows 对 AppData 骨架的处理——
     /// 骨架自保、内容照常可清（旧版 IDE 数据、卸载残留都住在这里面）。
-    #[cfg(target_os = "macos")]
+    ///
+    /// `test` 也编译：断言是纯路径逻辑（见下方测试），在任意主机都能执行，
+    /// 不必等到 macOS CI 才覆盖。
+    #[cfg(any(target_os = "macos", test))]
     macos_self_banned: Vec<String>,
 }
 
@@ -142,7 +145,7 @@ fn guards() -> &'static Guards {
         #[cfg(not(windows))]
         let public = None;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", test))]
         let macos_self_banned = crate::platform::user_home()
             .map(|h| {
                 let n = norm(&h);
@@ -164,7 +167,7 @@ fn guards() -> &'static Guards {
             orig_home,
             known_folders,
             public,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", test))]
             macos_self_banned,
         }
     })
@@ -246,7 +249,7 @@ pub fn is_system_root_dir(path: &Path) -> bool {
     if lower.len() <= 3 {
         return true;
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", test))]
     if MACOS_PROTECTED_PREFIXES
         .iter()
         .any(|prefix| at_or_under(&lower, prefix))
@@ -300,6 +303,15 @@ pub fn is_managed_agent_worktree(path: &Path) -> bool {
 ///   应用数据根目录是最坏事故；内容不受影响，旧版 IDE 数据、卸载残留
 ///   等类目照常工作。
 pub fn is_protected(path: &Path) -> bool {
+    protected_scope(path, false)
+}
+
+/// Only explicit contents scopes may retain a protected temporary root.
+pub fn is_contents_protected(path: &Path) -> bool {
+    protected_scope(path, true)
+}
+
+fn protected_scope(path: &Path, contents_only: bool) -> bool {
     if is_managed_agent_worktree(path) {
         return true;
     }
@@ -320,7 +332,7 @@ pub fn is_protected(path: &Path) -> bool {
     // macOS 的系统骨架此前完全依赖 SIP/文件权限兜底；拿到完全磁盘访问后，
     // 磁盘透镜的任意路径删除仍可能触碰其中部分内容。应用卸载有独立入口，
     // 系统树和 /Applications 不应由通用清理器删除。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", test))]
     if MACOS_PROTECTED_PREFIXES
         .iter()
         .any(|prefix| at_or_under(&lower, prefix))
@@ -329,7 +341,7 @@ pub fn is_protected(path: &Path) -> bool {
     }
 
     // macOS 自身禁止档（精确匹配，见 Guards::macos_self_banned 的注释）。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", test))]
     if guards().macos_self_banned.contains(&lower) {
         return true;
     }
@@ -347,7 +359,7 @@ pub fn is_protected(path: &Path) -> bool {
     if at_or_under(&lower, &g.windows) {
         let rest = &lower[g.windows.len()..];
         // rest 为空表示 C:\Windows 自身
-        if rest.is_empty() || rest == "\\temp" {
+        if rest.is_empty() || (rest == "\\temp" && !contents_only) {
             return true;
         }
         if WIN_PREFIXES.iter().any(|p| at_or_under(rest, p)) {
@@ -701,7 +713,7 @@ pub fn is_live_database(path: &Path) -> bool {
 /// - `/Library/Application Support/org.pqrs` 可以（残留扫描产出的就是这一层）
 /// - `/Library/Application Support/org.pqrs/Karabiner-Elements` 不行——再深
 ///   一层意味着调用方算错了粒度，宁可失败也不能以 root 身份 `rm -rf` 下去
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const MACOS_ELEVATED_RESIDUAL_PARENTS: &[&str] = &[
     "\\library\\application support",
     "\\library\\application scripts",
@@ -715,7 +727,7 @@ const MACOS_ELEVATED_RESIDUAL_PARENTS: &[&str] = &[
 ];
 
 /// `/Library` 白名单目录下、不以 `com.apple.` 命名的系统组件。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const MACOS_SYSTEM_COMPONENT_NAMES: &[&str] = &[
     "systemconfiguration",
     "crashreporter",
@@ -734,7 +746,7 @@ const MACOS_SYSTEM_COMPONENT_NAMES: &[&str] = &[
 ///
 /// 只有 macOS 残留清理这一条调用链可以用它绕开 [`is_protected`]；磁盘透镜、
 /// 分类清理都不许调，否则 `/Library` 的保护就形同虚设。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 pub fn is_elevated_residual_target(path: &Path) -> bool {
     // 符号链接会让「父目录在白名单里」这个判断失去意义：`/Library/Caches/x`
     // 可以指向任意位置，以 root 身份 rm -rf 过去就是任意文件删除。
@@ -772,7 +784,7 @@ pub fn is_elevated_residual_target(path: &Path) -> bool {
         .any(|allowed| parent == *allowed)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", test)))]
 pub fn is_elevated_residual_target(_path: &Path) -> bool {
     false
 }
@@ -783,7 +795,7 @@ pub fn is_elevated_residual_target(_path: &Path) -> bool {
 /// 磁盘透镜/右键删除的确认弹窗用它升级警示：Application Support 里装
 /// 的是聊天记录、密码库、本地数据库这类不可重建的应用数据，和删一个
 /// 缓存目录不是一个量级的事。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 pub fn under_home_app_support(path: &Path) -> bool {
     let Some(home) = guards().home.as_deref() else {
         return false;
@@ -793,12 +805,12 @@ pub fn under_home_app_support(path: &Path) -> bool {
     lower != root && at_or_under(&lower, &root)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", test)))]
 pub fn under_home_app_support(_path: &Path) -> bool {
     false
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const MACOS_PROTECTED_PREFIXES: &[&str] = &[
     "\\system",
     "\\library",
@@ -815,6 +827,35 @@ const MACOS_PROTECTED_PREFIXES: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn contents_scope_still_protects_whitelist_and_managed_worktrees() {
+        let _guard = crate::core::whitelist::lock_for_test();
+        let fixture = crate::core::testing::fixture("contents_safety");
+        let workspace = fixture.join("workspace");
+        let managed = workspace.join("subagent-worktrees/child");
+        std::fs::create_dir_all(&managed).unwrap();
+        std::fs::write(workspace.join("runtime.sqlite"), b"owner marker").unwrap();
+        assert!(super::is_contents_protected(&managed));
+        crate::core::whitelist::reload(&[fixture.to_string_lossy().into_owned()]);
+        assert!(super::is_contents_protected(&fixture));
+        assert!(super::is_contents_protected(&fixture.join("child")));
+        crate::core::whitelist::clear();
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+    #[test]
+    fn contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection() {
+        let windows = std::env::var("SystemRoot").unwrap_or_else(|_| "C:/Windows".into());
+        let temp = std::path::Path::new(&windows).join("Temp");
+        assert!(super::is_protected(&temp));
+        assert!(
+            !super::is_contents_protected(&temp),
+            "Temp contents must remain a supported scope"
+        );
+        assert!(super::is_contents_protected(
+            &std::path::Path::new(&windows).join("System32")
+        ));
+        assert!(super::is_contents_protected(std::path::Path::new("C:/")));
+    }
     use super::*;
     use std::path::PathBuf;
 
@@ -825,7 +866,6 @@ mod tests {
         assert!(is_protected(Path::new("D:\\")));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn elevated_residual_allowlist_only_opens_one_level() {
         // 扫描器产出的就是这一层，必须放行——否则 UI 列得出来、点了却静默失败
@@ -859,7 +899,6 @@ mod tests {
     }
 
     /// 白名单目录里混着 Apple 自己的配置，以 root 身份删掉就是拆系统。
-    #[cfg(target_os = "macos")]
     #[test]
     fn elevated_residual_allowlist_never_touches_apple_items() {
         for p in [
@@ -875,7 +914,6 @@ mod tests {
     }
 
     /// 白名单目录里还住着不带反向域名的系统组件。
-    #[cfg(target_os = "macos")]
     #[test]
     fn elevated_residual_allowlist_never_touches_bare_system_components() {
         for p in [
@@ -891,7 +929,6 @@ mod tests {
     }
 
     /// 提权删除的口子只对残留清理开放，磁盘透镜那条路必须照旧全挡。
-    #[cfg(target_os = "macos")]
     #[test]
     fn library_subtree_stays_protected_for_generic_cleaning() {
         for p in [
@@ -903,7 +940,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn protects_macos_system_trees() {
         for path in [
@@ -990,7 +1026,6 @@ mod tests {
     /// macOS 自身禁止档：`~`、`~/Library`、`~/Library/Application Support`
     /// 的目录本身受保护，但内容不受影响——后者是旧版 IDE 数据与卸载
     /// 残留两个类目的工作前提。
-    #[cfg(target_os = "macos")]
     #[test]
     fn macos_home_skeletons_are_self_banned_but_contents_are_free() {
         let home = dirs::home_dir().expect("测试环境必须有 home");
@@ -1010,7 +1045,6 @@ mod tests {
     }
 
     /// 确认弹窗的升级判定：严格位于 Application Support 之下才算。
-    #[cfg(target_os = "macos")]
     #[test]
     fn under_home_app_support_is_strict() {
         let home = dirs::home_dir().expect("测试环境必须有 home");

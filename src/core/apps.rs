@@ -394,6 +394,37 @@ pub enum ResidualKind {
 }
 
 impl ResidualKind {
+    /// The typed cleanup operation this residual maps to.
+    ///
+    /// Native kinds become `Operation::Native` (identified by their native id:
+    /// registry path / value name, task path, `teamID/bundleID`); filesystem kinds
+    /// become `File`/`Tree`. This lets a residual be expressed as a `CleanupPlan`
+    /// target — the same typed scope/operation model every other entry uses — instead
+    /// of only a display kind.
+    pub fn operation(&self) -> crate::core::rules::Operation {
+        use crate::core::rules::{NativeKind, Operation};
+        match self {
+            ResidualKind::File(..) => Operation::File,
+            ResidualKind::Directory(..) => Operation::Tree,
+            ResidualKind::RegistryKey(root, subpath) => Operation::Native {
+                native: NativeKind::RegistryKey,
+                identifier: format!("{}\\{}", root.label(), subpath),
+            },
+            ResidualKind::RegistryValue(root, subpath, name) => Operation::Native {
+                native: NativeKind::RegistryValue,
+                identifier: format!("{}\\{} → {name}", root.label(), subpath),
+            },
+            ResidualKind::ScheduledTask(name) => Operation::Native {
+                native: NativeKind::ScheduledTask,
+                identifier: name.clone(),
+            },
+            ResidualKind::SystemExtension(team, bundle) => Operation::Native {
+                native: NativeKind::SystemExtension,
+                identifier: format!("{team}/{bundle}"),
+            },
+        }
+    }
+
     pub fn size(&self) -> u64 {
         match self {
             ResidualKind::File(_, s) | ResidualKind::Directory(_, s) => *s,
@@ -467,6 +498,8 @@ pub enum ResidualSource {
     LikelyConfigRegKey,
     AppPathsEntry,
     StartupEntry,
+    /// `HKCU\Environment` 下值里提到安装目录/可执行文件的用户环境变量。
+    UserEnvEntry,
     Service,
     LikelyService,
     FirewallRule,
@@ -522,6 +555,7 @@ impl ResidualSource {
                 ResidualSource::LikelyConfigRegKey => "疑似配置注册表项",
                 ResidualSource::AppPathsEntry => "App Paths 登记",
                 ResidualSource::StartupEntry => "开机启动项",
+                ResidualSource::UserEnvEntry => "用户环境变量",
                 ResidualSource::Service => "服务",
                 ResidualSource::LikelyService => "疑似服务",
                 ResidualSource::FirewallRule => "防火墙规则",
@@ -564,6 +598,7 @@ impl ResidualSource {
                 ResidualSource::LikelyConfigRegKey => "Likely config registry key",
                 ResidualSource::AppPathsEntry => "App Paths entry",
                 ResidualSource::StartupEntry => "Startup entry",
+                ResidualSource::UserEnvEntry => "User environment variable",
                 ResidualSource::Service => "Service",
                 ResidualSource::LikelyService => "Likely service",
                 ResidualSource::FirewallRule => "Firewall rule",
@@ -682,6 +717,112 @@ fn residual_identity(kind: &ResidualKind) -> Option<crate::core::model::TargetId
     }
 }
 
+/// Identity key for a residual kind, **independent of the recorded size**.
+///
+/// A directory re-scanned after the official uninstaller ran keeps the same path
+/// but a smaller size, so comparing whole `kind` values (which embed the size)
+/// would list and weigh it twice.
+fn residual_key(kind: &ResidualKind) -> String {
+    let norm = |s: &str| crate::core::safety::norm(std::path::Path::new(s));
+    match kind {
+        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => {
+            format!("fs:{}", crate::core::safety::norm(path))
+        }
+        ResidualKind::RegistryKey(root, sub) => format!("key:{}:{}", root.label(), norm(sub)),
+        ResidualKind::RegistryValue(root, sub, name) => {
+            format!("val:{}:{}:{}", root.label(), norm(sub), name.to_lowercase())
+        }
+        ResidualKind::ScheduledTask(name) => format!("task:{}", name.to_lowercase()),
+        ResidualKind::SystemExtension(team, bundle) => format!("ext:{team}:{bundle}"),
+    }
+}
+
+/// Collapse duplicate and parent/child-overlapping residual items so the same
+/// physical target is only listed, weighed and deleted once. Order-independent.
+///
+/// Two levels, neither depending on scan order:
+/// 1. identical identity (same path / registry entry / task, size ignored) keeps
+///    the higher-confidence copy;
+/// 2. a directory covers every filesystem item strictly under it, and a registry
+///    key covers its subkeys and values — the descendant is dropped because the
+///    ancestor's size already counted it and deleting the ancestor removes it.
+///
+/// The ancestor keeps its own confidence: a merge never upgrades deletion
+/// authority, so a guessed (Possible) parent can never become Certain by absorbing
+/// a certain child.
+pub fn dedupe_residuals(items: &mut Vec<ResidualItem>) {
+    let mut kept: Vec<ResidualItem> = Vec::with_capacity(items.len());
+    let mut positions: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in items.drain(..) {
+        match positions.get(&residual_key(&item.kind)) {
+            Some(&index) => {
+                if item.confidence > kept[index].confidence {
+                    kept[index] = item;
+                }
+            }
+            None => {
+                positions.insert(residual_key(&item.kind), kept.len());
+                kept.push(item);
+            }
+        }
+    }
+
+    let dirs: Vec<String> = kept
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ResidualKind::Directory(path, _) => Some(crate::core::safety::norm(path)),
+            _ => None,
+        })
+        .collect();
+    let keys: Vec<(String, String)> = kept
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ResidualKind::RegistryKey(root, sub) => {
+                Some((root.label().to_string(), registry_norm(sub)))
+            }
+            _ => None,
+        })
+        .collect();
+    kept.retain(|item| match &item.kind {
+        ResidualKind::Directory(path, _) => {
+            let key = crate::core::safety::norm(path);
+            !dirs
+                .iter()
+                .any(|dir| dir != &key && crate::core::safety::at_or_under(&key, dir))
+        }
+        ResidualKind::File(path, _) => {
+            let key = crate::core::safety::norm(path);
+            !dirs
+                .iter()
+                .any(|dir| crate::core::safety::at_or_under(&key, dir))
+        }
+        ResidualKind::RegistryKey(root, sub) => {
+            let (root, sub) = (root.label(), registry_norm(sub));
+            !keys.iter().any(|(parent_root, parent_sub)| {
+                parent_root == root && parent_sub != &sub && registry_under(&sub, parent_sub)
+            })
+        }
+        ResidualKind::RegistryValue(root, sub, _) => {
+            let (root, sub) = (root.label(), registry_norm(sub));
+            !keys.iter().any(|(parent_root, parent_sub)| {
+                parent_root == root && registry_under(&sub, parent_sub)
+            })
+        }
+        _ => true,
+    });
+    *items = kept;
+}
+
+/// Normalize a registry subpath: lowercase, `\` separators, no trailing `\`.
+fn registry_norm(sub: &str) -> String {
+    crate::core::safety::norm(std::path::Path::new(sub))
+}
+
+/// `lower` is at or below `base` in the registry tree (component-wise).
+fn registry_under(lower: &str, base: &str) -> bool {
+    crate::core::safety::at_or_under(lower, base)
+}
+
 /// 残留扫描时发现的「软件仍被占用」证据：运行中的进程、launchd 里仍
 /// 登记的任务。只提示不阻断——活库删除有 cleaner 的 live-database 闸门
 /// 兜底，但用户该在点「彻底清除」**之前**就知道为什么数据库类残留删不掉。
@@ -730,6 +871,52 @@ pub struct ResidualScanResult {
     /// 扫描时刻的进程/launchd 占用证据。空证据 = 没测到占用或当前平台
     /// 未实现探测，两种情况都不拦清理。
     pub occupancy: ResidualOccupancy,
+}
+
+impl ResidualScanResult {
+    /// A typed cleanup plan for these residuals: one target per item, with native kinds
+    /// as `Operation::Native` and filesystem kinds as `File`/`Tree`. Diagnostic — the
+    /// residual clean still performs its own platform checks (identity, occupancy,
+    /// installs-before-delete) — but it gives residuals the same typed scope/operation
+    /// model as every other entry instead of only a display kind.
+    pub fn cleanup_plan(&self) -> Option<std::sync::Arc<crate::core::rules::CleanupPlan>> {
+        if self.items.is_empty() {
+            return None;
+        }
+        let rule = self
+            .items
+            .iter()
+            .find_map(|item| item.rule.clone())
+            .unwrap_or_else(|| crate::core::rules::RuleRef::engine().observed());
+        let targets = self
+            .items
+            .iter()
+            .map(|item| crate::core::rules::PlannedTarget {
+                path: residual_target_path(&item.kind),
+                operation: item.kind.operation(),
+                identity: item.identity,
+                disposal: crate::core::cleaner::Disposal::Permanent,
+            })
+            .collect();
+        Some(std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+            rule, targets,
+        )))
+    }
+}
+
+/// The plan target path for a residual: the filesystem path for file/dir kinds, or a
+/// synthetic path carrying the native identifier otherwise (registry/task/extension
+/// have no filesystem path).
+fn residual_target_path(kind: &ResidualKind) -> std::path::PathBuf {
+    match kind {
+        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => path.clone(),
+        _ => match kind.operation() {
+            crate::core::rules::Operation::Native { identifier, .. } => {
+                std::path::PathBuf::from(identifier)
+            }
+            _ => std::path::PathBuf::new(),
+        },
+    }
 }
 
 /// 清理残留之后，这款软件还该不该留在「已安装」列表里。
@@ -1288,6 +1475,248 @@ mod tests {
             st.kind_label_lang(crate::core::i18n::Language::Zh),
             "计划任务"
         );
+    }
+
+    /// 同一目录重扫后体积变了，仍按身份去重，不能因为 size 不同就列两遍。
+    #[test]
+    fn residual_dedup_ignores_recorded_size_and_keeps_confidence() {
+        let dir = PathBuf::from(r"C:\fixture\AppData\Vendor");
+        let mut items = vec![
+            ResidualItem::possible(
+                ResidualKind::Directory(dir.clone(), 100),
+                ResidualSource::LikelyAppDataDir,
+            ),
+            ResidualItem::certain(
+                ResidualKind::Directory(dir.clone(), 40),
+                ResidualSource::AppDataDir,
+            ),
+        ];
+        dedupe_residuals(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].confidence, Confidence::Certain);
+        assert_eq!(items[0].source, ResidualSource::AppDataDir);
+    }
+
+    /// 父目录覆盖子项：只留父目录，兄弟不受影响，且与输入顺序无关。
+    #[test]
+    fn residual_dedup_collapses_parent_child_overlap_in_any_order() {
+        let root = PathBuf::from(r"C:\fixture\Vendor");
+        let child = root.join("sub").join("leftover.exe");
+        let sibling = PathBuf::from(r"C:\fixture\Other\keep.bin");
+        let build = || {
+            vec![
+                ResidualItem::certain(
+                    ResidualKind::Directory(root.clone(), 500),
+                    ResidualSource::InstallDir,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::File(child.clone(), 20),
+                    ResidualSource::UninstallerLeftover,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::File(sibling.clone(), 30),
+                    ResidualSource::Other,
+                ),
+            ]
+        };
+        for mut items in [build(), {
+            let mut reversed = build();
+            reversed.reverse();
+            reversed
+        }] {
+            dedupe_residuals(&mut items);
+            assert_eq!(items.len(), 2, "{items:?}");
+            assert!(items
+                .iter()
+                .any(|i| i.kind == ResidualKind::Directory(root.clone(), 500)));
+            assert!(items
+                .iter()
+                .any(|i| i.kind == ResidualKind::File(sibling.clone(), 30)));
+        }
+    }
+
+    /// 合并绝不升级删除权限：吸收一条更确定的子项后，猜出来的父目录仍是
+    /// Possible，不会被抬成可放心删除。
+    #[test]
+    fn residual_dedup_never_upgrades_a_guessed_parent() {
+        let root = PathBuf::from(r"C:\fixture\Guessed");
+        let mut items = vec![
+            ResidualItem::possible(
+                ResidualKind::Directory(root.clone(), 100),
+                ResidualSource::LikelyAppDataDir,
+            ),
+            ResidualItem::certain(
+                ResidualKind::File(root.join("cache.bin"), 10),
+                ResidualSource::AppDataDir,
+            ),
+        ];
+        dedupe_residuals(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].confidence, Confidence::Possible);
+    }
+
+    /// 注册表键覆盖它的子键和值：删掉键之后再删已经消失的值只会制造假失败。
+    #[test]
+    fn residual_dedup_collapses_registry_key_over_subkeys_and_values() {
+        let parent = ResidualKind::RegistryKey(AppRegRoot::Hkcu, r"Software\Vendor".into());
+        let mut items = vec![
+            ResidualItem::certain(
+                ResidualKind::RegistryValue(
+                    AppRegRoot::Hkcu,
+                    r"Software\Vendor".into(),
+                    "Install".into(),
+                ),
+                ResidualSource::ConfigRegKey,
+            ),
+            ResidualItem::certain(
+                ResidualKind::RegistryKey(AppRegRoot::Hkcu, r"Software\Vendor\App".into()),
+                ResidualSource::ConfigRegKey,
+            ),
+            ResidualItem::certain(
+                ResidualKind::RegistryKey(AppRegRoot::Hklm, r"Software\Vendor".into()),
+                ResidualSource::ConfigRegKey,
+            ),
+            ResidualItem::certain(parent.clone(), ResidualSource::ConfigRegKey),
+        ];
+        dedupe_residuals(&mut items);
+        assert_eq!(items.len(), 2, "只留父键和不同根的同名键");
+        assert!(items.iter().any(|i| i.kind == parent));
+        assert!(items
+            .iter()
+            .any(|i| i.kind
+                == ResidualKind::RegistryKey(AppRegRoot::Hklm, r"Software\Vendor".into())));
+    }
+
+    /// 残留类别映射到类型化操作：原生类别变 `Operation::Native`（带原生标识），
+    /// 文件/目录变 `File`/`Tree`。
+    #[test]
+    fn residual_kinds_map_to_typed_operations() {
+        use crate::core::rules::{NativeKind, Operation};
+        assert_eq!(
+            ResidualKind::File(PathBuf::from("x"), 1).operation(),
+            Operation::File
+        );
+        assert_eq!(
+            ResidualKind::Directory(PathBuf::from("d"), 1).operation(),
+            Operation::Tree
+        );
+        assert_eq!(
+            ResidualKind::RegistryKey(AppRegRoot::Hkcu, r"Software\Vendor".into()).operation(),
+            Operation::Native {
+                native: NativeKind::RegistryKey,
+                identifier: format!("{}\\Software\\Vendor", AppRegRoot::Hkcu.label()),
+            }
+        );
+        assert_eq!(
+            ResidualKind::ScheduledTask(r"\Vendor\Upd".into()).operation(),
+            Operation::Native {
+                native: NativeKind::ScheduledTask,
+                identifier: r"\Vendor\Upd".into(),
+            }
+        );
+        assert_eq!(
+            ResidualKind::SystemExtension("TEAM".into(), "com.x".into()).operation(),
+            Operation::Native {
+                native: NativeKind::SystemExtension,
+                identifier: "TEAM/com.x".into(),
+            }
+        );
+    }
+
+    /// 残留扫描结果能产出类型化计划：每条一个目标，原生条目是 `Native` 操作。
+    #[test]
+    fn residual_scan_result_builds_a_typed_plan() {
+        use crate::core::rules::{NativeKind, Operation};
+        let result = ResidualScanResult {
+            app_name: "X".into(),
+            scope: ResidualScope::App,
+            app_id: "x".into(),
+            items: vec![
+                ResidualItem::certain(
+                    ResidualKind::File(PathBuf::from(r"C:\x\y.bin"), 1),
+                    ResidualSource::InstallDir,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::RegistryKey(AppRegRoot::Hkcu, r"Software\Vendor".into()),
+                    ResidualSource::ConfigRegKey,
+                ),
+            ],
+            total_file_size: 1,
+            occupancy: ResidualOccupancy::default(),
+        };
+        let plan = result.cleanup_plan().expect("non-empty scan yields a plan");
+        assert_eq!(plan.targets.len(), 2);
+        assert_eq!(plan.targets[0].operation, Operation::File);
+        assert!(matches!(
+            plan.targets[1].operation,
+            Operation::Native {
+                native: NativeKind::RegistryKey,
+                ..
+            }
+        ));
+        assert!(ResidualScanResult::default().cleanup_plan().is_none());
+    }
+
+    /// 残留计划金样：范围 / 操作 / 完成条件逐项对照（矩阵「所有入口计划夹具」）。
+    #[test]
+    fn residual_plan_matches_the_baseline() {
+        let result = ResidualScanResult {
+            app_name: "Fixture".into(),
+            scope: ResidualScope::App,
+            app_id: "fixture".into(),
+            items: vec![
+                ResidualItem::certain(
+                    ResidualKind::File(PathBuf::from(r"C:\fixture\leftover.bin"), 1),
+                    ResidualSource::InstallDir,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::Directory(PathBuf::from(r"C:\fixture\cache"), 1),
+                    ResidualSource::AppDataDir,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::RegistryKey(AppRegRoot::Hkcu, r"Software\Vendor".into()),
+                    ResidualSource::ConfigRegKey,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::RegistryValue(
+                        AppRegRoot::Hkcu,
+                        r"Software\Vendor".into(),
+                        "Install".into(),
+                    ),
+                    ResidualSource::ConfigRegKey,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::ScheduledTask(r"\Vendor\Update".into()),
+                    ResidualSource::ScheduledTask,
+                ),
+                ResidualItem::certain(
+                    ResidualKind::SystemExtension("TEAM".into(), "com.vendor.x".into()),
+                    ResidualSource::SystemExtension,
+                ),
+            ],
+            total_file_size: 6,
+            occupancy: ResidualOccupancy::default(),
+        };
+        let plan = result.cleanup_plan().expect("non-empty scan yields a plan");
+        let mut actual: Vec<serde_json::Value> = plan
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| {
+                serde_json::json!({
+                    "path": target.path.to_string_lossy(),
+                    "operation": target.operation,
+                    "scope": plan.scope(index),
+                    "completion": target.completion(),
+                })
+            })
+            .collect();
+        actual.sort_by_key(|row| row["path"].as_str().unwrap().to_owned());
+        let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../rules/fixtures/residual-plan-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, expected);
     }
 }
 

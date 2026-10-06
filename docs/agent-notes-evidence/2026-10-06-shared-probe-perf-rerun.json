@@ -1,0 +1,173 @@
+{
+ "cache-catalog-extra": [
+  {
+   "run": 1,
+   "exit": 0,
+   "wall_ms": 193,
+   "peak_rss_mb": 13.3,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 4,
+   "budget_blocked": 0
+  },
+  {
+   "run": 2,
+   "exit": 0,
+   "wall_ms": 33,
+   "peak_rss_mb": 13.3,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 4,
+   "budget_blocked": 0
+  },
+  {
+   "run": 3,
+   "exit": 0,
+   "wall_ms": 33,
+   "peak_rss_mb": 13.1,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 4,
+   "budget_blocked": 0
+  },
+  {
+   "run": 4,
+   "exit": 0,
+   "wall_ms": 35,
+   "peak_rss_mb": 13.3,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 4,
+   "budget_blocked": 0
+  },
+  {
+   "run": 5,
+   "exit": 0,
+   "wall_ms": 34,
+   "peak_rss_mb": 12.0,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 4,
+   "budget_blocked": 0
+  }
+ ],
+ "directory-layout-extra": [
+  {
+   "run": 1,
+   "exit": 0,
+   "wall_ms": 31,
+   "peak_rss_mb": 11.8,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 1,
+   "budget_blocked": 0
+  },
+  {
+   "run": 2,
+   "exit": 0,
+   "wall_ms": 26,
+   "peak_rss_mb": 13.0,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 1,
+   "budget_blocked": 0
+  },
+  {
+   "run": 3,
+   "exit": 0,
+   "wall_ms": 28,
+   "peak_rss_mb": 11.9,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 1,
+   "budget_blocked": 0
+  },
+  {
+   "run": 4,
+   "exit": 0,
+   "wall_ms": 25,
+   "peak_rss_mb": 12.7,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 1,
+   "budget_blocked": 0
+  },
+  {
+   "run": 5,
+   "exit": 0,
+   "wall_ms": 25,
+   "peak_rss_mb": 12.9,
+   "directory_reads": 1,
+   "probes": 2,
+   "manifest_reads": 0,
+   "candidate_checks": 1,
+   "budget_blocked": 0
+  }
+ ],
+ "manifest-layout-extra": [
+  {
+   "run": 1,
+   "exit": 0,
+   "wall_ms": 40,
+   "peak_rss_mb": 11.8,
+   "directory_reads": 1,
+   "probes": 4,
+   "manifest_reads": 2,
+   "candidate_checks": 2,
+   "budget_blocked": 0
+  },
+  {
+   "run": 2,
+   "exit": 0,
+   "wall_ms": 30,
+   "peak_rss_mb": 11.9,
+   "directory_reads": 1,
+   "probes": 4,
+   "manifest_reads": 2,
+   "candidate_checks": 2,
+   "budget_blocked": 0
+  },
+  {
+   "run": 3,
+   "exit": 0,
+   "wall_ms": 29,
+   "peak_rss_mb": 13.0,
+   "directory_reads": 1,
+   "probes": 4,
+   "manifest_reads": 2,
+   "candidate_checks": 2,
+   "budget_blocked": 0
+  },
+  {
+   "run": 4,
+   "exit": 0,
+   "wall_ms": 30,
+   "peak_rss_mb": 12.4,
+   "directory_reads": 1,
+   "probes": 4,
+   "manifest_reads": 2,
+   "candidate_checks": 2,
+   "budget_blocked": 0
+  },
+  {
+   "run": 5,
+   "exit": 0,
+   "wall_ms": 30,
+   "peak_rss_mb": 13.1,
+   "directory_reads": 1,
+   "probes": 4,
+   "manifest_reads": 2,
+   "candidate_checks": 2,
+   "budget_blocked": 0
+  }
+ ]
+}

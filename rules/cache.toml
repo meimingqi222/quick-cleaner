@@ -1,7 +1,47 @@
 id = "cache"
-version = 1
+version = 3
 platform = "all"
-required = ["file"]
+required = ["file", "updater_artifacts", "directory_selection"]
+
+[lists]
+updater_directories_exact = ["pending"]
+updater_directories_prefixes = ["update."]
+updater_files_exact = ["update.zip", "latest-mac.yml", "latest.yml", "update-info.json", "ShipItState.plist", "ShipIt_stdout.log", "ShipIt_stderr.log"]
+updater_files_suffixes = [".blockmap"]
+updater_display_suffixes = ["-updater", ".ShipIt"]
+# Apple 系统服务目录不做更新包探测：签名表按第三方更新器的产物形态做的，
+# 对守护进程目录没有意义；这些目录只展示，不按产物拆分。
+updater_probe_exclude_prefixes = ["com.apple."]
+
+# ~/.cache 布局：整个枚举走声明式 catalog_children 选择。目录规则自带的
+# category/recommended 是认不出的目录的兜底形态（只展示、不预选）；
+# catalogs.agents/packages/shown 的派发策略在 select.catalog_policy 里声明；
+# Chromium 数据目录的内容签名与叶子词汇来自 chromium 规则（leaf_policy），
+# 叶子的推荐由 chromium.toml 的 shown_leaves 决定，根目录与登录态不入表。
+[[directories]]
+id = "home_cache"
+root = "home"
+paths = [".cache"]
+zh = "~/.cache/{name}"
+en = "~/.cache/{name}"
+category = "UserTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "catalog_children"
+[directories.select.catalog_policy]
+agents = { category = "AiAgents", recommended = true }
+packages = { category = "PackageCache", recommended = true }
+shown = { category = "PackageCache", recommended = false }
+[directories.select.leaf_policy]
+signature = "chromium"
+category = "UserCache"
+zh = "~/.cache/{name} · {trail}"
+en = "~/.cache/{name} · {trail}"
+
+[numbers]
+updater_stale_seconds = 604800
 
 # ~/.cache 下确认能重建的包缓存：工具自带 cache clean，或删掉后下一次构建自己长回来。
 [[catalogs.packages]]

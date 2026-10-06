@@ -313,13 +313,11 @@ Note: `2026-10-05-windows-desktop-user-long-command.md`
 
 ---
 
-## P18 规则缓存读失败不能重置防回放水位
+## P18 规则远程缓存水位（已退休）
 
-Note: `2026-10-05-rule-state-replay-watermark.md`
+Note: `2026-10-05-bundled-runtime-rules.md`
 
-- **根因**：损坏状态被当成首次安装，允许旧签名包重新启用。
-- **防护**：只在没有状态文件时初始化；损坏或读失败拒绝更新，保留最高已接受序号。回退不降低水位，切换后保留失败不能撤销已接受状态。
-- **测试**：`corrupt_state_never_resets_replay_protection`、`interrupted_publication_retries_and_corrupt_updates_leave_active_state`。
+用户取消远程规则下发；客户端不再加载规则下载缓存，旧水位算法及回归仅留历史归档。不能恢复下载入口或将静态清单迁移误称为通用规则重构全部完成。
 
 ## P19 相同路径去重必须合并全部约束
 
@@ -328,6 +326,7 @@ Note: `2026-10-05-duplicate-rule-constraints.md`
 - **根因**：只取第一条会丢保留项或隐藏处置冲突；UI 合并不能保护 core 的其他调用者。
 - **防护**：先在 core 合并，再执行；推荐取交集，保留项和归属证据取并集。处置、身份或快照冲突阻止目标，不能按加载顺序决定。Unix 仍用 dev/ino 复核，不加 mtime/len 相等约束。
 - **测试**：`duplicate_scan_policies_cannot_silently_select_a_deletion_method`、`core_duplicate_merge_preserves_every_rule_in_both_orders`。
+- **动态来源**：提供者必须显式提交类型化范围/资源参数和具名配置策略，不得恢复类别或 URI 操作推断。策略观察冻结，缺失和处置冲突阻止。Note: `2026-10-05-runtime-provider-policies.md`。
 
 ## P20 已尝试生态命令后，超时不能回退裸删
 
@@ -340,6 +339,8 @@ Note: `2026-10-05-owner-command-timeout.md`
 ## P21 外置运行环境与恢复记录不能作为同一步树删除
 
 Note: `2026-10-05-install-record-last.md`、`2026-10-05-capability-plan-lifecycles.md`
+
+稳定期不能把刻意留到最后的恢复记录要求为已消失。精确豁免与最终完整核验的决策及真实扫描库存红跑绑定见 Note: `2026-10-05-settle-window-inside-lifecycle.md`。
 
 - **根因**：installs 状态里同时含 environments 和 facts；把整个状态目录留到最后，会在运行环境还存在时完成核验，最终失败又可能先删 facts。
 - **防护**：补充清理先移除拥有的依赖子项，保留 facts 所在子树；核验后才清记录。最后一步前复查进程与共享引用。规则不能重排五步骤依赖。
@@ -442,3 +443,35 @@ Note: `2026-10-05-live-database-crash-leftover-channel.md`
 ## P34 首次窗口绘制前不能同步生成清理目标
 
 窗口级回调不能调用需要当前视图的 `request_animation_frame()`。
+
+
+## P35 Windows Temp 的 contents 不能按树删除范围复核
+
+Note: `2026-10-05-protected-temp-contents-scope.md`
+
+- **根因**：目录本身受保护被误作内容范围禁止；旧提供者能列出 Temp，但计划/cleaner 拒绝，规则迁移还会丢失目标。
+- **防护**：扫描、计划与内容删除复用 core safety 的 is_contents_protected。Windows Temp 根保留、子项继续逐个防护；树删除、系统子树、驱动器根、白名单和会话保护仍拒绝。不得用虚拟子路径探测或跳过 safety 替代范围判定。
+- **根归属**：user_temp 仅来自可信前台用户；未知就跳过，不能回退进程账户。点目标仅支持 user_temp contents 无变量，其他骨架根与盘符逃逸拒绝。
+- **测试**：`contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection`、`contents_scope_still_protects_whitelist_and_managed_worktrees`、`system_rules_keep_temp_scope_and_unknown_user_root_never_falls_back`。
+
+## P36 规则 TOML 里被注释吞掉的表头会报成无关表的重复键
+
+Note: `2026-10-05-declarative-path-templates.md`
+
+- **症状**：改完 `rules/*.toml` 后 build script 直接 panic，报的是完全没动过的表，例如
+  `parse rule TOML: duplicate key 'path' in table 'catalogs.vscode_family'`；照这个位置去找，代码里根本没有重复键。
+- **根因**：删/改注释时把空行一起删掉，`# 说明…` 和后面的 `[[entries]]` 挤在同一行，表头整行变成注释，
+  后面的键全部落进上一个表，于是报错点在无关位置。
+- **防护**：注释块与表头之间保留空行；任何规则改动后跑 `cargo run --example rules -- check`，
+  整包校验会把这类错误变成显式失败。模板与选择器边界另有回归覆盖：`path_templates_stay_declarative_and_bounded`。
+- **禁止回退**：不要为了让 check 通过去改无关表；不要放宽 `directories` / `version_layouts` 校验。
+
+## P37 残留清理删每个条目前必须复核扫描期身份
+
+Note: `2026-10-05-windows-residual-identity-gate.md`
+
+- **症状**：残留清理里，扫描后被换掉的目标（同名不同物）被当成原残留删掉。用户看到的是「清理完成」，实际把窗口期内活应用重建的配置/登录态送进了回收站。
+- **根因**：macOS `clean_residuals` 在 `dispose` 前有 `item.identity.recheck(path)` 闸门，Windows `clean_residuals` 从 pending-reboot 检查直接走到 `dispose`。两边都「看起来完整」，编译和测试都过，不对称因此长期没暴露。批次级 `validate_discovered_residual_clean` 只在清理前整批跑一次、且是 Windows 发现式专属，替代不了逐项、删除前的复核。
+- **防护**：Windows `clean_residuals` 的 `File`/`Directory` 分支在 `dispose` 前要求 `item.identity.is_some_and(|identity| identity.recheck(path))`；失败记 `CleanResult::Failed` 并跳过，身份缺失同样拒绝（fail closed），**绝不回退裸删**。与 macOS 共用同一道闸门。
+- **测试**：`residual_cleanup_rejects_path_replaced_after_scan`（Windows 与 macOS 各一份）。红跑证据 `docs/agent-notes-evidence/2026-10-05-windows-residual-identity-red.log`（撤闸门 → 失败），恢复后 `...-green.log`。
+- **禁止回退**：不要为了「能删掉」去掉身份复核或改成只在文件缺失时跳过；不要把批次级快照检查当作逐项复核的替代。

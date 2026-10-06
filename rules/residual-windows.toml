@@ -1,0 +1,34 @@
+id = "residual-windows"
+version = 3
+platform = "windows"
+required = ["file", "registration"]
+
+# Windows 残留通道的共享事实：扫描锚点与公共目录排除名单都在这里，
+# 扫描代码只实现算法（值文本反查厂商键、安装目录身份复核等）。
+# 删除完成核验见 residuals.rs 的 delete_registry_target / identity 闸门。
+[lists]
+# 键路径锚点：Windows 约定的注册表位置，扫描器枚举锚点下的子键/值，
+# 用安装目录与可执行文件名的文本匹配筛出残留。锚点路径随配置维护。
+run_keys = ['SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce']
+app_paths_keys = ['SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths']
+service_keys = ['SYSTEM\CurrentControlSet\Services']
+firewall_keys = ['SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules']
+tracing_keys = ['SOFTWARE\Microsoft\Tracing']
+heap_leak_keys = ['SOFTWARE\Microsoft\RADAR\HeapLeakDetection\DiagnosedApplications']
+installer_folder_keys = ['SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders']
+registered_apps_keys = ['SOFTWARE\RegisteredApplications']
+# 用户环境变量：只认当前用户的环境键，删除只删值不删键。
+user_environment_keys = ['Environment']
+mui_cache_keys = ['Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache']
+app_compat_keys = ['SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers', 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store']
+# 外壳扩展锚点：这些父键下的子键名/默认值是 GUID，与安装登记比对筛出残留。
+shell_extension_parents = ['SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\*\\shellex\\PropertySheetHandlers', 'SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\Directory\\Background\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\Folder\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\AllFilesystemObjects\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\Drive\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Classes\\lnkfile\\shellex\\ContextMenuHandlers', 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers', 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects']
+shell_extension_approved_keys = ['SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved']
+# COM 类 / TypeLib 根：扫描器在其下枚举 CLSID/TypeLib 子键，按 InprocServer32 /
+# LocalServer32 / TypeLib 文件路径落在安装目录筛残留。HKCU 用同名单数形式（小写
+# Software）由扫描器派生。
+com_classes_roots = ['SOFTWARE\\Classes', 'SOFTWARE\\Classes\\WOW6432Node']
+
+# 公共目录 / 骨架文件夹的归一化名。拿它们做反向包含匹配会把桌面、
+# 开始菜单根目录整棵当成某软件的残留。
+generic_folder_names = ["desktop", "documents", "downloads", "pictures", "videos", "music", "public", "users", "programs", "startup", "startmenu", "windows", "system", "system32", "temp", "tmp", "appdata", "programdata", "programfiles", "programfilesx86", "commonfiles", "common", "shared"]

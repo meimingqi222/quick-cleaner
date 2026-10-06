@@ -68,8 +68,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # 与 Windows job 对齐：矩阵「平台质量」要求 macOS 也过 fmt/build/lib tests/严格 clippy，
+      # 缺 fmt/build 会让该行无法在 CI 上被证明。
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Build
+        run: cargo build
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       # 废纸篓往返那个用例标了 #[ignore]：它会真的往运行者的废纸篓里写东西。
@@ -97,3 +103,9 @@ jobs:
           pattern: testlist-*
       - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --dump-anchors > anchors.txt
       - run: python -X utf8 scripts/check-anchors-vs-tests.py anchors.txt testlist-windows/testlist-windows.txt testlist-macos/testlist-macos.txt
+      # 状态记录的引用守卫：矩阵映射引用的测试名必须在两个平台的并集里真实
+      # 存在，其余标识符须在源码/规则/工具/依赖清单里找得到。
+      - run: python -X utf8 scripts/check-status-references.py --tests testlist-windows/testlist-windows.txt testlist-macos/testlist-macos.txt
+      # 验收脚本的回填块格式是交接链路的承重件：在非 macOS 主机上守护它，
+      # 避免拿到 macOS 时发现块已不能直接粘贴。
+      - run: bash scripts/macos-acceptance-format-test.sh

@@ -1,0 +1,32 @@
+[
+  {
+    "layout": "codex_cli",
+    "path": ".codex/packages/standalone/releases/9.9.9",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "layout": "devin_windows",
+    "path": "devin/cli/_versions/9.9.9",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "layout": "devin_windows",
+    "path": "devin/cli/_versions/_download/installer.tar.gz",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "file"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  }
+]

@@ -1,183 +1,62 @@
 //! 用户缓存、包管理缓存、缩略图缓存
 
-use super::{target, target_with_recommendation, ScanTarget};
+#[cfg(any(target_os = "macos", test))]
+use super::target_with_recommendation;
+#[cfg(target_os = "macos")]
+use super::target_with_size;
+use super::ScanTarget;
+#[cfg(any(target_os = "macos", test))]
 use crate::core::categories::CategoryId;
+#[cfg(target_os = "macos")]
 use crate::core::i18n::Text;
+#[cfg(any(target_os = "macos", test))]
+use crate::core::rules::Operation;
 use std::path::Path;
 
 /// 包管理缓存、用户缓存、缩略图缓存。
 ///
-/// `home` 为 None 时跳过用户级缓存；QuickLook 缩略图从 `$TMPDIR` 推路径，
-/// 不依赖 home，仍然加入。
+/// `~/.cache` 布局与包缓存派发在 cache 规则的 `home_cache` 目录条目里，由
+/// 通用目录能力统一枚举；`home` 为 None 时跳过用户级缓存。
 pub(super) fn push_cache_targets(
     t: &mut Vec<ScanTarget>,
     home: Option<&Path>,
     brew_cleanup_at: Option<i64>,
 ) {
-    if let Some(home) = home {
-        push_package_cache_targets(t, home, brew_cleanup_at);
-        push_user_cache_targets(t, home);
-        push_thumbnail_targets(t, home);
-    } else {
-        #[cfg(target_os = "macos")]
-        push_quicklook_thumbnail_targets(t);
-    }
-}
-
-/// 包管理器缓存（npm / pnpm / cargo / go / pip 等）
-fn push_package_cache_targets(t: &mut Vec<ScanTarget>, home: &Path, brew_cleanup_at: Option<i64>) {
-    #[cfg(windows)]
-    {
-        let _ = brew_cleanup_at;
-        // Fixed package layouts live in rules/package-windows.toml.
-        push_home_cache_targets(t, home);
-    }
-
     #[cfg(target_os = "macos")]
     {
-        // 固定包缓存路径在 rules/package-macos.toml。这里只留 brew cleanup：
-        // 它不是一个目录，体积和是否出现都取决于 dry-run 与节流。
-        push_home_cache_targets(t, home);
+        if let Some(home) = home {
+            push_user_cache_targets(t, home);
+        }
+        // brew cleanup 不是一个目录，体积和是否出现都取决于 dry-run 与节流。
         if crate::core::brew::should_offer(brew_cleanup_at) {
             if let Some((bytes, _files)) = crate::core::brew::cleanup_preview() {
-                t.push(ScanTarget {
-                    operation: crate::core::rules::Operation::Brew,
-                    disposal: crate::core::cleaner::Disposal::Permanent,
-                    rule: crate::core::rules::RuleRef::engine(),
-                    path: crate::core::brew::virtual_path(),
-                    label: Text::new("Homebrew 清理", "Homebrew cleanup"),
-                    category: CategoryId::PackageCache,
-                    recommended: CategoryId::PackageCache.default_selected(),
-                    size_hint: Some(bytes),
-                });
+                t.push(target_with_size(
+                    crate::core::brew::virtual_path(),
+                    Text::new("Homebrew 清理", "Homebrew cleanup"),
+                    CategoryId::PackageCache,
+                    bytes,
+                    Operation::Brew,
+                    ("engine", "brew_cleanup"),
+                ));
             }
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (t, home, brew_cleanup_at);
 }
 
 /// 用户缓存（`~/Library/Caches` 展开等）
+#[cfg(target_os = "macos")]
 fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    // Windows 缩略图路径在 rules/windows.toml。
-    #[cfg(not(target_os = "macos"))]
-    let _ = (t, home);
+    let cache = home.join("Library/Caches");
 
-    #[cfg(target_os = "macos")]
-    {
-        let cache = home.join("Library/Caches");
-
-        // `~/Library/Caches` 剩下的部分。
-        //
-        // 这里逐个展开顶层子目录，而不是把整个 `~/Library/Caches` 作为一个目标：
-        // 它和上面的浏览器 / Homebrew 缓存是父子关系，而 `scanner` 不做嵌套去重
-        // （`scan_fixed_inner` 逐目标独立称重后直接相加），父子同时入表会让总量
-        // 凭空翻倍。展开后顺带能按目录名给出标签，比一个不透明的大块更有用。
-        push_user_cache_dirs(t, &cache);
-    }
-}
-
-/// 缩略图缓存
-fn push_thumbnail_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (t, home);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // QuickLook 缩略图缓存。
-        //
-        // macOS 15 上经典的 `com.apple.QuickLook.thumbnailcache` 已不存在，
-        // 改为散落在 `$TMPDIR` 同级的 `C` 目录下的多个 `com.apple.quicklook.*`
-        // 子目录。`$TMPDIR`（即 `/var/folders/<hash>/T`）下也有几个。
-        // `<hash>` 是 per-user 的，编译期不知道，必须运行时从 `temp_dir()` 推。
-        let _ = home;
-        push_quicklook_thumbnail_targets(t);
-    }
-}
-
-/// 展开 `~/.cache`，避免一个宽泛父目录掩盖子项目的不同安全级别。
-///
-/// 三种形状分三条路：
-/// 1. 认得出来的包缓存 → `PackageCache`（表里有的预选，没有的只展示）；
-/// 2. Chromium 数据目录（`chrome-devtools-mcp/chrome-profile/Default/...`
-///    这类）→ **只收缓存叶子**，父目录不入表；
-/// 3. 其余 → `UserTemp`，整目录展示、不预选。
-///
-/// 第 2 条是实测踩出来的：`~/.cache/chrome-devtools-mcp` 整个 228 MB，可重建
-/// 的只有 85 MB，剩下是那个浏览器 Profile 本体（Cookies / Login Data /
-/// DIPS / IndexedDB）。整目录入表等于拿别人的登录态换 140 MB，
-/// 而“不预选就完事”又等于那 85 MB 永远清不掉。
-fn cache_catalog(name: &str) -> Vec<crate::core::rules::Layout> {
-    crate::core::rules::current()
-        .definition("cache")
-        .catalogs
-        .get(name)
-        .cloned()
-        .unwrap_or_default()
-}
-
-pub(super) fn push_home_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    let root = home.join(".cache");
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    // 内容签名先于名字。命中 Chromium profile 时只收叶子，不能因为目录名
-    // 也在包缓存表里就把 Profile 本体收进来。
-    let agents = cache_catalog("agents");
-    let packages = cache_catalog("packages");
-    let shown = cache_catalog("shown");
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let dir = entry.path();
-        let leaves = super::chromium::cache_leaves(&dir);
-        if !leaves.is_empty() {
-            for leaf in leaves {
-                let trail = super::chromium::leaf_trail(&dir, &leaf);
-                let Some(leaf_name) = trail.last() else {
-                    continue;
-                };
-                t.push(target_with_recommendation(
-                    leaf,
-                    format!("~/.cache/{name} · {}", trail.join(" · ")),
-                    CategoryId::UserCache,
-                    super::chromium::leaf_recommended(leaf_name),
-                ));
-            }
-            continue;
-        }
-        if let Some(row) = agents.iter().find(|row| row.path == name) {
-            t.push(target_with_recommendation(
-                dir,
-                Text::new(row.zh.as_str(), row.en.as_str()),
-                CategoryId::AiAgents,
-                true,
-            ));
-        } else if let Some(row) = packages.iter().find(|row| row.path == name) {
-            t.push(target(
-                dir,
-                Text::new(row.zh.as_str(), row.en.as_str()),
-                CategoryId::PackageCache,
-            ));
-        } else if let Some(row) = shown.iter().find(|row| row.path == name) {
-            // shown 是包缓存，只是不能预选。掉进下面的 UserTemp 后，
-            // 用户在「包缓存」里就找不到它。
-            t.push(target_with_recommendation(
-                dir,
-                Text::new(row.zh.as_str(), row.en.as_str()),
-                CategoryId::PackageCache,
-                false,
-            ));
-        } else {
-            t.push(target_with_recommendation(
-                dir,
-                format!("~/.cache/{name}"),
-                CategoryId::UserTemp,
-                false,
-            ));
-        }
-    }
+    // `~/Library/Caches` 剩下的部分。
+    //
+    // 这里逐个展开顶层子目录，而不是把整个 `~/Library/Caches` 作为一个目标：
+    // 它和上面的浏览器 / Homebrew 缓存是父子关系，而 `scanner` 不做嵌套去重
+    // （`scan_fixed_inner` 逐目标独立称重后直接相加），父子同时入表会让总量
+    // 凭空翻倍。展开后顺带能按目录名给出标签，比一个不透明的大块更有用。
+    push_user_cache_dirs(t, &cache);
 }
 
 /// `~/Library/Caches` 下已被整目录认领的名字，以及只认领了某个孩子的父目录。
@@ -242,13 +121,17 @@ pub(super) fn library_cache_claims() -> (Vec<String>, Vec<(String, Vec<String>)>
 /// 分成三步判定，而不是一律丢进同一个桶：
 /// 1. 内容命中更新包签名 → 按子项拆开，更新包叶子可默认勾选；
 /// 2. 没命中 → 整目录作为「分不清」的一项展示，不预选；
-/// 3. `com.apple.*` → 不做探测，见下方说明。
+/// 3. 探测排除名单（cache 规则 `updater_probe_exclude_prefixes`）→ 不做探测，
+///    见下方说明。
 #[cfg(any(target_os = "macos", test))]
 pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
     let Ok(rd) = std::fs::read_dir(cache) else {
         return;
     };
     let (whole, partial) = library_cache_claims();
+    let probe_excludes = crate::core::rules::current()
+        .list("cache", "updater_probe_exclude_prefixes")
+        .to_vec();
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if whole.iter().any(|claimed| claimed == &name) {
@@ -279,9 +162,11 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
             .collect();
         let stem = super::updater::display_stem(&name);
         // 签名判定是按第三方更新器的产物形态做的，对 Apple 守护进程的目录
-        // 没有意义：上面那张敏感表只列了确认危险的，其余 `com.apple.*` 并不
-        // 因此安全，所以一律不探测、只展示。
-        let hit = !name.starts_with("com.apple.")
+        // 没有意义：上面那张敏感表只列了确认危险的，其余探测排除名单里的
+        // 目录并不因此安全，所以一律不探测、只展示。
+        let hit = !probe_excludes
+            .iter()
+            .any(|prefix| name.starts_with(prefix.as_str()))
             && super::updater::push_updater_artifacts(t, &dir, &stem);
         if hit || !claimed.is_empty() {
             push_residual_children(t, &dir, &name, &claimed);
@@ -295,6 +180,8 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
             format!("~/Library/Caches/{name}"),
             CategoryId::UserTemp,
             false,
+            Operation::Contents,
+            ("engine", "cache_candidate"),
         ));
     }
 }
@@ -315,57 +202,79 @@ fn push_residual_children(t: &mut Vec<ScanTarget>, dir: &Path, name: &str, skip:
             format!("~/Library/Caches/{name}/{child}"),
             CategoryId::UserTemp,
             false,
+            Operation::Contents,
+            ("engine", "cache_candidate"),
         ));
-    }
-}
-
-/// 发现 QuickLook 缩略图缓存目录并加为清理目标。
-///
-/// macOS 15 上缩略图缓存散落在 per-user 的 `$TMPDIR`（`/var/folders/<hash>/T`）
-/// 及其同级 `C` 目录下的多个 `com.apple.quicklook.*` 子目录里。经典路径
-/// `com.apple.QuickLook.thumbnailcache` 已不存在。`<hash>` 编译期不知道，
-/// 用 `std::env::temp_dir()` 推：它返回 `/var/folders/<hash>/T`，
-/// `parent()` 得到 `/var/folders/<hash>`，再拼 `C` 得到缓存目录。
-#[cfg(target_os = "macos")]
-fn push_quicklook_thumbnail_targets(t: &mut Vec<ScanTarget>) {
-    let tmpdir = std::env::temp_dir();
-    let Some(user_cache_root) = tmpdir.parent() else {
-        return;
-    };
-    // 两个目录都扫：T（临时）和 C（缓存），QuickLook 在两边都写
-    for root in [user_cache_root.join("C"), user_cache_root.join("T")] {
-        let Ok(rd) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // 只收 QuickLook 相关的目录，其余的 per-user 缓存不归这一类
-            if !name.starts_with("com.apple.quicklook") {
-                continue;
-            }
-            if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                continue;
-            }
-            t.push(target(
-                entry.path(),
-                Text::new(
-                    format!("QuickLook 缓存 · {name}"),
-                    format!("QuickLook cache · {name}"),
-                ),
-                CategoryId::Thumbnails,
-            ));
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::library_cache_claims;
     use super::push_user_cache_dirs;
-    use super::{library_cache_claims, push_home_cache_targets};
     #[cfg(target_os = "macos")]
     use crate::core::categories::helpers::backdate;
     use crate::core::categories::CategoryId;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// 生产选择器的隔离入口：cache 规则的目录条目在给定 home 上展开。
+    fn home_cache_scan(home: &Path) -> Vec<super::ScanTarget> {
+        let snapshot = crate::core::rules::current();
+        let (mut targets, _) = crate::core::rules::directories::scan_at(
+            &snapshot,
+            "cache",
+            &crate::core::rules::directories::fixture_roots(home, &home.join("roaming")),
+        );
+        targets.sort_by(|a, b| a.path.cmp(&b.path));
+        targets
+    }
+
+    fn home_cache_row(target: &super::ScanTarget, root: &Path) -> serde_json::Value {
+        serde_json::json!({
+            "relative": target
+                .path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
+            "label": target.label.get(crate::core::i18n::Language::Zh),
+            "category": format!("{:?}", target.category),
+            "recommended": target.recommended,
+            "operation": format!("{:?}", target.operation),
+            "disposal": format!("{:?}", target.disposal),
+        })
+    }
+
+    /// 「仅配置增量」：给 cache 规则的包缓存目录清单加一行（`cache-tool`），
+    /// 通用 `catalog_children` 能力立刻把它展开成目标——没有为它加专用 Rust 分支。
+    #[test]
+    fn cache_catalog_rule_only_fixture_surfaces_a_new_package() {
+        use std::sync::Arc;
+        let root = crate::core::testing::fixture("cache_catalog_extra");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".cache/cache-tool")).unwrap();
+        let extra: crate::core::rules::RuleDefinition = toml::from_str(include_str!(
+            "../../../rules/fixtures/cache-catalog-extra.toml"
+        ))
+        .unwrap();
+        let mut bundle = crate::core::rules::current().bundle.clone();
+        bundle.rules.retain(|rule| rule.id != "cache");
+        bundle.rules.push(extra);
+        bundle.validate().unwrap();
+        let snapshot = Arc::new(crate::core::rules::RuleSnapshot { bundle });
+        let (targets, _) = crate::core::rules::directories::scan_at(
+            &snapshot,
+            "cache",
+            &crate::core::rules::directories::fixture_roots(&root, &root.join("roaming")),
+        );
+        let found = targets
+            .iter()
+            .find(|target| target.path == root.join(".cache/cache-tool"))
+            .expect("the added package catalog must surface as a target");
+        assert_eq!(found.category, CategoryId::PackageCache);
+        assert!(found.recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     /// 混装目录按内容拆开：更新包叶子进「应用更新包」，形态不明的子项各自
     /// 作为展示项入表，父目录不得再次入表。
@@ -482,8 +391,7 @@ mod tests {
         std::fs::create_dir_all(profile.join("Cookies")).unwrap();
         std::fs::create_dir_all(tool.join("chrome-profile/IndexedDB")).unwrap();
 
-        let mut targets = Vec::new();
-        push_home_cache_targets(&mut targets, &root);
+        let targets = home_cache_scan(&root);
         let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
 
         assert_eq!(targets.len(), 3, "{paths:?}");
@@ -614,8 +522,7 @@ mod tests {
             std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
         }
 
-        let mut targets = Vec::new();
-        push_home_cache_targets(&mut targets, &root);
+        let targets = home_cache_scan(&root);
 
         for name in ["uv", "pip"] {
             let target = targets
@@ -647,6 +554,121 @@ mod tests {
             .expect("表外的目录仍应展示");
         assert_eq!(unknown.category, CategoryId::UserTemp);
         assert!(!unknown.recommended);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 迁移金样：`~/.cache` 枚举改走声明式 `catalog_children` 后，目标、标签、
+    /// 类别、推荐与处置和旧 Rust 构造（删除前的 `push_home_cache_targets`）
+    /// 逐项一致。基线由迁移前的实现产出后提交，路径归一为相对 `<root>`。
+    #[test]
+    fn home_cache_catalog_children_preserve_the_migration_baseline() {
+        let root = crate::core::testing::fixture("qc_home_cache_migration");
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["uv", "pypoetry", "opencode", "some-unknown-tool"] {
+            std::fs::create_dir_all(root.join(".cache").join(name)).unwrap();
+        }
+        let profile = root.join(".cache/chrome-devtools-mcp/chrome-profile/Default");
+        for leaf in ["Cache", "GPUCache"] {
+            std::fs::create_dir_all(profile.join(leaf)).unwrap();
+            std::fs::write(profile.join(leaf).join("data"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(profile.join("Cookies")).unwrap();
+        std::fs::create_dir_all(root.join(".cache/empty-leaf-only/Default/GPUCache")).unwrap();
+        std::fs::write(root.join(".cache/loose.txt"), b"file").unwrap();
+
+        let targets = home_cache_scan(&root);
+        let rows: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|target| home_cache_row(target, &root))
+            .collect();
+        let baseline: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/cache-catalog-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(rows, baseline);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 派发与叶子推荐跟着规则走：新增一个目录只需在 cache.toml 加一行；
+    /// 一个叶子要不要预选由 chromium.toml 的 shown_leaves 决定。
+    #[test]
+    fn catalog_children_policy_and_leaf_recommendation_follow_the_rule() {
+        use std::sync::Arc;
+        let root = crate::core::testing::fixture("qc_home_cache_policy");
+        let _ = std::fs::remove_dir_all(&root);
+        // 签名成立的最小布局：两个签名叶子。Cache 是被改推荐的目标，
+        // GPUCache 是对照组。
+        let profile = root.join(".cache/fixturetool/chrome-profile/Default");
+        for leaf in ["Cache", "GPUCache"] {
+            std::fs::create_dir_all(profile.join(leaf)).unwrap();
+            std::fs::write(profile.join(leaf).join("data"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(root.join(".cache/fixturepkg")).unwrap();
+
+        let targets = home_cache_scan(&root);
+        let cache_leaf = targets
+            .iter()
+            .find(|t| t.path == profile.join("Cache"))
+            .expect("签名叶子该入表");
+        assert!(cache_leaf.recommended, "普通缓存叶子该预选");
+        let fallback = targets
+            .iter()
+            .find(|t| t.path == root.join(".cache/fixturepkg"))
+            .expect("规则没派发的新目录仍走兜底展示");
+        assert_eq!(fallback.category, CategoryId::UserTemp);
+        assert!(!fallback.recommended);
+
+        let original = crate::core::rules::snapshot();
+        let mut bundle = original.bundle.clone();
+        let cache = bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "cache")
+            .unwrap();
+        cache.version += 1;
+        cache
+            .catalogs
+            .get_mut("packages")
+            .unwrap()
+            .push(crate::core::rules::Layout {
+                path: "fixturepkg".into(),
+                zh: "夹具包缓存".into(),
+                en: "Fixture package cache".into(),
+                children: Vec::new(),
+            });
+        let chromium = bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "chromium")
+            .unwrap();
+        chromium.version += 1;
+        chromium
+            .lists
+            .get_mut("shown_leaves")
+            .unwrap()
+            .push("Cache".into());
+        bundle.validate().unwrap();
+        let changed = Arc::new(crate::core::rules::RuleSnapshot { bundle });
+        let targets = crate::core::rules::with_snapshot(changed.clone(), || home_cache_scan(&root));
+        let package = targets
+            .iter()
+            .find(|t| t.path == root.join(".cache/fixturepkg"))
+            .expect("新增目录只需规则加一行");
+        assert_eq!(package.category, CategoryId::PackageCache);
+        assert!(package.recommended);
+        let cache_leaf = targets
+            .iter()
+            .find(|t| t.path == profile.join("Cache"))
+            .expect("进 shown_leaves 的叶子仍要展示");
+        assert!(!cache_leaf.recommended, "shown_leaves 里的叶子只展示");
+        assert!(
+            targets
+                .iter()
+                .find(|t| t.path == profile.join("GPUCache"))
+                .is_some_and(|t| t.recommended),
+            "对照组叶子不受影响"
+        );
+        assert!(Arc::ptr_eq(&package.rule.snapshot, &changed));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -732,5 +754,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// 随程序发布闭环（schema=9 重验）：编译产物里的 `~/.cache` 目标表面完全
+    /// 跟随内置 TOML——期望逐行从 embedded bundle 的 catalog_policy 推导。
+    /// 只改 rules/cache.toml 加一行并重编译（build.rs 重新内嵌规则包），下一
+    /// 次扫描就表面化新目标；本测试在改动前后都应保持绿，且断言自动覆盖新行。
+    #[test]
+    fn bundled_scan_surface_follows_the_embedded_catalog() {
+        use crate::core::rules::directories::{CatalogPolicy, Selection};
+        use std::collections::BTreeMap;
+
+        let root = crate::core::testing::fixture("qc_bundled_catalog_surface");
+        let _ = std::fs::remove_dir_all(&root);
+        let cache = root.join(".cache");
+        let snapshot = crate::core::rules::snapshot();
+        let rule = snapshot.definition("cache");
+        let entry = rule
+            .directories
+            .iter()
+            .find(|entry| entry.id == "home_cache")
+            .expect("home_cache entry");
+        let catalog_policy: &BTreeMap<String, CatalogPolicy> = match &entry.select {
+            Selection::CatalogChildren { catalog_policy, .. } => catalog_policy,
+            _ => panic!("home_cache must use catalog_children"),
+        };
+
+        // 磁盘上放齐全部被派发目录 + 一个表外目录。
+        let mut dispatched: Vec<(String, String, bool)> = Vec::new();
+        for (catalog, policy) in catalog_policy {
+            for row in &rule.catalogs[catalog] {
+                std::fs::create_dir_all(cache.join(&row.path)).unwrap();
+                dispatched.push((
+                    row.path.clone(),
+                    policy.category.clone(),
+                    policy.recommended,
+                ));
+            }
+        }
+        std::fs::create_dir_all(cache.join("not-in-any-catalog")).unwrap();
+
+        let targets = home_cache_scan(&root);
+        assert_eq!(
+            targets.len(),
+            dispatched.len() + 1,
+            "目标表面必须恰好是内置规则的派发行 + 一个兜底"
+        );
+        for (name, category, recommended) in &dispatched {
+            let dir = cache.join(name);
+            let target = targets
+                .iter()
+                .find(|t| t.path == dir)
+                .unwrap_or_else(|| panic!("内置规则声明的 {name} 没有表面化"));
+            assert_eq!(
+                target.category,
+                CategoryId::from_rule(category).unwrap(),
+                "{name} 类别应来自 catalog_policy"
+            );
+            assert_eq!(
+                target.recommended, *recommended,
+                "{name} 推荐应来自 catalog_policy"
+            );
+        }
+        let fallback = targets
+            .iter()
+            .find(|t| t.path == cache.join("not-in-any-catalog"))
+            .expect("表外目录仍要兜底展示");
+        assert!(!fallback.recommended);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

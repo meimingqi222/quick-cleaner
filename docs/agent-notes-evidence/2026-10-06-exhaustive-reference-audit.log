@@ -1,0 +1,28 @@
+全文件反引号标识符：320
+解析为现行通过测试：128
+解析为源码/规则/工具中的标识符：176
+既非测试也不存在于仓库的引用（陈旧/拼写错误）：16
+  STALE auto_update_rules
+  STALE check_and_update
+  STALE d0684a57
+  STALE d0684a57fdef526f07a725461adc0a100b519f2c
+  STALE dedup_items
+  STALE deep_preserved_paths_recurse_and_keep_siblings
+  STALE generated_signing_key_is_fresh_and_verifies_against_its_public_key
+  STALE getrandom
+  STALE gpui_http_client
+  STALE gpui_media
+  STALE install_channel
+  STALE load_cached
+  STALE load_selected
+  STALE owner_result
+  STALE push_firefox_profile_caches
+  STALE rules_only_release_reaches_the_next_scan_without_recompiling
+=== exhaustive-ref-audit batch 2026-10-06T14:48:39+08:00 ===
+fmt_exit=0
+test_exit=0
+
+clippy_exit=0
+build_exit=0
+anchors_exit=0
+diff_clean

@@ -3,6 +3,8 @@
 use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget, CleanProgress, Disposal};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
+use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::i18n::*;
 use crate::ui::views::DeclutterTab;
 use gpui::Context;
 use std::path::{Path, PathBuf};
@@ -15,12 +17,7 @@ impl crate::ui::Root {
         self.declutter.scanning = true;
         let rule_snapshot = crate::core::rules::snapshot();
         self.declutter.rule_snapshot = Some(rule_snapshot.clone());
-        self.status = bilingual(|l| match l {
-            Language::Zh => "正在利用索引与多线程深度扫描大文件、重复文件与相似图片...".to_string(),
-            Language::En => {
-                "Scanning for large files, duplicates and similar photos (indexed)...".to_string()
-            }
-        });
+        self.status = bilingual(|l| tr_status_declutter_scanning(l).to_string());
         cx.notify();
 
         let live = self.live.clone();
@@ -137,7 +134,37 @@ impl crate::ui::Root {
     ///
     /// 计数口径也随之对齐 core 的不变量：**移入废纸篓不释放空间**，所以只报
     /// 条目数，不再说「释放 X」。
+    /// 冗余整理的「移入废纸篓」入口：确认前显示本次范围（条目数）与处置方式。
+    ///
+    /// 与磁盘透镜一样是用户手选范围，因此只展示范围与「移入废纸篓」这一操作，
+    /// 不套规则版本。确认后走 `run_declutter_clean`。
     pub fn clean_declutter_selected(&mut self, tab: DeclutterTab, cx: &mut Context<Self>) {
+        if self.declutter.cleaning {
+            return;
+        }
+        let paths = self.selected_declutter_paths(tab);
+        if paths.is_empty() {
+            return;
+        }
+        let count = paths.len();
+        let lang = self.language;
+        // 范围如实展示：列出这次会移走的路径（过长时只列前若干并说明总数），
+        // 与磁盘透镜入口同一份 `confirm_scope_detail`。
+        let listed: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        let mut detail = tr_confirm_declutter_detail(lang).to_string();
+        detail.push_str(&confirm_scope_detail(lang, &listed));
+        self.confirm = Some(ConfirmRequest {
+            title: tr_confirm_declutter_title(lang).to_string(),
+            body: tr_confirm_declutter_msg(lang, count),
+            detail,
+            kind: ConfirmKind::CleanDeclutter(tab),
+            app_data: false,
+        });
+        cx.notify();
+    }
+
+    /// 确认后的实际清理：把选中的条目移入废纸篓。
+    pub(crate) fn run_declutter_clean(&mut self, tab: DeclutterTab, cx: &mut Context<Self>) {
         if self.declutter.cleaning {
             return;
         }
@@ -148,10 +175,7 @@ impl crate::ui::Root {
 
         let n = paths.len();
         self.declutter.cleaning = true;
-        self.status = bilingual(move |l| match l {
-            Language::Zh => format!("正在把 {n} 项移入废纸篓..."),
-            Language::En => format!("Moving {n} items to Trash..."),
-        });
+        self.status = bilingual(move |l| tr_status_declutter_moving(l, n));
         cx.notify();
 
         let items: Vec<ArbitraryTarget> = paths.into_iter().map(ArbitraryTarget::capture).collect();
@@ -265,27 +289,41 @@ impl crate::ui::Root {
     /// 一个文件谈不上「重复」。
     fn prune_cleaned_declutter_items(&mut self, tab: DeclutterTab, failed: &[PathBuf]) {
         // 勾上了但没移走的要留下：以前无条件按 selected 摘除，失败的条目会从
-        // 界面上消失，用户以为清掉了，其实文件还在盘上。
-        let gone = |path: &PathBuf, selected: bool| selected && !failed.contains(path);
+        // 界面上消失，用户以为清掉了，其实文件还在盘上。「已清掉」以实际核验为准
+        // （报告没失败 + 路径确实不在了），只看报告会把「返回成功但文件还在」的
+        // 条目也从界面抹掉。
         let d = &mut self.declutter;
         match tab {
-            DeclutterTab::Downloads => d.download_items.retain(|f| !gone(&f.path, f.selected)),
-            DeclutterTab::LargeFiles => d.large_files.retain(|f| !gone(&f.path, f.selected)),
+            DeclutterTab::Downloads => d
+                .download_items
+                .retain(|f| !declutter_item_is_gone(&f.path, f.selected, failed)),
+            DeclutterTab::LargeFiles => d
+                .large_files
+                .retain(|f| !declutter_item_is_gone(&f.path, f.selected, failed)),
             DeclutterTab::SimilarPhotos => {
                 for g in &mut d.photo_groups {
-                    g.photos.retain(|p| !gone(&p.path, p.selected));
+                    g.photos
+                        .retain(|p| !declutter_item_is_gone(&p.path, p.selected, failed));
                 }
                 d.photo_groups.retain(|g| g.photos.len() >= 2);
             }
             DeclutterTab::Duplicates => {
                 for g in &mut d.duplicate_groups {
-                    g.files.retain(|f| !gone(&f.path, f.selected));
+                    g.files
+                        .retain(|f| !declutter_item_is_gone(&f.path, f.selected, failed));
                 }
                 d.duplicate_groups.retain(|g| g.files.len() >= 2);
             }
             DeclutterTab::Overview => {}
         }
     }
+}
+
+/// 一条已勾选条目是否应从列表摘除：报告没失败、且路径确实已经不在了才算清掉。
+///
+/// 独立成纯函数以便单测——只看报告会把「返回成功但文件还在」的条目从界面抹掉。
+fn declutter_item_is_gone(path: &std::path::Path, selected: bool, failed: &[PathBuf]) -> bool {
+    selected && !failed.iter().any(|failed| failed == path) && !path.exists()
 }
 
 /// 状态栏里对这批条目的称呼。
@@ -296,5 +334,37 @@ fn declutter_item_noun(tab: DeclutterTab) -> (&'static str, &'static str) {
         DeclutterTab::SimilarPhotos => ("相似照片", "similar photos"),
         DeclutterTab::Duplicates => ("重复文件", "duplicate files"),
         DeclutterTab::Overview => ("项目", "items"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::declutter_item_is_gone;
+    use std::path::PathBuf;
+
+    /// 已清掉的判定以实际核验为准：报告没失败、且路径确实不在了才算清掉。
+    #[test]
+    fn declutter_gone_requires_report_success_and_actual_absence() {
+        let dir = crate::core::testing::fixture("qc_declutter_gone");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gone = dir.join("gone.bin");
+        let alive = dir.join("alive.bin");
+        std::fs::write(&alive, b"x").unwrap();
+        let failed: Vec<PathBuf> = Vec::new();
+
+        // 未勾选：不动。
+        assert!(!declutter_item_is_gone(&alive, false, &failed));
+        // 勾选但文件还在：留下（只看报告会把这条从界面抹掉）。
+        assert!(!declutter_item_is_gone(&alive, true, &failed));
+        // 勾选且确实不在了：摘除。
+        assert!(declutter_item_is_gone(&gone, true, &failed));
+        // 报告失败：即便文件已不在也留下（失败名单优先）。
+        assert!(!declutter_item_is_gone(
+            &gone,
+            true,
+            std::slice::from_ref(&gone)
+        ));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

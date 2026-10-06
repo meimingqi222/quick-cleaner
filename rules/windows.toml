@@ -1,5 +1,5 @@
 id = "windows"
-version = 2
+version = 3
 platform = "windows"
 required = ["file"]
 
@@ -9,6 +9,86 @@ path = "Microsoft/Windows/Explorer"
 zh = "缩略图/图标缓存"
 en = "Thumbnail / icon cache"
 category = "Thumbnails"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "system"
+path = "Temp"
+zh = "Windows\\Temp"
+en = "Windows\\Temp"
+category = "SystemTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "system"
+path = "SoftwareDistribution/Download"
+zh = "Windows 更新缓存"
+en = "Windows Update cache"
+category = "SystemTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "system"
+path = "SystemTemp"
+zh = "SystemTemp"
+en = "SystemTemp"
+category = "SystemTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "drive:C"
+path = "tmp"
+zh = "C:\\tmp"
+en = "C:\\tmp"
+category = "SystemTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "system"
+path = "Logs"
+zh = "Windows\\Logs"
+en = "Windows\\Logs"
+category = "Logs"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "user_temp"
+path = "."
+zh = "%TEMP%"
+en = "%TEMP%"
+category = "UserTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "local"
+path = "CrashDumps"
+zh = "CrashDumps 崩溃转储"
+en = "CrashDumps"
+category = "Logs"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+[[entries]]
+root = "local"
+path = "D3DSCache"
+zh = "D3D 着色器缓存"
+en = "D3D shader cache"
+category = "Logs"
 operation = "contents"
 disposal = "permanent"
 recommended = true

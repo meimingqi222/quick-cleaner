@@ -1,0 +1,8 @@
+
+
+failures:
+    platform::windows::residuals::tests::registry_residual_clean_verifies_absence_after_delete
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 570 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

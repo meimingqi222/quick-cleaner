@@ -1,0 +1,10 @@
+=== guard path-extension batch 2026-10-06T14:57:39+08:00 ===
+fmt_exit=0
+test_exit=0
+
+clippy_exit=0
+build_exit=0
+anchors_exit=0
+OK: no new inline UI strings (remaining baseline: 0)
+OK: 343 identifier(s) resolved (609 test names); 3 doc(s) path-clean
+diff_clean

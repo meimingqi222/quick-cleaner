@@ -1,0 +1,43 @@
+=== 矩阵其余六行引用抽样 2026-10-06T14:42:29+08:00 ===
+--- 统一计划（4 条）
+test core::rules::plan::tests::source_and_worktree_steps_preserve_verification_before_records ... ok
+test core::rules::flow::tests::native_executor_uses_typed_resources_and_reports_verification_and_accounting ... ok
+test core::cleaner::tests::arbitrary_clean_refuses_a_type_swap_after_capture ... ok
+test core::cleaner::tests::scanned_filesystem_target_runs_reported_plan_lifecycle ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 0.02s
+--- 范围安全（4 条）
+test core::apps::tests::residual_dedup_collapses_parent_child_overlap_in_any_order ... ok
+test core::categories::tests::nested_targets_merge_into_the_covering_parent_in_any_order ... ok
+test core::categories::tests::covering_targets_split_into_independent_children_around_preserves ... ok
+test core::cleaner::tests::core_duplicate_merge_preserves_every_rule_in_both_orders ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 0.03s
+--- 原生能力（4 条）
+test platform::windows::residuals::tests::user_environment_evidence_requires_value_or_name_evidence ... ok
+test platform::windows::residuals::tests::registry_residual_clean_verifies_absence_after_delete ... ok
+test core::cleaner::tests::recycle_verification_rejects_reported_success_that_left_the_file ... ok
+test platform::windows::residuals::tests::scheduled_task_delete_counts_absence_as_completion ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 0.04s
+--- UI（5 条）
+test ui::i18n::scope_detail_tests::disposal_summary_reflects_the_recycle_setting ... ok
+test ui::i18n::scope_detail_tests::scope_detail_lists_paths_and_marks_truncation ... ok
+test ui::i18n::views::tests::view_strings_are_localized_and_carry_their_values ... ok
+test ui::actions::disk::tests::unresolved_counts_surviving_targets_regardless_of_reason ... ok
+test ui::state::tests::selected_plan_summary_lists_rule_versions_and_blocked_reasons ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 603 filtered out; finished in 0.02s
+--- 性能（3 条）
+test core::rules::directories::tests::manifest_reads_and_rows_share_the_session_budget ... ok
+test core::rules::directories::tests::directory_probe_budget_covers_empty_missing_and_duplicate_roots ... ok
+test core::categories::tests::production_target_table_is_deterministic_and_duplicate_free ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 605 filtered out; finished in 1.12s
+--- 维护交付（交付物抽样）
+docs/RULES.md: 220 行
+docs/CAPABILITIES.md: 42 行
+docs/PITFALLS.md: 477 行
+docs/HANDOFF.md: 75 行
+RULES.md schema9 节: 1 处
+CAPABILITIES.md schema9: 1 处
+配置增量示例: 7 份
+note 数（implemented/archived）: 69 / 3
+OK: regression notes under docs\agent-notes verified
+OK: no new inline UI strings (remaining baseline: 0)
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers

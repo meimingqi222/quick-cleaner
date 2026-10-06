@@ -1,0 +1,19 @@
+id = "fixture-directory-layout"
+version = 1
+platform = "all"
+required = ["file", "directory_selection"]
+
+[[directories]]
+id = "project_markers"
+root = "home"
+paths = ["Projects"]
+zh = "项目标记 · {relative}"
+en = "Project marker · {relative}"
+category = "UserCache"
+operation = "file"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "named_files"
+name = "project.marker"
+child_depth = 1

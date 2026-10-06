@@ -12,7 +12,7 @@ Schema 2 requires operation and disposal on path entries. The schema source gene
 
 ## Alternatives considered
 
-Keeping category defaults at confirmation would preserve hidden execution policy. Parsing URI parameters after confirmation would keep presentation as authority. Accepting old packages with missing fields would make behavior depend on client defaults. All were rejected. Dynamic providers still have a compatibility constructor; their migration is tracked separately rather than claimed complete.
+Keeping category defaults at confirmation would preserve hidden execution policy. Parsing URI parameters after confirmation would keep presentation as authority. Accepting old packages with missing fields would make behavior depend on client defaults. All were rejected. The subsequent dynamic constructor migration is owned by `2026-10-05-runtime-provider-policies.md`; it does not prove the entire refactor complete.
 
 ## Consequences
 

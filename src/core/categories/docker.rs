@@ -4,6 +4,7 @@ use super::{target_with_size, CategoryId, ScanTarget};
 use crate::core::docker::{self, JunkKind};
 use crate::core::i18n::Text;
 use crate::core::model::docker_image_path;
+use crate::core::rules::Operation;
 
 /// 枚举冗余镜像并生成虚拟路径目标。
 ///
@@ -41,8 +42,14 @@ pub(super) fn push_docker_targets(t: &mut Vec<ScanTarget>) {
         };
         let reference = junk.rmi_ref();
         let path = docker_image_path(&reference);
-        let mut target = target_with_size(path, label, CategoryId::DockerImages, junk.image.size);
-        target.operation = crate::core::rules::Operation::Docker { reference };
+        let target = target_with_size(
+            path,
+            label,
+            CategoryId::DockerImages,
+            junk.image.size,
+            Operation::Docker { reference },
+            ("engine", "docker_image"),
+        );
         t.push(target);
     }
 }

@@ -20,7 +20,6 @@ serde = { version = "1", features = ["derive"] }
 # 只给 core/settings.rs 用：读写 %APPDATA%\QuickCleaner\settings.json
 serde_json = "1"
 toml = "0.8"
-ed25519-dalek = "2"
 chrono = "0.4"
 lz4_flex = "0.14.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
@@ -32,9 +31,6 @@ ureq = { version = "2.12", features = ["json"] }
 # 解压发行 zip；sha2 做 sidecar 校验
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
-# 只给运维工具 `rules keygen` 用：生成规则签名密钥对的 OS 熵源。不参与运行时清理逻辑，
-# 已在依赖树里（0.2.x 由传递依赖引入），显式声明不引入新的下载。
-getrandom = "0.2"
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 展开里带着 `#[cfg(feature = "cargo-clippy")]`——那是

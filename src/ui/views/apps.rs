@@ -89,15 +89,8 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         ),
     };
 
-    let total_apps_display = match lang {
-        Language::Zh => format!("{total_apps} 款"),
-        Language::En => format!("{total_apps} Apps"),
-    };
-
-    let stale_apps_display = match lang {
-        Language::Zh => format!("{stale_apps_count} 款"),
-        Language::En => format!("{stale_apps_count} Apps"),
-    };
+    let total_apps_display = tr_apps_count(lang, total_apps);
+    let stale_apps_display = tr_apps_count(lang, stale_apps_count);
 
     // 顶部 3 个指标卡片
     let stats_row = div()
@@ -299,15 +292,9 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     );
 
     let filter_stats_text = if root.apps.input.text.is_empty() {
-        match lang {
-            Language::Zh => format!("共 {} 款", display_apps.len()),
-            Language::En => format!("{} apps", display_apps.len()),
-        }
+        tr_apps_filter_all(lang, display_apps.len())
     } else {
-        match lang {
-            Language::Zh => format!("匹配 {} / {} 款", display_apps.len(), total_apps),
-            Language::En => format!("Matched {} of {} apps", display_apps.len(), total_apps),
-        }
+        tr_apps_filter_matched(lang, display_apps.len(), total_apps)
     };
 
     let filter_stats_tag = div()
@@ -403,10 +390,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         };
 
     // 表格头（全部支持点击正逆序排序，并动态显示当前列项目数）
-    let app_name_header = match lang {
-        Language::Zh => format!("应用名称与版本 (共 {} 款)", display_apps.len()),
-        Language::En => format!("Name & Version ({} apps)", display_apps.len()),
-    };
+    let app_name_header = tr_apps_name_header(lang, display_apps.len());
     let table_header = div()
         .px_5()
         .py_2()
@@ -470,10 +454,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         ),
     };
 
-    let empty_title = match lang {
-        Language::Zh => "未找到匹配的已安装软件",
-        Language::En => "No matching applications found",
-    };
+    let empty_title = tr_apps_empty(lang);
 
     let body = if root.apps.scanning {
         ListBody::Placeholder(loading_state_view(
@@ -505,33 +486,12 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     let filtered_size: u64 = display_apps.iter().map(|a| a.estimated_size).sum();
     let footer_text = if root.apps.input.text.is_empty() {
-        match lang {
-            Language::Zh => format!(
-                "当前列表展示 {} 款软件（总计 {} 款已装）",
-                display_apps.len(),
-                total_apps
-            ),
-            Language::En => format!(
-                "Displaying {} apps (Total {} installed)",
-                display_apps.len(),
-                total_apps
-            ),
-        }
+        tr_apps_footer_all(lang, display_apps.len(), total_apps)
     } else {
-        match lang {
-            Language::Zh => format!(
-                "搜索匹配 {} 款软件（总计 {} 款）",
-                display_apps.len(),
-                total_apps
-            ),
-            Language::En => format!("Matched {} apps (Total {})", display_apps.len(), total_apps),
-        }
+        tr_apps_footer_matched(lang, display_apps.len(), total_apps)
     };
 
-    let total_size_label = match lang {
-        Language::Zh => format!("列表总占用: {}", fmt_size(filtered_size)),
-        Language::En => format!("Total Size: {}", fmt_size(filtered_size)),
-    };
+    let total_size_label = tr_apps_total_size(lang, &fmt_size(filtered_size));
 
     let list_footer = div()
         .px_5()

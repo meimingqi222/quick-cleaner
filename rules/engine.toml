@@ -1,7 +1,7 @@
 id = "engine"
-version = 1
+version = 6
 platform = "all"
-required = ["file", "providers", "declutter"]
+required = ["file", "providers", "declutter", "docker", "snapshot", "owner"]
 
 [lists]
 providers = ["system", "cache", "browser", "development", "docker", "macos"]
@@ -43,3 +43,54 @@ download_max_depth = 4
 default_min_size_filter = 100000000
 default_age_filter_months = 3
 
+[provider_policies.browser_cache]
+recommended = true
+disposal = "permanent"
+
+[provider_policies.cache_candidate]
+recommended = true
+disposal = "permanent"
+
+[provider_policies.agent_history]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.linked_worktree]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.development_candidate]
+recommended = true
+disposal = "permanent"
+
+[provider_policies.docker_image]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.broken_login_item]
+recommended = true
+disposal = "permanent"
+
+[provider_policies.local_snapshot]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.old_ide_data]
+recommended = false
+disposal = "recycle_bin"
+
+[provider_policies.volume_trash]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.user_trash]
+recommended = false
+disposal = "permanent"
+
+[provider_policies.updater_artifact]
+recommended = true
+disposal = "permanent"
+
+[provider_policies.brew_cleanup]
+recommended = true
+disposal = "permanent"

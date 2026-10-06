@@ -340,51 +340,12 @@ fn render_rules_settings(root: &Root, cx: &mut Context<Root>) -> gpui::AnyElemen
                     crate::core::rules::snapshot().bundle.sequence,
                 ))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.rule_update.expanded = !this.rule_update.expanded;
+                    this.rule_panel.expanded = !this.rule_panel.expanded;
                     cx.notify();
                 })),
         );
-    if root.rule_update.expanded {
-        panel = panel
-            .child(div().px_3().child(tr_rules_next_scan(lang)))
-            .child(
-                div()
-                    .id("rules-auto")
-                    .px_3()
-                    .py_1()
-                    .cursor_pointer()
-                    .child(tr_rules_auto(lang, root.settings.auto_update_rules))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.auto_update_rules = !this.settings.auto_update_rules;
-                        this.settings.save();
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("rules-check")
-                    .px_3()
-                    .py_1()
-                    .cursor_pointer()
-                    .child(if root.rule_update.checking {
-                        tr_update_checking(lang)
-                    } else {
-                        tr_rules_check(lang)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.check_rule_update(cx))),
-            )
-            .child(
-                div()
-                    .id("rules-rollback")
-                    .px_3()
-                    .py_1()
-                    .cursor_pointer()
-                    .child(tr_rules_rollback(lang))
-                    .on_click(cx.listener(|this, _, _, cx| this.rollback_rules(cx))),
-            );
-        if root.rule_update.error.is_some() {
-            panel = panel.child(div().px_3().child(tr_rules_failed(lang)));
-        }
+    if root.rule_panel.expanded {
+        panel = panel.child(div().px_3().child(tr_rules_bundled(lang)));
     }
     panel.into_any_element()
 }

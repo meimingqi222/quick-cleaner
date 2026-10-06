@@ -1,0 +1,336 @@
+Historical test source for the removed remote rule channel. Not compiled or maintained as a client capability.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    fn signed_bundle(bundle: &RuleBundle) -> (Vec<u8>, Vec<u8>, Vec<u8>, BTreeMap<String, String>) {
+        let key = SigningKey::from_bytes(&[37; 32]);
+        let package = serde_json::to_vec(bundle).unwrap();
+        let manifest = serde_json::to_vec(&Manifest {
+            sequence: bundle.sequence,
+            sha256: format!("{:x}", Sha256::digest(&package)),
+            schema: SCHEMA,
+            minimum_app_version: env!("CARGO_PKG_VERSION").into(),
+            required: CAPABILITIES.iter().map(|s| s.to_string()).collect(),
+            key_id: "fixture".into(),
+        })
+        .unwrap();
+        let signature = key.sign(&manifest).to_bytes().to_vec();
+        let keys = BTreeMap::from([(
+            "fixture".into(),
+            key.verifying_key()
+                .to_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+        )]);
+        (manifest, signature, package, keys)
+    }
+    fn signed(sequence: u64) -> (Vec<u8>, Vec<u8>, Vec<u8>, BTreeMap<String, String>) {
+        let mut bundle = super::super::embedded().bundle.clone();
+        bundle.sequence = sequence;
+        signed_bundle(&bundle)
+    }
+    #[test]
+    fn update_authenticates_entire_bundle_and_rejects_replay() {
+        let (manifest, mut signature, mut package, keys) = signed(10);
+        assert_eq!(
+            verify(&manifest, &signature, &package, &keys, 9)
+                .unwrap()
+                .sequence,
+            10
+        );
+        assert!(verify(&manifest, &signature, &package, &keys, 11).is_err());
+        package.push(b' ');
+        assert!(verify(&manifest, &signature, &package, &keys, 9).is_err());
+        package.pop();
+        signature[0] ^= 1;
+        assert!(verify(&manifest, &signature, &package, &keys, 9).is_err());
+        assert!(verify(&manifest, &signature, &package, &BTreeMap::new(), 9).is_err());
+    }
+    #[test]
+    fn untrusted_hex_never_panics_on_unicode() {
+        assert!(decode_hex::<2>("€a").is_err());
+        assert!(decode_hex::<2>("zzzz").is_err());
+        assert_eq!(decode_hex::<2>("abcd").unwrap(), [0xab, 0xcd]);
+    }
+    #[test]
+    fn generated_signing_key_is_fresh_and_verifies_against_its_public_key() {
+        let (private, public) = super::generate_signing_key().unwrap();
+        assert_eq!(private.len(), 64);
+        assert_eq!(public.len(), 64);
+        let key = SigningKey::from_bytes(&decode_hex::<32>(&private).unwrap());
+        let derived: String = key
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            derived, public,
+            "printed public key must match the private key"
+        );
+        let keys = BTreeMap::from([("fixture".to_string(), public.clone())]);
+        let mut bundle = super::super::embedded().bundle.clone();
+        bundle.sequence = 10;
+        let package = serde_json::to_vec(&bundle).unwrap();
+        let manifest = serde_json::to_vec(&Manifest {
+            sequence: 10,
+            sha256: format!("{:x}", Sha256::digest(&package)),
+            schema: SCHEMA,
+            minimum_app_version: env!("CARGO_PKG_VERSION").into(),
+            required: CAPABILITIES.iter().map(|s| s.to_string()).collect(),
+            key_id: "fixture".into(),
+        })
+        .unwrap();
+        let signature = key.sign(&manifest).to_bytes().to_vec();
+        assert_eq!(
+            verify(&manifest, &signature, &package, &keys, 0)
+                .unwrap()
+                .sequence,
+            10
+        );
+        // A package signed by the fixture key must not verify under the generated key.
+        let (other_manifest, other_signature, other_package, _) = signed(10);
+        assert!(verify(&other_manifest, &other_signature, &other_package, &keys, 0).is_err());
+        assert_ne!(
+            super::generate_signing_key().unwrap().0,
+            private,
+            "each generation must use fresh entropy"
+        );
+    }
+    fn sign_header(header: &Manifest) -> (Vec<u8>, Vec<u8>, BTreeMap<String, String>) {
+        let key = SigningKey::from_bytes(&[37; 32]);
+        let manifest = serde_json::to_vec(header).unwrap();
+        let signature = key.sign(&manifest).to_bytes().to_vec();
+        let keys = BTreeMap::from([(
+            "fixture".into(),
+            key.verifying_key()
+                .to_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+        )]);
+        (manifest, signature, keys)
+    }
+    #[test]
+    fn verify_rejects_incompatible_manifest_and_package_drift() {
+        let (manifest, _, package, _) = signed(10);
+        let header: Manifest = serde_json::from_slice(&manifest).unwrap();
+        let reject = |header: Manifest, package: &[u8]| {
+            let (manifest, signature, keys) = sign_header(&header);
+            assert!(verify(&manifest, &signature, package, &keys, 0).is_err());
+        };
+        let mut too_new = header.clone();
+        too_new.minimum_app_version = "999.0.0".into();
+        reject(too_new, &package);
+        let mut malformed_version = header.clone();
+        malformed_version.minimum_app_version = "1.2".into();
+        reject(malformed_version, &package);
+        let mut schema = header.clone();
+        schema.schema = SCHEMA + 1;
+        reject(schema, &package);
+        let mut replay = header.clone();
+        replay.sequence = 0;
+        reject(replay, &package);
+        let mut unknown = header.clone();
+        unknown.required.push("shell".into());
+        reject(unknown, &package);
+
+        let mut undeclared = header.clone();
+        undeclared
+            .required
+            .retain(|capability| capability != "file");
+        reject(undeclared, &package);
+
+        let mut bundle: super::super::RuleBundle = serde_json::from_slice(&package).unwrap();
+        bundle.sequence = 11;
+        let drifted = serde_json::to_vec(&bundle).unwrap();
+        let mut drifted_header = header;
+        drifted_header.sha256 = format!("{:x}", Sha256::digest(&drifted));
+        reject(drifted_header, &drifted);
+    }
+    #[test]
+    fn cache_file_over_limit_or_not_a_file_is_rejected() {
+        let root = crate::core::testing::fixture("rule_cache_reject");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("rules.json");
+        std::fs::write(&file, vec![b'x'; 32]).unwrap();
+        assert!(read_bounded(&file, 8).is_err());
+        assert!(read_bounded(&root, 100).is_err());
+        assert!(check_directory(&file).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn atomic_state_keeps_previous_and_watermark() {
+        let root = crate::core::testing::fixture("rule_state");
+        std::fs::create_dir_all(&root).unwrap();
+        write_state(
+            &root,
+            &State {
+                current: 7,
+                previous: 6,
+                watermark: 7,
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("state-999999999999999999999999999999999999999.json"),
+            b"interrupted",
+        )
+        .unwrap();
+        let s = state(&root).unwrap();
+        assert_eq!((s.current, s.previous, s.watermark), (7, 6, 7));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn corrupt_state_never_resets_replay_protection() {
+        let root = crate::core::testing::fixture("rule_corrupt_state");
+        std::fs::write(root.join("state-1.json"), b"interrupted").unwrap();
+        assert!(state(&root).is_err());
+        let (manifest, signature, package, keys) = signed(10);
+        assert!(install_at(&root, &manifest, &signature, &package, &keys).is_err());
+        assert!(!root.join("10").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interrupted_publication_retries_and_corrupt_updates_leave_active_state() {
+        let root = crate::core::testing::fixture("rule_interrupted_install");
+        let (manifest, signature, package, keys) = signed(10);
+        let bundle = verify(&manifest, &signature, &package, &keys, 0).unwrap();
+        store_package(&root, &manifest, &signature, &package, &keys, &bundle).unwrap();
+        assert_eq!(state(&root).unwrap().watermark, 0);
+        assert_eq!(
+            load_selected(&root, &keys).unwrap().sequence,
+            super::super::embedded().bundle.sequence
+        );
+        install_at(&root, &manifest, &signature, &package, &keys).unwrap();
+        let old = Arc::new(RuleSnapshot { bundle });
+        let (next_manifest, next_signature, mut next_package, _) = signed(11);
+        next_package.push(b'x');
+        assert!(install_at(&root, &next_manifest, &next_signature, &next_package, &keys).is_err());
+        assert_eq!(state(&root).unwrap().current, 10);
+        let (_, _, next_package, _) = signed(11);
+        install_at(&root, &next_manifest, &next_signature, &next_package, &keys).unwrap();
+        super::super::with_snapshot(old, || {
+            assert_eq!(super::super::current().bundle.sequence, 10)
+        });
+        assert_eq!(load_selected(&root, &keys).unwrap().sequence, 11);
+        assert_eq!(rollback_at(&root, &keys).unwrap().sequence, 10);
+        assert_eq!(state(&root).unwrap().watermark, 11);
+        assert!(install_at(&root, &manifest, &signature, &package, &keys).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cache_retains_current_previous_and_embedded_without_deleting_unknown_files() {
+        let root = crate::core::testing::fixture("rule_retention");
+        for sequence in 10..=12 {
+            let (manifest, signature, package, keys) = signed(sequence);
+            install_at(&root, &manifest, &signature, &package, &keys).unwrap();
+        }
+        assert!(!root.join("10").exists());
+        let (_, _, _, keys) = signed(12);
+        std::fs::create_dir(root.join("99")).unwrap();
+        std::fs::write(root.join("99/keep"), b"unknown").unwrap();
+        prune_packages(&root, &state(&root).unwrap(), &keys).unwrap();
+        assert!(root.join("99/keep").is_file());
+        std::fs::write(root.join("12/rules.json"), b"corrupt").unwrap();
+        assert_eq!(load_selected(&root, &keys).unwrap().sequence, 11);
+        assert_eq!(rollback_at(&root, &keys).unwrap().sequence, 11);
+        assert_eq!(state(&root).unwrap().watermark, 12);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rules_only_release_reaches_the_next_scan_without_recompiling() {
+        let root = crate::core::testing::fixture("rules_e2e_channel");
+        std::fs::create_dir_all(&root).unwrap();
+        // The publisher only edits a TOML-shaped rule inside the signed bundle.
+        let mut bundle = super::super::embedded().bundle.clone();
+        bundle.sequence = 7;
+        let rule: super::super::RuleDefinition = toml::from_str(
+            r#"
+id = "e2e-fixture"
+version = 1
+platform = "all"
+required = ["file"]
+
+[[entries]]
+root = "home"
+path = "e2e-fixture-cache"
+zh = "E2E 缓存"
+en = "E2E cache"
+category = "PackageCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+"#,
+        )
+        .unwrap();
+        bundle.rules.push(rule);
+        bundle.validate().unwrap();
+        let (manifest, signature, package, keys) = signed_bundle(&bundle);
+        // A fake channel serves only the immutable release assets; the transport never recompiles.
+        let package_url = format!(
+            "https://github.com/meimingqi222/quick-cleaner/releases/download/rules-v{}/rules.json",
+            bundle.sequence
+        );
+        let fetch = move |url: &str, limit: usize| -> Result<Vec<u8>, String> {
+            let bytes = if url == format!("{CHANNEL}/manifest.json") {
+                manifest.clone()
+            } else if url == format!("{CHANNEL}/manifest.sig") {
+                signature.clone()
+            } else if url == package_url {
+                package.clone()
+            } else {
+                return Err(format!("unexpected fetch {url}"));
+            };
+            if bytes.len() > limit {
+                return Err("fixture transport limit".into());
+            }
+            Ok(bytes)
+        };
+        let installed = install_channel(CHANNEL, &root, &keys, &fetch)
+            .unwrap()
+            .expect("a newer channel installs");
+        assert_eq!(installed.sequence, 7);
+        // A second poll at the same sequence must not reinstall or lower the watermark.
+        assert!(install_channel(CHANNEL, &root, &keys, &fetch)
+            .unwrap()
+            .is_none());
+        assert_eq!(state(&root).unwrap().watermark, 7);
+        // The already-compiled client loads the authenticated cache and the next scan surfaces
+        // the added rule entry with its declared policy.
+        let bundle = load_selected(&root, &keys).unwrap();
+        let snapshot = Arc::new(RuleSnapshot { bundle });
+        let mut targets = Vec::new();
+        let home = root.join("home");
+        super::super::with_snapshot(snapshot, || {
+            super::super::append_path_targets(&mut targets, Some(&home));
+        });
+        let target = targets
+            .iter()
+            .find(|t| t.rule.id == "e2e-fixture")
+            .expect("the published rule surfaces a scan target");
+        assert_eq!(
+            crate::core::safety::norm(&target.path),
+            crate::core::safety::norm(&home.join("e2e-fixture-cache"))
+        );
+        assert_eq!(target.operation, crate::core::rules::Operation::Contents);
+        assert!(target.recommended);
+        // The signed channel cannot resurrect once the package is tampered after install:
+        // `load_cached` treats an unauthenticated cache as absent and falls back to embedded.
+        std::fs::write(root.join("7/rules.json"), b"corrupt").unwrap();
+        let bundle = load_selected(&root, &keys)
+            .ok()
+            .map(|bundle| Arc::new(RuleSnapshot { bundle }))
+            .unwrap_or_else(super::super::embedded);
+        assert_eq!(
+            bundle.bundle.sequence,
+            super::super::embedded().bundle.sequence,
+            "a corrupted accepted package falls back to embedded rules"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

@@ -1,7 +1,5 @@
-//! Official rule maintenance tool. Private keys are supplied only through the environment.
-use ed25519_dalek::{Signer, SigningKey};
-use quick_cleaner::core::rules::{self, update::Manifest, RuleBundle};
-use sha2::{Digest, Sha256};
+//! Validate, package and explain rules shipped with the application.
+use quick_cleaner::core::rules::{self, RuleBundle};
 use std::path::Path;
 
 fn main() {
@@ -13,10 +11,6 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = args.first().map(String::as_str).unwrap_or("check");
-    // Key generation is a one-off operator step; it must not touch the rule bundle or sequence.
-    if mode == "keygen" {
-        return keygen(args.get(1).map(String::as_str).unwrap_or("official-1"));
-    }
     let sequence = args
         .get(1)
         .map(|s| s.parse::<u64>())
@@ -33,55 +27,12 @@ fn run() -> Result<(), String> {
             bundle.rules.len(),
             bytes.len()
         ),
-        "pack" | "sign" => {
+        "pack" => {
             let output = Path::new(
                 args.get(2)
-                    .ok_or("usage: cargo run --example rules -- pack|sign SEQUENCE OUTPUT")?,
+                    .ok_or("usage: cargo run --example rules -- pack SEQUENCE OUTPUT")?,
             );
-            if mode == "sign" {
-                let id = std::env::var("QC_RULE_KEY_ID").map_err(|_| "Missing QC_RULE_KEY_ID")?;
-                let private = std::env::var("QC_RULE_PRIVATE_KEY")
-                    .map_err(|_| "Missing QC_RULE_PRIVATE_KEY")?;
-                let key = SigningKey::from_bytes(&rules::update::decode_hex::<32>(&private)?);
-                let public = key
-                    .verifying_key()
-                    .to_bytes()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>();
-                if rules::update::trusted_keys().get(&id) != Some(&public) {
-                    return Err("Signing key is not trusted by this application".into());
-                }
-                let required: std::collections::BTreeSet<_> = bundle
-                    .rules
-                    .iter()
-                    .flat_map(|r| r.required.clone())
-                    .collect();
-                let manifest = serde_json::to_vec(&Manifest {
-                    sequence,
-                    sha256: format!("{:x}", Sha256::digest(&bytes)),
-                    schema: rules::SCHEMA,
-                    minimum_app_version: env!("CARGO_PKG_VERSION").into(),
-                    required: required.into_iter().collect(),
-                    key_id: id,
-                })
-                .map_err(|e| e.to_string())?;
-                let signature = key.sign(&manifest).to_bytes();
-                rules::update::verify(
-                    &manifest,
-                    &signature,
-                    &bytes,
-                    &rules::update::trusted_keys(),
-                    0,
-                )?;
-                std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
-                std::fs::write(output.join("manifest.json"), manifest)
-                    .map_err(|e| e.to_string())?;
-                std::fs::write(output.join("manifest.sig"), signature)
-                    .map_err(|e| e.to_string())?;
-            } else {
-                std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
-            }
+            std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
             std::fs::write(output.join("rules.json"), bytes).map_err(|e| e.to_string())?;
         }
         "explain" => {
@@ -152,6 +103,8 @@ fn run() -> Result<(), String> {
                     Err(reason) => blocked.push(reason),
                 }
             }
+            let directory_discovery = rules::directories::explain_at(&snapshot, &rule.id, root);
+            let version_discovery = rules::versions::explain_at(&snapshot, &rule.id, root);
             let mut plan = rules::CleanupPlan::new(reference, planned);
             plan.blocked.extend(blocked.iter().cloned());
             if let Err(reason) = plan.validate() {
@@ -183,28 +136,13 @@ fn run() -> Result<(), String> {
             #[cfg(not(windows))]
             let installation: Option<serde_json::Value> = None;
             cleanup_plan["blocked"] = serde_json::json!(blocked);
-            let result = serde_json::json!({"rule":rule.id,"sequence":sequence,"variables":variables,"facts":facts,"detected":detected,"targets":targets,"preserve":preserve,"cleanup_plan":cleanup_plan,"installation_plan":installation,"blocked":blocked,"installation_layout":rule.app});
+            let result = serde_json::json!({"rule":rule.id,"sequence":sequence,"variables":variables,"facts":facts,"detected":detected,"targets":targets,"directory_discovery":directory_discovery,"version_discovery":version_discovery,"preserve":preserve,"cleanup_plan":cleanup_plan,"installation_plan":installation,"blocked":blocked,"installation_layout":rule.app});
             println!(
                 "{}",
                 serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
             );
         }
-        _ => return Err("Expected check, pack, sign, keygen or explain".into()),
+        _ => return Err("Expected check, pack or explain".into()),
     }
-    Ok(())
-}
-
-/// Generates a rule-signing keypair. The private key goes to stdout for one-time capture into the
-/// CI secret and is never written to disk; the public key is what gets committed to the app.
-fn keygen(id: &str) -> Result<(), String> {
-    let (private, public) = rules::update::generate_signing_key()?;
-    println!("key_id={id}");
-    println!("public={public}");
-    println!("private={private}");
-    eprintln!("Commit this into rules/trusted-keys.json, then rebuild the app:");
-    eprintln!("    {{\"{id}\": \"{public}\"}}");
-    eprintln!("Store the private key ONLY as the GitHub Environment secret QC_RULE_PRIVATE_KEY");
-    eprintln!("(and QC_RULE_KEY_ID={id} as an environment variable).");
-    eprintln!("Never commit the private key and never paste it into chat, issues or logs.");
     Ok(())
 }

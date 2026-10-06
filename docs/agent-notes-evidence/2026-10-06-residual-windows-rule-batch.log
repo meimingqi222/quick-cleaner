@@ -1,0 +1,12 @@
+=== residual-windows source-reference batch 2026-10-06T02:55:03+08:00 ===
+
+test result: ok. 575 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 10.76s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.05s
+clippy_exit=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.55s
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=38998
+OK: regression notes under docs\agent-notes verified
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff_clean

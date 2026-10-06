@@ -9,16 +9,15 @@
 use super::{target_with_recommendation, ScanTarget};
 use crate::core::categories::CategoryId;
 use crate::core::i18n::Text;
+use crate::core::rules::Operation;
 use std::path::Path;
 use std::time::Duration;
 
-/// 更新包叶子要默认勾选，至少得先滞留这么久。
-///
-/// Squirrel.Mac 换版时把 `update.<随机串>/X.app` 拷去 `/Applications`，
-/// electron-updater 装完才回收 `pending/`。刚下完的更新包删了只是让应用重
-/// 下一遍，但确实会让「马上要装的更新」倒退；滞留超过这个时长说明那次事务
-/// 要么早已完成、要么根本没继续，留在盘上的纯粹是垃圾。
-const STALE_AFTER: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+fn stale_after() -> Duration {
+    Duration::from_secs(
+        crate::core::rules::current().definition("cache").numbers["updater_stale_seconds"],
+    )
+}
 
 /// `read_dir` 条目的类型，折叠成判定用得到的三态。
 ///
@@ -50,40 +49,20 @@ impl EntryKind {
 /// `update.5fD8IKe`，随机后缀是它独有的特征，而应用自己的 `update.log`
 /// 之类不能算。
 fn is_updater_artifact(name: &str, kind: EntryKind) -> bool {
-    // 名字表必须**连类型一起**认：同名不同型是典型的伪装——应用自己恰好
-    // 叫 `pending` 的文件、指向别处的 `pending` 符号链接都不能算。
-    const EXACT_DIRS: &[&str] = &[
-        // electron-updater：暂存子目录
-        "pending",
-    ];
-    const EXACT_FILES: &[&str] = &[
-        // electron-updater：macOS 通用命名、更新清单
-        "update.zip",
-        "latest-mac.yml",
-        "latest.yml",
-        "update-info.json",
-        // Squirrel.Mac：换版助手的状态与日志（stderr 是实机看到的名字，
-        // 不是 errors）
-        "ShipItState.plist",
-        "ShipIt_stdout.log",
-        "ShipIt_stderr.log",
-    ];
+    let snapshot = crate::core::rules::current();
     match kind {
-        EntryKind::Dir => EXACT_DIRS.contains(&name) || name.starts_with("update."),
-        EntryKind::File => {
-            EXACT_FILES.contains(&name)
-                // electron-updater 的差量块映射（`current.blockmap` 等走后缀）
-                || name.ends_with(".blockmap")
-        }
+        EntryKind::Dir => snapshot.matches_name("cache", "updater_directories", name),
+        EntryKind::File => snapshot.matches_name("cache", "updater_files", name),
         EntryKind::Other => false,
     }
 }
 
 /// 目录名 → 展示用产品名：去掉更新器加的后缀，其余原样保留。
 pub(super) fn display_stem(name: &str) -> String {
-    ["-updater", ".ShipIt"]
+    crate::core::rules::current()
+        .list("cache", "updater_display_suffixes")
         .iter()
-        .find_map(|suffix| name.strip_suffix(suffix))
+        .find_map(|suffix| name.strip_suffix(suffix.as_str()))
         .unwrap_or(name)
         .to_string()
 }
@@ -109,12 +88,14 @@ pub(super) fn push_updater_artifacts(t: &mut Vec<ScanTarget>, dir: &Path, stem: 
     }
     for name in artifacts {
         let path = dir.join(&name);
-        let stale = super::helpers::is_older_than(&path, STALE_AFTER);
+        let stale = super::helpers::is_older_than(&path, stale_after());
         t.push(target_with_recommendation(
             path,
             Text::same(format!("{stem} · {name}")),
             CategoryId::UpdaterPackages,
             stale,
+            Operation::Tree,
+            ("engine", "updater_artifact"),
         ));
     }
     true
@@ -184,6 +165,72 @@ fn top_level(dir: &Path) -> Option<Vec<(String, EntryKind)>> {
 #[cfg(test)]
 mod tests {
     use super::{display_stem, is_updater_artifact, EntryKind};
+    #[test]
+    fn updater_rules_change_typed_signatures_age_and_labels_without_application_branches() {
+        use std::sync::Arc;
+        let root = crate::core::testing::fixture("updater_rule_extension");
+        let package = root.join("payload.extra");
+        std::fs::write(&package, b"isolated package").unwrap();
+        std::fs::write(root.join("account.data"), b"keep").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&package)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400),
+            ))
+            .unwrap();
+        let original = crate::core::rules::snapshot();
+        let mut before = Vec::new();
+        assert!(!super::push_updater_artifacts(
+            &mut before,
+            &root,
+            "Fixture"
+        ));
+        let mut bundle = original.bundle.clone();
+        let cache = bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "cache")
+            .unwrap();
+        cache.version += 1;
+        cache
+            .lists
+            .get_mut("updater_files_exact")
+            .unwrap()
+            .push("payload.extra".into());
+        cache
+            .lists
+            .get_mut("updater_display_suffixes")
+            .unwrap()
+            .push(".fixture-update".into());
+        cache.numbers.insert("updater_stale_seconds".into(), 86400);
+        bundle.validate().unwrap();
+        let changed = Arc::new(crate::core::rules::RuleSnapshot { bundle });
+        let mut targets = Vec::new();
+        crate::core::rules::with_snapshot(changed.clone(), || {
+            assert!(is_updater_artifact("payload.extra", EntryKind::File));
+            assert!(!is_updater_artifact("payload.extra", EntryKind::Dir));
+            assert!(!is_updater_artifact("payload.extra", EntryKind::Other));
+            assert_eq!(display_stem("Fixture.fixture-update"), "Fixture");
+            assert!(super::push_updater_artifacts(
+                &mut targets,
+                &root,
+                "Fixture"
+            ));
+        });
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, package);
+        assert!(targets[0].recommended);
+        assert!(Arc::ptr_eq(&targets[0].rule.snapshot, &changed));
+        assert!(!is_updater_artifact("payload.extra", EntryKind::File));
+        assert_eq!(
+            targets[0].rule.snapshot.definition("cache").numbers["updater_stale_seconds"],
+            86400
+        );
+        assert!(root.join("account.data").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// electron-updater：`pending/` 暂存目录、`update.zip`、差量块映射。
     /// 类型敏感——同名不同型不能误判。

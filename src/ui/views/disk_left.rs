@@ -4,7 +4,6 @@ use super::disk_breakdown::{compute_breakdown, render_proportion_bar};
 use super::disk_components::render_breakdown_row;
 use super::disk_volume::render_volume_selector_button;
 use crate::core::disk::{Node, ScanResult};
-use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::cards::card;
 use crate::ui::components::donut::{render_donut, DonutSegment};
@@ -39,26 +38,20 @@ pub(super) fn render_left_lens_pane(
     let lang = root.language;
 
     let total_cap_str = if let Some((tot, _)) = root.disk.space {
-        match lang {
-            Language::Zh => format!("{} 总容量", fmt_size(tot)),
-            Language::En => format!("{} Total", fmt_size(tot)),
-        }
+        tr_disk_total_capacity(lang, &fmt_size(tot))
     } else {
-        match lang {
-            // 整卷总量必须用 `unique_size` 而不是 `total_size`。
-            //
-            // NTFS 上一个文件可以从多个目录被硬链接进来（WinSxS 组件存储
-            // 大量这么做），`total_size` 是**按路径的表观体积**——每个链接
-            // 位置各计一次，见 `mft_scanner` 里 `total_size += hard_link_size`。
-            // 那个口径对"这个目录占多大"是对的，但把它当整卷总量就会报出
-            // 一个超过磁盘实际占用的数字。`unique_size` 是同一次扫描里已经
-            // 算好的去重口径，直接用。
-            //
-            // macOS 侧两者恒等（`devscan::macos` 里 `unique_size = total_size`），
-            // 所以这里不需要 `#[cfg]` 分支。
-            Language::Zh => format!("{} 已扫描", fmt_size(scan.unique_size)),
-            Language::En => format!("{} Scanned", fmt_size(scan.unique_size)),
-        }
+        // 整卷总量必须用 `unique_size` 而不是 `total_size`。
+        //
+        // NTFS 上一个文件可以从多个目录被硬链接进来（WinSxS 组件存储
+        // 大量这么做），`total_size` 是**按路径的表观体积**——每个链接
+        // 位置各计一次，见 `mft_scanner` 里 `total_size += hard_link_size`。
+        // 那个口径对"这个目录占多大"是对的，但把它当整卷总量就会报出
+        // 一个超过磁盘实际占用的数字。`unique_size` 是同一次扫描里已经
+        // 算好的去重口径，直接用。
+        //
+        // macOS 侧两者恒等（`devscan::macos` 里 `unique_size = total_size`），
+        // 所以这里不需要 `#[cfg]` 分支。
+        tr_disk_scanned_size(lang, &fmt_size(scan.unique_size))
     };
 
     // 占比清单的计算按 Tab 分两种口径，单独拎出去了
@@ -260,10 +253,7 @@ pub(super) fn render_breadcrumbs(
         }
         let tooltip_text = acc.to_string_lossy().to_string();
         let crumb_name = if is_root {
-            match lang {
-                Language::Zh => format!("{}: 根目录", tree.volume()),
-                Language::En => format!("{}: Root", tree.volume()),
-            }
+            tr_disk_breadcrumb_root(lang, &tree.volume().to_string())
         } else {
             truncate(&tree.name_of(idx), 16)
         };

@@ -16,6 +16,10 @@ pub mod history;
 pub mod i18n;
 pub mod inuse;
 pub mod log;
+// 纯解析逻辑：macOS 平台代码用（`target_os = "macos"`），测试构建里也编译，
+// 从而其单元测试在 Windows 上也能跑。Windows 非测试构建不编译，避免 dead_code。
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) mod macos_text;
 pub mod model;
 pub mod owner;
 pub mod proc;

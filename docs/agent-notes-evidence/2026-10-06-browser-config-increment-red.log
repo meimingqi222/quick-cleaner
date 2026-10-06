@@ -1,0 +1,30 @@
+Browser entry config-only increment — red/green evidence
+========================================================
+
+Fixture: rules/fixtures/browser-extra.toml (production browsers.toml + one added
+windows_user_data root `NovaSoft/Nova/User Data`).
+Test:   src/core/categories/browser.rs::browser_rule_only_fixture_surfaces_a_new_root_with_shared_leaves
+
+Manufactured red (2026-10-06T13:51:00+08:00): removed only the added root block
+(`# 配置增量示例…` + the `[[catalogs.windows_user_data]]` Nova row) from the
+fixture, kept the test. Focused run:
+
+  thread '...browser_rule_only_fixture_surfaces_a_new_root_with_shared_leaves' panicked:
+  夹具必须真的新增了这个浏览器根
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 600 filtered out
+
+=> the test binds the rule row: without that one config line the new root does
+   not surface, so the assertion fails.
+
+Restored the fixture verbatim, then:
+
+  test ...browser_rule_only_fixture_surfaces_a_new_root_with_shared_leaves ... ok
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 594 filtered out
+
+Note on procedure: after restoring via Copy-Item the first re-run still reported
+FAILED because Copy-Item restores the source mtime, so cargo treated the fixture
+as unchanged and ran the earlier (red) test binary. Bumping the file mtime forced
+the rebuild and the test went green. The green result above is from that rebuild.
+
+This is a test/fixture addition, not an organic bug fix; the red run is a
+manufactured proof that the assertion is bound to the configuration.

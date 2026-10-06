@@ -262,15 +262,9 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
 
     // 列表底部信息条
     let footer_text = if query.trim().is_empty() {
-        match lang {
-            Language::Zh => format!("全盘最大的 {} 项 · 输入关键字精确检索", results_len),
-            Language::En => format!("Top {} largest items · type to filter", results_len),
-        }
+        tr_search_footer_top(lang, results_len)
     } else {
-        match lang {
-            Language::Zh => format!("匹配到 {} 个文件 / 文件夹", results_len),
-            Language::En => format!("Matched {} items", results_len),
-        }
+        tr_search_footer_matched(lang, results_len)
     };
 
     let list_footer = div()

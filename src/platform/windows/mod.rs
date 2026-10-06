@@ -29,6 +29,11 @@ pub(super) fn run_discovered_uninstaller_reported(
 ) -> crate::core::apps::UninstallOutcome {
     app_discovery::run_uninstaller_reported(app)
 }
+pub(super) fn run_registered_uninstaller_reported(
+    app: &crate::core::apps::InstalledApp,
+) -> crate::core::apps::UninstallOutcome {
+    apps::run_uninstaller_and_wait_reported(app)
+}
 pub use apps::{
     dir_or_file_size, list_installed_apps, open_in_default_app, reveal_in_explorer,
     run_uninstaller_and_wait,

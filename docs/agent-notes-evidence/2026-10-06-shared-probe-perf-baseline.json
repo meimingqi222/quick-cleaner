@@ -1,0 +1,228 @@
+{
+  "baseline": {
+    "date": "2026-10-06T14:04:58.4971017+08:00",
+    "commit": "63e4c467c8e6b78dc4c8d9a25cafd30a1a28d135",
+    "branch": "master",
+    "dirty": true,
+    "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+    "os": "Microsoft Windows NT 10.0.26200.0",
+    "rules_check": "schema=9 sequence=1 rules=13 bytes=40627",
+    "method": "compiled rules.exe explain 1 <extra.toml> <root>, 5 runs each; wall clock around the exe; counters from directory_discovery",
+    "fixture_scale": "directory=1 marker (+sibling); cache=5 .cache children incl. Chromium leaves; manifest=.obsolete(4 rows)+4 workspace.json"
+  },
+  "results": [
+    {
+      "name": "directory-layout-extra",
+      "toml": "rules/fixtures/directory-layout-extra.toml",
+      "runs": [
+        {
+          "run": 1,
+          "exit": 0,
+          "wall_ms": 35,
+          "plans": 1,
+          "directory_reads": 1,
+          "inventory_entries": 1,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 1,
+          "budget_blocked": 0
+        },
+        {
+          "run": 2,
+          "exit": 0,
+          "wall_ms": 33,
+          "plans": 1,
+          "directory_reads": 1,
+          "inventory_entries": 1,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 1,
+          "budget_blocked": 0
+        },
+        {
+          "run": 3,
+          "exit": 0,
+          "wall_ms": 31,
+          "plans": 1,
+          "directory_reads": 1,
+          "inventory_entries": 1,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 1,
+          "budget_blocked": 0
+        },
+        {
+          "run": 4,
+          "exit": 0,
+          "wall_ms": 40,
+          "plans": 1,
+          "directory_reads": 1,
+          "inventory_entries": 1,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 1,
+          "budget_blocked": 0
+        },
+        {
+          "run": 5,
+          "exit": 0,
+          "wall_ms": 32,
+          "plans": 1,
+          "directory_reads": 1,
+          "inventory_entries": 1,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 1,
+          "budget_blocked": 0
+        }
+      ]
+    },
+    {
+      "name": "cache-catalog-extra",
+      "toml": "rules/fixtures/cache-catalog-extra.toml",
+      "runs": [
+        {
+          "run": 1,
+          "exit": 0,
+          "wall_ms": 49,
+          "plans": 4,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 4,
+          "budget_blocked": 0
+        },
+        {
+          "run": 2,
+          "exit": 0,
+          "wall_ms": 47,
+          "plans": 4,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 4,
+          "budget_blocked": 0
+        },
+        {
+          "run": 3,
+          "exit": 0,
+          "wall_ms": 47,
+          "plans": 4,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 4,
+          "budget_blocked": 0
+        },
+        {
+          "run": 4,
+          "exit": 0,
+          "wall_ms": 41,
+          "plans": 4,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 4,
+          "budget_blocked": 0
+        },
+        {
+          "run": 5,
+          "exit": 0,
+          "wall_ms": 39,
+          "plans": 4,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 2,
+          "manifest_reads": 0,
+          "manifest_rows": 0,
+          "candidate_checks": 4,
+          "budget_blocked": 0
+        }
+      ]
+    },
+    {
+      "name": "manifest-layout-extra",
+      "toml": "rules/fixtures/manifest-layout-extra.toml",
+      "runs": [
+        {
+          "run": 1,
+          "exit": 0,
+          "wall_ms": 43,
+          "plans": 2,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 4,
+          "manifest_reads": 5,
+          "manifest_rows": 4,
+          "candidate_checks": 2,
+          "budget_blocked": 0
+        },
+        {
+          "run": 2,
+          "exit": 0,
+          "wall_ms": 37,
+          "plans": 2,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 4,
+          "manifest_reads": 5,
+          "manifest_rows": 4,
+          "candidate_checks": 2,
+          "budget_blocked": 0
+        },
+        {
+          "run": 3,
+          "exit": 0,
+          "wall_ms": 38,
+          "plans": 2,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 4,
+          "manifest_reads": 5,
+          "manifest_rows": 4,
+          "candidate_checks": 2,
+          "budget_blocked": 0
+        },
+        {
+          "run": 4,
+          "exit": 0,
+          "wall_ms": 37,
+          "plans": 2,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 4,
+          "manifest_reads": 5,
+          "manifest_rows": 4,
+          "candidate_checks": 2,
+          "budget_blocked": 0
+        },
+        {
+          "run": 5,
+          "exit": 0,
+          "wall_ms": 37,
+          "plans": 2,
+          "directory_reads": 1,
+          "inventory_entries": 4,
+          "directory_probes": 4,
+          "manifest_reads": 5,
+          "manifest_rows": 4,
+          "candidate_checks": 2,
+          "budget_blocked": 0
+        }
+      ]
+    }
+  ]
+}

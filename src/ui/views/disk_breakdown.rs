@@ -90,10 +90,7 @@ fn breakdown_for_tree(
             let rem = used - top_sum;
             let ratio = rem as f64 / cur_size as f64;
             let rem_count = children.len().saturating_sub(visible_children.len());
-            let others_label = match lang {
-                Language::Zh => format!("其他已用 {} 项", rem_count),
-                Language::En => format!("Other {} items", rem_count),
-            };
+            let others_label = tr_breakdown_other_used(lang, rem_count);
             items.push(BreakdownItem {
                 name: others_label,
                 size: rem,
@@ -107,10 +104,7 @@ fn breakdown_for_tree(
         // 空闲可用空间条目（以翡翠绿清晰展现）
         if fre > 0 {
             let free_ratio = fre as f64 / cur_size as f64;
-            let free_label = match lang {
-                Language::Zh => "空闲可用空间".to_string(),
-                Language::En => "Free Space".to_string(),
-            };
+            let free_label = tr_breakdown_free_space(lang).to_string();
             items.push(BreakdownItem {
                 name: free_label,
                 size: fre,
@@ -129,10 +123,7 @@ fn breakdown_for_tree(
             }
         }
 
-        let used_count_str = match lang {
-            Language::Zh => format!("已用 {used_pct}% · 空闲 {}", fre_str),
-            Language::En => format!("Used {used_pct}% · Free {}", fre_str),
-        };
+        let used_count_str = tr_breakdown_used_free(lang, used_pct, &fre_str);
 
         // 中间大数字显示物理已用空间，而不是磁盘总量
         (cur_name, used_str, used_count_str, items)
@@ -148,10 +139,7 @@ fn breakdown_for_tree(
             top_sum += c.size;
             items.push(BreakdownItem {
                 name: if c.name.is_empty() {
-                    match lang {
-                        Language::Zh => format!("{}: 根目录", tree.volume()),
-                        Language::En => format!("{}: Root", tree.volume()),
-                    }
+                    tr_disk_breadcrumb_root(lang, &tree.volume().to_string())
                 } else {
                     c.name.clone()
                 },
@@ -166,10 +154,7 @@ fn breakdown_for_tree(
         if cur_size > top_sum && cur_size - top_sum > 1024 {
             let rem = cur_size - top_sum;
             let ratio = (rem as f64 / base_size as f64).clamp(0.0, 1.0);
-            let others_label = match lang {
-                Language::Zh => format!("其他 {} 项", children.len().saturating_sub(4)),
-                Language::En => format!("Other {} items", children.len().saturating_sub(4)),
-            };
+            let others_label = tr_breakdown_other_items(lang, children.len().saturating_sub(4));
             items.push(BreakdownItem {
                 name: others_label,
                 size: rem,
@@ -180,10 +165,7 @@ fn breakdown_for_tree(
             });
         }
 
-        let sub_count_str = match lang {
-            Language::Zh => format!("当前目录共 {} 个子项", children.len()),
-            Language::En => format!("{} items in folder", children.len()),
-        };
+        let sub_count_str = tr_breakdown_folder_items(lang, children.len());
 
         (cur_name, fmt_size(cur_size), sub_count_str, items)
     }
@@ -254,14 +236,8 @@ fn breakdown_for_files(
         })
         .collect();
 
-    let files_summary_title = match lang {
-        Language::Zh => "全盘大文件分布".to_string(),
-        Language::En => "Largest Files Breakdown".to_string(),
-    };
-    let files_count_str = match lang {
-        Language::Zh => format!("前 {} 个大文件汇总", files.len()),
-        Language::En => format!("Top {} large files", files.len()),
-    };
+    let files_summary_title = tr_breakdown_files_title(lang).to_string();
+    let files_count_str = tr_breakdown_files_count(lang, files.len());
 
     (
         files_summary_title,

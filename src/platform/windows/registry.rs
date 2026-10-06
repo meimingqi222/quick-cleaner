@@ -90,14 +90,113 @@ pub fn read_reg_dword(h_key: HKEY, value_name: &str) -> Option<u32> {
     }
 }
 
-/// 递归删除指定的注册表子树
-pub fn delete_reg_tree(root: HKEY, subpath: &str) -> bool {
-    let wide_path = to_wide(subpath);
-    // SAFETY: wide_path 是本地 Vec，to_wide 保证以 NUL 结尾，指针在整个
-    // 调用期间有效。RegDeleteTreeW 只读这个字符串。
+/// 递归删除指定的注册表子树。
+///
+/// `sam` 携带 WOW64 视图标志：32 位安装的登记项扫的是 32 位视图
+/// （`KEY_WOW64_32KEY`），删除也必须落在同一个视图上，否则 64 位进程
+/// 会去删 64 位视图里的同名路径——删错对象或永远报「删除失败」。实现
+/// 上先按声明视图打开父键，再对叶子名调 `RegDeleteTreeW`。
+///
+/// 返回 `true` 只代表删除调用成功；完成核验用 [`reg_key_absent`]。
+pub fn delete_reg_tree(root: HKEY, subpath: &str, sam: DWORD) -> bool {
+    use winapi::um::winnt::{DELETE, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE};
+    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW};
+
+    let (parent, leaf) = match subpath.rsplit_once('\\') {
+        Some((parent, leaf)) => (parent, leaf),
+        None => ("", subpath),
+    };
+    let wide_parent = to_wide(parent);
+    let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: wide_parent 以 NUL 结尾且活到调用结束；空父路径返回根键
+    // 本身的句柄。句柄在出口无条件关闭。
     unsafe {
-        let res = RegDeleteTreeW(root, wide_path.as_ptr());
-        res as u32 == ERROR_SUCCESS
+        if RegOpenKeyExW(
+            root,
+            wide_parent.as_ptr(),
+            0,
+            sam | DELETE | KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE,
+            &mut h,
+        ) as u32
+            != ERROR_SUCCESS
+        {
+            return false;
+        }
+        // 叶子为空表示删的就是打开的这个键本身；RegDeleteTreeW 只把
+        // NULL 指针当「删 hKey 自己」，空串不是。
+        let wide_leaf = (!leaf.is_empty()).then(|| to_wide(leaf));
+        let leaf_ptr = wide_leaf
+            .as_ref()
+            .map(|w| w.as_ptr())
+            .unwrap_or(std::ptr::null());
+        let ok = RegDeleteTreeW(h, leaf_ptr) as u32 == ERROR_SUCCESS;
+        RegCloseKey(h);
+        ok
+    }
+}
+
+/// 三态核验：键是否真的不在了。
+///
+/// `Some(true)` 只认 `ERROR_FILE_NOT_FOUND` / `ERROR_PATH_NOT_FOUND`；
+/// 打开成功说明还在（`Some(false)`）；其他失败（权限不足等）原因不明，
+/// 是 Unknown（`None`），不能当作删除成功。
+pub fn reg_key_absent(root: HKEY, subpath: &str, sam: DWORD) -> Option<bool> {
+    use winapi::shared::winerror::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
+    use winapi::um::winnt::KEY_QUERY_VALUE;
+    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW};
+
+    let wide = to_wide(subpath);
+    let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: wide 以 NUL 结尾且活到调用结束；句柄只在打开成功时使用，
+    // 出口无条件关闭。
+    unsafe {
+        let res = RegOpenKeyExW(root, wide.as_ptr(), 0, sam | KEY_QUERY_VALUE, &mut h) as u32;
+        if !h.is_null() {
+            RegCloseKey(h);
+        }
+        match res {
+            ERROR_SUCCESS => Some(false),
+            ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Some(true),
+            _ => None,
+        }
+    }
+}
+
+/// 三态核验：某个值是否真的不在了。键不在也算值不在（整棵树已删除）；
+/// 其余语义与 [`reg_key_absent`] 相同。
+pub fn reg_value_absent(root: HKEY, subpath: &str, value_name: &str, sam: DWORD) -> Option<bool> {
+    use winapi::shared::winerror::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
+    use winapi::um::winnt::KEY_QUERY_VALUE;
+    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW};
+
+    let wide = to_wide(subpath);
+    let wide_val = to_wide(value_name);
+    let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: 同 reg_key_absent；wide_val 活到 RegQueryValueExW 返回。
+    unsafe {
+        let open = RegOpenKeyExW(root, wide.as_ptr(), 0, sam | KEY_QUERY_VALUE, &mut h) as u32;
+        if open != ERROR_SUCCESS {
+            return match open {
+                ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Some(true),
+                _ => None,
+            };
+        }
+        let mut val_type: DWORD = 0;
+        let mut buf_size: DWORD = 0;
+        let res = RegQueryValueExW(
+            h,
+            wide_val.as_ptr(),
+            std::ptr::null_mut(),
+            &mut val_type,
+            std::ptr::null_mut(),
+            &mut buf_size,
+        ) as u32;
+        RegCloseKey(h);
+        match res {
+            ERROR_SUCCESS => Some(false),
+            ERROR_FILE_NOT_FOUND => Some(true),
+            _ => None,
+        }
     }
 }
 
@@ -254,11 +353,54 @@ pub fn delete_reg_value(root: HKEY, subpath: &str, value_name: &str, sam: DWORD)
     }
 }
 
+/// 测试夹具：在 HKCU 的 QuickCleanerTest 路径下自建一个带 marker 值的键。
+/// 自建自清，绝不触碰用户资源；同 crate 的测试共用。
+#[cfg(test)]
+pub(crate) fn create_fixture_key(subpath: &str) -> bool {
+    use winapi::shared::winerror::ERROR_SUCCESS;
+    use winapi::um::winnt::{KEY_CREATE_SUB_KEY, KEY_SET_VALUE, REG_SZ};
+    use winapi::um::winreg::{RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER};
+
+    let wide = to_wide(subpath);
+    let mut h: HKEY = std::ptr::null_mut();
+    // SAFETY: wide 以 NUL 结尾且活到调用结束；句柄只在创建成功后使用，
+    // 并在返回前关闭。
+    unsafe {
+        if RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            wide.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            KEY_SET_VALUE | KEY_CREATE_SUB_KEY,
+            std::ptr::null_mut(),
+            &mut h,
+            std::ptr::null_mut(),
+        ) as u32
+            != ERROR_SUCCESS
+        {
+            return false;
+        }
+        let value = to_wide("marker");
+        let data: Vec<u16> = "x".encode_utf16().chain(std::iter::once(0)).collect();
+        let set = RegSetValueExW(
+            h,
+            value.as_ptr(),
+            0,
+            REG_SZ,
+            data.as_ptr() as *const u8,
+            (data.len() * 2) as u32,
+        );
+        RegCloseKey(h);
+        set as u32 == ERROR_SUCCESS
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use winapi::um::winnt::KEY_READ;
-    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW, HKEY_LOCAL_MACHINE};
+    use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
     /// 每台 Windows 上都有的键，拿来做真实读取的靶子。
     const CURVER: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
@@ -384,7 +526,53 @@ mod tests {
     fn deleting_a_missing_tree_reports_failure() {
         assert!(!delete_reg_tree(
             HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\QuickCleanerTestKeyThatMustNotExist9f3a"
+            r"SOFTWARE\QuickCleanerTestKeyThatMustNotExist9f3a",
+            0
         ));
+        // 三态核验对同一个路径必须给出「确认不在」，而不是 Unknown。
+        assert_eq!(
+            reg_key_absent(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\QuickCleanerTestKeyThatMustNotExist9f3a",
+                0
+            ),
+            Some(true)
+        );
+    }
+
+    /// 删除 + 三态核验的真实往返：夹具键建在 HKCU 自己的测试路径下
+    /// （自建自清，不是用户资源），删掉后必须核验为「确认不在」。
+    #[test]
+    fn delete_then_verify_reports_verified_absence() {
+        let base = format!("Software\\QuickCleanerTest\\{}", std::process::id());
+        let with_child = format!("{base}\\child");
+        assert!(create_fixture_key(&with_child), "自建夹具键失败");
+
+        // 键还在：核验必须给出「还在」，不能当作已删除。
+        assert_eq!(
+            reg_key_absent(HKEY_CURRENT_USER, &with_child, 0),
+            Some(false)
+        );
+        // 值还在：同理。
+        assert_eq!(
+            reg_value_absent(HKEY_CURRENT_USER, &with_child, "marker", 0),
+            Some(false)
+        );
+
+        // 删值 + 核验：确认消失才算完成。
+        assert!(super::delete_reg_value(
+            HKEY_CURRENT_USER,
+            &with_child,
+            "marker",
+            0
+        ));
+        assert_eq!(
+            reg_value_absent(HKEY_CURRENT_USER, &with_child, "marker", 0),
+            Some(true)
+        );
+
+        // 删树 + 核验：确认消失才算完成。
+        assert!(delete_reg_tree(HKEY_CURRENT_USER, &base, 0));
+        assert_eq!(reg_key_absent(HKEY_CURRENT_USER, &base, 0), Some(true));
     }
 }

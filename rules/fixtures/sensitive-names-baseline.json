@@ -1,0 +1,52 @@
+{
+  "sensitive_cache_exact": [
+    "CloudKit",
+    "com.apple.AuthenticationServicesCore.AuthenticationServicesAgent",
+    "com.apple.amsaccountsd",
+    "com.apple.amsengagementd",
+    "com.apple.appleaccountd",
+    "com.apple.securityd",
+    "com.apple.identityservicesd",
+    "com.apple.protectedcloudstorage.protectedcloudkeysyncing",
+    "com.apple.ap.adprivacyd",
+    "com.apple.findmy.fmipcore",
+    "com.apple.passd",
+    "com.apple.ScreenTimeAgent",
+    "com.apple.ScreenTimeSettingsAgent",
+    "com.apple.icloudwebd",
+    "com.apple.iTunesCloud",
+    "com.apple.itunescloudd",
+    "com.apple.CloudTelemetry",
+    "com.apple.iCloudNotificationAgent",
+    "com.apple.HomeKit",
+    "com.apple.gamed"
+  ],
+  "sensitive_cache_prefixes": [
+    "com.apple.AuthenticationServices",
+    "com.apple.ams",
+    "com.apple.appleaccount",
+    "com.apple.identity",
+    "com.apple.protectedcloud",
+    "com.apple.security",
+    "com.apple.icloud",
+    "com.apple.iCloud",
+    "com.apple.Cloud",
+    "com.apple.cloud",
+    "com.apple.findmy",
+    "com.apple.HomeKit",
+    "com.apple.homekit",
+    "com.apple.ScreenTime",
+    "com.apple.screentime",
+    "com.apple.passd",
+    "com.apple.biome"
+  ],
+  "sensitive_group_contains": [
+    "1password",
+    "keychain",
+    "bitwarden",
+    "lastpass",
+    "keepass",
+    "dashlane",
+    "enpass"
+  ]
+}

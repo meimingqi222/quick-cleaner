@@ -1,0 +1,19 @@
+id = "fixture-version-layout"
+version = 1
+platform = "all"
+required = ["file", "version_retention"]
+
+[[version_layouts]]
+id = "runtime_cache"
+root = "home"
+path = "Alternative/runtime"
+versions = "."
+leaf = "generated/cache"
+prefixes = ["release-"]
+exclude = ["release-protected"]
+zh = "运行时缓存 · {name}"
+en = "Runtime cache · {name}"
+category = "UserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false

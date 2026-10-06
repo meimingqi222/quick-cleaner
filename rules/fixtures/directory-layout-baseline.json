@@ -1,0 +1,155 @@
+[
+  {
+    "path": "home/Desktop/.DS_Store",
+    "category": "UserCache",
+    "operation": {
+      "kind": "file"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "home/Desktop/project/.DS_Store",
+    "category": "UserCache",
+    "operation": {
+      "kind": "file"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "home/Library/Application Support/Firefox/Profiles/abc.default-release/cache2",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "home/Library/Group Containers/group.example/Library/Caches",
+    "category": "UserTemp",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Group Containers/group.example/Library/Logs",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Group Containers/group.example/Library/tmp",
+    "category": "UserTemp",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/DiagnosticReports",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/Notion",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "home/Library/Logs/OneDrive",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/Telemetry",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/com.apple.CloudTelemetry",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/data.bin",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "home/Library/Logs/plain.log",
+    "category": "Logs",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "temp/C/com.apple.dns",
+    "category": "SystemTemp",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "temp/C/com.apple.quicklook",
+    "category": "Thumbnails",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "temp/T/com.apple.networkd",
+    "category": "SystemTemp",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "temp/T/com.apple.quicklook.worker",
+    "category": "Thumbnails",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  }
+]

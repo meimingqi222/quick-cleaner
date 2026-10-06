@@ -357,7 +357,10 @@ impl SourceInstallPlan {
                 if self.shared_tools {
                     return Ok(());
                 }
-                let frozen = scanned.official.as_ref().ok_or("Missing scanned official operation")?;
+                let frozen = scanned
+                    .official
+                    .as_ref()
+                    .ok_or("Missing scanned official operation")?;
                 let command = frozen.command()?;
                 let exit = super::process::run_official_command(command)?;
                 if exit != 0 {
@@ -552,7 +555,8 @@ impl SourceInstallPlan {
         let mut stable = 0;
         loop {
             if super::app_discovery::artifacts_removed(&artifacts)
-                && idle().is_ok() && self.recheck_shared().is_ok()
+                && idle().is_ok()
+                && self.recheck_shared().is_ok()
             {
                 stable += 1;
                 if stable >= 4 {
@@ -588,10 +592,15 @@ impl SourceInstallPlan {
 
     // These exact records are deliberately retained until the final lifecycle step.
     fn before_recovery_artifacts(&self, paths: &[PathBuf]) -> Vec<PathBuf> {
-        let tool_facts = self.home.join(&self.rule.tools_dir).join(&self.rule.tool_facts);
-        paths.iter().filter(|path| {
-            Some(path.as_path()) != self.state.as_deref() && **path != tool_facts
-        }).cloned().collect()
+        let tool_facts = self
+            .home
+            .join(&self.rule.tools_dir)
+            .join(&self.rule.tool_facts);
+        paths
+            .iter()
+            .filter(|path| Some(path.as_path()) != self.state.as_deref() && **path != tool_facts)
+            .cloned()
+            .collect()
     }
 
     fn recheck_shared(&self) -> Result<(), String> {
@@ -1031,8 +1040,8 @@ mod tests {
                         .set_modified(modified)
                         .unwrap();
                     assert!(
-                        identity.recheck(&startup),
-                        "fixture must expose the weak identity check"
+                        !identity.recheck(&startup),
+                        "the replaced startup must no longer match its scanned identity"
                     );
                     Ok(())
                 },
@@ -1233,6 +1242,51 @@ mod tests {
             "verified completion retires the install record"
         );
         assert!(fixture.0.join("config.yaml").is_file());
+    }
+
+    #[test]
+    fn settle_exempts_only_exact_recovery_records_and_rechecks_shared_owners() {
+        let fixture = Fixture::new();
+        let code = fixture.layout();
+        let plan = HermesPlan::build(&code, true).unwrap();
+        let state = plan.state.as_ref().unwrap();
+        let facts = fixture
+            .0
+            .join(&plan.rule.tools_dir)
+            .join(&plan.rule.tool_facts);
+        let child = state.join("environments/remaining");
+        let sibling = state.with_extension("other");
+        let paths = vec![
+            state.clone(),
+            facts,
+            child.clone(),
+            sibling.clone(),
+            code.clone(),
+        ];
+        assert_eq!(
+            plan.before_recovery_artifacts(&paths),
+            [child, sibling, code]
+        );
+        let command = OfficialUninstaller {
+            provider: "fixture".into(),
+            executable: fixture.0.join("missing.exe"),
+            arguments: vec![],
+            working_directory: fixture.0.clone(),
+            installed_artifacts: vec![fixture.0.join("absent")],
+        };
+        let error = plan
+            .await_stable(
+                &|| {
+                    std::fs::create_dir_all(fixture.0.join(&plan.rule.profiles).join("new-owner"))
+                        .unwrap();
+                    Ok(())
+                },
+                &command,
+                std::time::Duration::ZERO,
+            )
+            .unwrap_err();
+        assert!(error.contains("Official uninstall incomplete"));
+        assert!(state.join("facts.json").is_file());
     }
 
     #[test]

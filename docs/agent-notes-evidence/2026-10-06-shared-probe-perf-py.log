@@ -1,0 +1,31 @@
+方法：已编译 rules.exe explain 在同一夹具根上连续运行 5 次；2ms 间隔轮询 RSS 取峰值。
+夹具规模：cache=4 个 .cache 子目录含 Chromium 叶子布局；directory=Projects/isolated 2 文件；manifest=2 份清单共 3 行。
+
+cache-catalog-extra: 15 次中读取计数逐次完全一致 directory_reads=[1] candidate_checks=[4]
+  wall_ms 各次: [45, 42, 43, 42, 41]（均值 43，极差 4ms）
+  peak_rss_mb 各次: [12.8, 13.2, 12.9, 12.9, 13.2]（均值 13.0）
+  {'run': 1, 'exit': 0, 'wall_ms': 45, 'peak_rss_mb': 12.8, 'plans': 4, 'directory_reads': 1, 'inventory_entries': 4, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 4, 'budget_blocked': 0}
+  {'run': 2, 'exit': 0, 'wall_ms': 42, 'peak_rss_mb': 13.2, 'plans': 4, 'directory_reads': 1, 'inventory_entries': 4, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 4, 'budget_blocked': 0}
+  {'run': 3, 'exit': 0, 'wall_ms': 43, 'peak_rss_mb': 12.9, 'plans': 4, 'directory_reads': 1, 'inventory_entries': 4, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 4, 'budget_blocked': 0}
+  {'run': 4, 'exit': 0, 'wall_ms': 42, 'peak_rss_mb': 12.9, 'plans': 4, 'directory_reads': 1, 'inventory_entries': 4, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 4, 'budget_blocked': 0}
+  {'run': 5, 'exit': 0, 'wall_ms': 41, 'peak_rss_mb': 13.2, 'plans': 4, 'directory_reads': 1, 'inventory_entries': 4, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 4, 'budget_blocked': 0}
+
+directory-layout-extra: 15 次中读取计数逐次完全一致 directory_reads=[1] candidate_checks=[1]
+  wall_ms 各次: [34, 31, 28, 28, 28]（均值 30，极差 6ms）
+  peak_rss_mb 各次: [12.7, 12.5, 11.6, 11.7, 11.7]（均值 12.0）
+  {'run': 1, 'exit': 0, 'wall_ms': 34, 'peak_rss_mb': 12.7, 'plans': 1, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 1, 'budget_blocked': 0}
+  {'run': 2, 'exit': 0, 'wall_ms': 31, 'peak_rss_mb': 12.5, 'plans': 1, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 1, 'budget_blocked': 0}
+  {'run': 3, 'exit': 0, 'wall_ms': 28, 'peak_rss_mb': 11.6, 'plans': 1, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 1, 'budget_blocked': 0}
+  {'run': 4, 'exit': 0, 'wall_ms': 28, 'peak_rss_mb': 11.7, 'plans': 1, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 1, 'budget_blocked': 0}
+  {'run': 5, 'exit': 0, 'wall_ms': 28, 'peak_rss_mb': 11.7, 'plans': 1, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 2, 'manifest_reads': 0, 'manifest_rows': 0, 'candidate_checks': 1, 'budget_blocked': 0}
+
+manifest-layout-extra: 15 次中读取计数逐次完全一致 directory_reads=[1] candidate_checks=[2]
+  wall_ms 各次: [34, 30, 30, 30, 31]（均值 31，极差 4ms）
+  peak_rss_mb 各次: [13.0, 13.1, 13.0, 13.1, 13.0]（均值 13.0）
+  {'run': 1, 'exit': 0, 'wall_ms': 34, 'peak_rss_mb': 13.0, 'plans': 2, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 4, 'manifest_reads': 2, 'manifest_rows': 3, 'candidate_checks': 2, 'budget_blocked': 0}
+  {'run': 2, 'exit': 0, 'wall_ms': 30, 'peak_rss_mb': 13.1, 'plans': 2, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 4, 'manifest_reads': 2, 'manifest_rows': 3, 'candidate_checks': 2, 'budget_blocked': 0}
+  {'run': 3, 'exit': 0, 'wall_ms': 30, 'peak_rss_mb': 13.0, 'plans': 2, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 4, 'manifest_reads': 2, 'manifest_rows': 3, 'candidate_checks': 2, 'budget_blocked': 0}
+  {'run': 4, 'exit': 0, 'wall_ms': 30, 'peak_rss_mb': 13.1, 'plans': 2, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 4, 'manifest_reads': 2, 'manifest_rows': 3, 'candidate_checks': 2, 'budget_blocked': 0}
+  {'run': 5, 'exit': 0, 'wall_ms': 31, 'peak_rss_mb': 13.0, 'plans': 2, 'directory_reads': 1, 'inventory_entries': 1, 'directory_probes': 4, 'manifest_reads': 2, 'manifest_rows': 3, 'candidate_checks': 2, 'budget_blocked': 0}
+
+已写入 docs/agent-notes-evidence/2026-10-06-shared-probe-perf.json

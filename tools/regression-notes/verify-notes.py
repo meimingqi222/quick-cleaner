@@ -109,6 +109,21 @@ BANNED_IMPLEMENTED_HEADINGS = re.compile(
 TEST_RE = re.compile(r"`([^`\s]*[/\\][^`\s]*)`")
 PROVED_RE = re.compile(r"^Proved:\s*\S", re.M)
 
+# Tokens that are machine-absolute, never repo-relative: URI schemes,
+# Windows drives, UNC/verbatim paths, POSIX roots, %-vars, and registry
+# hives. A `HKLM\SOFTWARE\Foo` or `C:\App` cited in prose is context, not a
+# test target, and must never hit the existence check.
+MACHINE_PATH_RE = re.compile(
+    r"^(?:"
+    r"[A-Za-z][A-Za-z0-9+.-]*://"       # URI scheme (https://, file://)
+    r"|[A-Za-z]:[\\/]"                  # Windows drive (C:\, D:/)
+    r"|\\\\"                            # UNC / verbatim (\\server, \\?\)
+    r"|/"                               # POSIX absolute
+    r"|%[A-Za-z_][A-Za-z0-9_]*%[\\/]"   # %WINDIR%\..., %APPDATA%\...
+    r"|HKEY_[A-Z_]+[\\/]"               # registry hive, long form
+    r"|HK(?:LM|CU|CR|U|CC|PD)[\\/]"     # registry hive, short form
+    r")", re.I)
+
 # Optional header lines naming a successor note. Both are validated for
 # resolution, self-reference, and cycles; `Partly-superseded-by` additionally
 # requires a `## Superseded` section so a partially replaced decision cannot be
@@ -457,6 +472,8 @@ def check_verification(path, ver, repo_root, strict, opts, bare_index,
 
     targets, anchors = [], []
     for token in raw:
+        if MACHINE_PATH_RE.match(token):
+            continue
         left, sep, right = token.partition(ANCHOR_SEP)
         if sep and right and (repo_root / left).is_file():
             targets.append(left)
@@ -474,6 +491,7 @@ def check_verification(path, ver, repo_root, strict, opts, bare_index,
         t.partition(ANCHOR_SEP)[0].strip()
         for t in proved_tokens
         if ":" not in t.partition(ANCHOR_SEP)[0]
+        and not MACHINE_PATH_RE.match(t)
         and not (repo_root / t.partition(ANCHOR_SEP)[0]).exists()
     })
     if evidence_missing:
@@ -712,10 +730,12 @@ def find_notes(notes, pattern):
 
 def _norm_repo_path(token):
     """Normalize a backticked repo-relative path token to lowercase posix
-    parts; None when the token is not a usable path (URL, absolute, `..`,
-    or a `path::anchor` remainder)."""
+    parts; None when the token is not a usable path (URL, absolute,
+    registry hive, `..`, or a `path::anchor` remainder)."""
     token = token.partition(ANCHOR_SEP)[0].strip()
     if not token or ":" in token or token.startswith(("/", "\\", "~")):
+        return None
+    if MACHINE_PATH_RE.match(token):
         return None
     parts = [p for p in re.split(r"[/\\]+", token) if p not in ("", ".")]
     if not parts or any(p == ".." for p in parts):

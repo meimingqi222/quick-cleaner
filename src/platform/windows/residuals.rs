@@ -16,6 +16,7 @@
 //! 这个区分是必要的：靠名字模糊匹配去删注册表，一次误判就可能带走别的
 //! 软件的配置。
 
+use crate::core::apps::dedupe_residuals;
 use crate::core::apps::{
     is_safe_app_token, split_command, AppRegRoot, Confidence, InstalledApp, ResidualItem,
     ResidualKind, ResidualOccupancy, ResidualScanResult, ResidualSource,
@@ -25,7 +26,7 @@ use crate::core::safety::{is_protected_residual_path, is_system_root_dir};
 use crate::platform::windows::apps::dir_or_file_size;
 use crate::platform::windows::registry::{
     delete_reg_tree, delete_reg_value, enum_string_values, enum_subkeys, from_wide,
-    read_reg_string, to_wide,
+    read_reg_string, reg_key_absent, reg_value_absent, to_wide,
 };
 use std::path::{Path, PathBuf};
 
@@ -34,28 +35,20 @@ use winapi::shared::winerror::ERROR_SUCCESS;
 use winapi::um::winnt::{KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use winapi::um::winreg::{RegCloseKey, RegOpenKeyExW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
+/// 读 residual-windows 规则里的共享名单。扫描锚点与排除名单都在
+/// rules/residual-windows.toml 维护，扫描代码只实现算法。
+fn residual_list(key: &str) -> Vec<String> {
+    crate::core::rules::list("residual-windows", key)
+}
+
+/// 单锚点：名单第一项。名单为空时该扫描器直接停用（配置清空即停）。
+fn residual_anchor(key: &str) -> String {
+    residual_list(key).into_iter().next().unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // 注册表路径常量
 // ---------------------------------------------------------------------------
-
-const APP_PATHS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
-const RUN_KEYS: &[&str] = &[
-    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-    r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
-];
-const SERVICES: &str = r"SYSTEM\CurrentControlSet\Services";
-const FIREWALL_RULES: &str =
-    r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules";
-const TRACING: &str = r"SOFTWARE\Microsoft\Tracing";
-const HEAP_LEAK: &str = r"SOFTWARE\Microsoft\RADAR\HeapLeakDetection\DiagnosedApplications";
-const INSTALLER_FOLDERS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders";
-const REGISTERED_APPS: &str = r"SOFTWARE\RegisteredApplications";
-const MUI_CACHE: &str =
-    r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache";
-const APP_COMPAT: &[&str] = &[
-    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers",
-    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store",
-];
 
 // ---------------------------------------------------------------------------
 // 匹配辅助
@@ -74,32 +67,9 @@ fn norm(s: &str) -> String {
 /// 公共目录 / 骨架文件夹的归一化名。拿它们做反向包含匹配会把桌面、
 /// 开始菜单根目录整棵当成某软件的残留。
 fn is_generic_folder_name(normed: &str) -> bool {
-    matches!(
-        normed,
-        "desktop"
-            | "documents"
-            | "downloads"
-            | "pictures"
-            | "videos"
-            | "music"
-            | "public"
-            | "users"
-            | "programs"
-            | "startup"
-            | "startmenu"
-            | "windows"
-            | "system"
-            | "system32"
-            | "temp"
-            | "tmp"
-            | "appdata"
-            | "programdata"
-            | "programfiles"
-            | "programfilesx86"
-            | "commonfiles"
-            | "common"
-            | "shared"
-    )
+    residual_list("generic_folder_names")
+        .iter()
+        .any(|name| name == normed)
 }
 
 fn sanitize_token(s: &str) -> String {
@@ -263,6 +233,16 @@ fn sam_of(root: AppRegRoot) -> DWORD {
     }
 }
 
+/// 删除/核验用的视图标志：与 [`sam_of`] 同一视图，只去掉读权限位——
+/// 打开目标键的访问位由删除与核验各自声明。
+fn delete_sam_of(root: AppRegRoot) -> DWORD {
+    match root {
+        AppRegRoot::Hklm32 => KEY_WOW64_32KEY,
+        AppRegRoot::Hkcu => 0,
+        _ => KEY_WOW64_64KEY,
+    }
+}
+
 fn reg_key_exists(root: HKEY, subpath: &str, sam: DWORD) -> bool {
     let wide = to_wide(subpath);
     let mut h_key: HKEY = std::ptr::null_mut();
@@ -299,11 +279,14 @@ fn open_and_read(root: HKEY, subpath: &str, value: &str, sam: DWORD) -> Option<S
 
 /// 扫描指定软件在磁盘与注册表中的残留项
 pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
+    // 来源引用：登记/发现规则优先；非规则应用绑定 residual-windows 规则
+    // （与 macOS 侧 residual-macos 同形），并捕获观察（版本/schema/序号）
+    // ——不能拿默认 engine 标签充当完整来源。
     let rule = app
         .discovery
         .as_ref()
         .and_then(|d| d.rule.clone())
-        .unwrap_or_else(crate::core::rules::RuleRef::engine);
+        .unwrap_or_else(|| crate::core::rules::RuleRef::new("residual-windows", None).observed());
     crate::core::rules::with_snapshot(rule.snapshot.clone(), || {
         let mut result = scan_residuals_inner(app);
         for item in &mut result.items {
@@ -338,6 +321,7 @@ fn scan_residuals_inner(app: &InstalledApp) -> ResidualScanResult {
     scan_vendor_keys_by_path(&ctx, &mut items);
     scan_app_paths(&ctx, &mut items);
     scan_run_keys(&ctx, &mut items);
+    scan_user_environment(&ctx, &mut items);
     scan_services(&ctx, &mut items);
     scan_firewall_rules(&ctx, &mut items);
     scan_tracing(&ctx, &mut items);
@@ -353,7 +337,7 @@ fn scan_residuals_inner(app: &InstalledApp) -> ResidualScanResult {
     scan_uninstaller_leftover(app, &ctx, &mut items);
 
     limit_discovered_residuals(app, &mut items);
-    dedup_items(&mut items);
+    dedupe_residuals(&mut items);
     // 「确定」的排在前面，用户先看到的就是可以放心删的
     items.sort_by_key(|b| std::cmp::Reverse(b.confidence));
 
@@ -719,12 +703,16 @@ fn scan_software_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// `App Paths`：以可执行文件名为子键，默认值是完整路径。
 fn scan_app_paths(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let app_paths = residual_anchor("app_paths_keys");
+    if app_paths.is_empty() {
+        return;
+    }
     for (reg_root, sam) in [
         (AppRegRoot::Hklm, KEY_READ | KEY_WOW64_64KEY),
         (AppRegRoot::Hklm32, KEY_READ | KEY_WOW64_32KEY),
     ] {
-        for sub in enum_subkeys(HKEY_LOCAL_MACHINE, APP_PATHS, sam) {
-            let full = format!("{APP_PATHS}\\{sub}");
+        for sub in enum_subkeys(HKEY_LOCAL_MACHINE, &app_paths, sam) {
+            let full = format!("{app_paths}\\{sub}");
             let target = open_and_read(HKEY_LOCAL_MACHINE, &full, "", sam).unwrap_or_default();
             let hit_dir = ctx.mentions_install_dir(&target);
             let hit_exe = ctx.exe_names.iter().any(|e| sub.eq_ignore_ascii_case(e));
@@ -740,7 +728,7 @@ fn scan_app_paths(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// 开机启动项。以「值」的形式存在，只能删值不能删键。
 fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
-    for key in RUN_KEYS {
+    for key in residual_list("run_keys") {
         for (reg_root, h, sam) in [
             (AppRegRoot::Hkcu, HKEY_CURRENT_USER, KEY_READ),
             (
@@ -754,7 +742,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 KEY_READ | KEY_WOW64_32KEY,
             ),
         ] {
-            for (name, data) in enum_string_values(h, key, sam) {
+            for (name, data) in enum_string_values(h, &key, sam) {
                 let certain = ctx.mentions_install_dir(&data) || ctx.mentions_exe(&data);
                 let possible = ctx.name_matches(&name);
                 if !certain && !possible {
@@ -777,14 +765,53 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     }
 }
 
+/// 归属证据：值里提到安装目录/可执行文件 = Certain；变量名与软件名相近
+/// = Possible。抽成纯函数以便隔离测试——测试绝不能写真实的环境变量。
+fn user_env_evidence(ctx: &Ctx, name: &str, value: &str) -> Option<Confidence> {
+    if ctx.mentions_install_dir(value) || ctx.mentions_exe(value) {
+        return Some(Confidence::Certain);
+    }
+    ctx.name_matches(name).then_some(Confidence::Possible)
+}
+
+/// 用户环境变量（`HKCU\Environment`）：卸载后仍指向安装目录或可执行文件
+/// 的变量值算残留。只碰当前用户的环境键；系统级环境（HKLM）影响所有账户，
+/// 不在这里认领。删除只删值不删键（键是 Windows 骨架）。
+fn scan_user_environment(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let key = residual_anchor("user_environment_keys");
+    if key.is_empty() {
+        return;
+    }
+    if ctx.install_dir.is_empty() && ctx.exe_names.is_empty() && !ctx.name_is_matchable() {
+        return;
+    }
+    for (name, data) in enum_string_values(HKEY_CURRENT_USER, &key, KEY_READ) {
+        let Some(confidence) = user_env_evidence(ctx, &name, &data) else {
+            continue;
+        };
+        out.push(ResidualItem {
+            rule: None,
+            kind: ResidualKind::RegistryValue(AppRegRoot::Hkcu, key.clone(), name),
+            confidence,
+            source: ResidualSource::UserEnvEntry,
+            identity: None,
+            owner_bundle_id: None,
+        });
+    }
+}
+
 /// 服务：`ImagePath` 指向安装目录的算残留。
 fn scan_services(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let services = residual_anchor("service_keys");
+    if services.is_empty() {
+        return;
+    }
     if ctx.install_dir.is_empty() && !ctx.name_is_matchable() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for svc in enum_subkeys(HKEY_LOCAL_MACHINE, SERVICES, sam) {
-        let full = format!("{SERVICES}\\{svc}");
+    for svc in enum_subkeys(HKEY_LOCAL_MACHINE, &services, sam) {
+        let full = format!("{services}\\{svc}");
         let image = open_and_read(HKEY_LOCAL_MACHINE, &full, "ImagePath", sam).unwrap_or_default();
         if ctx.mentions_install_dir(&image) {
             out.push(ResidualItem::certain(
@@ -802,14 +829,18 @@ fn scan_services(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// 防火墙规则：值的内容里含 `App=<路径>`。
 fn scan_firewall_rules(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let firewall_rules = residual_anchor("firewall_keys");
+    if firewall_rules.is_empty() {
+        return;
+    }
     if ctx.install_dir.is_empty() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for (name, data) in enum_string_values(HKEY_LOCAL_MACHINE, FIREWALL_RULES, sam) {
+    for (name, data) in enum_string_values(HKEY_LOCAL_MACHINE, &firewall_rules, sam) {
         if ctx.mentions_install_dir(&data) {
             out.push(ResidualItem::certain(
-                ResidualKind::RegistryValue(AppRegRoot::Hklm, FIREWALL_RULES.to_string(), name),
+                ResidualKind::RegistryValue(AppRegRoot::Hklm, firewall_rules.to_string(), name),
                 ResidualSource::FirewallRule,
             ));
         }
@@ -818,11 +849,15 @@ fn scan_firewall_rules(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// `SOFTWARE\Microsoft\Tracing`：子键形如 `<程序名>_RASAPI32`。
 fn scan_tracing(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let tracing = residual_anchor("tracing_keys");
+    if tracing.is_empty() {
+        return;
+    }
     if !ctx.name_is_matchable() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for sub in enum_subkeys(HKEY_LOCAL_MACHINE, TRACING, sam) {
+    for sub in enum_subkeys(HKEY_LOCAL_MACHINE, &tracing, sam) {
         // 去掉 _RASAPI32 / _RASMANCS 之类的后缀再比对
         let stem = match sub.rfind('_') {
             Some(i) if i > 0 => &sub[..i],
@@ -830,7 +865,7 @@ fn scan_tracing(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         };
         if ctx.name_matches(stem) {
             out.push(ResidualItem::possible(
-                ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{TRACING}\\{sub}")),
+                ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{tracing}\\{sub}")),
                 ResidualSource::RasTrace,
             ));
         }
@@ -839,14 +874,18 @@ fn scan_tracing(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// `RADAR\HeapLeakDetection`：子键就是可执行文件名。
 fn scan_heap_leak(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let heap_leak = residual_anchor("heap_leak_keys");
+    if heap_leak.is_empty() {
+        return;
+    }
     if ctx.exe_names.is_empty() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for sub in enum_subkeys(HKEY_LOCAL_MACHINE, HEAP_LEAK, sam) {
+    for sub in enum_subkeys(HKEY_LOCAL_MACHINE, &heap_leak, sam) {
         if ctx.exe_names.iter().any(|e| sub.eq_ignore_ascii_case(e)) {
             out.push(ResidualItem::certain(
-                ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{HEAP_LEAK}\\{sub}")),
+                ResidualKind::RegistryKey(AppRegRoot::Hklm, format!("{heap_leak}\\{sub}")),
                 ResidualSource::LeakDiagnostics,
             ));
         }
@@ -858,7 +897,7 @@ fn scan_app_compat(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     if ctx.install_dir.is_empty() {
         return;
     }
-    for key in APP_COMPAT {
+    for key in residual_list("app_compat_keys") {
         for (reg_root, h, sam) in [
             (AppRegRoot::Hkcu, HKEY_CURRENT_USER, KEY_READ),
             (
@@ -867,7 +906,7 @@ fn scan_app_compat(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 KEY_READ | KEY_WOW64_64KEY,
             ),
         ] {
-            for (name, _) in enum_string_values(h, key, sam) {
+            for (name, _) in enum_string_values(h, &key, sam) {
                 if ctx.mentions_install_dir(&name) {
                     out.push(ResidualItem::certain(
                         ResidualKind::RegistryValue(reg_root, key.to_string(), name),
@@ -881,14 +920,18 @@ fn scan_app_compat(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// `Installer\Folders`：值名是安装过程中创建过的目录路径。
 fn scan_installer_folders(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let installer_folders = residual_anchor("installer_folder_keys");
+    if installer_folders.is_empty() {
+        return;
+    }
     if ctx.install_dir.is_empty() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for (name, _) in enum_string_values(HKEY_LOCAL_MACHINE, INSTALLER_FOLDERS, sam) {
+    for (name, _) in enum_string_values(HKEY_LOCAL_MACHINE, &installer_folders, sam) {
         if ctx.mentions_install_dir(&name) {
             out.push(ResidualItem::certain(
-                ResidualKind::RegistryValue(AppRegRoot::Hklm, INSTALLER_FOLDERS.to_string(), name),
+                ResidualKind::RegistryValue(AppRegRoot::Hklm, installer_folders.to_string(), name),
                 ResidualSource::InstallerFolderEntry,
             ));
         }
@@ -897,13 +940,17 @@ fn scan_installer_folders(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// MuiCache：值名是可执行文件的完整路径。
 fn scan_mui_cache(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let mui_cache = residual_anchor("mui_cache_keys");
+    if mui_cache.is_empty() {
+        return;
+    }
     if ctx.install_dir.is_empty() {
         return;
     }
-    for (name, _) in enum_string_values(HKEY_CURRENT_USER, MUI_CACHE, KEY_READ) {
+    for (name, _) in enum_string_values(HKEY_CURRENT_USER, &mui_cache, KEY_READ) {
         if ctx.mentions_install_dir(&name) {
             out.push(ResidualItem::certain(
-                ResidualKind::RegistryValue(AppRegRoot::Hkcu, MUI_CACHE.to_string(), name),
+                ResidualKind::RegistryValue(AppRegRoot::Hkcu, mui_cache.to_string(), name),
                 ResidualSource::ProgramNameCache,
             ));
         }
@@ -912,14 +959,18 @@ fn scan_mui_cache(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
 
 /// `RegisteredApplications`：值指向 `SOFTWARE\...\Capabilities`。
 fn scan_registered_apps(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
+    let registered_apps = residual_anchor("registered_apps_keys");
+    if registered_apps.is_empty() {
+        return;
+    }
     if !ctx.name_is_matchable() {
         return;
     }
     let sam = KEY_READ | KEY_WOW64_64KEY;
-    for (name, data) in enum_string_values(HKEY_LOCAL_MACHINE, REGISTERED_APPS, sam) {
+    for (name, data) in enum_string_values(HKEY_LOCAL_MACHINE, &registered_apps, sam) {
         if ctx.name_matches(&name) || ctx.name_matches(&data) {
             out.push(ResidualItem::possible(
-                ResidualKind::RegistryValue(AppRegRoot::Hklm, REGISTERED_APPS.to_string(), name),
+                ResidualKind::RegistryValue(AppRegRoot::Hklm, registered_apps.to_string(), name),
                 ResidualSource::DefaultProgramsEntry,
             ));
         }
@@ -935,22 +986,21 @@ fn scan_com(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         return;
     }
     let mut guids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let classes = [
-        (
-            AppRegRoot::Hklm,
-            r"SOFTWARE\Classes",
-            KEY_READ | KEY_WOW64_64KEY,
-        ),
-        (
-            AppRegRoot::Hklm,
-            r"SOFTWARE\Classes\WOW6432Node",
-            KEY_READ | KEY_WOW64_64KEY,
-        ),
-        (AppRegRoot::Hkcu, r"Software\Classes", KEY_READ),
+    // 锚点来自 residual-windows 规则；HKCU 用小写 Software 形式由扫描器派生。
+    let views = [
+        (AppRegRoot::Hklm, KEY_READ | KEY_WOW64_64KEY),
+        (AppRegRoot::Hkcu, KEY_READ),
     ];
-    for (root, base, sam) in classes {
-        scan_clsid_key(root, &format!(r"{base}\CLSID"), sam, ctx, out, &mut guids);
-        scan_typelib_key(root, &format!(r"{base}\TypeLib"), sam, ctx, out, &mut guids);
+    for base in residual_list("com_classes_roots") {
+        for (root, sam) in views {
+            let base = if root == AppRegRoot::Hkcu {
+                base.replacen("SOFTWARE", "Software", 1)
+            } else {
+                base.clone()
+            };
+            scan_clsid_key(root, &format!(r"{base}\CLSID"), sam, ctx, out, &mut guids);
+            scan_typelib_key(root, &format!(r"{base}\TypeLib"), sam, ctx, out, &mut guids);
+        }
     }
     if guids.is_empty() {
         return;
@@ -1074,32 +1124,22 @@ fn scan_typelib_key(
     }
 }
 
-const SHELLEX_PARENTS: &[&str] = &[
-    r"SOFTWARE\Classes\*\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\*\shellex\PropertySheetHandlers",
-    r"SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\Directory\Background\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\Folder\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\AllFilesystemObjects\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\lnkfile\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers",
-    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects",
-];
-
 fn scan_shell_extensions(guids: &std::collections::HashSet<String>, out: &mut Vec<ResidualItem>) {
     let views = [
         (AppRegRoot::Hklm, KEY_READ | KEY_WOW64_64KEY),
         (AppRegRoot::Hklm32, KEY_READ | KEY_WOW64_32KEY),
         (AppRegRoot::Hkcu, KEY_READ),
     ];
+    // 锚点来自 residual-windows 规则；扫描只实现「枚举子键/值 → GUID 文本比对」的算法。
+    let parents = residual_list("shell_extension_parents");
+    let approved_key = residual_anchor("shell_extension_approved_keys");
     for (root, sam) in views {
         let h = hkey_of(root);
-        for parent in SHELLEX_PARENTS {
+        for parent in &parents {
             let parent_path = if root == AppRegRoot::Hkcu {
                 parent.replacen("SOFTWARE", "Software", 1)
             } else {
-                (*parent).to_string()
+                parent.clone()
             };
             for sub in enum_subkeys(h, &parent_path, sam) {
                 let full = format!(r"{parent_path}\{sub}");
@@ -1114,14 +1154,14 @@ fn scan_shell_extensions(guids: &std::collections::HashSet<String>, out: &mut Ve
             }
         }
         let approved = if root == AppRegRoot::Hkcu {
-            r"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
+            approved_key.replacen("SOFTWARE", "Software", 1)
         } else {
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
+            approved_key.clone()
         };
-        for (name, _) in enum_string_values(h, approved, sam) {
+        for (name, _) in enum_string_values(h, &approved, sam) {
             if guid_in_set(guids, &name) {
                 out.push(ResidualItem::certain(
-                    ResidualKind::RegistryValue(root, approved.to_string(), name),
+                    ResidualKind::RegistryValue(root, approved.clone(), name),
                     ResidualSource::ShellExtension,
                 ));
             }
@@ -1341,24 +1381,6 @@ fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source
     });
 }
 
-/// 去重：`Vec::dedup` 只能消掉相邻重复项，而这里的 items 并非有序。
-///
-/// 同一目标被多个扫描器发现时，保留把握更高的那条。
-fn dedup_items(items: &mut Vec<ResidualItem>) {
-    let mut kept: Vec<ResidualItem> = Vec::with_capacity(items.len());
-    for it in items.drain(..) {
-        match kept.iter_mut().find(|k| k.kind == it.kind) {
-            Some(existing) => {
-                if it.confidence > existing.confidence {
-                    *existing = it;
-                }
-            }
-            None => kept.push(it),
-        }
-    }
-    *items = kept;
-}
-
 /// 进程占用探测的 Windows 占位实现。文件被进程锁住时，Windows 的删除
 /// 会带着系统错误（sharing violation）直接失败，原因已经到了用户面前，
 /// 不像 macOS 活库闸门那样需要额外解释「为什么拒」。
@@ -1514,6 +1536,33 @@ fn is_pending_reboot_locked(path: &Path, locked: &std::collections::HashSet<Stri
 }
 
 /// 执行残留清理
+/// 登记项/值/任务删除的统一完成判据：三态核验确认目标真的不在才算完成。
+///
+/// - 核验「确认不在」→ 幂等完成（重复清理、竞态都不虚报失败）；
+/// - 核验「还在」→ 先删除、再复核一次；复核仍确认不在才算完成；
+/// - 核验「原因不明」（权限不足等 Unknown）→ 不删除，如实记失败——
+///   读不到的登记项状态不能当作删除授权。
+///
+/// 返回 `Err(原因)` 时调用方按失败记录，`CleanFailure::Id` 的格式由调用方
+/// 保持与 `display_label` 一致（收尾判定靠它匹配未清项）。
+fn delete_registry_target(
+    absent: impl Fn() -> Option<bool>,
+    delete: impl Fn() -> bool,
+) -> Result<(), &'static str> {
+    match absent() {
+        Some(true) => Ok(()),
+        Some(false) => {
+            delete();
+            match absent() {
+                Some(true) => Ok(()),
+                Some(false) => Err("删除后核验仍确认目标存在"),
+                None => Err("删除后核验失败，原因不明"),
+            }
+        }
+        None => Err("删除前核验失败（Unknown），拒绝删除"),
+    }
+}
+
 pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanReport {
     let mut report = CleanReport::default();
 
@@ -1561,24 +1610,36 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                     report.record(path, crate::core::cleaner::CleanResult::ManualAction);
                     continue;
                 }
-                // 残留走回收站，不永久删（与 macOS 侧同一条理由，见
-                // `platform::macos::residuals::clean_residuals`）：判据是
-                // 「这个 app 已经不在任何位置装着了」，判错的代价是活应用
-                // 的配置与登录态，收益通常只有几十 MB。
-                //
-                // 注册表键值、计划任务、服务不走这条——它们没有回收站语义，
-                // 维持原来的直接删除。
-                let res = crate::core::cleaner::dispose(
-                    path,
-                    crate::core::cleaner::Disposal::RecycleBin,
-                    prog,
-                );
-                report.record(path, res);
+                // 变更前重新复核身份与保护、Apply 移入废纸篓、Verify 用「路径确已
+                // 不存在」判完成，全走共用执行器：被换掉的目标在 Revalidate 被阻止，
+                // 绝不回退裸删。注册表键值、计划任务、服务走 clean_native_residual。
+                let outcome = clean_filesystem_residual(item, prog);
+                report.ok += outcome.ok;
+                report.skipped += outcome.skipped;
+                report.failed.extend(outcome.failed);
+                report.skipped_items.extend(outcome.skipped_items);
+                report.manual.extend(outcome.manual);
+                report.plan_executions.extend(outcome.plan_executions);
             }
             ResidualKind::RegistryKey(root, subpath) => {
-                if delete_reg_tree(hkey_of(*root), subpath) {
+                // 成功判据是登记项真的没了，不是删除调用返回 0。sam 带
+                // WOW64 标志——32 位登记项扫自 32 位视图，删除也必须落在
+                // 同一视图，否则删的是 64 位视图的同名路径。
+                let sam = delete_sam_of(*root);
+                let outcome = clean_native_residual(
+                    item,
+                    prog,
+                    || reg_key_absent(hkey_of(*root), subpath, sam),
+                    || delete_reg_tree(hkey_of(*root), subpath, sam),
+                );
+                if outcome.failed.is_empty() {
                     report.ok += 1;
                 } else {
+                    crate::log!(
+                        "[残留] 登记项 {}\\{}: 删除未生效或核验未通过",
+                        root.label(),
+                        subpath
+                    );
                     report
                         .failed
                         .push(CleanFailure::Id(format!("{}\\{}", root.label(), subpath)));
@@ -1590,9 +1651,21 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                     AppRegRoot::Hkcu => 0,
                     _ => KEY_WOW64_64KEY,
                 };
-                if delete_reg_value(hkey_of(*root), subpath, name, sam) {
+                let outcome = clean_native_residual(
+                    item,
+                    prog,
+                    || reg_value_absent(hkey_of(*root), subpath, name, sam),
+                    || delete_reg_value(hkey_of(*root), subpath, name, sam),
+                );
+                if outcome.failed.is_empty() {
                     report.ok += 1;
                 } else {
+                    crate::log!(
+                        "[残留] 注册表值 {}\\{} → {}: 删除未生效或核验未通过",
+                        root.label(),
+                        subpath,
+                        name
+                    );
                     report.failed.push(CleanFailure::Id(format!(
                         "{}\\{} → {}",
                         root.label(),
@@ -1602,9 +1675,18 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
                 }
             }
             ResidualKind::ScheduledTask(name) => {
-                if delete_scheduled_task(name) {
+                // 成功判据是任务真的没了（与扫描同一份 Tasks 目录来源），
+                // 不是 schtasks 的退出码 0；还在或原因不明都如实记失败。
+                let outcome = clean_native_residual(
+                    item,
+                    prog,
+                    || Some(!scheduled_task_exists(name)),
+                    || delete_scheduled_task(name),
+                );
+                if outcome.failed.is_empty() {
                     report.ok += 1;
                 } else {
+                    crate::log!("[残留] 计划任务 {name}: 删除未生效或核验未通过");
                     report.failed.push(CleanFailure::Id(name.clone()));
                 }
             }
@@ -1614,6 +1696,79 @@ pub fn clean_residuals(items: &[ResidualItem], prog: &CleanProgress) -> CleanRep
     }
 
     report
+}
+
+/// Route one native residual (registry key/value, scheduled task) through the shared
+/// capability runner, so it produces the same `Revalidate → Apply → Verify` steps as
+/// every other entry. `delete` performs the deletion, `absent` is the completion check;
+/// a successful run is one where every step succeeded (so `absent` confirmed).
+fn clean_native_residual(
+    item: &ResidualItem,
+    prog: &CleanProgress,
+    absent: impl Fn() -> Option<bool>,
+    delete: impl Fn() -> bool,
+) -> CleanReport {
+    use crate::core::rules::{CleanupPlan, Operation, PlannedTarget};
+    let rule = item
+        .rule
+        .clone()
+        .unwrap_or_else(crate::core::rules::RuleRef::engine);
+    let path = PathBuf::from(match item.kind.operation() {
+        Operation::Native { identifier, .. } => identifier,
+        other => format!("{other:?}"),
+    });
+    let plan = CleanupPlan::new(
+        rule,
+        vec![PlannedTarget {
+            path,
+            operation: item.kind.operation(),
+            identity: None,
+            disposal: crate::core::cleaner::Disposal::Permanent,
+        }],
+    );
+    crate::core::rules::flow::execute_native_residual(
+        &plan,
+        0,
+        prog,
+        |_| delete_registry_target(&absent, &delete).map_err(str::to_string),
+        |_| match absent() {
+            Some(true) => crate::core::rules::facts::Evidence::Confirmed,
+            Some(false) => crate::core::rules::facts::Evidence::Absent,
+            None => crate::core::rules::facts::Evidence::Unknown,
+        },
+    )
+}
+
+/// Route one filesystem residual (file/dir) through the shared capability runner, so
+/// the whole residual clean — not just the native kinds — runs through the unified
+/// executor and yields typed `Revalidate → Apply → Verify` steps. The runner's
+/// Revalidate re-checks the plan (identity, protection) and the Apply disposes to the
+/// Recycle Bin, matching the previous direct path.
+fn clean_filesystem_residual(item: &ResidualItem, prog: &CleanProgress) -> CleanReport {
+    use crate::core::rules::{CleanupPlan, PlannedTarget};
+    let path = match &item.kind {
+        ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => path.clone(),
+        _ => return CleanReport::default(),
+    };
+    let rule = item
+        .rule
+        .clone()
+        .unwrap_or_else(crate::core::rules::RuleRef::engine);
+    let plan = CleanupPlan::new(
+        rule,
+        vec![PlannedTarget {
+            path,
+            operation: item.kind.operation(),
+            identity: item.identity,
+            disposal: crate::core::cleaner::Disposal::RecycleBin,
+        }],
+    );
+    crate::core::rules::flow::execute_filesystem(
+        &plan,
+        0,
+        prog,
+        crate::core::inuse::SpotCheck::Clear,
+    )
 }
 
 fn scheduled_task_exists(name: &str) -> bool {
@@ -1634,7 +1789,11 @@ fn delete_scheduled_task(name: &str) -> bool {
         .args(["/Delete", "/TN", name, "/F"])
         .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
         .status();
-    matches!(status, Ok(s) if s.success()) || !scheduled_task_exists(name)
+    let _ = status;
+    // 成功判据是任务真的没了（与扫描同一份 Tasks 目录来源），不是 schtasks
+    // 的退出码 0——报了成功但任务文件还在，或者失败原因不明，都不算完成。
+    // 任务本来就不存在（重复清理、竞态）按完成处理。
+    !scheduled_task_exists(name)
 }
 
 fn stop_windows_service(name: &str) -> bool {
@@ -1673,6 +1832,7 @@ fn stop_windows_service(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::windows::registry;
 
     fn app(name: &str, publisher: &str) -> InstalledApp {
         InstalledApp {
@@ -1728,6 +1888,95 @@ mod tests {
             .collect();
         assert!(is_pending_reboot_locked(Path::new(r"C:\x\y.dll"), &locked));
         assert!(!is_pending_reboot_locked(Path::new(r"C:\x\z.dll"), &locked));
+    }
+
+    /// 注册表应用没有规则，但残留项的来源观察要完整——挂的是带 observation 的
+    /// engine 规则引用，而不是一个裸 engine 标签。
+    #[test]
+    fn registered_app_residuals_carry_a_complete_source_observation() {
+        let root = crate::core::testing::fixture("qc_residual_source_observation");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut fixture = app("Fixture", "Vendor");
+        fixture.install_location = Some(root.clone());
+        let result = scan_residuals(&fixture);
+        assert!(!result.items.is_empty(), "install dir should be a residual");
+        for item in &result.items {
+            let rule = item.rule.as_ref().expect("every residual carries a rule");
+            assert!(
+                rule.observation.is_some(),
+                "residual source must be a complete observation, not a bare engine label"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 扫描后被换掉的目标必须拒绝删除：同名不同物不能裸删。与 macOS 残留
+    /// 清理同一道身份闸门——Windows 侧此前缺这一道。
+    #[test]
+    fn residual_cleanup_rejects_path_replaced_after_scan() {
+        let root = crate::core::testing::fixture("qc_residual_identity_swap_win");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("leftover.cfg");
+        std::fs::write(&path, b"old residual").unwrap();
+        let item = ResidualItem::certain(
+            ResidualKind::File(path.clone(), 12),
+            ResidualSource::UninstallerLeftover,
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"new live configuration, different length").unwrap();
+
+        let report = clean_residuals(&[item], &CleanProgress::default());
+        assert_eq!(report.failed, vec![CleanFailure::Path(path.clone())]);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"new live configuration, different length"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 登记项清理必须以「删除后核验确认消失」为完成判据：夹具键建在 HKCU
+    /// 自己的测试路径下（自建自清），删除调用成功 + 核验确认不在才算 ok；
+    /// 键本来就不存在（重复清理）不算失败。
+    #[test]
+    fn registry_residual_clean_verifies_absence_after_delete() {
+        let base = format!("Software\\QuickCleanerTest\\{}", std::process::id());
+        let with_child = format!("{base}\\child");
+        assert!(registry::create_fixture_key(&with_child));
+
+        let item = ResidualItem::certain(
+            ResidualKind::RegistryKey(AppRegRoot::Hkcu, with_child.clone()),
+            ResidualSource::UninstallEntry,
+        );
+        let report = clean_residuals(&[item], &CleanProgress::default());
+        assert_eq!(report.ok, 1, "删除+核验通过该记 ok");
+        assert!(report.failed.is_empty());
+        assert_eq!(
+            registry::reg_key_absent(HKEY_CURRENT_USER, &with_child, 0),
+            Some(true)
+        );
+
+        // 键已经不在（重复清理/竞态）：任务视为完成，不虚报失败。
+        let item = ResidualItem::certain(
+            ResidualKind::RegistryKey(AppRegRoot::Hkcu, with_child.clone()),
+            ResidualSource::UninstallEntry,
+        );
+        let report = clean_residuals(&[item], &CleanProgress::default());
+        assert_eq!(report.ok, 1);
+        assert!(report.failed.is_empty());
+        // 清掉夹具根，不留测试键。
+        assert!(delete_reg_tree(HKEY_CURRENT_USER, &base, 0));
+    }
+
+    /// 删除失败必须如实记失败：路径不存在但父键也没有时不能虚报成功。
+    /// 注意「键不在」的核验走的是三态——这里删的是必不存在的键，删除
+    /// 调用失败、核验给出「确认不在」，此时按幂等完成处理。
+    #[test]
+    fn scheduled_task_delete_counts_absence_as_completion() {
+        // 从不存在的任务名：schtasks 报错但任务确实不在，按完成处理。
+        assert!(delete_scheduled_task(r"\QuickCleanerNoSuchTask9f3a"));
     }
 
     fn utf16_multi_sz(entries: &[&str]) -> Vec<u16> {
@@ -1837,7 +2086,7 @@ mod tests {
             ResidualItem::possible(k.clone(), ResidualSource::LikelyConfigRegKey),
             ResidualItem::certain(k.clone(), ResidualSource::ConfigRegKey),
         ];
-        dedup_items(&mut items);
+        dedupe_residuals(&mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].confidence, Confidence::Certain);
         assert_eq!(items[0].source, ResidualSource::ConfigRegKey);
@@ -1888,6 +2137,147 @@ mod tests {
                     && i.confidence == Confidence::Certain),
             "「{}」的卸载登记项没被识别出来",
             target.name
+        );
+    }
+    /// 残留扫描的来源引用：非规则应用绑定 residual-windows 规则（与 macOS
+    /// 侧 residual-macos 同形）并携带观察——不能拿默认 engine 标签充当来源。
+    #[test]
+    fn residual_scan_binds_the_residual_windows_rule() {
+        let root = crate::core::testing::fixture("qc_residual_rule_binding_win");
+        let _ = std::fs::remove_dir_all(&root);
+        let install = root.join("App");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join("app.exe"), b"x").unwrap();
+        let mut a = app("FixtureApp", "Fixture");
+        a.install_location = Some(install);
+        let result = scan_residuals(&a);
+        assert!(!result.items.is_empty(), "安装目录残留应被列出");
+        let expected = crate::core::rules::snapshot()
+            .definition("residual-windows")
+            .version;
+        for item in &result.items {
+            let rule = item.rule.as_ref().expect("每条残留都要有规则引用");
+            assert_eq!(rule.id, "residual-windows", "{item:?}");
+            let observation = rule
+                .observation
+                .as_ref()
+                .expect("来源观察必须捕获（版本/schema/序号）");
+            assert_eq!(observation.rule_version, expected);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 残留通道的共享名单（扫描锚点/公共目录排除）跟规则走：改
+    /// residual-windows.toml 即生效，扫描代码不再自备名单。
+    #[test]
+    fn residual_shared_lists_follow_the_rule() {
+        use std::sync::Arc;
+        let original = crate::core::rules::snapshot();
+        assert!(
+            !original.list("residual-windows", "run_keys").is_empty(),
+            "内置基线必须带 Run/RunOnce 锚点"
+        );
+        // 全部键路径锚点在 shipped 基线里都非空——锚点配置清空即停用对应
+        // 扫描器，所以「有没有」本身就是行为。
+        for key in [
+            "run_keys",
+            "app_paths_keys",
+            "service_keys",
+            "firewall_keys",
+            "tracing_keys",
+            "heap_leak_keys",
+            "installer_folder_keys",
+            "registered_apps_keys",
+            "mui_cache_keys",
+            "app_compat_keys",
+            "user_environment_keys",
+            "shell_extension_parents",
+            "shell_extension_approved_keys",
+            "com_classes_roots",
+        ] {
+            assert!(
+                !original.list("residual-windows", key).is_empty(),
+                "内置基线缺少锚点 {key}"
+            );
+        }
+        assert!(is_generic_folder_name("desktop"));
+        assert!(!is_generic_folder_name("somefixturegeneric"));
+
+        let mut bundle = original.bundle.clone();
+        {
+            let rule = bundle
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "residual-windows")
+                .unwrap();
+            rule.version += 1;
+            rule.lists
+                .get_mut("generic_folder_names")
+                .unwrap()
+                .push("somefixturegeneric".into());
+            rule.lists.get_mut("registered_apps_keys").unwrap()[0] =
+                r"SOFTWARE\FixtureAnchor".into();
+        }
+        bundle.validate().unwrap();
+        let changed = Arc::new(crate::core::rules::RuleSnapshot { bundle });
+        crate::core::rules::with_snapshot(changed.clone(), || {
+            assert!(is_generic_folder_name("somefixturegeneric"));
+            assert_eq!(
+                residual_anchor("registered_apps_keys"),
+                r"SOFTWARE\FixtureAnchor",
+                "单锚点扫描器跟随规则配置"
+            );
+        });
+        assert!(
+            !is_generic_folder_name("somefixturegeneric"),
+            "快照结束后不得延续改动的名单"
+        );
+    }
+    /// 用户环境变量的归属证据：值提到安装目录/可执行文件 = Certain；
+    /// 只有变量名与软件名相近 = Possible；两者都没有不认领。
+    /// 纯函数测试——真实环境变量键绝不能被测试写入。
+    #[test]
+    fn user_environment_evidence_requires_value_or_name_evidence() {
+        let mut c = ctx_with_dir("Foo", r"c:\program files\foo");
+        c.exe_names = vec!["foo.exe".into()];
+
+        assert_eq!(
+            user_env_evidence(&c, "FOO_HOME", r"c:\program files\foo\bin"),
+            Some(Confidence::Certain),
+            "值里提到安装目录"
+        );
+        assert_eq!(
+            user_env_evidence(&c, "SOMETHING_ELSE", r"c:\anywhere\foo.exe --serve"),
+            Some(Confidence::Certain),
+            "值里提到可执行文件"
+        );
+        assert_eq!(
+            user_env_evidence(&c, "FOO_EXTRA", r"c:\unrelated\payload"),
+            Some(Confidence::Possible),
+            "只有名字相近"
+        );
+        assert_eq!(
+            user_env_evidence(&c, "UNRELATED", r"c:\unrelated\payload"),
+            None,
+            "名字与值都没有归属证据"
+        );
+    }
+
+    /// 用户环境变量锚点在 shipped 基线里存在，且扫描器不认领系统级环境。
+    #[test]
+    fn user_environment_anchor_follows_the_rule() {
+        let original = crate::core::rules::snapshot();
+        assert_eq!(
+            residual_anchor("user_environment_keys"),
+            "Environment",
+            "内置基线必须只声明当前用户的环境键"
+        );
+        assert!(
+            !original
+                .list("residual-windows", "user_environment_keys")
+                .iter()
+                .any(|key| key.starts_with("SYSTEM\\") || key.starts_with("HKLM")),
+            "系统级环境不在残留认领范围"
         );
     }
 }

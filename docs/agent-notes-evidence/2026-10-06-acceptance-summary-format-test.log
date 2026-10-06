@@ -1,0 +1,10 @@
+===== 可粘贴到 docs/RULES_REFACTOR_STATUS.md 的块（原样复制，含上面各步输出）=====
+| macOS 检查 | 结果 |
+| --- | --- |
+| 1/7 `cargo fmt --check` | OK |
+| 4/7 `cargo test`（含 macOS 门控用例） | OK |
+| 5/7 废纸篓往返（ignored） | OK |
+| 6/7 testlist 产物（620 行） | OK |
+| 7/7 守卫三件套（strict-anchors / UI 本地化 / 状态引用） | OK |
+| 运行环境 | MINGW64_NT-10.0-26200 x86_64 · rustc 1.92.0 (ded5c06cf 2025-12-08) · commit 63e4c46 dirty=true · 2026-10-06T07:28:53Z |
+===== 块结束：粘贴以上表格 + 本脚本的完整原始输出 =====

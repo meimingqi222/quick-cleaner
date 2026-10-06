@@ -46,14 +46,8 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     let body = if root.disk.scanning {
         loading_state_view(&loading_title, &loading_sub, root.anim_phase)
     } else if let Some(ref err) = root.disk.error {
-        let err_hint = match lang {
-            Language::Zh => "请确保以管理员权限运行，或切换至其他可用盘符重试",
-            Language::En => "Please ensure running as administrator or switch to another drive",
-        };
-        let err_prefix = match lang {
-            Language::Zh => "磁盘分析失败：",
-            Language::En => "Disk analysis failed: ",
-        };
+        let err_hint = tr_disk_error_hint(lang);
+        let err_prefix = tr_disk_error_prefix(lang);
         div()
             .flex_1()
             .flex()
@@ -80,15 +74,9 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     } else if let Some(ref scan) = root.disk.mft {
         render_disk_lens_panes(root, scan, cx)
     } else {
-        let prompt_title = match lang {
-            Language::Zh => "选择要分析的磁盘并开始深度扫描",
-            Language::En => "Select a drive to analyze storage hierarchy",
-        };
+        let prompt_title = tr_disk_prompt_title(lang);
         let current_label = format_volume_label(&root.disk.volume, lang);
-        let btn_scan_text = match lang {
-            Language::Zh => format!("开始分析 {current_label} 空间占用"),
-            Language::En => format!("Analyze Storage for {current_label}"),
-        };
+        let btn_scan_text = tr_disk_scan_button(lang, &current_label);
 
         let vol_cards: Vec<_> = root
             .disk

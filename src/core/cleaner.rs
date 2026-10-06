@@ -833,7 +833,7 @@ pub fn clean_dir_contents(dir: &Path, p: &CleanProgress) -> CleanReport {
         report.failed.push(CleanFailure::Path(dir.to_path_buf()));
         return report;
     }
-    if is_protected(dir) {
+    if crate::core::safety::is_contents_protected(dir) {
         report.record(dir, CleanResult::Skipped);
         return report;
     }
@@ -1019,8 +1019,7 @@ pub struct CleanTarget {
     /// `clean_dir_contents` 内部对每个叶子做的「叶子—父目录绑定」复核，
     /// 这个字段对它们来说用不上（但仍然会被填充，只是没有消费方）。
     pub identity: Option<crate::core::model::TargetIdentity>,
-    /// 永久删除还是送废纸篓/回收站，由类目决定（见
-    /// `categories::CategoryId::disposal`）。只对 `remove_dir: true` 的
+    /// 扫描计划固定的永久删除或废纸篓/回收站处置。只对 `remove_dir: true` 的
     /// 目标有意义——`remove_dir: false` 是「清空内容、保留目录」，把内容
     /// 逐个挪进废纸篓既不释放空间也不成其为一次清理。
     pub disposal: Disposal,
@@ -1032,7 +1031,7 @@ impl CleanTarget {
         Self {
             plans: Vec::new(),
             rule: None,
-            operation: crate::core::rules::Operation::classify(&path, false),
+            operation: crate::core::rules::Operation::Contents,
             path,
             remove_dir: false,
             size_hint: None,
@@ -1046,7 +1045,7 @@ impl CleanTarget {
         Self {
             plans: Vec::new(),
             rule: None,
-            operation: crate::core::rules::Operation::classify(&path, true),
+            operation: crate::core::rules::Operation::Tree.for_scanned_path(&path),
             path,
             remove_dir: true,
             size_hint: None,
@@ -1433,14 +1432,27 @@ pub enum Disposal {
 pub struct ArbitraryTarget {
     pub path: PathBuf,
     pub identity: Option<TargetIdentity>,
+    /// 确认时冻结的类型化操作：目录是 `Tree`，其余是 `File`。
+    ///
+    /// 删除前复核当前类型仍与冻结值一致——操作不再在执行时按文件系统
+    /// 类型重新推断，用户确认的「删这个目录/这个文件」就是执行的操作。
+    pub operation: crate::core::rules::Operation,
 }
 
 impl ArbitraryTarget {
-    /// 当场拍一份身份。调用方应在用户确认删除时调用，不要拖到后台线程
-    /// 已经开始删了再拍。
+    /// 当场拍一份身份与类型化操作。调用方应在用户确认删除时调用，不要拖到
+    /// 后台线程已经开始删了再拍。
     pub fn capture(path: PathBuf) -> Self {
         let identity = crate::core::model::capture_identity(&path);
-        Self { path, identity }
+        let operation = match std::fs::symlink_metadata(&path) {
+            Ok(md) if md.is_dir() => crate::core::rules::Operation::Tree,
+            _ => crate::core::rules::Operation::File,
+        };
+        Self {
+            path,
+            identity,
+            operation,
+        }
     }
 }
 
@@ -1506,6 +1518,18 @@ pub fn clean_arbitrary_items(
             report.record(path, CleanResult::Skipped);
             continue;
         }
+        // 冻结操作复核：确认时是目录、现在不是（或反之）说明目标在确认后
+        // 被换过类型，按变更拒绝，绝不改用另一种操作去删。目标消失交给
+        // dispose 记 Skipped，不在这里拒绝。
+        if let Ok(md) = std::fs::symlink_metadata(path) {
+            let frozen_is_dir = item.operation == crate::core::rules::Operation::Tree;
+            if md.is_dir() != frozen_is_dir {
+                record_fail_reason(path, FailReason::Changed);
+                note_delete_failure(path, &"operation-changed");
+                report.record(path, CleanResult::Failed);
+                continue;
+            }
+        }
         // 确认时没拍到身份（网络盘、mtime 读不到）不能把整条手选路径
         // 卡死：没有快照就跳过复验。有快照但对不上，才是 TOCTOU。
         if let Some(identity) = item.identity {
@@ -1545,6 +1569,19 @@ pub(crate) fn dispose(path: &Path, disposal: Disposal, p: &CleanProgress) -> Cle
 ///
 /// 失败时**不**回退到永久删除（见 [`dispose`]），如实报失败。
 fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
+    recycle_path_with(path, p, crate::platform::move_to_trash)
+}
+
+/// 带注入缝的回收站删除。
+///
+/// OS 调用报告成功之后**复核路径真的不在**了才算完成——与登记项/任务的
+/// 核验式完成判据同一条原则（「报成功但东西还在」不能记 ok）。测试注入
+/// 假实现覆盖那条路；生产注入 `platform::move_to_trash`。
+fn recycle_path_with(
+    path: &Path,
+    p: &CleanProgress,
+    move_to_trash: impl Fn(&Path) -> Result<(), String>,
+) -> CleanResult {
     if p.cancelled() {
         return CleanResult::Skipped;
     }
@@ -1560,8 +1597,14 @@ fn recycle_path(path: &Path, p: &CleanProgress) -> CleanResult {
         return CleanResult::Failed;
     }
 
-    match crate::platform::move_to_trash(path) {
+    match move_to_trash(path) {
         Ok(()) => {
+            if std::fs::symlink_metadata(path).is_ok() {
+                record_fail_reason(path, FailReason::Unverified);
+                note_delete_failure(path, &"trash-reported-success-but-remains");
+                p.failed.fetch_add(1, Ordering::Relaxed);
+                return CleanResult::Failed;
+            }
             // 回收站不释放空间，所以这里只记条目数，不往 bytes 上加——
             // 界面上「已释放 X」必须是真的释放了才算。
             p.files.fetch_add(1, Ordering::Relaxed);
@@ -1664,6 +1707,7 @@ mod tests {
         let item = ArbitraryTarget {
             path: path.clone(),
             identity,
+            operation: crate::core::rules::Operation::File,
         };
         let p = CleanProgress::default();
         let report = clean_arbitrary_items(std::slice::from_ref(&item), Disposal::Permanent, &p);
@@ -1713,6 +1757,7 @@ mod tests {
         let item = ArbitraryTarget {
             path: path.clone(),
             identity: None,
+            operation: crate::core::rules::Operation::File,
         };
         let p = CleanProgress::default();
         let report = clean_arbitrary_items(std::slice::from_ref(&item), Disposal::Permanent, &p);
@@ -2673,6 +2718,95 @@ mod tests {
             perms.set_mode(0o755);
             let _ = std::fs::set_permissions(&held_dir, perms);
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 确认时冻结类型化操作：目录捕获为 `Tree`，文件捕获为 `File`。
+    #[test]
+    fn arbitrary_target_freezes_the_operation_at_capture() {
+        let base = crate::core::testing::fixture("qc_arbitrary_operation_capture");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("dir")).unwrap();
+        std::fs::write(base.join("file.bin"), b"x").unwrap();
+
+        assert_eq!(
+            ArbitraryTarget::capture(base.join("dir")).operation,
+            crate::core::rules::Operation::Tree
+        );
+        assert_eq!(
+            ArbitraryTarget::capture(base.join("file.bin")).operation,
+            crate::core::rules::Operation::File
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 确认后目标被换成另一种类型：按变更拒绝，绝不用另一种操作去删。
+    ///
+    /// 这里刻意让身份快照缺失（网络盘、确认时读不到 metadata 的真实场景）：
+    /// 有身份时类型互换已被身份闸门挡住，冻结操作复核的价值正是补上
+    /// 「没有身份可复核」这条路——否则会对同名文件执行删除。
+    #[test]
+    fn arbitrary_clean_refuses_a_type_swap_after_capture() {
+        let base = crate::core::testing::fixture("qc_arbitrary_type_swap");
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("target");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("inside.bin"), b"original").unwrap();
+
+        // 确认时是目录 → 冻结 Tree；身份缺失，走冻结操作这条闸门。
+        let mut item = ArbitraryTarget::capture(dir.clone());
+        assert_eq!(item.operation, crate::core::rules::Operation::Tree);
+        item.identity = None;
+
+        // 换成同名文件（内容全新）。
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"replacement file").unwrap();
+
+        let p = CleanProgress::default();
+        let report = clean_arbitrary_items(std::slice::from_ref(&item), Disposal::Permanent, &p);
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert!(dir.is_file(), "替换文件必须原地保留");
+        assert_eq!(std::fs::read(&dir).unwrap(), b"replacement file");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 回收站报告成功但路径仍在：不算完成，如实记失败。与登记项/任务的
+    /// 核验式完成判据同一条原则；注入假实现覆盖这条不可自然触发的路。
+    #[test]
+    fn recycle_verification_rejects_reported_success_that_left_the_file() {
+        let base = crate::core::testing::fixture("qc_recycle_reported_success");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("still-here.bin");
+        std::fs::write(&file, b"payload").unwrap();
+
+        let p = CleanProgress::default();
+        let result = recycle_path_with(&file, &p, |_| Ok(()));
+
+        assert_eq!(result, CleanResult::Failed);
+        assert!(file.exists(), "报成功但文件还在时必须原地保留");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 回收站真的把文件移走：记 ok，但 bytes 仍为 0（回收站不释放空间）。
+    #[test]
+    fn recycle_verification_accepts_a_real_removal() {
+        let base = crate::core::testing::fixture("qc_recycle_real_removal");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("moved.bin");
+        std::fs::write(&file, b"payload").unwrap();
+
+        let p = CleanProgress::default();
+        let result = recycle_path_with(&file, &p, |path| {
+            std::fs::remove_file(path).map_err(|e| e.to_string())
+        });
+
+        assert_eq!(result, CleanResult::Ok);
+        assert!(!file.exists());
+        let snap = p.snapshot();
+        assert_eq!(snap.files, 1);
+        assert_eq!(snap.bytes, 0, "移入废纸篓不等于释放空间");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

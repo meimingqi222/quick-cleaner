@@ -185,10 +185,11 @@ pub fn truncate(s: &str, n: usize) -> String {
 ///   缝——四者都在 `Metadata` / `MetadataExt` 里，零额外开销。
 /// - **Windows**：稳定 API 的 `Metadata` 不含文件索引。`file_index` /
 ///   `volume_serial_number` 属于 nightly `windows_by_handle`，`DirEntry::
-///   metadata` 也不会填这两个字段；为了拿它们再开一次句柄，会打破
-///   「从已经在做的 Metadata 查询里顺手取」这条前提。因此退化为
-///   `mtime + len` 弱校验：挡得住「内容被整体换掉」（长度或修改时间几乎
-///   不可能保持一致），挡不住精确保持这两项的定向攻击。
+///   metadata` 也不会填这两个字段。`from_metadata` 因此只能填 `mtime + len`
+///   弱校验；`capture_identity` 会额外开一次句柄，把安装产物那套稳定身份
+///   （卷序列号 + 文件索引）也填进 `stable`。复核要求两者同时成立：弱校验
+///   挡「长度或修改时间被换掉」，稳定身份挡「同一秒内、长度又恰好相同的
+///   删掉重建」——单靠弱校验挡不住后者。
 ///
 /// 额外收益：复验用的是 `symlink_metadata`，只是不穿透目标**自身**的
 /// 符号链接，路径中间各级目录该怎么解析还是怎么解析——这是操作系统
@@ -203,10 +204,14 @@ pub struct TargetIdentity {
     dev: u64,
     #[cfg(unix)]
     ino: u64,
-    /// 秒级修改时间。Windows 上和 `len` 一起构成弱校验的全部依据；
-    /// Unix 上不参与复核（见 [`Self::recheck`]），但拿不到 mtime 的
-    /// 文件系统（虚拟/网络盘）仍然返回 `None` 走 fail closed，不能为了
-    /// 少一个字段就放宽掉。
+    /// Windows 稳定身份 `(卷序列号, 文件索引)`。`capture_identity` 通过句柄
+    /// 读取；复用现成 `Metadata` 的 `from_metadata` 拿不到，留 `None`。存在
+    /// 时参与复核（见 [`Self::recheck`]）。
+    #[cfg(windows)]
+    stable: Option<(u64, u64)>,
+    /// 秒级修改时间。Windows 上和 `len` 一起构成弱校验；Unix 上不参与复核
+    /// （见 [`Self::recheck`]），但拿不到 mtime 的文件系统（虚拟/网络盘）
+    /// 仍然返回 `None` 走 fail closed，不能为了少一个字段就放宽掉。
     mtime: i64,
     /// 文件长度。Windows 上弱校验的另一半依据；Unix 上不参与复核，原因
     /// 同 `mtime`。
@@ -236,7 +241,11 @@ impl TargetIdentity {
         }
         #[cfg(windows)]
         {
-            Some(Self { mtime, len })
+            Some(Self {
+                stable: None,
+                mtime,
+                len,
+            })
         }
     }
 
@@ -258,8 +267,12 @@ impl TargetIdentity {
     /// 被删除后 inode 恰好被复用，这个口子本来就挡不住（复用者的 mtime/
     /// len 也可以恰好相近），不值得用永久拒删活跃文件去换。
     ///
-    /// Windows 没有稳定的文件号，仍用 `mtime + len` 弱校验（快照取不到
-    /// mtime 时 `from_metadata` 直接返回 `None`，与旧行为一致）。
+    /// Windows 上要求「弱校验 + 稳定身份」同时成立：`mtime + len` 挡住
+    /// 长度或修改时间被换掉，`stable`（卷序列号 + 文件索引，`capture_identity`
+    /// 填）挡住「同一秒内、长度又恰好相同的删掉重建」——`mtime_secs` 是秒级，
+    /// 单靠弱校验挡不住这种替换。`stable` 为 `None`（`from_metadata` 路径）
+    /// 时退回纯弱校验。快照取不到 mtime 时 `from_metadata` 直接返回 `None`，
+    /// 与旧行为一致。
     pub fn recheck(&self, path: &Path) -> bool {
         let Ok(md) = std::fs::symlink_metadata(path) else {
             return false;
@@ -271,7 +284,16 @@ impl TargetIdentity {
         }
         #[cfg(windows)]
         {
-            Self::from_metadata(&md).is_some_and(|now| now == *self)
+            let Some(now) = Self::from_metadata(&md) else {
+                return false;
+            };
+            if now.mtime != self.mtime || now.len != self.len {
+                return false;
+            }
+            match self.stable {
+                Some(stable) => crate::platform::windows::identity::object_id(path) == Some(stable),
+                None => true,
+            }
         }
     }
 }
@@ -294,9 +316,16 @@ fn mtime_secs(md: &std::fs::Metadata) -> Option<i64> {
 /// 换这个目标也能享受身份防护。一个目标一次 stat，相对于称重要遍历的
 /// 成千上万个文件可以忽略不计。
 pub fn capture_identity(path: &Path) -> Option<TargetIdentity> {
-    std::fs::symlink_metadata(path)
-        .ok()
-        .and_then(|md| TargetIdentity::from_metadata(&md))
+    let md = std::fs::symlink_metadata(path).ok()?;
+    let mut identity = TargetIdentity::from_metadata(&md)?;
+    #[cfg(windows)]
+    {
+        // 把安装产物那套稳定身份推广到普通目标：卷序列号 + 文件索引。一次
+        // 句柄打开换来「弱校验 + 稳定身份」的双重判据；拿不到（祖先含
+        // reparse 点、超深、权限不足）就留 `None`，复核退回纯弱校验。
+        identity.stable = crate::platform::windows::identity::object_id(path);
+    }
+    Some(identity)
 }
 
 #[cfg(test)]
@@ -491,6 +520,30 @@ mod tests {
         assert!(id.recheck(&path), "原地改写 inode 未变，应视为同一对象");
         #[cfg(windows)]
         assert!(!id.recheck(&path), "弱校验的 mtime/len 变了必须拒绝");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 同 mtime/len、但稳定身份不同的目标必须被拒绝——这正是把 Windows
+    /// 稳定身份推广到安装产物之外的意义：秒级 mtime + len 挡不住「同一秒内
+    /// 删掉重建、长度又恰好相同」的替换，稳定身份（卷序列号 + 文件索引）能。
+    #[cfg(windows)]
+    #[test]
+    fn identity_recheck_rejects_a_different_stable_object() {
+        let path = crate::core::testing::file_path("qc_identity_stable_mismatch");
+        std::fs::write(&path, b"payload").unwrap();
+        let id = capture_identity(&path).expect("应该能拿到身份");
+        let Some(stable) = id.stable else {
+            panic!("Windows 的 capture_identity 应当填稳定身份");
+        };
+
+        let mut forged = id;
+        forged.stable = Some((stable.0, stable.1 ^ 0xffff));
+        assert!(
+            !forged.recheck(&path),
+            "稳定身份不一致必须拒绝，即便 mtime/len 相同"
+        );
+        assert!(id.recheck(&path), "原身份仍然通过");
 
         let _ = std::fs::remove_file(&path);
     }

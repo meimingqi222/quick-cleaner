@@ -1,7 +1,7 @@
 id = "development"
-version = 2
+version = 5
 platform = "all"
-required = ["chromium", "file"]
+required = ["chromium", "file", "version_retention", "directory_selection"]
 [lists]
 ai_app_dirs = ["Claude", "Codex", "Cursor", "CursorStar", "Trae", "Trae CN", "TRAE SOLO CN", "Windsurf", "Windsurf - Next", "Kiro", "Zed", "Void", "CodeBuddy", "CodeRabbit", "Antigravity", "AutoGLM", "WorkBuddy", "@genie", "devin", "Devin - Next", "anythingllm-desktop", "crush-gui", "CatPawAI", "Maka", "MiniMax", "MiniMax Code", "Xiaomi MiMo", "Grok Bot", "Doubao", "LobsterAI", "xyz.chatboxapp.app", "com.qoder.app.stable", "Qoder", "Paseo"]
 vscode_hosts = ["Code", "Trae", "Trae CN", "Cursor", "Windsurf - Next"]
@@ -73,7 +73,8 @@ zh = "WorkBuddy"
 en = "WorkBuddy"
 children = [{path = "logs", recommended = true}]
 
-# `User/globalStorage/<id>/tasks`。id 只是目录名，tasks 这一层由扫描代码补上。
+# `User/globalStorage/<id>/tasks`：主机名单外层的名字表，扩展 id 来自上面的目录。
+# `{name}` 是占位符，只能整段替换，值只能来自本文件声明的 lists 或 catalogs。
 [[catalogs.vscode_extensions]]
 path = "saoudrizwan.claude-dev"
 zh = "Cline 会话缓存"
@@ -213,3 +214,148 @@ operation = "contents"
 disposal = "permanent"
 recommended = false
 
+
+[[version_layouts]]
+id = "codex_cli"
+root = "home"
+platform = "all"
+path = ".codex/packages/standalone"
+versions = "releases"
+current = "current"
+prefixes = []
+exclude = ["current", "_download"]
+zh = "Codex CLI · 旧版本 {name}"
+en = "Codex CLI · old version {name}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[version_layouts.lock]
+path = "install.lock"
+maximum_age_seconds = 3600
+
+[[version_layouts]]
+id = "devin_windows"
+root = "roaming"
+platform = "windows"
+path = "devin/cli"
+versions = "_versions"
+current = "_versions/current"
+prefixes = []
+exclude = ["current", "_download"]
+zh = "Devin CLI · 旧版本 {name}"
+en = "Devin CLI · old version {name}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[version_layouts.lock]
+path = "_update.lock"
+maximum_age_seconds = 3600
+[version_layouts.downloads]
+path = "_versions/_download"
+suffixes = [".tar.gz"]
+zh = "Devin CLI · 安装包 {name}"
+en = "Devin CLI · installer {name}"
+operation = "file"
+disposal = "permanent"
+recommended = true
+
+[[version_layouts]]
+id = "devin_unix"
+root = "home"
+platform = "unix"
+path = ".local/share/devin/cli"
+versions = "_versions"
+current = "_versions/current"
+prefixes = []
+exclude = ["current", "_download"]
+zh = "Devin CLI · 旧版本 {name}"
+en = "Devin CLI · old version {name}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[version_layouts.lock]
+path = "_update.lock"
+maximum_age_seconds = 3600
+[version_layouts.downloads]
+path = "_versions/_download"
+suffixes = [".tar.gz"]
+zh = "Devin CLI · 安装包 {name}"
+en = "Devin CLI · installer {name}"
+operation = "file"
+disposal = "permanent"
+recommended = true
+
+[[version_layouts]]
+id = "zed_node"
+root = "roaming"
+platform = "all"
+path = "Zed/node"
+versions = "."
+leaf = "cache"
+prefixes = ["node-v"]
+exclude = []
+zh = "Zed · npm 缓存"
+en = "Zed · npm cache"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# agent 根目录下的 `logs*.sqlite`：日志库开着 WAL，预选只会制造必然失败，
+# 所以列出来但不勾。会话历史（`thread_history_1.sqlite`）和记忆不在此列。
+[[directories]]
+id = "agent_log_databases"
+root = "home"
+paths = ["{cli_agents}"]
+select = { kind = "files", prefixes = ["logs"], suffixes = [".sqlite"] }
+zh = "{cli_agents} · 日志库 {name}"
+en = "{cli_agents} · log database {name}"
+category = "AiAgents"
+operation = "file"
+disposal = "permanent"
+recommended = false
+
+# VS Code 系编辑器 AI 插件的会话缓存：`User/globalStorage/<扩展 id>/tasks`，
+# 主机名单在 lists 里，扩展 id 在 catalogs 里，交叉展开由能力完成。
+[[directories]]
+id = "vscode_task_storage"
+root = "roaming"
+paths = ["{vscode_hosts}/User/globalStorage/{vscode_extensions}/tasks"]
+select = { kind = "path", directories_only = true }
+zh = "{vscode_hosts} · {vscode_extensions}"
+en = "{vscode_hosts} · {vscode_extensions}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+# 编辑器自己写进 `.obsolete` 的已退役扩展版本。只信清单里的单段目录名，
+# 且目录必须还在——清单是 JSON，内容不可当作路径。
+[[directories]]
+id = "obsolete_editor_extensions"
+root = "home"
+paths = ["{vscode_family}/extensions"]
+select = { kind = "manifest_children", manifest = ".obsolete", selected_value = true }
+zh = "过期 {vscode_family} 扩展 · {name}"
+en = "Obsolete {vscode_family} extension · {name}"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = true
+
+# 只报告明确指向「home 下已不存在目录」的本地工作区：远程 URI、外接盘和
+# 含百分号编码的 URI 都跳过，避免把暂时离线的项目误报。
+[[directories]]
+id = "orphaned_editor_workspaces"
+root = "roaming"
+paths = ["{vscode_hosts}/User/workspaceStorage"]
+select = { kind = "orphaned_children", manifest = "workspace.json", pointer = "/folder", uri_prefix = "file://", scope = "home" }
+zh = "孤立工作区 · {vscode_hosts} · {project}"
+en = "Orphaned workspace · {vscode_hosts} · {project}"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = false

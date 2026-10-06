@@ -1,6 +1,8 @@
 # Agent Note: Rule cache corruption cannot reset replay protection
 
 Status: implemented
+Archived: 2026-10-05
+Superseded-by: 2026-10-05-bundled-runtime-rules.md
 
 ## Problem
 
@@ -20,8 +22,10 @@ Offline clients continue with a valid cached or built-in snapshot. Updates stay 
 
 ## Verification
 
-- `src/core/rules/update.rs::corrupt_state_never_resets_replay_protection`
-- `src/core/rules/update.rs::interrupted_publication_retries_and_corrupt_updates_leave_active_state`
-- `src/core/rules/update.rs::cache_retains_current_previous_and_embedded_without_deleting_unknown_files`
+- `docs/agent-notes-evidence/2026-10-05-retired-rule-update-tests.rs.txt::corrupt_state_never_resets_replay_protection`
+- `docs/agent-notes-evidence/2026-10-05-retired-rule-update-tests.rs.txt::interrupted_publication_retries_and_corrupt_updates_leave_active_state`
+- `docs/agent-notes-evidence/2026-10-05-retired-rule-update-tests.rs.txt::cache_retains_current_previous_and_embedded_without_deleting_unknown_files`
 
 Proved: temporarily restored unwrap_or_default for corrupt-only state and ran the first test. It failed at state(root).is_err() with cargo exit 101. Restoring the fail-closed read passes. Signed fixture tests also cover replay after rollback, interrupted publication retry, corrupted active-package fallback, retention and pinned snapshots. Production keys were not provisioned.
+
+Historical record only: the human user removed remote rule delivery and explicitly prioritized reusable runtime capabilities. Bound remote test source is retained as historical evidence, not an active executable test.

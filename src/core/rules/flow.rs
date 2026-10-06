@@ -172,6 +172,128 @@ impl<F: FnMut(super::execution::SourceAction) -> Result<(), String>> CapabilityE
     }
 }
 
+/// Run a command-based uninstall (a registered app's official uninstaller) through the
+/// shared capability runner, so the UI gets the same step evidence as source installs.
+///
+/// `run` performs the official operation; `verify` answers the completion condition
+/// (registration/artifacts gone). The plan's target is `OfficialUninstall`, whose
+/// `Revalidate` step validates the plan and then the frozen command is run.
+pub(crate) fn execute_registered(
+    plan: &CleanupPlan,
+    index: usize,
+    progress: &CleanProgress,
+    run: impl FnMut() -> Result<(), String>,
+    verify: impl FnMut(&CompletionCondition) -> Evidence,
+) -> CleanReport {
+    execute_capability(
+        plan,
+        index,
+        progress,
+        SpotCheck::Unknown,
+        &mut RegisteredExecutor {
+            run,
+            verify,
+            error: None,
+        },
+    )
+}
+
+struct RegisteredExecutor<R, V> {
+    run: R,
+    verify: V,
+    error: Option<String>,
+}
+impl<R: FnMut() -> Result<(), String>, V: FnMut(&CompletionCondition) -> Evidence>
+    CapabilityExecutor for RegisteredExecutor<R, V>
+{
+    fn supports(&self, target: &PlannedTarget) -> bool {
+        target.operation == Operation::OfficialUninstall
+            && target.disposal == crate::core::cleaner::Disposal::Permanent
+    }
+    fn requires_file_occupancy(&self) -> bool {
+        false
+    }
+    fn apply(&mut self, target: &PlannedTarget) -> CleanReport {
+        let mut report = CleanReport::default();
+        match (self.run)() {
+            Ok(()) => report.record(&target.path, CleanResult::Ok),
+            Err(reason) => {
+                self.error = Some(reason);
+                report.record(&target.path, CleanResult::Failed);
+            }
+        }
+        report
+    }
+    fn verify(&mut self, condition: &CompletionCondition) -> Evidence {
+        (self.verify)(condition)
+    }
+    fn failure_reason(&self) -> Option<String> {
+        self.error.clone()
+    }
+}
+
+/// Run a native-residue cleanup (registry key/value, scheduled task or system
+/// extension) through the shared capability runner, so the residual channel gets the
+/// same `Revalidate → Apply → Verify` step evidence as every other entry.
+///
+/// `apply` performs the kind-specific native deletion for a `Operation::Native` target;
+/// `verify` answers its completion condition (`RegistrationAbsent`, whose identifier is
+/// the target's native id).
+pub(crate) fn execute_native_residual(
+    plan: &CleanupPlan,
+    index: usize,
+    progress: &CleanProgress,
+    apply: impl FnMut(&PlannedTarget) -> Result<(), String>,
+    verify: impl FnMut(&CompletionCondition) -> Evidence,
+) -> CleanReport {
+    execute_capability(
+        plan,
+        index,
+        progress,
+        SpotCheck::Unknown,
+        &mut NativeResidualExecutor {
+            apply,
+            verify,
+            error: None,
+        },
+    )
+}
+
+struct NativeResidualExecutor<A, V> {
+    apply: A,
+    verify: V,
+    error: Option<String>,
+}
+impl<A, V> CapabilityExecutor for NativeResidualExecutor<A, V>
+where
+    A: FnMut(&PlannedTarget) -> Result<(), String>,
+    V: FnMut(&CompletionCondition) -> Evidence,
+{
+    fn supports(&self, target: &PlannedTarget) -> bool {
+        matches!(target.operation, Operation::Native { .. })
+    }
+    fn requires_file_occupancy(&self) -> bool {
+        false
+    }
+    fn apply(&mut self, target: &PlannedTarget) -> CleanReport {
+        let mut report = CleanReport::default();
+        match (self.apply)(target) {
+            Ok(()) => report.record(&target.path, CleanResult::Ok),
+            Err(reason) => {
+                self.error = Some(reason);
+                report.record(&target.path, CleanResult::Failed);
+            }
+        }
+        report
+    }
+    fn verify(&mut self, condition: &CompletionCondition) -> Evidence {
+        (self.verify)(condition)
+    }
+    fn failure_reason(&self) -> Option<String> {
+        self.error.clone()
+    }
+}
+
 pub(crate) fn execution_result(report: &CleanReport) -> Result<(), String> {
     let steps: Vec<_> = report
         .plan_executions
@@ -634,10 +756,16 @@ fn execute_capability(
         } else {
             match &step.action {
                 PlanAction::Revalidate => {
+                    // Command operations (official uninstall) have no filesystem scope to
+                    // validate; their capability's supports() is the authority. Everything
+                    // else must still pass the typed filesystem target check.
+                    let filesystem_scoped = target.operation != Operation::OfficialUninstall;
                     let supported = capability.supports(target)
-                        && target
-                            .operation
-                            .validate_target(&target.path, target.operation != Operation::Contents);
+                        && (!filesystem_scoped
+                            || target.operation.validate_target(
+                                &target.path,
+                                target.operation != Operation::Contents,
+                            ));
                     if capability.requires_file_occupancy() && occupancy != SpotCheck::Clear {
                         (
                             if occupancy == SpotCheck::Unknown {
@@ -754,6 +882,97 @@ mod tests {
     use super::*;
     use crate::core::cleaner::Disposal;
     use crate::core::rules::{PlannedTarget, RuleRef};
+
+    /// 注册表应用的卸载走共用执行器：产出 Revalidate → Apply → Verify 三步报告，
+    /// 失败原因保留在 Apply 步，完成条件不满足时 Verify 步失败。
+    #[test]
+    fn registered_runner_reports_revalidate_apply_verify_steps() {
+        let plan = CleanupPlan::new(
+            RuleRef::engine(),
+            vec![PlannedTarget {
+                path: std::path::PathBuf::from(r"C:\fixture\registered-app"),
+                operation: Operation::OfficialUninstall,
+                identity: None,
+                disposal: Disposal::Permanent,
+            }],
+        );
+        let progress = CleanProgress::new(1, 0);
+
+        let ok = execute_registered(&plan, 0, &progress, || Ok(()), |_| Evidence::Confirmed);
+        let steps = &ok.plan_executions[0].steps;
+        assert_eq!(steps.len(), 3);
+        assert!(steps
+            .iter()
+            .all(|step| step.status == StepStatus::Succeeded));
+        assert!(execution_result(&ok).is_ok());
+
+        let failed = execute_registered(
+            &plan,
+            0,
+            &progress,
+            || Err("boom".into()),
+            |_| Evidence::Confirmed,
+        );
+        assert_eq!(
+            failed.plan_executions[0].steps[1].reason.as_deref(),
+            Some("boom")
+        );
+        assert_eq!(
+            failed.plan_executions[0].steps[2].status,
+            StepStatus::Blocked
+        );
+        assert_eq!(execution_result(&failed), Err("boom".to_string()));
+
+        let incomplete = execute_registered(&plan, 0, &progress, || Ok(()), |_| Evidence::Absent);
+        assert_eq!(
+            incomplete.plan_executions[0].steps[2].status,
+            StepStatus::Failed
+        );
+    }
+
+    /// 原生残留目标走共用执行器：Revalidate → Apply → Verify 三步；失败原因保留、
+    /// 完成条件不满足时 Verify 失败。
+    #[test]
+    fn native_residual_runner_reports_revalidate_apply_verify_steps() {
+        let target = PlannedTarget {
+            path: std::path::PathBuf::from(r"HKCU\Software\Vendor"),
+            operation: Operation::Native {
+                native: crate::core::rules::NativeKind::RegistryKey,
+                identifier: r"HKCU\Software\Vendor".into(),
+            },
+            identity: None,
+            disposal: Disposal::Permanent,
+        };
+        let plan = CleanupPlan::new(RuleRef::engine(), vec![target]);
+        let progress = CleanProgress::new(1, 0);
+
+        let ok = execute_native_residual(&plan, 0, &progress, |_| Ok(()), |_| Evidence::Confirmed);
+        let steps = &ok.plan_executions[0].steps;
+        assert_eq!(steps.len(), 3);
+        assert!(steps
+            .iter()
+            .all(|step| step.status == StepStatus::Succeeded));
+        assert!(execution_result(&ok).is_ok());
+
+        let failed = execute_native_residual(
+            &plan,
+            0,
+            &progress,
+            |_| Err("boom".into()),
+            |_| Evidence::Confirmed,
+        );
+        assert_eq!(
+            failed.plan_executions[0].steps[1].reason.as_deref(),
+            Some("boom")
+        );
+        assert_eq!(execution_result(&failed), Err("boom".to_string()));
+
+        let absent = execute_native_residual(&plan, 0, &progress, |_| Ok(()), |_| Evidence::Absent);
+        assert_eq!(
+            absent.plan_executions[0].steps[2].status,
+            StepStatus::Failed
+        );
+    }
 
     #[test]
     fn source_runner_reports_fixed_dependencies_and_preserves_failure_reasons() {

@@ -1,0 +1,114 @@
+{
+  "rule": "fixture-directory-layout",
+  "sequence": 1,
+  "variables": {},
+  "facts": {},
+  "detected": "Confirmed",
+  "targets": [],
+  "directory_discovery": {
+    "directory_reads": 1,
+    "inventory_entries": 1,
+    "plans": [
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-directory-layout",
+            "rule_version": 1,
+            "schema": 5,
+            "sequence": 1,
+            "scope": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc\\Projects\\isolated\\project.marker",
+            "operation": {
+              "kind": "file"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "file",
+              "path": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc\\Projects\\isolated\\project.marker"
+            },
+            "completion": {
+              "kind": "path_absent",
+              "path": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc\\Projects\\isolated\\project.marker"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "file"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "path_absent",
+                "path": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc\\Projects\\isolated\\project.marker"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      }
+    ]
+  },
+  "preserve": [],
+  "cleanup_plan": {
+    "observations": [
+      {
+        "rule_id": "fixture-directory-layout",
+        "rule_version": 1,
+        "schema": 5,
+        "sequence": 1,
+        "scope": "C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\qc_directory_explain_d1796571c54d4a27938b5813f66ad0bc",
+        "variables": {},
+        "facts": {},
+        "detected": "Confirmed",
+        "provider_policy": null
+      }
+    ],
+    "installation": null,
+    "official": null,
+    "targets": [],
+    "steps": [],
+    "preserve": [],
+    "blocked": []
+  },
+  "installation_plan": null,
+  "blocked": [],
+  "installation_layout": null
+}

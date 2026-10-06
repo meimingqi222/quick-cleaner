@@ -1,6 +1,6 @@
 //! 磁盘透镜动作：扫描、卷切换、磁盘清理
 
-use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget};
+use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget, Disposal};
 use crate::core::disk::VolumeId;
 use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;
@@ -174,17 +174,24 @@ impl crate::ui::Root {
         let lang = self.language;
         // 任一目标位于 ~/Library/Application Support 之下就把确认弹窗升级
         // 成 Danger 警示——那里是聊天记录、密码库这类不可重建数据的家。
-        let app_data = self
-            .disk
-            .sel
-            .resolve_targets()
+        let targets = self.disk.sel.resolve_targets();
+        let app_data = targets
             .iter()
             .any(|p| crate::core::safety::under_home_app_support(p));
+
+        // 确认前把实际范围摆出来：列出这次会处理的路径（过长时只列前若干并
+        // 说明总数）。磁盘透镜是用户手选范围，这里如实展示，不扩张也不推断。
+        // 删除方式如实反映回收站设置——不能无条件宣称「不进回收站」。
+        let paths: Vec<String> = targets.iter().map(|p| p.display().to_string()).collect();
+        let mut detail = tr_confirm_disposal(lang, self.disposal() == Disposal::RecycleBin);
+        detail.push('\n');
+        detail.push_str(tr_confirm_running_caution(lang));
+        detail.push_str(&confirm_scope_detail(lang, &paths));
 
         self.confirm = Some(ConfirmRequest {
             title: tr_confirm_delete_selected_title(lang).to_string(),
             body: tr_confirm_delete_selected_msg(lang, count, &fmt_size(total_size)),
-            detail: tr_confirm_no_recycle_check_data(lang).to_string(),
+            detail,
             kind: ConfirmKind::CleanDiskSelected,
             app_data,
         });
@@ -258,7 +265,8 @@ impl crate::ui::Root {
             (0, total_size),
             bilingual(|l| tr_status_batch_deleting(l, n)),
             move |p| clean_arbitrary_items(&to_clean, disposal, p),
-            move |this, report, snap, cx| {
+            move |this, _report, snap, cx| {
+                this.clear_disk_selection();
                 this.clear_disk_selection();
 
                 let deleted: Vec<PathBuf> = targets
@@ -266,16 +274,13 @@ impl crate::ui::Root {
                     .filter(|target| !target.exists())
                     .cloned()
                     .collect();
-                let fails = targets
-                    .iter()
-                    .filter(|target| target.exists() && !report.was_skipped(target))
-                    .count();
+                let unresolved = unresolved_disk_targets(&targets);
                 let (files, size) = (snap.files, fmt_size(snap.bytes));
                 this.status = bilingual(|l| {
-                    if fails == 0 {
+                    if unresolved == 0 {
                         tr_status_batch_done(l, files, &size)
                     } else {
-                        tr_status_batch_done_partial(l, &size, fails)
+                        tr_status_batch_done_partial(l, &size, unresolved)
                     }
                 });
 
@@ -283,5 +288,41 @@ impl crate::ui::Root {
             },
             cx,
         );
+    }
+}
+
+/// 磁盘透镜批量删除的收尾计数：清理后仍存在的目标都算未完成——无论删除
+/// 失败还是受保护跳过。只数失败的话，全部目标被保护规则跳过时界面照样
+/// 显示「批量删除完成」，与实际核验结果矛盾。
+fn unresolved_disk_targets(targets: &[PathBuf]) -> usize {
+    targets.iter().filter(|target| target.exists()).count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unresolved_disk_targets;
+
+    /// 收尾计数以实际存在为准：删掉的路径不算未完成，仍存在的（失败或
+    /// 受保护跳过）都算——全部被跳过时不能显示「批量删除完成」。
+    #[test]
+    fn unresolved_counts_surviving_targets_regardless_of_reason() {
+        let root = crate::core::testing::fixture("qc_disk_unresolved");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let gone = root.join("deleted.txt");
+        let alive = root.join("skipped.txt");
+        std::fs::write(&gone, b"x").unwrap();
+        std::fs::write(&alive, b"x").unwrap();
+        std::fs::remove_file(&gone).unwrap();
+
+        assert_eq!(unresolved_disk_targets(&[gone.clone(), alive.clone()]), 1);
+        assert_eq!(unresolved_disk_targets(std::slice::from_ref(&alive)), 1);
+        assert_eq!(
+            unresolved_disk_targets(&[gone, alive]),
+            1,
+            "gone 已删，不再算未完成"
+        );
+        assert_eq!(unresolved_disk_targets(&[root.join("never-was.txt")]), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

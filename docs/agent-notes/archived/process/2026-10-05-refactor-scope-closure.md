@@ -1,6 +1,8 @@
 # Agent Note: Refactor completion is judged by the config-driven-rules goal
 
 Status: implemented
+Archived: 2026-10-05
+Superseded-by: 2026-10-05-bundled-runtime-rules.md
 
 ## Problem
 
@@ -20,4 +22,6 @@ Future sessions must not reopen F/G/B/E as blocking debt. Adding rules stays a T
 
 ## Verification
 
-The config-driven goal is demonstrated end-to-end by `src/core/rules/update.rs::rules_only_release_reaches_the_next_scan_without_recompiling`: a TOML-shaped rule added to a signed bundle surfaces as a scan target on the next scan without recompiling. This is a process/scope decision rather than a bug fix, so no red-run proof applies.
+The config-driven goal is demonstrated end-to-end by `docs/agent-notes-evidence/2026-10-05-retired-rule-update-tests.rs.txt::rules_only_release_reaches_the_next_scan_without_recompiling`: a TOML-shaped rule added to a signed bundle surfaces as a scan target on the next scan without recompiling. This is a process/scope decision rather than a bug fix, so no red-run proof applies.
+
+Historical record only: the human user removed remote rule delivery and explicitly prioritized reusable runtime capabilities. Bound remote test source is retained as historical evidence, not an active executable test.

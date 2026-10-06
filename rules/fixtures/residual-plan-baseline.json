@@ -1,0 +1,94 @@
+[
+  {
+    "path": "C:\\fixture\\cache",
+    "operation": {
+      "kind": "tree"
+    },
+    "scope": {
+      "kind": "owned_tree",
+      "path": "C:\\fixture\\cache"
+    },
+    "completion": {
+      "kind": "path_absent",
+      "path": "C:\\fixture\\cache"
+    }
+  },
+  {
+    "path": "C:\\fixture\\leftover.bin",
+    "operation": {
+      "kind": "file"
+    },
+    "scope": {
+      "kind": "file",
+      "path": "C:\\fixture\\leftover.bin"
+    },
+    "completion": {
+      "kind": "path_absent",
+      "path": "C:\\fixture\\leftover.bin"
+    }
+  },
+  {
+    "path": "HKCU\\Software\\Vendor",
+    "operation": {
+      "kind": "native",
+      "native": "registry_key",
+      "identifier": "HKCU\\Software\\Vendor"
+    },
+    "scope": {
+      "kind": "native_resource",
+      "key": "native:RegistryKey:HKCU\\Software\\Vendor"
+    },
+    "completion": {
+      "kind": "registration_absent",
+      "identifier": "HKCU\\Software\\Vendor"
+    }
+  },
+  {
+    "path": "HKCU\\Software\\Vendor → Install",
+    "operation": {
+      "kind": "native",
+      "native": "registry_value",
+      "identifier": "HKCU\\Software\\Vendor → Install"
+    },
+    "scope": {
+      "kind": "native_resource",
+      "key": "native:RegistryValue:HKCU\\Software\\Vendor → Install"
+    },
+    "completion": {
+      "kind": "registration_absent",
+      "identifier": "HKCU\\Software\\Vendor → Install"
+    }
+  },
+  {
+    "path": "TEAM/com.vendor.x",
+    "operation": {
+      "kind": "native",
+      "native": "system_extension",
+      "identifier": "TEAM/com.vendor.x"
+    },
+    "scope": {
+      "kind": "native_resource",
+      "key": "native:SystemExtension:TEAM/com.vendor.x"
+    },
+    "completion": {
+      "kind": "registration_absent",
+      "identifier": "TEAM/com.vendor.x"
+    }
+  },
+  {
+    "path": "\\Vendor\\Update",
+    "operation": {
+      "kind": "native",
+      "native": "scheduled_task",
+      "identifier": "\\Vendor\\Update"
+    },
+    "scope": {
+      "kind": "native_resource",
+      "key": "native:ScheduledTask:\\Vendor\\Update"
+    },
+    "completion": {
+      "kind": "registration_absent",
+      "identifier": "\\Vendor\\Update"
+    }
+  }
+]

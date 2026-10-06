@@ -27,16 +27,8 @@ fn render_cross_folder_badge(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
     let total_selected_count = root.disk_selected_count();
     let total_selected_size = root.disk_selected_size();
     let cross_folder_badge = if total_selected_count > 0 {
-        let badge_text = match lang {
-            Language::Zh => format!(
-                "已选 {total_selected_count} 项 ({})",
-                fmt_size(total_selected_size)
-            ),
-            Language::En => format!(
-                "{total_selected_count} items ({})",
-                fmt_size(total_selected_size)
-            ),
-        };
+        let badge_text =
+            tr_disk_selected_badge(lang, total_selected_count, &fmt_size(total_selected_size));
         Some(
             div()
                 .id("cross-folder-clear-btn")
@@ -83,10 +75,7 @@ pub(super) fn render_right_browser_pane(
 
     let cross_folder_badge = render_cross_folder_badge(root, cx);
 
-    let btn_parent_text = match lang {
-        Language::Zh => "← 上级",
-        Language::En => "← Up",
-    };
+    let btn_parent_text = tr_disk_up_button(lang);
 
     let top_bar = div()
         .px_4()
@@ -343,10 +332,7 @@ fn render_lens_row_name(
     // 大文件榜跨目录，只有完整路径才说得清是哪个文件。
     let display_name = if drillable {
         if n.name.is_empty() {
-            match lang {
-                Language::Zh => format!("{}: 根目录", tree.volume()),
-                Language::En => format!("{}: Root", tree.volume()),
-            }
+            tr_disk_breadcrumb_root(lang, &tree.volume().to_string())
         } else {
             n.name.clone()
         }
@@ -354,10 +340,7 @@ fn render_lens_row_name(
         path_str.clone()
     };
 
-    let protected_label = match lang {
-        Language::Zh => "系统保护项目",
-        Language::En => "System Protected",
-    };
+    let protected_label = tr_disk_protected_label(lang);
 
     div()
         .id(SharedString::from(format!("drill-{idx}")))
@@ -434,10 +417,7 @@ fn render_lens_row_actions(
     let size = n.size;
     let p_for_del = row.path.clone();
     let protected = row.protected;
-    let delete_label = match lang {
-        Language::Zh => "删除",
-        Language::En => "Delete",
-    };
+    let delete_label = tr_disk_delete_label(lang);
 
     div()
         .w(px(40.))
@@ -555,10 +535,7 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
     let count = root.disk_selected_count();
     let size = root.disk_selected_size();
 
-    let items_count_label = match lang {
-        Language::Zh => format!("{count} 项已选中"),
-        Language::En => format!("{count} items selected"),
-    };
+    let items_count_label = tr_disk_selected_count(lang, count);
 
     let to_recycle = root.settings.delete_to_recycle_bin;
 

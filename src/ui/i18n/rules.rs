@@ -30,35 +30,9 @@ pub fn tr_rules_version(lang: Language, sequence: u64) -> String {
         Language::En => format!("Cleanup rules v{sequence}"),
     }
 }
-pub fn tr_rules_next_scan(lang: Language) -> &'static str {
+pub fn tr_rules_bundled(lang: Language) -> &'static str {
     match lang {
-        Language::Zh => "更新在下次扫描生效",
-        Language::En => "Updates apply to the next scan",
-    }
-}
-pub fn tr_rules_auto(lang: Language, enabled: bool) -> &'static str {
-    match (lang, enabled) {
-        (Language::Zh, true) => "自动更新：开",
-        (Language::Zh, false) => "自动更新：关",
-        (Language::En, true) => "Auto update: on",
-        (Language::En, false) => "Auto update: off",
-    }
-}
-pub fn tr_rules_check(lang: Language) -> &'static str {
-    match lang {
-        Language::Zh => "检查规则更新",
-        Language::En => "Check rule updates",
-    }
-}
-pub fn tr_rules_rollback(lang: Language) -> &'static str {
-    match lang {
-        Language::Zh => "回退上一版",
-        Language::En => "Restore previous rules",
-    }
-}
-pub fn tr_rules_failed(lang: Language) -> &'static str {
-    match lang {
-        Language::Zh => "规则更新不可用，继续使用现有规则",
-        Language::En => "Rule update unavailable; current rules remain active",
+        Language::Zh => "规则随程序更新，扫描与清理使用内置规则",
+        Language::En => "Rules ship with app updates; scans and cleanup use bundled rules",
     }
 }

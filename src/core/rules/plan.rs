@@ -15,6 +15,8 @@ pub struct RuleObservation {
     pub variables: super::variables::Values,
     pub facts: std::collections::BTreeMap<String, super::facts::Evidence>,
     pub detected: super::facts::Evidence,
+    pub provider_policy: Option<(String, super::ProviderPolicy)>,
+    pub version_guard: Option<super::versions::VersionGuard>,
 }
 impl RuleObservation {
     pub fn capture(snapshot: &RuleSnapshot, id: &str, scope: Option<PathBuf>) -> Self {
@@ -38,6 +40,8 @@ impl RuleObservation {
             variables,
             facts,
             detected,
+            provider_policy: None,
+            version_guard: None,
         }
     }
 }
@@ -67,6 +71,16 @@ impl PartialEq for RuleRef {
 }
 impl Eq for RuleRef {}
 impl RuleRef {
+    pub fn provider(id: &str, key: &str) -> Self {
+        let mut rule = Self::new(id, None);
+        let mut observation = RuleObservation::capture(&rule.snapshot, id, None);
+        match rule.snapshot.definition(id).provider_policies.get(key) {
+            Some(policy) => observation.provider_policy = Some((key.into(), policy.clone())),
+            None => rule.blocked = Some(format!("Missing provider policy: {id}/{key}")),
+        }
+        rule.observation = Some(Arc::new(observation));
+        rule
+    }
     pub fn new(id: impl Into<String>, scope: Option<PathBuf>) -> Self {
         Self {
             snapshot: super::current(),
@@ -125,6 +139,18 @@ impl RuleRef {
         );
         preserved
     }
+    /// Cheap precheck (no filesystem): does this rule — or any merged contributor
+    /// — declare preserved paths? Discovery uses it to avoid evaluating variables
+    /// for every target when nothing can be preserved.
+    pub fn declares_preserve(&self) -> bool {
+        let definition = self.snapshot.definition(&self.id);
+        !definition.preserve.is_empty()
+            || definition
+                .app
+                .as_ref()
+                .is_some_and(|app| !app.preserve.is_empty())
+            || self.contributors.iter().any(RuleRef::declares_preserve)
+    }
     pub fn merge(&mut self, other: &Self) {
         if self == other || self.contributors.contains(other) {
             return;
@@ -157,6 +183,13 @@ impl RuleRef {
                 || observation.scope != self.scope
         }) {
             return Err("Rule observation does not match its snapshot and scope".into());
+        }
+        if let Some(guard) = self
+            .observation
+            .as_ref()
+            .and_then(|observation| observation.version_guard.as_ref())
+        {
+            guard.revalidate(definition, self.scope.as_deref())?;
         }
         if let Some(root) = &self.scope {
             let values = super::variables::evaluate(&definition.variables, root);
@@ -249,23 +282,47 @@ impl RuleRef {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeKind {
+    RegistryKey,
+    RegistryValue,
+    ScheduledTask,
+    SystemExtension,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     File,
     Tree,
-    GitWorktree { registration: PathBuf },
+    GitWorktree {
+        registration: PathBuf,
+    },
     Contents,
-    Docker { reference: String },
+    Docker {
+        reference: String,
+    },
     Brew,
     Go,
     Pnpm,
-    Snapshot { name: String },
+    Snapshot {
+        name: String,
+    },
     Trash,
+    /// Native (non-filesystem) residue: a registry entry, scheduled task or system
+    /// extension. `identifier` is the native id (registry path / value name, task
+    /// path, `teamID/bundleID`); the target's `path` carries the same string so the
+    /// plan's scope and target key stay uniform.
+    Native {
+        native: NativeKind,
+        identifier: String,
+    },
     Registration,
     OfficialUninstall,
 }
 impl Operation {
+    #[cfg(test)]
     pub fn classify(path: &std::path::Path, remove_directory: bool) -> Self {
         if let Some(reference) = crate::core::model::docker_rmi_ref(path) {
             Self::Docker { reference }
@@ -297,7 +354,7 @@ impl Operation {
     pub fn is_native_resource(&self) -> bool {
         matches!(
             self,
-            Self::Docker { .. } | Self::Snapshot { .. } | Self::Brew
+            Self::Docker { .. } | Self::Snapshot { .. } | Self::Brew | Self::Native { .. }
         )
     }
 
@@ -307,7 +364,11 @@ impl Operation {
         {
             Self::File
         } else if *self == Self::Tree && path.join(".git").is_file() {
-            Self::classify(path, true)
+            Self::GitWorktree {
+                registration: crate::core::worktrees::inspect(path)
+                    .map(|entry| entry.admin)
+                    .unwrap_or_else(|_| path.join(".git")),
+            }
         } else {
             self.clone()
         }
@@ -322,12 +383,18 @@ impl Operation {
                 super::execution::snapshot_date(name).unwrap_or(name)
             ),
             Self::Brew => "brew:cleanup".into(),
+            Self::Native { native, identifier } => format!("native:{native:?}:{identifier}"),
             _ => format!("path:{}", norm(path)),
         }
     }
 
     pub fn validate_target(&self, path: &std::path::Path, remove_directory: bool) -> bool {
         if self.is_native_resource() {
+            // Native residue (registry / task / extension) is identified by its typed
+            // `identifier`, not a display path, so it has no virtual-path requirement.
+            if let Self::Native { .. } = self {
+                return true;
+            }
             // A legacy display URI is allowed to differ from the actual resource parameter.
             // A real filesystem selection must never be silently converted into a native operation.
             crate::core::model::is_virtual_path(path)
@@ -337,18 +404,78 @@ impl Operation {
                     Self::Brew => true,
                     _ => false,
                 }
-        } else if *self == Self::File {
-            remove_directory
-                && Self::classify(path, true) == Self::Tree
-                && std::fs::symlink_metadata(path).is_ok_and(|md| md.is_file())
         } else {
-            *self == Self::classify(path, remove_directory)
+            if crate::core::model::is_virtual_path(path) {
+                return false;
+            }
+            let ordinary_filesystem = !crate::platform::is_system_trash(path)
+                && !crate::core::owner::is_go_modcache(path)
+                && !crate::core::owner::is_pnpm_store(path);
+            match self {
+                Self::File => {
+                    remove_directory
+                        && ordinary_filesystem
+                        && std::fs::symlink_metadata(path).is_ok_and(|md| md.is_file())
+                }
+                Self::Tree => {
+                    remove_directory && ordinary_filesystem && !path.join(".git").is_file()
+                }
+                Self::Contents => !remove_directory && ordinary_filesystem,
+                Self::GitWorktree { registration } => {
+                    remove_directory
+                        && ordinary_filesystem
+                        && crate::core::worktrees::inspect(path)
+                            .is_ok_and(|worktree| worktree.admin == *registration)
+                }
+                Self::Go => crate::core::owner::is_go_modcache(path),
+                Self::Pnpm => crate::core::owner::is_pnpm_store(path),
+                Self::Trash => crate::platform::is_system_trash(path),
+                _ => false,
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typed_filesystem_guards_reject_owner_bypass_and_unknown_worktree() {
+        use super::Operation;
+        let root = crate::core::testing::fixture("typed_operation_extent");
+        assert!(Operation::Tree.validate_target(&root, true));
+        assert!(Operation::Contents.validate_target(&root, false));
+        assert!(!Operation::File.validate_target(&root, true));
+        let file = root.join("fixture.txt");
+        std::fs::write(&file, b"fixture").unwrap();
+        assert!(Operation::File.validate_target(&file, true));
+        assert!(!Operation::File.validate_target(&file, false));
+        for path in [
+            "docker://image/display",
+            "brew://cleanup",
+            "tmutil://snapshot/display",
+        ] {
+            let path = std::path::Path::new(path);
+            assert!(!Operation::Tree.validate_target(path, true));
+            assert!(!Operation::Contents.validate_target(path, false));
+            assert!(!Operation::File.validate_target(path, true));
+        }
+        for (path, owner) in [
+            (root.join("go/pkg/mod"), Operation::Go),
+            (root.join(".pnpm-store"), Operation::Pnpm),
+        ] {
+            assert!(owner.validate_target(&path, false));
+            assert!(!Operation::Tree.validate_target(&path, true));
+            assert!(!Operation::Contents.validate_target(&path, false));
+        }
+        std::fs::write(root.join(".git"), b"gitdir: missing\n").unwrap();
+        assert!(!Operation::Tree.validate_target(&root, true));
+        assert!(!Operation::GitWorktree {
+            registration: root.join(".git")
+        }
+        .validate_target(&root, true));
+        assert!(file.is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn frozen_official_operation_retains_arguments_and_rejects_replaced_cwd() {
         let root = crate::core::testing::fixture("official_cwd");
@@ -357,8 +484,10 @@ mod tests {
         let exe = root.join("runtime.exe");
         std::fs::write(&exe, b"fixture").unwrap();
         let mut command = crate::core::apps::OfficialUninstaller {
-            provider: "fixture".into(), executable: exe,
-            arguments: vec!["--preserve".into()], working_directory: cwd.clone(),
+            provider: "fixture".into(),
+            executable: exe,
+            arguments: vec!["--preserve".into()],
+            working_directory: cwd.clone(),
             installed_artifacts: vec![cwd.join("source")],
         };
         let frozen = super::OfficialOperation::capture(&command, &[]).unwrap();
@@ -733,6 +862,40 @@ mod tests {
         assert!(plan.validate().is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    /// 保留项的两个方向要有各自的解释：目标在保留项里、目标覆盖保留项
+    /// （后者需要拆分子目标，当前拒绝并说明是哪条保留项）。
+    #[test]
+    fn preserved_overlap_reasons_name_the_direction_and_path() {
+        let root = crate::core::testing::fixture("rules_plan_preserve_direction");
+        std::fs::create_dir_all(root.join("keep/inner")).unwrap();
+        std::fs::create_dir_all(root.join("target/child")).unwrap();
+        let plan = |path: &std::path::Path, keep: PathBuf| CleanupPlan {
+            rule: RuleRef::engine(),
+            targets: vec![PlannedTarget {
+                path: path.to_path_buf(),
+                operation: Operation::Contents,
+                identity: crate::core::model::capture_identity(path),
+                disposal: crate::core::cleaner::Disposal::Permanent,
+            }],
+            preserve: vec![keep],
+            blocked: vec![],
+            observations: vec![],
+            installation: None,
+            official: None,
+        };
+        let inside = plan(&root.join("keep/inner"), root.join("keep"))
+            .validate()
+            .unwrap_err();
+        assert!(inside.contains("inside a preserved path"), "{inside}");
+        assert!(inside.contains("keep"), "{inside}");
+        let covering = plan(&root.join("target"), root.join("target/child"))
+            .validate()
+            .unwrap_err();
+        assert!(covering.contains("covers a preserved path"), "{covering}");
+        assert!(covering.contains("child"), "{covering}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -868,9 +1031,11 @@ impl PlannedTarget {
             Operation::Trash => CompletionCondition::TrashInventoryEmpty {
                 root: self.path.clone(),
             },
-            Operation::Registration => CompletionCondition::RegistrationAbsent {
-                identifier: self.path.clone(),
-            },
+            Operation::Registration | Operation::Native { .. } => {
+                CompletionCondition::RegistrationAbsent {
+                    identifier: self.path.clone(),
+                }
+            }
             Operation::OfficialUninstall => {
                 CompletionCondition::InstallationArtifactsAndRegistrationsAbsent {
                     root: self.path.clone(),
@@ -901,6 +1066,9 @@ impl PlannedTarget {
                     key: self.operation.target_key(&self.path),
                 }
             }
+            Operation::Native { .. } => TargetScope::NativeResource {
+                key: self.operation.target_key(&self.path),
+            },
             Operation::Registration => TargetScope::Registration {
                 identifier: self.path.clone(),
             },
@@ -1069,7 +1237,8 @@ impl OfficialOperation {
         evidence: &[PathBuf],
     ) -> Result<Self, String> {
         if !std::fs::symlink_metadata(&uninstaller.working_directory)
-            .is_ok_and(|metadata| metadata.is_dir() && !super::facts::is_link(&metadata)) {
+            .is_ok_and(|metadata| metadata.is_dir() && !super::facts::is_link(&metadata))
+        {
             return Err("Official working directory is missing or redirected".into());
         }
         let mut artifacts = Vec::with_capacity(evidence.len() + 1);
@@ -1107,7 +1276,11 @@ impl OfficialOperation {
 
     /// Returns the frozen command only while every scanned piece of evidence is unchanged.
     pub fn command(&self) -> Result<&OfficialUninstaller, String> {
-        if self.working_directory.scanned_identity(&self.uninstaller.working_directory)?.is_none() {
+        if self
+            .working_directory
+            .scanned_identity(&self.uninstaller.working_directory)?
+            .is_none()
+        {
             return Err("Official working directory disappeared since scan".into());
         }
         for artifact in &self.evidence {
@@ -1293,7 +1466,12 @@ impl CleanupPlan {
                     | Operation::Pnpm
                     | Operation::GitWorktree { .. }
             ) {
-                if crate::core::safety::is_protected(&target.path) {
+                let protected = if target.operation == Operation::Contents {
+                    crate::core::safety::is_contents_protected(&target.path)
+                } else {
+                    crate::core::safety::is_protected(&target.path)
+                };
+                if protected {
                     return Err("Protected target".into());
                 }
                 if target.identity.is_none() {
@@ -1306,10 +1484,26 @@ impl CleanupPlan {
                     return Err("Target identity changed or unavailable".into());
                 }
                 let target_path = norm(&target.path);
-                if preserve.iter().any(|keep| {
-                    at_or_under(&target_path, &norm(keep)) || at_or_under(&norm(keep), &target_path)
-                }) {
-                    return Err("Preserved target overlap".into());
+                // Two different refusals: a target inside a preserved path must not be
+                // narrowed into it, and a target covering a preserved path cannot be
+                // split here — both keep the target out of the plan with its reason.
+                if let Some(keep) = preserve
+                    .iter()
+                    .find(|keep| at_or_under(&target_path, &norm(keep)))
+                {
+                    return Err(format!(
+                        "Target is inside a preserved path: {}",
+                        keep.display()
+                    ));
+                }
+                if let Some(keep) = preserve
+                    .iter()
+                    .find(|keep| at_or_under(&norm(keep), &target_path))
+                {
+                    return Err(format!(
+                        "Target covers a preserved path: {}",
+                        keep.display()
+                    ));
                 }
             }
             for other in &self.targets[..index] {

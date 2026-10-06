@@ -1,13 +1,15 @@
 //! macOS 专属：损坏登录项、APFS 本地快照、外接卷废纸篓、Group Containers、.DS_Store
 
 #[cfg(target_os = "macos")]
-use super::{target, target_with_recommendation, ScanTarget};
+use super::{target, ScanTarget};
 #[cfg(target_os = "macos")]
 use crate::core::categories::CategoryId;
 #[cfg(target_os = "macos")]
 use crate::core::i18n::Text;
 #[cfg(target_os = "macos")]
 use crate::core::model::snapshot_path;
+#[cfg(target_os = "macos")]
+use crate::core::rules::Operation;
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 
@@ -27,13 +29,6 @@ pub(super) fn push_macos_targets(t: &mut Vec<ScanTarget>, home: Option<&Path>) {
     let Some(home) = home else {
         return;
     };
-
-    // Group Containers 下的缓存、临时文件、日志
-    // 沙盒应用共享的容器目录，很多应用在这里堆缓存。
-    push_group_container_caches(t, home);
-
-    // .DS_Store 文件清理（限定常见目录，不做全盘扫描）
-    push_dsstore_targets(t, home);
 
     // 遗留 LaunchAgent：仅收配置无效或绝对执行路径已经不存在的 plist。
     // 清理时走废纸篓而非永久删除，系统级条目会由 Finder 请求授权。
@@ -108,23 +103,28 @@ fn parse_jetbrains_versioned_name(name: &str) -> Option<(String, (u32, u32))> {
 /// 一律不碰。
 #[cfg(target_os = "macos")]
 pub(super) fn push_old_ide_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    let base = home.join("Library/Application Support/JetBrains");
-    let Ok(entries) = std::fs::read_dir(&base) else {
-        return;
-    };
-    let names: Vec<String> = entries
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-    for (name, family, version) in select_old_versions(&names) {
-        t.push(target(
-            base.join(&name),
-            Text::new(
-                format!("{family} {}.{}（旧版本数据）", version.0, version.1),
-                format!("{family} {}.{} (old version data)", version.0, version.1),
-            ),
-            CategoryId::OldIdeData,
-        ));
+    for layout in crate::core::rules::current().definition("macos").catalogs["old_ide_roots"].iter()
+    {
+        let base = home.join(&layout.path);
+        let Ok(entries) = std::fs::read_dir(&base) else {
+            continue;
+        };
+        let names: Vec<String> = entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        for (name, family, version) in select_old_versions(&names) {
+            t.push(target(
+                base.join(&name),
+                Text::new(
+                    format!("{family} {}.{}（旧版本数据）", version.0, version.1),
+                    format!("{family} {}.{} (old version data)", version.0, version.1),
+                ),
+                CategoryId::OldIdeData,
+                Operation::Tree,
+                ("engine", "old_ide_data"),
+            ));
+        }
     }
 }
 
@@ -153,10 +153,18 @@ fn select_old_versions(names: &[String]) -> Vec<(String, String, (u32, u32))> {
 
 #[cfg(target_os = "macos")]
 pub(super) fn push_broken_login_items(t: &mut Vec<ScanTarget>, home: &Path) {
-    for root in [
-        home.join("Library/LaunchAgents"),
-        PathBuf::from("/Library/LaunchAgents"),
-    ] {
+    let snapshot = crate::core::rules::current();
+    let policy = snapshot.definition("macos");
+    let roots = policy.catalogs["user_login_roots"]
+        .iter()
+        .map(|row| home.join(&row.path))
+        .chain(
+            policy.catalogs["system_login_roots"]
+                .iter()
+                .map(|row| PathBuf::from("/Library").join(&row.path)),
+        );
+    let minimum_age = std::time::Duration::from_secs(policy.numbers["login_item_min_age_seconds"]);
+    for root in roots {
         let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
@@ -166,7 +174,7 @@ pub(super) fn push_broken_login_items(t: &mut Vec<ScanTarget>, home: &Path) {
                 || !entry.file_type().is_ok_and(|kind| kind.is_file())
                 // 应用更新时执行文件与 plist 可能短暂不同步。至少持续一天
                 // 才视为遗留项，避免恰好在安装/更新窗口里误报。
-                || !super::helpers::is_older_than(&path, std::time::Duration::from_secs(24 * 60 * 60))
+                || !super::helpers::is_older_than(&path, minimum_age)
                 || !super::helpers::is_broken_launch_agent(&path)
             {
                 continue;
@@ -179,6 +187,8 @@ pub(super) fn push_broken_login_items(t: &mut Vec<ScanTarget>, home: &Path) {
                     format!("Broken login item · {name}"),
                 ),
                 CategoryId::BrokenLoginItems,
+                Operation::File,
+                ("engine", "broken_login_item"),
             ));
         }
     }
@@ -210,15 +220,16 @@ pub(super) fn push_local_snapshots(t: &mut Vec<ScanTarget>) {
     for name in parse_snapshot_names(&stdout) {
         // 虚拟路径：scanner 跳过称重，cleaner 路由到 tmutil
         let virtual_path = snapshot_path(&name);
-        let mut item = target(
+        let item = target(
             virtual_path,
             Text::new(
                 format!("本地快照 · {name}"),
                 format!("Local snapshot · {name}"),
             ),
             CategoryId::LocalSnapshots,
+            Operation::Snapshot { name },
+            ("engine", "local_snapshot"),
         );
-        item.operation = crate::core::rules::Operation::Snapshot { name };
         t.push(item);
     }
 }
@@ -230,7 +241,7 @@ pub(super) fn push_local_snapshots(t: &mut Vec<ScanTarget>) {
 /// 失败数。快照名永远是单个 token（形如
 /// `com.apple.TimeMachine.2026-08-23-101010.local`），用「不含任何空白」
 /// 甄别，不硬编码表头文本。
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn parse_snapshot_names(stdout: &str) -> Vec<String> {
     stdout
         .lines()
@@ -240,7 +251,7 @@ fn parse_snapshot_names(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::parse_snapshot_names;
 
@@ -297,145 +308,9 @@ pub(super) fn push_external_volume_trashes(t: &mut Vec<ScanTarget>) {
                 format!("Trash · {vol_name}"),
             ),
             CategoryId::RecycleBin,
+            Operation::Trash,
+            ("engine", "volume_trash"),
         ));
-    }
-}
-
-/// `~/Library/Group Containers` 下的缓存、临时文件和日志。
-///
-/// 沙盒应用通过 App Group 共享数据，Group Containers 下也有 Caches / tmp / Logs。
-/// 跳过包含密码管理器关键词的目录（1Password、Keychain 等）。
-#[cfg(target_os = "macos")]
-pub(super) fn push_group_container_caches(t: &mut Vec<ScanTarget>, home: &Path) {
-    let group_root = home.join("Library/Group Containers");
-    let Ok(rd) = std::fs::read_dir(&group_root) else {
-        return;
-    };
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        // 跳过密码管理器和敏感应用
-        let sensitive = [
-            "1password",
-            "keychain",
-            "bitwarden",
-            "lastpass",
-            "keepass",
-            "dashlane",
-            "enpass",
-        ];
-        if sensitive.iter().any(|s| name.contains(s)) {
-            continue;
-        }
-        let group_dir = entry.path();
-        if !group_dir.is_dir() {
-            continue;
-        }
-        // Caches 子目录
-        let caches = group_dir.join("Library/Caches");
-        if caches.is_dir() {
-            // App Group 标识经常不含产品名，靠关键词黑名单无法可靠识别
-            // 密码管理器、同步工具等敏感应用，因此只展示、不默认清理。
-            t.push(target_with_recommendation(
-                caches,
-                Text::new(
-                    format!("组容器缓存 · {}", entry.file_name().to_string_lossy()),
-                    format!(
-                        "Group Container Cache · {}",
-                        entry.file_name().to_string_lossy()
-                    ),
-                ),
-                CategoryId::UserTemp,
-                false,
-            ));
-        }
-        // tmp 子目录
-        let tmp = group_dir.join("Library/tmp");
-        if tmp.is_dir() {
-            t.push(target(
-                tmp,
-                Text::new(
-                    format!("组容器临时 · {}", entry.file_name().to_string_lossy()),
-                    format!(
-                        "Group Container Temp · {}",
-                        entry.file_name().to_string_lossy()
-                    ),
-                ),
-                CategoryId::UserTemp,
-            ));
-        }
-        // Logs 子目录
-        let logs = group_dir.join("Library/Logs");
-        if logs.is_dir() {
-            // 和上面 Caches 同一条判据：App Group 的容器名经常不含产品名，
-            // 认不出所有者就无从界定「删了最坏会怎样」（规范第 1 条）。
-            // 密码管理器的日志目录可能带会话线索，只展示、不默认勾选。
-            t.push(target_with_recommendation(
-                logs,
-                Text::new(
-                    format!("组容器日志 · {}", entry.file_name().to_string_lossy()),
-                    format!(
-                        "Group Container Logs · {}",
-                        entry.file_name().to_string_lossy()
-                    ),
-                ),
-                CategoryId::Logs,
-                false,
-            ));
-        }
-    }
-}
-
-/// `.DS_Store` 文件清理。
-///
-/// `.DS_Store` 是 Finder 自动生成的目录元数据文件，删除后 Finder 会重新生成。
-/// 不做全盘扫描（太慢），只扫常见目录：桌面、文档、下载、用户根目录、Applications。
-#[cfg(target_os = "macos")]
-pub(super) fn push_dsstore_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    let scan_dirs: &[&str] = &[
-        "Desktop",
-        "Documents",
-        "Downloads",
-        "Movies",
-        "Music",
-        "Pictures",
-        "Public",
-    ];
-    for dir in scan_dirs {
-        let path = home.join(dir);
-        if !path.is_dir() {
-            continue;
-        }
-        // 扫描该目录（仅一层）下的 .DS_Store 文件
-        let Ok(rd) = std::fs::read_dir(&path) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".DS_Store" {
-                t.push(target(
-                    entry.path(),
-                    Text::new(
-                        format!(".DS_Store · ~/{dir}"),
-                        format!(".DS_Store · ~/{dir}"),
-                    ),
-                    CategoryId::UserCache,
-                ));
-            }
-            // 子目录里的 .DS_Store（只下一层，不做深度遍历）
-            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                let sub_ds = entry.path().join(".DS_Store");
-                if sub_ds.is_file() {
-                    t.push(target(
-                        sub_ds,
-                        Text::new(
-                            format!(".DS_Store · ~/{dir}/{name}"),
-                            format!(".DS_Store · ~/{dir}/{name}"),
-                        ),
-                        CategoryId::UserCache,
-                    ));
-                }
-            }
-        }
     }
 }
 

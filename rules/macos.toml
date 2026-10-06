@@ -1,10 +1,15 @@
 id = "macos"
-version = 2
+version = 7
 platform = "macos"
-required = ["file"]
+required = ["file", "directory_selection"]
 
 [lists]
 jetbrains_products = ["IntelliJ IDEA", "PyCharm", "WebStorm", "CLion", "GoLand", "RubyMine", "PhpStorm", "DataGrip", "Rider", "RustRover"]
+
+sensitive_cache_exact = ["CloudKit", "com.apple.AuthenticationServicesCore.AuthenticationServicesAgent", "com.apple.amsaccountsd", "com.apple.amsengagementd", "com.apple.appleaccountd", "com.apple.securityd", "com.apple.identityservicesd", "com.apple.protectedcloudstorage.protectedcloudkeysyncing", "com.apple.ap.adprivacyd", "com.apple.findmy.fmipcore", "com.apple.passd", "com.apple.ScreenTimeAgent", "com.apple.ScreenTimeSettingsAgent", "com.apple.icloudwebd", "com.apple.iTunesCloud", "com.apple.itunescloudd", "com.apple.CloudTelemetry", "com.apple.iCloudNotificationAgent", "com.apple.HomeKit", "com.apple.gamed"]
+sensitive_cache_prefixes = ["com.apple.AuthenticationServices", "com.apple.ams", "com.apple.appleaccount", "com.apple.identity", "com.apple.protectedcloud", "com.apple.security", "com.apple.icloud", "com.apple.iCloud", "com.apple.Cloud", "com.apple.cloud", "com.apple.findmy", "com.apple.HomeKit", "com.apple.homekit", "com.apple.ScreenTime", "com.apple.screentime", "com.apple.passd", "com.apple.biome"]
+
+sensitive_group_contains = ["1password", "keychain", "bitwarden", "lastpass", "keepass", "dashlane", "enpass"]
 
 # Xcode/Archives 可能是唯一留存的发布归档。CoreSimulator/Devices 里是仍在
 # 使用的模拟器和应用数据。两者都不能仅凭目录位置当成构建垃圾，所以不入表。
@@ -38,3 +43,169 @@ category = "IosBackup"
 operation = "tree"
 disposal = "permanent"
 recommended = false
+
+[[entries]]
+root = "home"
+path = ".Trash"
+zh = "废纸篓"
+en = "Trash"
+category = "RecycleBin"
+operation = "trash"
+disposal = "permanent"
+recommended = false
+
+[[entries]]
+root = "home"
+path = "Library/Saved Application State"
+zh = "应用窗口状态"
+en = "Saved Application State"
+category = "UserTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+# 同一目录的枚举由通用能力共享；规则不授予父目录所有权。
+[[directories]]
+id = "logs"
+root = "home"
+paths = ["Library/Logs"]
+zh = "~/{relative}"
+en = "~/{relative}"
+category = "Logs"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[directories.select]
+kind = "children"
+directories_only = false
+prefixes = []
+[directories.log_policy]
+extensions = ["log"]
+exclude_exact = ["DiagnosticReports", "CrashReporter", "OneDrive"]
+exclude_prefixes = ["com.apple."]
+
+[[directories]]
+id = "dns"
+root = "user_temp_parent"
+paths = ["C", "T"]
+zh = "DNS 缓存 · {name}"
+en = "DNS Cache · {name}"
+category = "SystemTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "children"
+directories_only = true
+prefixes = ["com.apple.dns", "com.apple.networkd"]
+
+[[directories]]
+id = "quicklook"
+root = "user_temp_parent"
+paths = ["C", "T"]
+zh = "QuickLook 缓存 · {name}"
+en = "QuickLook cache · {name}"
+category = "Thumbnails"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[directories.select]
+kind = "children"
+directories_only = true
+prefixes = ["com.apple.quicklook"]
+
+[[directories]]
+id = "finder_metadata"
+root = "home"
+paths = ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures", "Public"]
+zh = ".DS_Store · ~/{relative}"
+en = ".DS_Store · ~/{relative}"
+category = "UserCache"
+operation = "file"
+disposal = "permanent"
+recommended = true
+[directories.select]
+kind = "named_files"
+name = ".DS_Store"
+child_depth = 1
+
+[[directories]]
+id = "group_caches"
+root = "home"
+paths = ["Library/Group Containers"]
+zh = "组容器缓存 · {name}"
+en = "Group Container Cache · {name}"
+category = "UserTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "container_directories"
+paths = ["Library/Caches"]
+exclude_name_policy = "sensitive_group"
+
+[[directories]]
+id = "group_temporary"
+root = "home"
+paths = ["Library/Group Containers"]
+zh = "组容器临时 · {name}"
+en = "Group Container Temp · {name}"
+category = "UserTemp"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "container_directories"
+paths = ["Library/tmp"]
+exclude_name_policy = "sensitive_group"
+
+[[directories]]
+id = "group_logs"
+root = "home"
+paths = ["Library/Group Containers"]
+zh = "组容器日志 · {name}"
+en = "Group Container Logs · {name}"
+category = "Logs"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+[directories.select]
+kind = "container_directories"
+paths = ["Library/Logs"]
+exclude_name_policy = "sensitive_group"
+
+# Firefox 每个 profile 的 `cache2`：只摘缓存目录本身，不碰 profile 里的
+# 登录态与书签。目录名与相对布局都在这里，扫描代码不再拼接。
+[[directories]]
+id = "firefox_profile_caches"
+root = "home"
+paths = ["Library/Application Support/Firefox/Profiles"]
+zh = "Firefox · {parent} · {name}"
+en = "Firefox · {parent} · {name}"
+category = "BrowserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+[directories.select]
+kind = "named_directories"
+name = "cache2"
+child_depth = 1
+
+
+[[catalogs.old_ide_roots]]
+path = "Library/Application Support/JetBrains"
+zh = "IDE 版本数据"
+en = "IDE version data"
+
+[[catalogs.user_login_roots]]
+path = "Library/LaunchAgents"
+zh = "用户登录项"
+en = "User login items"
+
+[[catalogs.system_login_roots]]
+path = "LaunchAgents"
+zh = "系统登录项"
+en = "System login items"
+
+[numbers]
+login_item_min_age_seconds = 86400

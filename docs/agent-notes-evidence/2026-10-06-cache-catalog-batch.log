@@ -1,0 +1,39 @@
+=== cargo test --lib 2026-10-06T00:51:54+08:00 ===
+
+test result: ok. 555 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 9.76s
+
+=== cargo clippy --all-targets -- -D warnings ===
+
+warning: `gpui` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.80s
+clippy_exit=0
+=== cargo build ===
+   Compiling quick-cleaner v0.0.9 (D:\code\quick-cleaner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.53s
+build_exit=0
+=== cargo run --example rules -- check ===
+schema=9 sequence=1 rules=12 bytes=38118
+=== strict-anchors ===
+OK: regression notes under docs\agent-notes verified
+=== check-pitfall-notes ===
+WARNING: docs\PITFALLS.md: P30 has no `Note:` pointer
+WARNING: docs\PITFALLS.md: P34 has no `Note:` pointer
+0 error(s), 7 warning(s), 25 of 32 pitfall(s) carry Note: pointers
+=== git diff --check ===
+diff_clean
+=== pack / JSON re-read ===
+     Running `target\debug\examples\rules.exe pack 1 target/rules-cache-catalog-package`
+schema 9 rules 12 bytes 42659
+cache version 3 directories ['home_cache']
+=== re-verify merged workspace 2026-10-06T00:59:17+08:00 ===
+fmt_ok
+
+test result: ok. 557 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 11.89s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.60s
+clippy_exit=0
+schema=9 sequence=1 rules=12 bytes=38118
+=== final merged checks 2026-10-06T01:00:55+08:00 ===
+diff_clean
+OK: regression notes under docs\agent-notes verified
+0 error(s), 7 warning(s), 25 of 32 pitfall(s) carry Note: pointers

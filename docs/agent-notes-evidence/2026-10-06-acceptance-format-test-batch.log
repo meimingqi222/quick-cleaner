@@ -1,0 +1,10 @@
+=== acceptance format test batch 2026-10-06T15:38:06+08:00 ===
+fmt_exit=0
+test_exit=0
+
+clippy_exit=0
+OK: 358 identifier(s) resolved (616 test names); 3 doc(s) path-clean
+OK: no new inline UI strings (remaining baseline: 0)
+OK: 回填块格式正确（8 行表格 + 环境行；未执行任何检查）
+anchors_exit=0
+diff_clean

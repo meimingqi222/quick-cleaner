@@ -1,0 +1,10 @@
+=== recycle-verification batch 2026-10-06T14:35:54+08:00 ===
+fmt_exit=0
+test_exit=0
+
+clippy_exit=0
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors_exit=0
+OK: no new inline UI strings (remaining baseline: 0)
+diff_clean

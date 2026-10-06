@@ -1572,6 +1572,53 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
     ))
 }
 
+/// Registered-app uninstall with the same typed step report as source installs.
+///
+/// A registry app has no rule and no filesystem scope it owns, so the plan carries a
+/// single `OfficialUninstall` target anchored at the install location (or the registry
+/// subpath) purely so the shared runner emits `Revalidate → Apply → Verify` steps. The
+/// actual work is the unchanged `run_uninstaller_and_wait`; completion is the app no
+/// longer being registered.
+pub(super) fn run_uninstaller_and_wait_reported(
+    app: &InstalledApp,
+) -> crate::core::apps::UninstallOutcome {
+    use crate::core::rules::{CleanupPlan, Operation, PlannedTarget, RuleRef};
+    let anchor = app
+        .install_location
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&app.registry_subpath));
+    let plan = CleanupPlan::new(
+        RuleRef::engine(),
+        vec![PlannedTarget {
+            path: anchor,
+            operation: Operation::OfficialUninstall,
+            identity: app
+                .install_location
+                .as_ref()
+                .and_then(|path| crate::core::model::capture_identity(path)),
+            disposal: crate::core::cleaner::Disposal::Permanent,
+        }],
+    );
+    let progress = crate::core::cleaner::CleanProgress::new(1, 0);
+    let report = crate::core::rules::flow::execute_registered(
+        &plan,
+        0,
+        &progress,
+        || run_uninstaller_and_wait(app),
+        |_condition| {
+            if is_app_registered(app) {
+                crate::core::rules::facts::Evidence::Absent
+            } else {
+                crate::core::rules::facts::Evidence::Confirmed
+            }
+        },
+    );
+    crate::core::apps::UninstallOutcome {
+        result: crate::core::rules::flow::execution_result(&report),
+        plan_executions: report.plan_executions,
+    }
+}
+
 fn is_app_registered(app: &InstalledApp) -> bool {
     let (root, sam) = match app.registry_root {
         AppRegRoot::Hklm => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_64KEY),

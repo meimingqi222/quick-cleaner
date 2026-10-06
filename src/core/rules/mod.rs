@@ -1,18 +1,19 @@
-//! Signed declarative policy selects fixed capabilities; deletion authority remains in safety/cleaner.
+//! Bundled declarative policy selects fixed capabilities; deletion authority remains in safety/cleaner.
+pub mod directories;
 pub mod execution;
 pub mod facts;
 pub mod flow;
 mod plan;
-pub mod update;
 pub mod variables;
+pub mod versions;
 pub use plan::{
-    CleanupPlan, CompletionCondition, InstallationInstance, OfficialOperation, Operation,
-    PlanAction, PlanStep, PlannedTarget, RuleObservation, RuleRef, TargetScope,
+    CleanupPlan, CompletionCondition, InstallationInstance, NativeKind, OfficialOperation,
+    Operation, PlanAction, PlanStep, PlannedTarget, RuleObservation, RuleRef, TargetScope,
 };
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 include!(concat!(env!("OUT_DIR"), "/rule_schema.rs"));
 pub const MAX_PACKAGE: usize = 8 * 1024 * 1024;
@@ -30,6 +31,9 @@ pub const CAPABILITIES: &[&str] = &[
     "declutter",
     "variables",
     "source_flow",
+    "directory_selection",
+    "updater_artifacts",
+    "version_retention",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,7 +57,13 @@ pub struct RuleDefinition {
     #[serde(default)]
     pub numbers: BTreeMap<String, u64>,
     #[serde(default)]
+    pub provider_policies: BTreeMap<String, ProviderPolicy>,
+    #[serde(default)]
     pub entries: Vec<PathRule>,
+    #[serde(default)]
+    pub directories: Vec<directories::DirectoryRule>,
+    #[serde(default)]
+    pub version_layouts: Vec<versions::VersionLayout>,
     #[serde(default)]
     pub markers: Vec<BuildMarker>,
     pub app: Option<SourceInstallRule>,
@@ -74,6 +84,14 @@ pub struct RuleDefinition {
 pub struct ResidualLocation {
     pub path: String,
     pub source: crate::core::apps::ResidualSource,
+}
+
+/// Discovery supplies a typed extent; policy cannot expand that extent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderPolicy {
+    pub recommended: bool,
+    pub disposal: crate::core::cleaner::Disposal,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -216,6 +234,19 @@ fn relative(value: &str) -> bool {
         })
 }
 
+fn drive_root(root: &str) -> Option<char> {
+    let letter = root.strip_prefix("drive:")?;
+    (letter.len() == 1 && letter.as_bytes()[0].is_ascii_uppercase())
+        .then(|| letter.as_bytes()[0] as char)
+}
+
+fn valid_root(root: &str) -> bool {
+    matches!(
+        root,
+        "home" | "local" | "roaming" | "cache" | "temp" | "user_temp" | "system"
+    ) || drive_root(root).is_some()
+}
+
 impl RuleBundle {
     pub fn from_directory(path: &std::path::Path, sequence: u64) -> Result<Self, String> {
         let mut paths: Vec<_> = std::fs::read_dir(path)
@@ -266,6 +297,24 @@ impl RuleBundle {
         }
         let mut ids = BTreeSet::new();
         for rule in &self.rules {
+            directories::validate(rule)?;
+            versions::validate(rule)?;
+            if rule.provider_policies.len() > 128
+                || rule.provider_policies.keys().any(|key| {
+                    key.is_empty()
+                        || key.len() > 128
+                        || !key
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                })
+                || (!rule.provider_policies.is_empty()
+                    && !rule
+                        .required
+                        .iter()
+                        .any(|capability| capability == "providers"))
+            {
+                return Err("Invalid or undeclared provider policy".into());
+            }
             if rule.locations.len() > 64
                 || rule
                     .locations
@@ -365,6 +414,17 @@ impl RuleBundle {
                         return Err("Invalid Chromium leaves".into());
                     }
                 }
+                // Profile names are policy too: browsers and content signatures share them.
+                if !["exact", "prefixes", "suffixes"].iter().any(|mode| {
+                    rule.lists
+                        .get(&format!("profile_{mode}"))
+                        .is_some_and(|list| {
+                            !list.is_empty()
+                                && list.iter().all(|s| relative(s) && !s.contains(['/', '\\']))
+                        })
+                }) {
+                    return Err("Invalid Chromium profile policy".into());
+                }
                 if rule
                     .numbers
                     .get("signature_min")
@@ -397,8 +457,50 @@ impl RuleBundle {
             if rule.id == "residual-macos" {
                 validate_residual_policy(rule)?;
             }
+            if rule.id == "cache" {
+                validate_cache_policy(rule)?;
+            }
+            if rule.id == "macos" {
+                for key in ["old_ide_roots", "user_login_roots", "system_login_roots"] {
+                    if rule
+                        .catalogs
+                        .get(key)
+                        .is_none_or(|rows| rows.is_empty() || rows.len() > 32)
+                    {
+                        return Err(format!("Missing macOS layout: {key}"));
+                    }
+                }
+                if rule
+                    .numbers
+                    .get("login_item_min_age_seconds")
+                    .is_none_or(|seconds| !(86400..=31536000).contains(seconds))
+                {
+                    return Err("Invalid login item age".into());
+                }
+                for key in [
+                    "sensitive_cache_exact",
+                    "sensitive_cache_prefixes",
+                    "sensitive_group_contains",
+                ] {
+                    if rule.lists.get(key).is_none_or(|values| {
+                        values.is_empty()
+                            || values.iter().any(|name| {
+                                name.trim().is_empty()
+                                    || name.contains(['\0', '\n', '\r', '/', '\\'])
+                            })
+                    }) {
+                        return Err(format!("Missing sensitive name policy: {key}"));
+                    }
+                }
+            }
             for entry in &rule.entries {
-                variables::validate_template(&entry.path, &rule.variables)?;
+                let temp_root = entry.root == "user_temp"
+                    && entry.path == "."
+                    && entry.operation == PathOperation::Contents
+                    && rule.variables.is_empty();
+                if !temp_root {
+                    variables::validate_template(&entry.path, &rule.variables)?;
+                }
                 let required = match entry.operation {
                     PathOperation::Go | PathOperation::Pnpm => "owner",
                     _ => "file",
@@ -412,11 +514,8 @@ impl RuleBundle {
                 {
                     return Err("Undeclared operation capability or incompatible disposal".into());
                 }
-                if !relative(&entry.path)
-                    || !matches!(
-                        entry.root.as_str(),
-                        "home" | "local" | "roaming" | "cache" | "temp" | "system"
-                    )
+                if (!relative(&entry.path) && !temp_root)
+                    || !valid_root(&entry.root)
                     || crate::core::categories::CategoryId::from_rule(&entry.category).is_none()
                 {
                     return Err(format!("Invalid path rule: {}", rule.id));
@@ -544,7 +643,80 @@ impl RuleBundle {
     }
 }
 
+fn validate_cache_policy(rule: &RuleDefinition) -> Result<(), String> {
+    if !rule
+        .required
+        .iter()
+        .any(|capability| capability == "updater_artifacts")
+    {
+        return Err("Missing updater artifact capability".into());
+    }
+    let accepted = [
+        "updater_directories_exact",
+        "updater_directories_prefixes",
+        "updater_files_exact",
+        "updater_files_suffixes",
+        "updater_display_suffixes",
+        "updater_probe_exclude_prefixes",
+    ];
+    if !rule.required.iter().any(|capability| capability == "file")
+        || rule
+            .lists
+            .keys()
+            .any(|key| key.starts_with("updater_") && !accepted.contains(&key.as_str()))
+    {
+        return Err("Unknown or undeclared updater policy".into());
+    }
+    for key in [
+        "updater_directories_exact",
+        "updater_directories_prefixes",
+        "updater_files_exact",
+        "updater_files_suffixes",
+        "updater_display_suffixes",
+        "updater_probe_exclude_prefixes",
+    ] {
+        if rule.lists.get(key).is_none_or(|values| {
+            values.is_empty()
+                || values.len() > 128
+                || values.iter().any(|value| {
+                    value.trim().is_empty()
+                        || value.len() > 128
+                        || value.contains(['/', '\\', ':', '\0', '\r', '\n'])
+                })
+        }) {
+            return Err(format!("Invalid updater policy: {key}"));
+        }
+    }
+    if rule
+        .numbers
+        .get("updater_stale_seconds")
+        .is_none_or(|seconds| !(86400..=31536000).contains(seconds))
+    {
+        return Err("Invalid updater age".into());
+    }
+    Ok(())
+}
+
 fn validate_engine_policy(rule: &RuleDefinition) -> Result<(), String> {
+    for key in [
+        "browser_cache",
+        "cache_candidate",
+        "agent_history",
+        "linked_worktree",
+        "development_candidate",
+        "docker_image",
+        "broken_login_item",
+        "local_snapshot",
+        "old_ide_data",
+        "volume_trash",
+        "user_trash",
+        "updater_artifact",
+        "brew_cleanup",
+    ] {
+        if !rule.provider_policies.contains_key(key) {
+            return Err(format!("Missing provider policy: {key}"));
+        }
+    }
     for (key, minimum, maximum) in [
         ("photo_distance", 0, 5),
         ("photo_burst_distance", 0, 8),
@@ -644,6 +816,333 @@ fn validate_residual_policy(rule: &RuleDefinition) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn root_scope_validation_rejects_skeleton_and_drive_escape() {
+        let original = super::snapshot().bundle.clone();
+        for (root, path, operation) in [
+            ("home", ".", super::PathOperation::Contents),
+            ("system", ".", super::PathOperation::Contents),
+            ("drive:C", ".", super::PathOperation::Contents),
+            ("user_temp", ".", super::PathOperation::Tree),
+            ("drive:C:", "tmp", super::PathOperation::Contents),
+            ("drive:../C", "tmp", super::PathOperation::Contents),
+            ("drive:c", "tmp", super::PathOperation::Contents),
+        ] {
+            let mut bundle = original.clone();
+            let rule = bundle
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "windows")
+                .unwrap();
+            let entry = rule
+                .entries
+                .iter_mut()
+                .find(|entry| entry.root == "user_temp")
+                .unwrap();
+            entry.root = root.into();
+            entry.path = path.into();
+            entry.operation = operation;
+            assert!(bundle.validate().is_err(), "{root}/{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_rules_keep_temp_scope_and_unknown_user_root_never_falls_back() {
+        use super::*;
+        use crate::core::cleaner::{CleanProgress, CleanTarget};
+        use std::path::PathBuf;
+        let fixture = crate::core::testing::fixture("rule_system_roots");
+        let temp = fixture.join("foreground-temp");
+        std::fs::create_dir(&temp).unwrap();
+        std::fs::write(temp.join("sentinel.txt"), b"fixture").unwrap();
+        let windows =
+            PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:/Windows".into()));
+        let mut roots = BTreeMap::from([
+            ("system".into(), Some(windows.clone())),
+            ("user_temp".into(), Some(temp.clone())),
+            ("local".into(), Some(fixture.join("local"))),
+            ("drive:C".into(), Some(fixture.join("drive-c"))),
+        ]);
+        let snapshot = snapshot();
+        let mut targets = Vec::new();
+        append_path_targets_with_roots(&mut targets, &snapshot, &roots);
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| target.rule.id == "windows")
+                .count(),
+            9
+        );
+        let windows_temp = targets
+            .iter()
+            .find(|target| target.path == windows.join("Temp"))
+            .unwrap();
+        assert_eq!(windows_temp.operation, Operation::Contents);
+        assert!(!windows_temp.recommended);
+        let user_temp = targets.iter().find(|target| target.path == temp).unwrap();
+        let identity = crate::core::model::capture_identity(&temp);
+        let plan = Arc::new(CleanupPlan::new(
+            user_temp.rule.clone(),
+            vec![PlannedTarget {
+                path: temp.clone(),
+                operation: user_temp.operation.clone(),
+                identity,
+                disposal: user_temp.disposal,
+            }],
+        ));
+        let selected = CleanTarget {
+            plans: vec![plan],
+            rule: Some(user_temp.rule.clone()),
+            path: temp.clone(),
+            operation: user_temp.operation.clone(),
+            remove_dir: false,
+            size_hint: None,
+            identity,
+            disposal: user_temp.disposal,
+        };
+        let report = crate::core::cleaner::clean_targets(&[selected], &CleanProgress::default());
+        assert_eq!(report.ok, 1);
+        assert!(temp.is_dir());
+        assert!(!temp.join("sentinel.txt").exists());
+        roots.insert("user_temp".into(), None);
+        targets.clear();
+        append_path_targets_with_roots(&mut targets, &snapshot, &roots);
+        assert!(!targets.iter().any(|target| target.path == temp));
+        assert!(targets
+            .iter()
+            .any(|target| target.path == windows.join("Temp")));
+        let mut bundle = snapshot.bundle.clone();
+        bundle
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == "windows")
+            .unwrap()
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == "Temp")
+            .unwrap()
+            .operation = PathOperation::Tree;
+        bundle.validate().unwrap();
+        targets.clear();
+        append_path_targets_with_roots(&mut targets, &Arc::new(RuleSnapshot { bundle }), &roots);
+        assert!(!targets
+            .iter()
+            .any(|target| target.path == windows.join("Temp")));
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+    #[test]
+    fn provider_policy_defaults_match_migration_baseline() {
+        let baseline: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/provider-policy-baseline.json"
+        ))
+        .unwrap();
+        let snapshot = super::snapshot();
+        let policies = &snapshot.definition("engine").provider_policies;
+        assert_eq!(baseline.len(), 31);
+        for row in baseline {
+            let key = row["policy"].as_str().unwrap();
+            let expected = super::ProviderPolicy {
+                recommended: row["recommended"].as_bool().unwrap(),
+                disposal: serde_json::from_value(row["disposal"].clone()).unwrap(),
+            };
+            assert_eq!(policies.get(key), Some(&expected), "policy: {key}");
+        }
+    }
+
+    #[test]
+    fn provider_policy_validation_rejects_missing_unbounded_and_script_fields() {
+        use super::*;
+        let bundle = snapshot().bundle.clone();
+        for change in ["missing", "undeclared", "key", "budget"] {
+            let mut modified = bundle.clone();
+            let rule = modified
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "engine")
+                .unwrap();
+            match change {
+                "missing" => {
+                    rule.provider_policies.remove("docker_image");
+                }
+                "undeclared" => rule.required.retain(|capability| capability != "providers"),
+                "key" => {
+                    rule.provider_policies.insert(
+                        "../escape".into(),
+                        ProviderPolicy {
+                            recommended: true,
+                            disposal: crate::core::cleaner::Disposal::Permanent,
+                        },
+                    );
+                }
+                "budget" => {
+                    for index in 0..129 {
+                        rule.provider_policies.insert(
+                            format!("fixture_{index}"),
+                            ProviderPolicy {
+                                recommended: true,
+                                disposal: crate::core::cleaner::Disposal::Permanent,
+                            },
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert!(modified.validate().is_err(), "invalid: {change}");
+        }
+        let mut json = serde_json::to_value(bundle).unwrap();
+        let engine = json["rules"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|rule| rule["id"] == "engine")
+            .unwrap();
+        engine["provider_policies"]["docker_image"]["command"] =
+            "powershell -Command arbitrary".into();
+        assert!(RuleBundle::parse(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
+    #[test]
+    fn bundled_snapshot_is_stable_and_scoped_rules_do_not_replace_it() {
+        let bundled = snapshot();
+        assert!(Arc::ptr_eq(&bundled, &embedded()));
+        let mut bundle = bundled.bundle.clone();
+        bundle.sequence += 1;
+        let scoped = Arc::new(RuleSnapshot { bundle });
+        with_snapshot(scoped.clone(), || {
+            assert!(Arc::ptr_eq(&current(), &scoped));
+            assert!(Arc::ptr_eq(&snapshot(), &bundled));
+        });
+        assert!(Arc::ptr_eq(&current(), &bundled));
+    }
+    #[test]
+    fn layout_and_artifact_policies_reject_missing_unsafe_or_unbounded_values() {
+        let original = snapshot().bundle.clone();
+        for fault in [
+            "artifact_missing",
+            "artifact_name",
+            "artifact_budget",
+            "artifact_extra",
+            "artifact_age",
+            "login_age",
+            "layout_missing",
+            "container_escape",
+            "container_policy",
+        ] {
+            let mut bundle = original.clone();
+            let cache = bundle
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "cache")
+                .unwrap();
+            match fault {
+                "artifact_missing" => {
+                    cache.lists.remove("updater_files_exact");
+                }
+                "artifact_name" => {
+                    cache
+                        .lists
+                        .get_mut("updater_files_exact")
+                        .unwrap()
+                        .push("../escape".into());
+                }
+                "artifact_budget" => {
+                    cache
+                        .lists
+                        .insert("updater_files_suffixes".into(), vec![".zip".into(); 129]);
+                }
+                "artifact_extra" => {
+                    cache
+                        .lists
+                        .insert("updater_files_prefixes".into(), vec![String::new()]);
+                }
+                "artifact_age" => {
+                    cache.numbers.insert("updater_stale_seconds".into(), 0);
+                }
+                _ => {
+                    let macos = bundle
+                        .rules
+                        .iter_mut()
+                        .find(|rule| rule.id == "macos")
+                        .unwrap();
+                    match fault {
+                        "login_age" => {
+                            macos.numbers.insert("login_item_min_age_seconds".into(), 0);
+                        }
+                        "layout_missing" => {
+                            macos.catalogs.remove("old_ide_roots");
+                        }
+                        "container_escape" | "container_policy" => {
+                            let entry = macos
+                                .directories
+                                .iter_mut()
+                                .find(|entry| entry.id == "group_caches")
+                                .unwrap();
+                            entry.select = directories::Selection::ContainerDirectories {
+                                paths: vec![if fault == "container_escape" {
+                                    "../outside"
+                                } else {
+                                    "Library/Caches"
+                                }
+                                .into()],
+                                exclude_name_policy: if fault == "container_policy" {
+                                    "missing"
+                                } else {
+                                    "sensitive_group"
+                                }
+                                .into(),
+                            };
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            assert!(bundle.validate().is_err(), "{fault}");
+        }
+        let cache = snapshot().definition("cache").clone();
+        assert_eq!(cache.numbers["updater_stale_seconds"], 7 * 86400);
+        let macos = snapshot().definition("macos").clone();
+        assert_eq!(macos.numbers["login_item_min_age_seconds"], 86400);
+        assert_eq!(
+            macos.catalogs["old_ide_roots"][0].path,
+            "Library/Application Support/JetBrains"
+        );
+        assert_eq!(
+            macos.catalogs["user_login_roots"][0].path,
+            "Library/LaunchAgents"
+        );
+        assert_eq!(macos.catalogs["system_login_roots"][0].path, "LaunchAgents");
+    }
+
+    #[test]
+    fn sensitive_name_policy_requires_complete_bounded_lists() {
+        let base = embedded().bundle.clone();
+        for key in [
+            "sensitive_cache_exact",
+            "sensitive_cache_prefixes",
+            "sensitive_group_contains",
+        ] {
+            let mut missing = base.clone();
+            missing
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "macos")
+                .unwrap()
+                .lists
+                .remove(key);
+            assert!(missing.validate().is_err());
+            let mut invalid = base.clone();
+            invalid
+                .rules
+                .iter_mut()
+                .find(|rule| rule.id == "macos")
+                .unwrap()
+                .lists
+                .get_mut(key)
+                .unwrap()
+                .push(String::new());
+            assert!(invalid.validate().is_err());
+        }
+    }
     use super::*;
     #[test]
     fn explicit_path_policies_match_pre_migration_baseline() {
@@ -654,10 +1153,13 @@ mod tests {
                 let category =
                     crate::core::categories::CategoryId::from_rule(&entry.category).unwrap();
                 let path = std::path::Path::new("C:/isolated").join(&entry.path);
-                assert_eq!(
-                    entry.operation.operation(),
-                    Operation::classify(&path, category.removes_directory())
-                );
+                // Trash scope is tied to the actual user/volume, not this synthetic root.
+                if entry.operation != PathOperation::Trash {
+                    assert_eq!(
+                        entry.operation.operation(),
+                        Operation::classify(&path, category.removes_directory())
+                    );
+                }
                 assert_eq!(entry.disposal, category.disposal());
                 actual.push(serde_json::json!({
                     "rule": rule.id, "root": entry.root, "path": entry.path,
@@ -679,6 +1181,36 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(actual, expected);
+    }
+
+    /// 「仅配置增量」：给内置规则包加一条新声明的路径条目，通用路径能力立刻把它
+    /// 展开成清理目标——没有为它加任何专用 Rust 分支。
+    #[test]
+    fn path_rule_only_fixture_surfaces_a_new_target_without_rust_changes() {
+        let root = crate::core::testing::fixture("path_rule_only");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("QuickCleanerFixtureCache")).unwrap();
+        let definition: RuleDefinition =
+            toml::from_str(include_str!("../../../rules/fixtures/path-extra.toml")).unwrap();
+        let mut bundle = embedded().bundle.clone();
+        bundle.rules.push(definition);
+        bundle.validate().unwrap();
+        let snapshot = Arc::new(RuleSnapshot { bundle });
+        let roots = BTreeMap::from([("home".to_string(), Some(root.clone()))]);
+        let mut targets = Vec::new();
+        append_path_targets_with_roots(&mut targets, &snapshot, &roots);
+        let found = targets
+            .iter()
+            .find(|target| target.path == root.join("QuickCleanerFixtureCache"))
+            .expect("a newly declared path must surface as a target");
+        assert_eq!(
+            found.category,
+            crate::core::categories::CategoryId::UserCache
+        );
+        assert_eq!(found.operation, Operation::Contents);
+        assert!(found.recommended);
+        assert!(Arc::ptr_eq(&found.rule.snapshot, &snapshot));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -858,6 +1390,38 @@ mod tests {
             serde_json::to_value(source).unwrap(),
             serde_json::to_value(&embedded().bundle).unwrap()
         );
+    }
+
+    /// macOS 残留锚点也在规则里，且是**平台无关的配置完整性**——Windows 上就能
+    /// 静态核验这份配置不空。缺 key 会让 macOS 扫描器静默产出 0 目标（不报错、
+    /// 不失败），是 Windows 构建与 macOS 编译都抓不到的静默回归。
+    #[test]
+    fn residual_macos_anchors_are_declared() {
+        let snapshot = current();
+        let rule = snapshot.definition("residual-macos");
+        for key in [
+            "satellite_dirs",
+            "user_family_dirs",
+            "system_family_dirs",
+            "orphan_roots",
+        ] {
+            assert!(
+                rule.locations.get(key).is_some_and(|rows| !rows.is_empty()),
+                "residual-macos 缺少非空 locations.{key}（macOS 扫描会静默产出 0 目标）"
+            );
+        }
+        for key in [
+            "helper_id_suffixes",
+            "shared_vendor_prefixes",
+            "dot_config_parents",
+            "protected_dot_dirs",
+            "id_file_suffixes",
+        ] {
+            assert!(
+                rule.lists.get(key).is_some_and(|rows| !rows.is_empty()),
+                "residual-macos 缺少非空 lists.{key}"
+            );
+        }
     }
     #[test]
     fn malformed_rules_are_rejected_as_a_whole() {
@@ -1095,6 +1659,23 @@ impl RuleSnapshot {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+    pub fn matches_name(&self, id: &str, policy: &str, name: &str) -> bool {
+        self.list(id, &format!("{policy}_exact"))
+            .iter()
+            .any(|entry| name == entry)
+            || self
+                .list(id, &format!("{policy}_prefixes"))
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            || self
+                .list(id, &format!("{policy}_contains"))
+                .iter()
+                .any(|part| name.contains(part))
+            || self
+                .list(id, &format!("{policy}_suffixes"))
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+    }
     pub fn number(&self, id: &str, key: &str, default: u64) -> u64 {
         self.definition(id)
             .numbers
@@ -1121,20 +1702,8 @@ fn embedded() -> Arc<RuleSnapshot> {
         })
         .clone()
 }
-fn active() -> &'static RwLock<Arc<RuleSnapshot>> {
-    static ACTIVE: OnceLock<RwLock<Arc<RuleSnapshot>>> = OnceLock::new();
-    ACTIVE.get_or_init(|| RwLock::new(update::load_cached().unwrap_or_else(embedded)))
-}
 pub fn snapshot() -> Arc<RuleSnapshot> {
-    active()
-        .read()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| embedded())
-}
-pub(crate) fn activate(bundle: RuleBundle) {
-    if let Ok(mut current) = active().write() {
-        *current = Arc::new(RuleSnapshot { bundle });
-    }
+    embedded()
 }
 
 thread_local! { static PINNED: std::cell::RefCell<Option<Arc<RuleSnapshot>>> = const { std::cell::RefCell::new(None) }; }
@@ -1187,26 +1756,53 @@ pub fn append_path_targets(
     home: Option<&std::path::Path>,
 ) {
     let snapshot = current();
+    let local = crate::platform::user_cache_dir();
+    let mut roots = BTreeMap::from([
+        ("home".into(), home.map(std::path::Path::to_path_buf)),
+        ("local".into(), local.clone()),
+        ("cache".into(), local),
+        ("roaming".into(), crate::platform::user_data_dir()),
+        ("temp".into(), Some(std::env::temp_dir())),
+        ("user_temp".into(), crate::platform::user_temp_dir()),
+        (
+            "system".into(),
+            std::env::var_os("SystemRoot")
+                .map(std::path::PathBuf::from)
+                .or_else(|| cfg!(windows).then(|| std::path::PathBuf::from("C:/Windows"))),
+        ),
+    ]);
+    if cfg!(windows) {
+        for entry in snapshot.bundle.rules.iter().flat_map(|rule| &rule.entries) {
+            if let Some(letter) = drive_root(&entry.root) {
+                roots
+                    .entry(entry.root.clone())
+                    .or_insert_with(|| Some(std::path::PathBuf::from(format!("{letter}:/"))));
+            }
+        }
+    }
+    append_path_targets_with_roots(targets, &snapshot, &roots);
+    let mut enumeration = directories::Enumeration::default();
+    directories::append(targets, &snapshot, &roots, &mut enumeration);
+    versions::append(targets, &snapshot, &roots, &mut enumeration);
+}
+
+fn append_path_targets_with_roots(
+    targets: &mut Vec<crate::core::categories::ScanTarget>,
+    snapshot: &Arc<RuleSnapshot>,
+    roots: &BTreeMap<String, Option<std::path::PathBuf>>,
+) {
     for rule in &snapshot.bundle.rules {
         if rule.platform != "all" && rule.platform != std::env::consts::OS {
             continue;
         }
         let mut evidence = BTreeMap::new();
         for entry in &rule.entries {
-            let root = match entry.root.as_str() {
-                "home" => home.map(std::path::Path::to_path_buf),
-                "local" | "cache" => crate::platform::user_cache_dir(),
-                "roaming" => crate::platform::user_data_dir(),
-                "temp" => Some(std::env::temp_dir()),
-                "system" => std::env::var_os("SystemRoot").map(std::path::PathBuf::from),
-                _ => None,
-            };
-            let Some(root) = root else {
+            let Some(root) = roots.get(&entry.root).and_then(Option::as_ref) else {
                 continue;
             };
             let observation = evidence.entry(root.clone()).or_insert_with(|| {
                 Arc::new(RuleObservation::capture(
-                    &snapshot,
+                    snapshot,
                     &rule.id,
                     Some(root.clone()),
                 ))
@@ -1214,17 +1810,30 @@ pub fn append_path_targets(
             if observation.detected != facts::Evidence::Confirmed {
                 continue;
             }
-            let Ok(paths) = variables::paths(&entry.path, &observation.variables) else {
+            let expanded = if entry.root == "user_temp" && entry.path == "." {
+                Ok(vec![".".into()])
+            } else {
+                variables::paths(&entry.path, &observation.variables)
+            };
+            let Ok(paths) = expanded else {
                 continue;
             };
             for relative in paths {
-                let path = root.join(relative.replace('\\', "/"));
-                if !rule.variables.is_empty()
-                    && !facts::confined_path(&root, &path).unwrap_or(false)
+                let path = if relative == "." {
+                    root.clone()
+                } else {
+                    root.join(relative.replace('\\', "/"))
+                };
+                if !rule.variables.is_empty() && !facts::confined_path(root, &path).unwrap_or(false)
                 {
                     continue;
                 }
-                if crate::core::safety::is_protected_residual_path(&path) {
+                let protected = if entry.operation == PathOperation::Contents {
+                    crate::core::safety::is_contents_protected(&path)
+                } else {
+                    crate::core::safety::is_protected_residual_path(&path)
+                };
+                if protected {
                     continue;
                 }
                 let old_enough = std::fs::metadata(&path)

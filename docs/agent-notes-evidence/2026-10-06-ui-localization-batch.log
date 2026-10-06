@@ -1,0 +1,20 @@
+=== ui-localization batch 2026-10-06T14:24:06+08:00 ===
+fmt_exit=0
+test_exit=0
+
+clippy_exit=101
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors_exit=0
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+OK: no new inline UI strings (remaining baseline: 0)
+diff_clean
+fmt_exit=0
+test_exit=0
+
+clippy_exit=0
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors_exit=0
+OK: no new inline UI strings (remaining baseline: 0)
+diff_clean

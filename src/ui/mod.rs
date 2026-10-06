@@ -96,7 +96,7 @@ pub struct Root {
     pub monitor: StatusState,
     /// 自动更新：GitHub Releases 检测、下载校验与安装交接。
     pub update: crate::ui::state::UpdateState,
-    pub rule_update: crate::ui::state::RuleUpdateState,
+    pub rule_panel: crate::ui::state::RulePanelState,
     /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
     /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
     /// 省掉 ~700MB 重复内存。
@@ -253,7 +253,7 @@ impl Root {
             monitor: StatusState::default(),
 
             update: crate::ui::state::UpdateState::default(),
-            rule_update: crate::ui::state::RuleUpdateState::default(),
+            rule_panel: crate::ui::state::RulePanelState::default(),
 
             #[cfg(not(windows))]
             macos_root_index: None,
@@ -599,6 +599,12 @@ impl Root {
 
     pub fn selected_count(&self) -> usize {
         self.junk.selected_count()
+    }
+
+    pub fn selected_plan_summary(
+        &self,
+    ) -> (Vec<String>, Vec<crate::core::rules::Operation>, Vec<String>) {
+        self.junk.selected_plan_summary()
     }
 
     pub fn failures_need_admin(&self) -> bool {

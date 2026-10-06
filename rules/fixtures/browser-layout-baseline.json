@@ -1,0 +1,72 @@
+[
+  {
+    "path": "Google/Chrome/User Data/Default/Cache",
+    "label_zh": "Chrome · Default · Cache",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "Google/Chrome/User Data/Default/CachedProfilesData",
+    "label_zh": "Chrome · Default · CachedProfilesData",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "Google/Chrome/User Data/Default/Code Cache",
+    "label_zh": "Chrome · Default · Code Cache",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "Google/Chrome/User Data/Default/DawnGraphiteCache",
+    "label_zh": "Chrome · Default · DawnGraphiteCache",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "Google/Chrome/User Data/Default/GPUCache",
+    "label_zh": "Chrome · Default · GPUCache",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  },
+  {
+    "path": "Google/Chrome/User Data/Default/blob_storage",
+    "label_zh": "Chrome · Default · blob_storage",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false
+  },
+  {
+    "path": "Google/Chrome/User Data/Profile 1/Cache",
+    "label_zh": "Chrome · Profile 1 · Cache",
+    "category": "BrowserCache",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": true
+  }
+]

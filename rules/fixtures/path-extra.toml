@@ -1,0 +1,16 @@
+id = "fixture-path-extra"
+version = 1
+platform = "all"
+required = ["file"]
+
+# 「仅配置增量」夹具：一条新声明的路径目标。生产规则里没有专用 Rust 分支——
+# 这条路径经通用路径能力（append_path_targets_with_roots）展开为清理目标。
+[[entries]]
+root = "home"
+path = "QuickCleanerFixtureCache"
+zh = "夹具厂商缓存"
+en = "Fixture vendor cache"
+category = "UserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true

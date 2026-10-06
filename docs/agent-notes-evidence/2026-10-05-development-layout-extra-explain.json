@@ -1,0 +1,300 @@
+{
+  "rule": "fixture-template-layout",
+  "sequence": 1,
+  "variables": {},
+  "facts": {},
+  "detected": "Confirmed",
+  "targets": [],
+  "directory_discovery": {
+    "directory_reads": 1,
+    "inventory_entries": 4,
+    "directory_probes": {
+      "D:/code/quick-cleaner/target/template-layout-fixture": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/template-layout-fixture\\First/profile/example.extension/tasks": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/template-layout-fixture\\Second/profile/example.extension/tasks": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/template-layout-fixture\\runtime": {
+        "state": "Confirmed",
+        "reason": null
+      }
+    },
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 3,
+    "candidate_budget_blocked": 0,
+    "plans": [
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-template-layout",
+            "rule_version": 1,
+            "schema": 8,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/template-layout-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/template-layout-fixture\\First/profile/example.extension/tasks",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\First/profile/example.extension/tasks"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\First/profile/example.extension/tasks"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/template-layout-fixture\\First/profile/example.extension/tasks"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-template-layout",
+            "rule_version": 1,
+            "schema": 8,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/template-layout-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/template-layout-fixture\\Second/profile/example.extension/tasks",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\Second/profile/example.extension/tasks"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\Second/profile/example.extension/tasks"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/template-layout-fixture\\Second/profile/example.extension/tasks"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-template-layout",
+            "rule_version": 1,
+            "schema": 8,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/template-layout-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/template-layout-fixture\\runtime\\logs_2.sqlite",
+            "operation": {
+              "kind": "file"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "file",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\runtime\\logs_2.sqlite"
+            },
+            "completion": {
+              "kind": "path_absent",
+              "path": "D:/code/quick-cleaner/target/template-layout-fixture\\runtime\\logs_2.sqlite"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "file"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "path_absent",
+                "path": "D:/code/quick-cleaner/target/template-layout-fixture\\runtime\\logs_2.sqlite"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      }
+    ]
+  },
+  "version_discovery": {
+    "directory_reads": 0,
+    "inventory_entries": 0,
+    "directory_probes": {},
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 0,
+    "candidate_budget_blocked": 0,
+    "plans": []
+  },
+  "preserve": [],
+  "cleanup_plan": {
+    "observations": [
+      {
+        "rule_id": "fixture-template-layout",
+        "rule_version": 1,
+        "schema": 8,
+        "sequence": 1,
+        "scope": "D:/code/quick-cleaner/target/template-layout-fixture",
+        "variables": {},
+        "facts": {},
+        "detected": "Confirmed",
+        "provider_policy": null,
+        "version_guard": null
+      }
+    ],
+    "installation": null,
+    "official": null,
+    "targets": [],
+    "steps": [],
+    "preserve": [],
+    "blocked": []
+  },
+  "installation_plan": null,
+  "blocked": [],
+  "installation_layout": null
+}

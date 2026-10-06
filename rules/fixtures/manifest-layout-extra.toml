@@ -1,0 +1,31 @@
+id = "fixture-manifest-layout"
+version = 1
+platform = "all"
+required = ["file", "directory_selection"]
+
+# 清单驱动的选择：条目名来自 JSON 清单，但目标必须在磁盘上真实存在，
+# 且清单内容永远不是路径授权（单段名字才被接受）。
+[[directories]]
+id = "retired_vendor_dirs"
+root = "home"
+paths = ["vendor/extensions"]
+select = { kind = "manifest_children", manifest = ".obsolete", selected_value = true }
+zh = "已退役扩展 · {name}"
+en = "Retired extension · {name}"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = true
+
+# 记录路径的清单：只认前缀匹配、home 内、且确实不存在的那条。
+[[directories]]
+id = "orphaned_projects"
+root = "home"
+paths = ["editors/projects"]
+select = { kind = "orphaned_children", manifest = "workspace.json", pointer = "/folder", uri_prefix = "file://", scope = "home" }
+zh = "孤立项目 · {name} · {project}"
+en = "Orphaned project · {name} · {project}"
+category = "DevBuild"
+operation = "tree"
+disposal = "permanent"
+recommended = false

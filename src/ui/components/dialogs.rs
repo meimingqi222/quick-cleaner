@@ -18,6 +18,8 @@ pub enum ConfirmKind {
     CleanSelected,
     CleanPath(PathBuf, u64),
     CleanDiskSelected,
+    /// 冗余整理（相似照片/重复文件/大文件/下载）把选中的条目移入废纸篓。
+    CleanDeclutter(crate::ui::views::declutter::DeclutterTab),
     UninstallApp(Box<InstalledApp>),
     /// 结束一个进程（状态监控页）。`pid` + 进程名。
     KillProcess {
@@ -57,20 +59,11 @@ pub fn render_confirm_dialog(
     let is_fan_install = matches!(&req.kind, ConfirmKind::InstallFanHelper(_));
     let is_update = matches!(&req.kind, ConfirmKind::InstallUpdate);
     let confirm_label = match &req.kind {
-        ConfirmKind::UninstallApp(_) => match lang {
-            Language::Zh => "确认卸载",
-            Language::En => "Uninstall",
-        },
+        ConfirmKind::UninstallApp(_) => tr_confirm_action_uninstall(lang),
         ConfirmKind::KillProcess { .. } => tr_confirm_kill_title(lang),
-        ConfirmKind::InstallFanHelper(_) => match lang {
-            Language::Zh => "安装",
-            Language::En => "Install",
-        },
+        ConfirmKind::InstallFanHelper(_) => tr_confirm_action_install(lang),
         ConfirmKind::InstallUpdate => tr_update_restart_install(lang),
-        _ => match lang {
-            Language::Zh => "确认永久删除",
-            Language::En => "Delete Permanently",
-        },
+        _ => tr_confirm_action_delete_permanently(lang),
     };
 
     let badge = if is_uninstall || is_fan_install || is_update {
@@ -207,10 +200,7 @@ fn render_occupancy_banner(occ: &ResidualOccupancy, lang: Language) -> gpui::Any
     }
     let hidden = occ.processes.len().saturating_sub(3) + occ.launchd_labels.len().saturating_sub(3);
     if hidden > 0 {
-        evidence.push(match lang {
-            Language::Zh => format!("…以及另外 {hidden} 条"),
-            Language::En => format!("…and {hidden} more"),
-        });
+        evidence.push(tr_occupancy_more(lang, hidden));
     }
     // 补救指引和证据行同款样式、同一列缩进，就跟在证据后面一起渲染。
     evidence.push(advice.to_string());
@@ -271,10 +261,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
         .iter()
         .any(|it| matches!(it.kind, ResidualKind::SystemExtension(..)));
 
-    let done_label = match lang {
-        Language::Zh => "完成",
-        Language::En => "Done",
-    };
+    let done_label = tr_done_label(lang);
     // 空态文案也分两种口径：按应用扫出来的「没残留」说的是卸载干不干净，
     // 孤儿扫描说的则是「用户目录里没有找不到主人的东西」。
     let (empty_title, empty_desc) = match res.scope {
@@ -413,18 +400,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .collect()
     };
 
-    let clean_btn_text = match lang {
-        Language::Zh => format!(
-            "彻底清除所选 ({}) · 释放 {}",
-            selected_count,
-            fmt_size(selected_bytes)
-        ),
-        Language::En => format!(
-            "Clean Selected ({}) · Free {}",
-            selected_count,
-            fmt_size(selected_bytes)
-        ),
-    };
+    let clean_btn_text = tr_clean_selected_button(lang, selected_count, &fmt_size(selected_bytes));
 
     let footer = if is_empty {
         div()
@@ -545,23 +521,8 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
     // 一堆已经不在的软件，用「发现「」的 N 项残留」会把空名字套进引号里。
     let (modal_title, modal_sub) = match res.scope {
         ResidualScope::App => (
-            match lang {
-                Language::Zh => format!("发现「{}」的 {} 项关联残留", res.app_name, total_items),
-                Language::En => format!(
-                    "Found {} residual items for \"{}\"",
-                    total_items, res.app_name
-                ),
-            },
-            match lang {
-                Language::Zh => format!(
-                    "包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {}",
-                    fmt_size(res.total_file_size)
-                ),
-                Language::En => format!(
-                    "Includes caches, app configuration and registry traces. Potential space: {}",
-                    fmt_size(res.total_file_size)
-                ),
-            },
+            tr_residual_found_title(lang, &res.app_name, total_items),
+            tr_residual_found_sub(lang, &fmt_size(res.total_file_size)),
         ),
         ResidualScope::OrphanLeftovers => (
             tr_orphan_modal_title(lang, total_items),

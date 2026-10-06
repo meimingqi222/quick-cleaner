@@ -69,8 +69,9 @@ fn signature_min() -> usize {
 
 /// Profile 目录名。`Default` / `Profile 1` 是 Chrome 系；`chrome-profile`、
 /// `<名字>-profile` 是 MCP server 一类工具自建的原生 profile 目录。
+/// 名单来自 `chromium.toml` 的 profile 策略，浏览器入口共用同一份。
 fn is_profile_name(name: &str) -> bool {
-    name == "Default" || name.starts_with("Profile ") || name.ends_with("-profile")
+    crate::core::rules::current().matches_name("chromium", "profile", name)
 }
 
 /// 叶子相对其宿主目录的路径段，用来拼双语标签。
@@ -78,7 +79,7 @@ fn is_profile_name(name: &str) -> bool {
 /// `Cache` → `["Cache"]`；`Default/GPUCache` → `["Default", "GPUCache"]`。
 /// 不带上中间段的话，`<App>/GPUCache` 与 `<App>/Default/GPUCache` 在界面上
 /// 就是两行同名条目。
-pub(super) fn leaf_trail(dir: &Path, leaf: &Path) -> Vec<String> {
+pub(crate) fn leaf_trail(dir: &Path, leaf: &Path) -> Vec<String> {
     let relative = leaf.strip_prefix(dir).unwrap_or(leaf);
     relative
         .components()
@@ -88,15 +89,17 @@ pub(super) fn leaf_trail(dir: &Path, leaf: &Path) -> Vec<String> {
 
 /// 这个叶子默认勾不勾。
 ///
-/// 两条例外，其余缓存叶子都默认勾选：
-/// - `CachedProfilesData` 可能保存本地唯一的编辑器 Profile；
-/// - `blob_storage` 可能承载未保存的附件或草稿。
-pub(super) fn leaf_recommended(name: &str) -> bool {
-    !matches!(name, "CachedProfilesData" | "blob_storage")
+/// 「只展示不预选」的叶子名单来自 `chromium.toml` 的 `shown_leaves`：
+/// `CachedProfilesData` 可能保存本地唯一的编辑器 Profile，`blob_storage`
+/// 可能承载未保存的附件或草稿——删除代价不止「重新下载」，所以只展示。
+pub(crate) fn leaf_recommended(name: &str) -> bool {
+    !crate::core::rules::current()
+        .list("chromium", "shown_leaves")
+        .iter()
+        .any(|leaf| leaf.as_str() == name)
 }
 
-/// `dir` 底下可以直接清掉的缓存叶子。不是 Chromium 数据目录时返回空表。
-///
+/// `dir` 底下可以直接清掉的缓存叶子。不是 Chromium 数据目录时返回空表。///
 /// 三种布局都认：
 /// - `dir` 自己是 userData 根 → 收它自己的叶子（Electron 布局）；
 /// - `dir` 下的 profile 目录 → 收 profile 下的叶子（`<App>/Default/...`）；
@@ -105,7 +108,7 @@ pub(super) fn leaf_recommended(name: &str) -> bool {
 ///
 /// 空目录不收：一个 0 字节的 `GPUCache` 列出来只会把界面撑长，用户点它
 /// 什么也得不到。这是本模块唯一「看不见」的东西，代价为零。
-pub(super) fn cache_leaves(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn cache_leaves(dir: &Path) -> Vec<PathBuf> {
     let mut leaves = Vec::new();
     let root_confirmed = is_chromium_dir(dir);
     if root_confirmed {
@@ -124,6 +127,19 @@ pub(super) fn cache_leaves(dir: &Path) -> Vec<PathBuf> {
         }
     }
 
+    leaves
+}
+
+/// 规则已声明产品的 Chromium 根（`browsers.toml` 的 User Data / Application
+/// Support 目录）：不需要内容签名，直接套用同一份叶子词汇与 Crashpad 规则。
+///
+/// 浏览器入口用它取代自己那份硬编码叶子名单；叶子名只在 `chromium.toml` 维护。
+pub(super) fn declared_leaves(dir: &Path) -> Vec<PathBuf> {
+    let mut leaves = Vec::new();
+    collect_leaves(dir, &mut leaves);
+    for profile in profile_dirs(dir) {
+        collect_leaves(&profile, &mut leaves);
+    }
     leaves
 }
 
@@ -211,6 +227,56 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn declared_profile_policy_comes_from_the_rule() {
+        for profile in [
+            "Default",
+            "Profile 1",
+            "Guest Profile",
+            "System Profile",
+            "chrome-profile",
+        ] {
+            assert!(is_profile_name(profile), "{profile} 是 profile 名");
+        }
+        for other in ["Cache", "Profile", "logs", "Default 1", "Local State"] {
+            assert!(!is_profile_name(other), "{other} 不是 profile 名");
+        }
+    }
+
+    /// 规则声明过的 Chromium 根：不需要内容签名，叶子词汇与 Crashpad 细分共用。
+    #[test]
+    fn declared_roots_reuse_the_shared_leaf_vocabulary() {
+        let root = crate::core::testing::fixture("qc_declared_chromium");
+        let user_data = root.join("User Data");
+        for leaf in ["Default/Cache", "Profile 3/GPUCache"] {
+            touch_dir(&user_data.join(leaf));
+        }
+        touch_dir(&user_data.join("Default/blob_storage"));
+        touch_dir(&user_data.join("Default/Code Cache"));
+        std::fs::create_dir_all(user_data.join("Default/fcache")).unwrap();
+        touch_dir(&user_data.join("component_crx_cache"));
+        let names: Vec<String> = declared_leaves(&user_data)
+            .iter()
+            .map(|path| leaf_trail(&user_data, path).join("/"))
+            .collect();
+        assert!(names.contains(&"Default/Cache".to_string()), "{names:?}");
+        assert!(
+            names.contains(&"Profile 3/GPUCache".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"component_crx_cache".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains(&"Default/fcache".to_string()),
+            "空叶子不产出：{names:?}"
+        );
+        assert!(!leaf_recommended("blob_storage"));
+        assert!(leaf_recommended("Cache"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

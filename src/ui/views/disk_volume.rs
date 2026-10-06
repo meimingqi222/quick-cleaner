@@ -4,6 +4,7 @@ use crate::core::disk::VolumeId;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::*;
+use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString};
@@ -12,18 +13,12 @@ pub(super) fn format_volume_label(vol: &VolumeId, lang: Language) -> String {
     let raw = vol.display();
     #[cfg(windows)]
     {
-        match lang {
-            Language::Zh => format!("{raw} 盘"),
-            Language::En => format!("Drive {raw}"),
-        }
+        tr_volume_drive_label(lang, raw)
     }
     #[cfg(not(windows))]
     {
         if raw == "/" {
-            match lang {
-                Language::Zh => "系统盘 (/)".to_string(),
-                Language::En => "System (/)".to_string(),
-            }
+            tr_volume_system_root(lang).to_string()
         } else if let Some(stripped) = raw.strip_prefix("/Volumes/") {
             stripped.to_string()
         } else {
@@ -96,18 +91,8 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
     let lang = root.language;
     let volumes = &root.disk.volumes;
 
-    let title = match lang {
-        Language::Zh => "选择要分析的磁盘",
-        Language::En => "Select Drive to Analyze",
-    };
-    let count_hint = format!(
-        "{} {}",
-        volumes.len(),
-        match lang {
-            Language::Zh => "个可用磁盘",
-            Language::En => "available",
-        }
-    );
+    let title = tr_volume_picker_title(lang);
+    let count_hint = tr_volume_available_count(lang, volumes.len());
 
     let items: Vec<AnyElement> = volumes
         .iter()
@@ -117,10 +102,7 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
             let space_info = root.disk.volume_space(v);
             let space_str = if let Some((tot, fre)) = space_info {
                 let used = tot.saturating_sub(fre);
-                match lang {
-                    Language::Zh => format!("已用 {} / 共 {}", fmt_size(used), fmt_size(tot)),
-                    Language::En => format!("Used {} / Total {}", fmt_size(used), fmt_size(tot)),
-                }
+                tr_volume_used_of_total(lang, &fmt_size(used), &fmt_size(tot))
             } else {
                 String::new()
             };

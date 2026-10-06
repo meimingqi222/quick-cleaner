@@ -1,0 +1,12 @@
+=== RULES 高危措辞自查 2026-10-06T15:03:22+08:00 ===
+--- 『默认 7 天』: TOML 值
+44:updater_stale_seconds = 604800
+--- 『五步骤』: SOURCE_ACTIONS 数量
+8
+--- 『仅一次』: 清单读取缓存
+493:        if let Some(cached) = self.manifests.get(path) {
+--- 『零命中』: 远程通道复验
+0
+--- 『共用一份』: chromium 词汇来源
+1
+4

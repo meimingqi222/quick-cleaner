@@ -1,0 +1,39 @@
+id = "fixture-template-layout"
+version = 1
+platform = "all"
+required = ["file", "directory_selection"]
+
+# 只改配置就能新增的布局：主机名单 × 扩展目录 × 固定相对路径。
+# 模板只能整段引用本文件声明的 lists / catalogs，没有脚本、表达式或递归。
+[lists]
+hosts = ["First", "Second"]
+
+[[catalogs.extensions]]
+path = "example.extension"
+zh = "示例扩展缓存"
+en = "Example extension cache"
+
+[[directories]]
+id = "extension_task_storage"
+root = "home"
+paths = ["{hosts}/profile/{extensions}/tasks"]
+select = { kind = "path", directories_only = true }
+zh = "{hosts} · {extensions}"
+en = "{hosts} · {extensions}"
+category = "UserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = false
+
+# 精确文件名筛选：只摘 `log` 前缀 + `.sqlite` 后缀的文件，邻居文件保留。
+[[directories]]
+id = "runtime_log_databases"
+root = "home"
+paths = ["runtime"]
+select = { kind = "files", prefixes = ["log"], suffixes = [".sqlite"] }
+zh = "运行时日志库 · {name}"
+en = "Runtime log database · {name}"
+category = "UserCache"
+operation = "file"
+disposal = "permanent"
+recommended = false

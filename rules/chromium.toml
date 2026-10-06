@@ -1,10 +1,17 @@
 id = "chromium"
-version = 1
+version = 3
 platform = "all"
 required = ["chromium"]
 [lists]
 signature_leaves = ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "GraphiteDawnCache", "ShaderCache", "component_crx_cache", "extensions_crx_cache"]
 extra_leaves = ["CachedData", "CachedProfilesData", "CachedExtensionVSIXs", "blob_storage", "fcache", "logs"]
 strong_leaves = ["component_crx_cache", "extensions_crx_cache", "CachedExtensionVSIXs"]
+# 命中叶子后仍只展示不预选的名字：可能承载未保存的附件、草稿或本地唯一的
+# 编辑器 Profile，删除代价不止「重新下载」。
+shown_leaves = ["CachedProfilesData", "blob_storage"]
+# Profile 目录名策略：浏览器 User Data 与内容签名共用同一份判据。
+profile_exact = ["Default", "Guest Profile", "System Profile"]
+profile_prefixes = ["Profile "]
+profile_suffixes = ["-profile"]
 [numbers]
 signature_min = 2

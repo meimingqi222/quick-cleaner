@@ -1,0 +1,58 @@
+[
+  {
+    "relative": ".cache/chrome-devtools-mcp/chrome-profile/Default/Cache",
+    "label": "~/.cache/chrome-devtools-mcp · chrome-profile · Default · Cache",
+    "category": "UserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/chrome-devtools-mcp/chrome-profile/Default/GPUCache",
+    "label": "~/.cache/chrome-devtools-mcp · chrome-profile · Default · GPUCache",
+    "category": "UserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/empty-leaf-only",
+    "label": "~/.cache/empty-leaf-only",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/opencode",
+    "label": "OpenCode · 缓存",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/pypoetry",
+    "label": "Poetry 缓存",
+    "category": "PackageCache",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/some-unknown-tool",
+    "label": "~/.cache/some-unknown-tool",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "relative": ".cache/uv",
+    "label": "uv 缓存",
+    "category": "PackageCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  }
+]

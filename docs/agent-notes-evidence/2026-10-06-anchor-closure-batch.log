@@ -1,0 +1,22 @@
+=== anchor-closure + matrix-mapping batch 2026-10-06T03:10:54+08:00 ===
+
+test result: ok. 578 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 18.85s
+
+warning: build failed, waiting for other jobs to finish...
+clippy_exit=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 46.05s
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=39636
+OK: regression notes under docs\agent-notes verified
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff_clean
+=== final verify 2026-10-06T13:55:23+08:00 ===
+fmt_exit=0
+test_exit=0
+clippy_exit=0
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=40627
+anchors_exit=0
+OK: regression notes under docs\agent-notes verified
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff_clean

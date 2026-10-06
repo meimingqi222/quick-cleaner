@@ -1,0 +1,45 @@
+== cargo fmt --check ==
+exit=0
+== cargo test --lib ==
+
+test result: ok. 532 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 9.78s
+
+exit=0
+== cargo clippy --all-targets -- -D warnings ==
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.24s
+
+exit=0
+== cargo build ==
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s
+
+exit=0
+== rules check / pack ==
+
+schema=8 sequence=1 rules=12 bytes=36207
+
+
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+
+packed bytes: 36207
+== notes / pitfalls / diff ==
+OK: regression notes under docs\agent-notes verified
+exit=0
+0 error(s), 7 warning(s), 25 of 32 pitfall(s) carry Note: pointers
+exit=0
+exit=0

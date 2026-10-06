@@ -28,6 +28,34 @@ pub fn tr_declutter_remove_selected(lang: Language) -> &'static str {
     }
 }
 
+/// 冗余整理确认框标题。
+pub fn tr_confirm_declutter_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认移入废纸篓",
+        Language::En => "Confirm move to Trash",
+    }
+}
+
+/// 冗余整理确认框正文：本次范围（条目数）。
+pub fn tr_confirm_declutter_msg(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("将把 {count} 项移入废纸篓。"),
+        Language::En => format!("{count} items will be moved to the Trash."),
+    }
+}
+
+/// 冗余整理确认框明细：处置方式与「不释放空间」的如实说明。
+pub fn tr_confirm_declutter_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => {
+            "移入废纸篓不释放磁盘空间；需要真正释放时再清空废纸篓。移走的条目可从废纸篓恢复。"
+        }
+        Language::En => {
+            "Moving to the Trash does not free disk space; empty the Trash to reclaim it. Moved items can be restored from the Trash."
+        }
+    }
+}
+
 pub fn tr_declutter_selected_summary(lang: Language, count: usize, size: &str) -> String {
     match lang {
         Language::Zh => format!("已选 {count} 个项目 • 共 {size}"),
@@ -632,5 +660,37 @@ pub fn tr_declutter_overview_status_badge(lang: Language, scanned: bool) -> &'st
         (true, Language::En) => "● Analyzed",
         (false, Language::Zh) => "● 待扫描",
         (false, Language::En) => "● Pending",
+    }
+}
+
+/// 冗余整理：扫描进行中的状态栏文案。
+pub fn tr_status_declutter_scanning(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在利用索引与多线程深度扫描大文件、重复文件与相似图片...",
+        Language::En => "Scanning for large files, duplicates and similar photos (indexed)...",
+    }
+}
+
+/// 冗余整理：移入废纸篓进行中的状态栏文案。
+pub fn tr_status_declutter_moving(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在把 {count} 项移入废纸篓..."),
+        Language::En => format!("Moving {count} items to Trash..."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 冗余整理确认框：正文带上本次条目数，标题与明细双语都非空。
+    #[test]
+    fn declutter_confirm_states_scope_in_both_languages() {
+        for lang in [Language::Zh, Language::En] {
+            let body = tr_confirm_declutter_msg(lang, 3);
+            assert!(body.contains('3'), "{body}");
+            assert!(!tr_confirm_declutter_title(lang).is_empty());
+            assert!(!tr_confirm_declutter_detail(lang).is_empty());
+        }
     }
 }

@@ -358,10 +358,7 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
         })
         .collect();
 
-    let count_text = match lang {
-        Language::Zh => format!("共 {total} 项"),
-        Language::En => format!("{total} items"),
-    };
+    let count_text = tr_junk_total_items(lang, total);
 
     div()
         .flex()
@@ -838,10 +835,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
     let count = root.selected_count();
     let enabled = root.junk.scanned && !root.clean.running && !root.junk.scanning && count > 0;
 
-    let items_label = match lang {
-        Language::Zh => format!("({count} 项)"),
-        Language::En => format!("({count} items)"),
-    };
+    let items_label = tr_junk_selected_items(lang, count);
 
     let clean_btn_text = if root.clean.running {
         tr_cleaning(lang).to_string()

@@ -1,0 +1,17 @@
+{
+ "auto_update_rules": "远程规则通道已按 GOAL 删除；历史恢复点对这些旧入口的记述",
+ "canonical_hash": "RULES.md 的变量能力词汇（文档用语，非代码符号）",
+ "check_and_update": "远程规则通道已按 GOAL 删除；历史恢复点对这些旧入口的记述",
+ "d0684a57": "提交哈希（远端 master 旧快照）",
+ "d0684a57fdef526f07a725461adc0a100b519f2c": "提交哈希（远端 master 旧快照）",
+ "dedup_items": "残留去重迁移中被替换的旧函数；历史恢复点记述",
+ "generated_signing_key_is_fresh_and_verifies_against_its_public_key": "已删除的远程签名工具测试；历史恢复点记述",
+ "install_channel": "已删除的远程 transport 接缝；历史恢复点记述",
+ "json_field": "RULES.md 的变量能力词汇（文档用语，非代码符号）",
+ "load_cached": "已删除的远程规则缓存链；历史恢复点记述",
+ "load_selected": "已删除的远程规则加载入口；历史恢复点记述",
+ "owner_result": "Go/pnpm 迁移中被替换的旧 cleaner 分支；历史恢复点记述",
+ "push_firefox_profile_caches": "Firefox cache2 迁入 named_directories 时删除的旧函数；历史恢复点记述",
+ "rules/trusted-keys.json": "历史检查点对远程信任根的记述（该文件随后被删除，见同节作废说明）",
+ "rules_only_release_reaches_the_next_scan_without_recompiling": "已删除的远程规则-only 闭环测试；历史恢复点记述"
+}

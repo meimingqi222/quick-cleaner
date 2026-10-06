@@ -1,0 +1,8 @@
+
+
+failures:
+    core::cleaner::tests::arbitrary_clean_refuses_a_type_swap_after_capture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 602 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `--lib`

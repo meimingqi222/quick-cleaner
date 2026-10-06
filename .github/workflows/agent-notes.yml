@@ -15,3 +15,4 @@ jobs:
           python-version: '3.x'
       - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --strict-anchors
       - run: python -X utf8 scripts/check-pitfall-notes.py
+      - run: python -X utf8 scripts/check-ui-localization.py

@@ -5,7 +5,6 @@ mod clean;
 mod declutter;
 mod disk;
 mod junk;
-mod rules;
 mod search;
 mod status;
 mod updater;

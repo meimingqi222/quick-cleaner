@@ -1,6 +1,8 @@
 # Agent Note: Rule channel update logic is transport-injectable for end-to-end proof
 
 Status: implemented
+Archived: 2026-10-05
+Superseded-by: 2026-10-05-bundled-runtime-rules.md
 
 ## Problem
 
@@ -20,6 +22,8 @@ Serving a local HTTP stub still depends on the production URL derivation and por
 
 ## Verification
 
-- `src/core/rules/update.rs::rules_only_release_reaches_the_next_scan_without_recompiling`
+- `docs/agent-notes-evidence/2026-10-05-retired-rule-update-tests.rs.txt::rules_only_release_reaches_the_next_scan_without_recompiling`
 
 The test edits a TOML-shaped rule inside the signed bundle, publishes manifest/signature/package through an in-memory transport, installs into an isolated cache root, confirms a same-sequence re-poll returns `Ok(None)` without lowering the watermark, and shows `append_path_targets` under the loaded snapshot surfacing the new rule's target with its declared operation and recommendation. A tampered accepted package falls back to embedded rules via the `load_cached` chain. The full Windows library suite passed with 507 tests and 9 ignored; strict clippy, `cargo build`, `cargo fmt --check` and `git diff --check` passed. No real channel, key or user cache was touched.
+
+Historical record only: the human user removed remote rule delivery and explicitly prioritized reusable runtime capabilities. Bound remote test source is retained as historical evidence, not an active executable test.

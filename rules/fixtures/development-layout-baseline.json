@@ -1,0 +1,68 @@
+[
+  {
+    "path": "home/.claude/logs_2.sqlite",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "file"
+    },
+    "disposal": "permanent",
+    "recommended": false,
+    "zh": "Claude Code · 日志库 logs_2.sqlite",
+    "en": "Claude Code · log database logs_2.sqlite"
+  },
+  {
+    "path": "home/.codex/logs_2.sqlite",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "file"
+    },
+    "disposal": "permanent",
+    "recommended": false,
+    "zh": "Codex · 日志库 logs_2.sqlite",
+    "en": "Codex · log database logs_2.sqlite"
+  },
+  {
+    "path": "home/.vscode/extensions/pub.retired-1.0.0",
+    "category": "DevBuild",
+    "operation": {
+      "kind": "tree"
+    },
+    "disposal": "permanent",
+    "recommended": true,
+    "zh": "过期 VS Code 扩展 · pub.retired-1.0.0",
+    "en": "Obsolete VS Code extension · pub.retired-1.0.0"
+  },
+  {
+    "path": "roaming/Code/User/globalStorage/saoudrizwan.claude-dev/tasks",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false,
+    "zh": "Code · Cline 会话缓存",
+    "en": "Code · Cline sessions"
+  },
+  {
+    "path": "roaming/Code/User/workspaceStorage/orphan",
+    "category": "DevBuild",
+    "operation": {
+      "kind": "tree"
+    },
+    "disposal": "permanent",
+    "recommended": false,
+    "zh": "孤立工作区 · Code · <root>/home/gone-project",
+    "en": "Orphaned workspace · Code · <root>/home/gone-project"
+  },
+  {
+    "path": "roaming/Trae/User/globalStorage/github.copilot-chat/tasks",
+    "category": "AiAgents",
+    "operation": {
+      "kind": "contents"
+    },
+    "disposal": "permanent",
+    "recommended": false,
+    "zh": "Trae · Copilot Chat 缓存",
+    "en": "Trae · Copilot Chat cache"
+  }
+]

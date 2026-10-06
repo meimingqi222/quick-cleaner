@@ -1,0 +1,250 @@
+[
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "browser",
+    "category": "BrowserCache",
+    "policy": "browser_cache",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "UserCache",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "AiAgents",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "PackageCache",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "UserTemp",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "UserTemp",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "UserTemp",
+    "policy": "cache_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "AGENT",
+    "policy": "agent_history",
+    "operation": "Contents",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "AGENT",
+    "policy": "development_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "AGENT",
+    "policy": "development_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "AGENT",
+    "policy": "agent_history",
+    "operation": "Contents",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "DevWorktrees",
+    "policy": "linked_worktree",
+    "operation": "GitWorktree { registration }",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "category",
+    "policy": "development_candidate",
+    "operation": "Contents",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "AiAgents",
+    "policy": "development_candidate",
+    "operation": "File",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "DevBuild",
+    "policy": "development_candidate",
+    "operation": "Tree",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "dev",
+    "category": "DevBuild",
+    "policy": "development_candidate",
+    "operation": "Tree",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "docker",
+    "category": "DockerImages",
+    "policy": "docker_image",
+    "operation": "Docker { reference }",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "macos",
+    "category": "OldIdeData",
+    "policy": "old_ide_data",
+    "operation": "Tree",
+    "recommended": false,
+    "disposal": "recycle_bin"
+  },
+  {
+    "provider": "macos",
+    "category": "BrokenLoginItems",
+    "policy": "broken_login_item",
+    "operation": "File",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "macos",
+    "category": "LocalSnapshots",
+    "policy": "local_snapshot",
+    "operation": "Snapshot { name }",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "macos",
+    "category": "RecycleBin",
+    "policy": "volume_trash",
+    "operation": "Trash",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "system",
+    "category": "RecycleBin",
+    "policy": "user_trash",
+    "operation": "Trash",
+    "recommended": false,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "updater",
+    "category": "UpdaterPackages",
+    "policy": "updater_artifact",
+    "operation": "Tree",
+    "recommended": true,
+    "disposal": "permanent"
+  },
+  {
+    "provider": "cache",
+    "category": "PackageCache",
+    "policy": "brew_cleanup",
+    "operation": "Brew",
+    "recommended": true,
+    "disposal": "permanent"
+  }
+]

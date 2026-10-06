@@ -1,0 +1,9 @@
+=== arbitrary-operation-freeze batch 2026-10-06T14:06:19+08:00 ===
+fmt_exit=0
+test_exit=0
+clippy_exit=0
+build_exit=0
+schema=9 sequence=1 rules=13 bytes=40627
+anchors_exit=0
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff_clean

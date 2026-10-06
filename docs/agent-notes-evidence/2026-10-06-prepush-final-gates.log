@@ -1,0 +1,13 @@
+=== 推送前最终门禁 2026-10-06T17:44:35+08:00 ===
+fmt=0
+test=0
+
+clippy=0
+build=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors=0
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+OK: no new inline UI strings (remaining baseline: 0)
+OK: 358 identifier(s) resolved (616 test names); 3 doc(s) path-clean
+OK: 回填块格式正确（8 行表格 + 环境行；未执行任何检查）
+diff=clean

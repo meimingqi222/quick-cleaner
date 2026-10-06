@@ -1,0 +1,372 @@
+{
+  "rule": "cache",
+  "sequence": 1,
+  "variables": {},
+  "facts": {},
+  "detected": "Confirmed",
+  "targets": [],
+  "directory_discovery": {
+    "directory_reads": 1,
+    "inventory_entries": 4,
+    "manifest_reads": 0,
+    "manifest_rows": 0,
+    "directory_probes": {
+      "D:/code/quick-cleaner/target/cache-catalog-fixture": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache": {
+        "state": "Confirmed",
+        "reason": null
+      }
+    },
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 4,
+    "candidate_budget_blocked": 0,
+    "plans": [
+      {
+        "observations": [
+          {
+            "rule_id": "cache",
+            "rule_version": 4,
+            "schema": 9,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/cache-catalog-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\cache-tool",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\cache-tool"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\cache-tool"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\cache-tool"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": true
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "cache",
+            "rule_version": 4,
+            "schema": 9,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/cache-catalog-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Cache",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Cache"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Cache"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Cache"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": true
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "cache",
+            "rule_version": 4,
+            "schema": 9,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/cache-catalog-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Code Cache",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Code Cache"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Code Cache"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\random-app\\Code Cache"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": true
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "cache",
+            "rule_version": 4,
+            "schema": 9,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/cache-catalog-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\unknown-thing",
+            "operation": {
+              "kind": "contents"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "contents",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\unknown-thing"
+            },
+            "completion": {
+              "kind": "contents_empty",
+              "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\unknown-thing"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "contents"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "contents_empty",
+                "path": "D:/code/quick-cleaner/target/cache-catalog-fixture\\.cache\\unknown-thing"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      }
+    ]
+  },
+  "version_discovery": {
+    "directory_reads": 0,
+    "inventory_entries": 0,
+    "manifest_reads": 0,
+    "manifest_rows": 0,
+    "directory_probes": {},
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 0,
+    "candidate_budget_blocked": 0,
+    "plans": []
+  },
+  "preserve": [],
+  "cleanup_plan": {
+    "observations": [
+      {
+        "rule_id": "cache",
+        "rule_version": 4,
+        "schema": 9,
+        "sequence": 1,
+        "scope": "D:/code/quick-cleaner/target/cache-catalog-fixture",
+        "variables": {},
+        "facts": {},
+        "detected": "Confirmed",
+        "provider_policy": null,
+        "version_guard": null
+      }
+    ],
+    "installation": null,
+    "official": null,
+    "targets": [],
+    "steps": [],
+    "preserve": [],
+    "blocked": []
+  },
+  "installation_plan": null,
+  "blocked": [],
+  "installation_layout": null
+}

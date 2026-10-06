@@ -206,9 +206,14 @@ pub fn run_uninstaller_reported(
     app: &crate::core::apps::InstalledApp,
 ) -> crate::core::apps::UninstallOutcome {
     #[cfg(windows)]
-    if app.discovery.is_some() {
-        return windows::run_discovered_uninstaller_reported(app);
+    {
+        if app.discovery.is_some() {
+            windows::run_discovered_uninstaller_reported(app)
+        } else {
+            windows::run_registered_uninstaller_reported(app)
+        }
     }
+    #[cfg(not(windows))]
     crate::core::apps::UninstallOutcome {
         result: run_uninstaller_and_wait(app),
         plan_executions: Vec::new(),

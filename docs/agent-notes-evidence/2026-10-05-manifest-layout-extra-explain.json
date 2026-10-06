@@ -1,0 +1,228 @@
+{
+  "rule": "fixture-manifest-layout",
+  "sequence": 1,
+  "variables": {},
+  "facts": {},
+  "detected": "Confirmed",
+  "targets": [],
+  "directory_discovery": {
+    "directory_reads": 1,
+    "inventory_entries": 4,
+    "manifest_reads": 5,
+    "manifest_rows": 4,
+    "directory_probes": {
+      "D:/code/quick-cleaner/target/manifest-layout-fixture": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/manifest-layout-fixture\\editors/projects": {
+        "state": "Confirmed",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\ghost.tool-0.9": {
+        "state": "Absent",
+        "reason": null
+      },
+      "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\live.tool-1.0": {
+        "state": "Confirmed",
+        "reason": null
+      }
+    },
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 2,
+    "candidate_budget_blocked": 0,
+    "plans": [
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-manifest-layout",
+            "rule_version": 1,
+            "schema": 8,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/manifest-layout-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\live.tool-1.0",
+            "operation": {
+              "kind": "tree"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "owned_tree",
+              "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\live.tool-1.0"
+            },
+            "completion": {
+              "kind": "path_absent",
+              "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\live.tool-1.0"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "tree"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "path_absent",
+                "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\vendor/extensions\\live.tool-1.0"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": true
+      },
+      {
+        "observations": [
+          {
+            "rule_id": "fixture-manifest-layout",
+            "rule_version": 1,
+            "schema": 8,
+            "sequence": 1,
+            "scope": "D:/code/quick-cleaner/target/manifest-layout-fixture",
+            "variables": {},
+            "facts": {},
+            "detected": "Confirmed",
+            "provider_policy": null,
+            "version_guard": null
+          }
+        ],
+        "installation": null,
+        "official": null,
+        "targets": [
+          {
+            "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\editors/projects\\orphan",
+            "operation": {
+              "kind": "tree"
+            },
+            "disposal": "permanent",
+            "identity_captured": true,
+            "scope": {
+              "kind": "owned_tree",
+              "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\editors/projects\\orphan"
+            },
+            "completion": {
+              "kind": "path_absent",
+              "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\editors/projects\\orphan"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": 0,
+            "target": 0,
+            "depends_on": [],
+            "action": {
+              "kind": "revalidate"
+            }
+          },
+          {
+            "id": 1,
+            "target": 0,
+            "depends_on": [
+              0
+            ],
+            "action": {
+              "kind": "apply",
+              "operation": {
+                "kind": "tree"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "target": 0,
+            "depends_on": [
+              1
+            ],
+            "action": {
+              "kind": "verify",
+              "condition": {
+                "kind": "path_absent",
+                "path": "D:/code/quick-cleaner/target/manifest-layout-fixture\\editors/projects\\orphan"
+              }
+            }
+          }
+        ],
+        "preserve": [],
+        "blocked": [],
+        "recommended": false
+      }
+    ]
+  },
+  "version_discovery": {
+    "directory_reads": 0,
+    "inventory_entries": 0,
+    "manifest_reads": 0,
+    "manifest_rows": 0,
+    "directory_probes": {},
+    "probe_limit": 512,
+    "budget_blocked": 0,
+    "candidate_checks": 0,
+    "candidate_budget_blocked": 0,
+    "plans": []
+  },
+  "preserve": [],
+  "cleanup_plan": {
+    "observations": [
+      {
+        "rule_id": "fixture-manifest-layout",
+        "rule_version": 1,
+        "schema": 8,
+        "sequence": 1,
+        "scope": "D:/code/quick-cleaner/target/manifest-layout-fixture",
+        "variables": {},
+        "facts": {},
+        "detected": "Confirmed",
+        "provider_policy": null,
+        "version_guard": null
+      }
+    ],
+    "installation": null,
+    "official": null,
+    "targets": [],
+    "steps": [],
+    "preserve": [],
+    "blocked": []
+  },
+  "installation_plan": null,
+  "blocked": [],
+  "installation_layout": null
+}

@@ -31,15 +31,18 @@ fn main() {
             };
             let targets: Vec<_> = found
                 .into_iter()
-                .map(|path| ScanTarget {
-                    operation: Operation::classify(&path, true),
-                    disposal: Disposal::Permanent,
-                    rule: RuleRef::engine(),
-                    label: path.to_string_lossy().into_owned().into(),
-                    path,
-                    category: CategoryId::DevWorktrees,
-                    recommended: false,
-                    size_hint: None,
+                .filter_map(|path| {
+                    let registration = worktrees::inspect(&path).ok()?.admin;
+                    Some(ScanTarget {
+                        operation: Operation::GitWorktree { registration },
+                        disposal: Disposal::Permanent,
+                        rule: RuleRef::engine(),
+                        label: path.to_string_lossy().into_owned().into(),
+                        path,
+                        category: CategoryId::DevWorktrees,
+                        recommended: false,
+                        size_hint: None,
+                    })
                 })
                 .collect();
             let start = std::time::Instant::now();

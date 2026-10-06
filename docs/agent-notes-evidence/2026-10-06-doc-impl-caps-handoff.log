@@ -1,0 +1,13 @@
+=== CAPABILITIES/HANDOFF 高危措辞核对 2026-10-06T15:04:33+08:00 ===
+--- CAPABILITIES.md 高危词命中
+--- HANDOFF.md 高危词命中
+24:系统固定路径共 10 项迁入 entries，根上下文一次捕获，支持可信 user_temp 和有界 drive:<字母>。Windows Temp contents 在 safety 中区别于树删除，扫描/计划/cleaner 复用判定；旧固定构造及两项闲置 provider 策略已移除。路径基线 46 项、动态默认基线 43 行；实测和日志见状态记录。
+30:缓存入口（schema 9）：`~/.cache` 枚举整体迁入 cache.toml 的 `home_cache` 目录条目（`catalog_children` 派发 + chromium 叶子签名），`categories/cache.rs` 只剩 macOS `~/Library/Caches` 展开、更新包探测排除前缀（cache.toml 的 `updater_probe_exclude_prefixes`）与 brew 原生构造；包缓存推荐由规则声明，engine.package_cache 策略已移除。迁移金样 rules/fixtures/cache-catalog-baseline.json，配置增量 cache-catalog-extra.toml。
+36:Windows 已运行隔离测试与严格检查。该主机缺少 macOS C 编译器/SDK，交叉检查在依赖编译阶段失败；macOS 原生 CI 尚须实际运行。用户取消远程规则下发，签名/下载/独立规则发布流程已移除；应用自身更新不受影响。
+54:2026-10-05 后续批次：schema 5 的 directories 通过 rules/directories.rs 共享展开 macOS 日志、DNS、QuickLook 与 Finder 元数据布局；旧提供者枚举和四项默认策略已移除。动态默认基线剩 38 行，另有 13 个目录目标金样。实际门禁与未完成项以 RULES_REFACTOR_STATUS 为准，Windows 夹具不代替 macOS 原生验收。
+--- 修正后核对
+24:系统固定路径共 10 项迁入 entries，根上下文一次捕获，支持可信 user_temp 和有界 drive:<字母>。Windows Temp contents 在 safety 中区别于树删除，扫描/计划/cleaner 复用判定；旧固定构造及两项闲置 provider 策略已移除。路径基线 46 项、动态默认基线 31 行（`rules/fixtures/provider-policy-baseline.json`，随迁移持续收敛）；实测和日志见状态记录。
+54:2026-10-05 后续批次：schema 5 的 directories 通过 rules/directories.rs 共享展开 macOS 日志、DNS、QuickLook 与 Finder 元数据布局；旧提供者枚举和四项默认策略已移除。动态默认基线剩 38 行，另有 13 个目录目标金样。实际门禁与未完成项以 RULES_REFACTOR_STATUS 为准，Windows 夹具不代替 macOS 原生验收。
+57:后续布局/探测批次（2026-10-05）：schema 6 将 Group Containers 三类叶子接入共享目录能力，旧提供者删除，动态默认基线剩 35 行、目录金样 16 目标。旧 IDE/LaunchAgent 根和登录年龄、更新包类型签名/年龄/展示后缀进入配置。探测会话有整体预算和三态诊断；实际门禁与 macOS 限制见状态记录。
+--- 其余主张抽验：两项闲置 provider 策略是否确实已移除
+0

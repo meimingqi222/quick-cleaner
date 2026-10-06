@@ -3,6 +3,7 @@
 use super::{target, target_with_recommendation, ScanTarget};
 use crate::core::categories::CategoryId;
 use crate::core::i18n::Text;
+use crate::core::rules::Operation;
 use std::path::Path;
 
 /// 开发相关清理目标：AI agent 缓存、构建产物、iOS 备份、编辑器工作区
@@ -96,13 +97,6 @@ pub(super) fn local_agent_claimed_children(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// VS Code 系编辑器里 AI 插件的全局存储（会话缓存都存这儿）。
-/// 平台无关：`User/globalStorage/<ext-id>/tasks` 的相对结构两边一致。
-pub(super) static VSCODE_HOSTS: &crate::core::rules::RuleList = &crate::core::rules::RuleList {
-    rule: "development",
-    key: "vscode_hosts",
-};
-
 /// AI 编程助手的缓存、会话残留与临时 worktree。
 ///
 /// 三种来源，覆盖面各不同：
@@ -111,7 +105,7 @@ pub(super) static VSCODE_HOSTS: &crate::core::rules::RuleList = &crate::core::ru
 /// - **内容签名**：Electron/Chromium 系应用（[`push_chromium_app_caches`]）
 ///   与 agent 目录下自建的浏览器 profile。这里**不看名字**——名字只决定
 ///   归到 AI 类还是应用缓存。
-/// - **动态发现**：旧版本目录、日志库。
+/// - **动态发现**：旧版本目录、日志库、编辑器清单，都在 `directories` 规则里。
 ///
 /// 平台无关：调用方传入平台对应的根目录即可——
 /// - Windows: `home = %USERPROFILE%`, `local = %LOCALAPPDATA%`, `roaming = %APPDATA%`
@@ -132,10 +126,13 @@ pub(super) fn push_ai_agent_targets(
                 format!("{label} · {sub}"),
                 AGENT,
                 *recommended,
+                Operation::Contents,
+                ("engine", "development_candidate"),
             ));
         }
     }
-    push_agent_log_databases(t, home);
+    // 日志库、扩展 tasks 等搜索式布局走 `directories` 规则（见 development.toml），
+    // 不再在这里重抄一份目录拼接。
     // agent 目录下自建的浏览器 profile：`~/.gemini/antigravity-browser-profile`
     // 是 Chromium 的 userData 形状，同样只收叶子。
     for (dir, label, _) in &cli_agents() {
@@ -152,6 +149,8 @@ pub(super) fn push_ai_agent_targets(
                 local.join(&row.path),
                 Text::new(row.zh, row.en),
                 AGENT,
+                Operation::Contents,
+                ("engine", "agent_history"),
             ));
         } else {
             for child in &row.children {
@@ -163,6 +162,8 @@ pub(super) fn push_ai_agent_targets(
                     ),
                     AGENT,
                     child.recommended,
+                    Operation::Contents,
+                    ("engine", "development_candidate"),
                 ));
             }
         }
@@ -177,44 +178,8 @@ pub(super) fn push_ai_agent_targets(
         super::updater::push_updater_dirs_under(t, local);
     }
 
-    // 固定叶子在 development 规则的 entries 里。这里只补版本化的
-    // `node-v*` 缓存：版本号要读目录才知道，而且只能收 `cache`，
-    // 不能把整个工具状态目录当缓存清掉。
-    let zed_node = roaming.join("Zed/node");
-    for version in std::fs::read_dir(&zed_node).into_iter().flatten().flatten() {
-        if !version.file_name().to_string_lossy().starts_with("node-v")
-            || !version.file_type().is_ok_and(|kind| kind.is_dir())
-        {
-            continue;
-        }
-        t.push(target_with_recommendation(
-            version.path().join("cache"),
-            Text::new("Zed · npm 缓存", "Zed · npm cache"),
-            AGENT,
-            true,
-        ));
-    }
-
-    // ---- VS Code 系 AI 插件的全局存储 ----
-    // `User/globalStorage/<ext-id>/tasks` 的相对结构两边一致，用 join 走平台分隔符。
-    let extensions = layouts("vscode_extensions");
-    for host in VSCODE_HOSTS {
-        for row in &extensions {
-            t.push(target(
-                roaming
-                    .join(&host)
-                    .join("User")
-                    .join("globalStorage")
-                    .join(&row.path)
-                    .join("tasks"),
-                Text::new(
-                    format!("{host} · {}", row.zh),
-                    format!("{host} · {}", row.en),
-                ),
-                AGENT,
-            ));
-        }
-    }
+    #[cfg(test)]
+    crate::core::rules::versions::append_fixture(t, "zed_node", home, roaming);
 
     // ---- AI agent 的临时 git worktree（单列一类，风险更高）----
     for row in layouts("worktrees") {
@@ -226,10 +191,8 @@ pub(super) fn push_ai_agent_targets(
         push_worktrees(t, &roaming.join(&row.path), &row.zh, &row.en);
     }
 
-    push_devin_cli_versions(t, home, roaming);
-    push_codex_cli_versions(t, home);
-    push_obsolete_vscode_extensions(t, home);
-    push_orphaned_editor_workspaces(t, home, roaming);
+    // 编辑器扩展清单（`.obsolete`）与孤立工作区（`workspace.json`）也由
+    // `directories` 规则读取（见 development.toml），不在这里再抄一份 JSON 解析。
 }
 
 fn push_worktrees(t: &mut Vec<ScanTarget>, container: &Path, zh: &str, en: &str) {
@@ -237,9 +200,19 @@ fn push_worktrees(t: &mut Vec<ScanTarget>, container: &Path, zh: &str, en: &str)
         if crate::core::safety::is_protected(&path) {
             continue;
         }
+        let Ok(worktree) = crate::core::worktrees::inspect(&path) else {
+            continue;
+        };
+        let registration = worktree.admin;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let label = Text::new(format!("{zh} · {name}"), format!("{en} · {name}"));
-        t.push(target(path, label, CategoryId::DevWorktrees));
+        t.push(target(
+            path,
+            label,
+            CategoryId::DevWorktrees,
+            Operation::GitWorktree { registration },
+            ("engine", "linked_worktree"),
+        ));
     }
 }
 
@@ -310,321 +283,42 @@ fn push_chromium_leaves(t: &mut Vec<ScanTarget>, dir: &Path, owner: &str, catego
             format!("{owner} · {}", trail.join(" · ")),
             category,
             super::chromium::leaf_recommended(leaf_name),
+            Operation::Contents,
+            ("engine", "development_candidate"),
         ));
     }
 }
 
-/// agent 根目录下的 `logs*.sqlite` 日志库。
-///
-/// 本机 `~/.codex/logs_2.sqlite` 单个 279 MB，`.tables` 里只有一张 `logs`
-/// 表——而 `~/.codex/log` 这个**目录**早就在表里了：同一个东西的两种形态，
-/// 只收目录就漏掉了大头。
-///
-/// 刻意不预选：日志库开着 WAL/SHM（agent 运行时恒成立），删除级闸门
-/// （`safety::is_active_sqlite_member`）会直接拒删，预选只会制造一次必然
-/// 失败。用户关掉 agent 再手动勾，才删得掉。
-fn push_agent_log_databases(t: &mut Vec<ScanTarget>, home: &Path) {
-    for (dir, label, _) in &cli_agents() {
-        let Ok(entries) = std::fs::read_dir(home.join(dir)) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // `logs.sqlite` / `logs_2.sqlite`。后缀把 `logs_2.sqlite-wal` 挡在
-            // 外面；`thread_history_1.sqlite`、`state_5.sqlite`、
-            // `memories_1.sqlite` 是会话历史、状态与记忆，绝不入表。
-            if !name.starts_with("logs") || !name.ends_with(".sqlite") {
-                continue;
-            }
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                continue;
-            }
-            t.push(target_with_recommendation(
-                entry.path(),
-                Text::new(
-                    format!("{label} · 日志库 {name}"),
-                    format!("{label} · log database {name}"),
-                ),
-                CategoryId::AiAgents,
-                false,
-            ));
-        }
-    }
-}
-
-/// Devin CLI / Codex CLI 这类自管理版本目录的旧版本回收。
-///
-/// 两者是同一个形状：一堆版本目录 + 一个 `current` 软链接指向当前版本。
-/// 旧版本目录纯属垃圾（本机 Codex 四个旧版本共 1.17 GB），删了最多重新
-/// 下载——但**当前版本只能从 `current` 读**，不能按版本号大小猜：用户可能
-/// 回滚到旧版，`current` 缺失时一个都不预选（分不清就别默认删）。
-fn push_old_version_dirs(
-    t: &mut Vec<ScanTarget>,
-    versions_dir: &Path,
-    keep: Option<&str>,
-    label: &str,
-    recommended: bool,
-) {
-    let Ok(entries) = std::fs::read_dir(versions_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // `current` 是软链接、`_download` 是安装包暂存、`install.lock` /
-        // `auto-update-version` 是更新器自己的书签：都不是版本目录。
-        if name == "current" || name == "_download" || Some(name.as_str()) == keep {
-            continue;
-        }
-        let path = entry.path();
-        if !entry
-            .file_type()
-            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-        {
-            continue;
-        }
-        t.push(target_with_recommendation(
-            path,
-            Text::new(
-                format!("{label} · 旧版本 {name}"),
-                format!("{label} · old version {name}"),
-            ),
-            CategoryId::AiAgents,
-            recommended,
-        ));
-    }
-}
-
-/// `<root>/current` 软链接指向的目录名。读不到就 `None`。
-fn current_version_name(root: &Path) -> Option<String> {
-    std::fs::read_link(root.join("current"))
-        .ok()
-        .and_then(|target| target.file_name().map(|n| n.to_string_lossy().into_owned()))
-}
-
-/// 安装目录里的锁文件很新 → 可能正在换版，这一轮不预选。
-///
-/// 锁文件在更新完成后会被删掉；长期残留的锁（本机 Codex 的
-/// `install.lock` 空文件从 8 月留到现在）说明上次更新异常退出，此时预选是
-/// 安全的。
-fn update_in_flight(lock: &Path) -> bool {
-    lock.exists() && !super::helpers::is_older_than(lock, std::time::Duration::from_secs(3600))
-}
-
-/// Codex CLI 自管理的版本目录：`~/.codex/packages/standalone/releases/<版本>/`。
-///
-/// 每次 `codex` 自更新都会解压一份新版本目录，旧的从来不清（本机 5 份共
-/// 1.4 GB，其中四个旧版本 1.17 GB）。当前版本由 `standalone/current`
-/// 软链接指向。
+#[cfg(all(test, unix))]
 fn push_codex_cli_versions(t: &mut Vec<ScanTarget>, home: &Path) {
-    let standalone = home.join(".codex/packages/standalone");
-    if !standalone.is_dir() {
-        return;
-    }
-    let current = current_version_name(&standalone);
-    let updating = update_in_flight(&standalone.join("install.lock"));
-    push_old_version_dirs(
-        t,
-        &standalone.join("releases"),
-        current.as_deref(),
-        "Codex CLI",
-        current.is_some() && !updating,
-    );
+    crate::core::rules::versions::append_fixture(t, "codex_cli", home, home);
 }
-
-/// Devin CLI 自管理的版本目录：`_versions/<版本>/` 与 `_download/*.tar.gz`。
-///
-/// Devin CLI 每次 `devin update` 都会下载新安装包、解压出新版本目录，
-/// 但从不回收旧的——旧版本目录和下载包纯粹是垃圾，删掉只代价重新下载。
-/// 版本目录的处置与 Codex CLI 共用 [`push_old_version_dirs`]。
-///
-/// 路径平台相关：
-/// - macOS / Linux：`~/.local/share/devin/cli/_versions`
-/// - Windows：`%APPDATA%\devin\cli\_versions`
+#[cfg(all(test, unix))]
 fn push_devin_cli_versions(t: &mut Vec<ScanTarget>, home: &Path, roaming: &Path) {
-    const AGENT: CategoryId = CategoryId::AiAgents;
-
-    // Windows 只用 roaming；home 仅供 macOS/Linux 分支使用。
-    #[cfg(windows)]
-    let _ = home;
-    #[cfg(windows)]
-    let cli_root = roaming.join("devin/cli");
-    #[cfg(not(windows))]
-    let cli_root = {
-        let _ = roaming;
-        home.join(".local/share/devin/cli")
-    };
-
-    let versions_dir = cli_root.join("_versions");
-    if !versions_dir.is_dir() {
-        return;
-    }
-
-    // `current` 缺失时无法确定当前版本，不预选任何版本目录——分不清就别默认删。
-    // `_update.lock` 很新说明可能正在换版，同样不预选。
-    let current_version = current_version_name(&versions_dir);
-    let updating = update_in_flight(&cli_root.join("_update.lock"));
-    push_old_version_dirs(
-        t,
-        &versions_dir,
-        current_version.as_deref(),
-        "Devin CLI",
-        current_version.is_some() && !updating,
-    );
-
-    // 下载的安装包：装完即废，删了最多重新下载
-    let download_dir = versions_dir.join("_download");
-    if let Ok(entries) = std::fs::read_dir(&download_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.ends_with(".tar.gz") {
-                continue;
-            }
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            t.push(target_with_recommendation(
-                path,
-                Text::new(
-                    format!("Devin CLI · 安装包 {name}"),
-                    format!("Devin CLI · installer {name}"),
-                ),
-                AGENT,
-                !updating,
-            ));
-        }
-    }
-}
-
-/// 只报告已明确指向"用户主目录下不存在文件夹"的本地工作区。
-/// 远程 URI、外接盘和含百分号编码的 URI 都跳过，避免把暂时离线的项目误报。
-pub(super) fn push_orphaned_editor_workspaces(
-    t: &mut Vec<ScanTarget>,
-    home: &Path,
-    roaming: &Path,
-) {
-    for host in VSCODE_HOSTS {
-        let root = roaming.join(&host).join("User/workspaceStorage");
-        let Ok(entries) = std::fs::read_dir(root) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(entry.path().join("workspace.json")) else {
-                continue;
-            };
-            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-                continue;
-            };
-            let Some(uri) = value.get("folder").and_then(|value| value.as_str()) else {
-                continue;
-            };
-            let Some(raw_path) = uri.strip_prefix("file://") else {
-                continue;
-            };
-            if raw_path.contains('%') {
-                continue;
-            }
-            let project = Path::new(raw_path);
-            if !project.starts_with(home) || project.exists() {
-                continue;
-            }
-            t.push(target_with_recommendation(
-                entry.path(),
-                Text::new(
-                    format!("孤立工作区 · {host} · {}", project.display()),
-                    format!("Orphaned workspace · {host} · {}", project.display()),
-                ),
-                CategoryId::DevBuild,
-                false,
-            ));
-        }
-    }
-}
-
-/// VS Code 系编辑器的扩展目录根。
-///
-/// 这一族编辑器（VS Code 及其各家分叉）共用同一套扩展布局：
-/// `~/<根>/extensions/` 下每个扩展一个 `<发布者>.<名字>-<版本>` 目录，
-/// 同级一个 `.obsolete` JSON 记录已退役的版本。
-///
-/// 本机实测这六个都存在且都是这个布局（`.vscode` 50 个扩展、`.trae` 33、
-/// `.windsurf` 18、`.qoder` 15、`.kiro` 3、`.antigravity` 1）。以前这里
-/// 只写死了 `.vscode`，另外五个的 `.obsolete` 完全没人看——`.qoder` 一家
-/// 就攒了 39 条记录。不存在的根会被 `read` 失败直接跳过，多列几个的代价
-/// 只是一次失败的文件读取。
-fn vscode_family() -> Vec<crate::core::rules::Layout> {
-    layouts("vscode_family")
-}
-
-/// 编辑器自己写入 `.obsolete` 的扩展版本已退出当前扩展集合，可以删除。
-/// 只信任清单中的单段目录名，并要求目录仍实际存在，避免把 JSON 内容当路径。
-///
-/// **为什么只信 `.obsolete`，不做注册表对账**：Mole 的
-/// `0207d72a` 给同一问题加了一套 reconciliation（拿 `extensions.json` 的
-/// keep-set 反查没人认领的目录），依据是 `.obsolete` 是「删除日志」而非
-/// 「清单」，为空或截断时旧目录无人认领。这个推理成立，但本机六个编辑器
-/// 实测下来 **孤儿目录为 0**（目录数与注册数一一对应，`.vscode` 50/50、
-/// `.trae` 33/33、`.windsurf` 18/18、`.qoder` 15/15），也就是说这些编辑器
-/// 自己收尾是干净的，对账能挖出来的东西是空集。
-///
-/// 那套对账要引入 keep-set 求并、`package.json` 大小写不敏感比对、编辑器
-/// 进程探测、以及一串「拿不准就整类跳过」的兜底——为一个实测收益为零的
-/// 场景付这些复杂度不划算。真正会产生孤儿的是「更新到一半被杀掉」这类
-/// 异常，等真见到再补，判据留在这里备查。
-pub(super) fn push_obsolete_vscode_extensions(t: &mut Vec<ScanTarget>, home: &Path) {
-    for row in vscode_family() {
-        push_obsolete_extensions_for_root(
-            t,
-            &home.join(&row.path).join("extensions"),
-            &row.zh,
-            &row.en,
-        );
-    }
-}
-
-fn push_obsolete_extensions_for_root(
-    t: &mut Vec<ScanTarget>,
-    root: &Path,
-    editor_zh: &str,
-    editor_en: &str,
-) {
-    let Ok(bytes) = std::fs::read(root.join(".obsolete")) else {
-        return;
-    };
-    let Ok(serde_json::Value::Object(entries)) = serde_json::from_slice(&bytes) else {
-        return;
-    };
-    for (name, obsolete) in entries {
-        if obsolete != serde_json::Value::Bool(true)
-            || !matches!(
-                Path::new(&name).components().collect::<Vec<_>>().as_slice(),
-                [std::path::Component::Normal(_)]
-            )
-        {
-            continue;
-        }
-        let path = root.join(&name);
-        if !std::fs::symlink_metadata(&path).is_ok_and(|md| md.is_dir() && !md.is_symlink()) {
-            continue;
-        }
-        t.push(target_with_recommendation(
-            path,
-            Text::new(
-                format!("过期 {editor_zh} 扩展 · {name}"),
-                format!("Obsolete {editor_en} extension · {name}"),
-            ),
-            CategoryId::DevBuild,
-            true,
-        ));
-    }
+    crate::core::rules::versions::append_fixture(t, "devin_unix", home, roaming);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 走生产选择器（`directories` 规则）而不是测试专用的拼接，夹具与运行时同一条路径。
+    fn rule_directories(home: &Path, roaming: &Path) -> Vec<ScanTarget> {
+        let snapshot = crate::core::rules::snapshot();
+        let roots = crate::core::rules::directories::fixture_roots(home, roaming);
+        crate::core::rules::directories::scan_at(&snapshot, "development", &roots).0
+    }
+
+    /// 编辑器清单产出的目标：Tree + `DevBuild`。
+    fn manifest_targets(home: &Path, roaming: &Path) -> Vec<std::path::PathBuf> {
+        rule_directories(home, roaming)
+            .into_iter()
+            .filter(|target| {
+                target.category == CategoryId::DevBuild && target.operation == Operation::Tree
+            })
+            .map(|target| target.path)
+            .collect()
+    }
 
     /// `.obsolete` 里记着、但目录已经不在的条目不能进清理列表——那是
     /// 已经清干净的历史记录，报给用户就是幽灵条目。本机 `.vscode` 的
@@ -642,11 +336,10 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(root.join("pub.here-2.0.0")).unwrap();
 
-        let mut t = Vec::new();
-        push_obsolete_vscode_extensions(&mut t, &tmp);
+        let targets = manifest_targets(&tmp, &tmp.join("roaming"));
 
-        assert_eq!(t.len(), 1, "只有目录还在的那条该进列表");
-        assert!(t[0].path.ends_with("pub.here-2.0.0"));
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert!(targets[0].ends_with("pub.here-2.0.0"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -661,9 +354,10 @@ mod tests {
         std::fs::write(root.join(".obsolete"), br#"{"../../evil":true}"#).unwrap();
         std::fs::create_dir_all(tmp.join("evil")).unwrap();
 
-        let mut t = Vec::new();
-        push_obsolete_vscode_extensions(&mut t, &tmp);
-        assert!(t.is_empty(), "带 .. 的条目不该被当成目录名");
+        assert!(
+            manifest_targets(&tmp, &tmp.join("roaming")).is_empty(),
+            "带 .. 的条目不该被当成目录名"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -679,9 +373,45 @@ mod tests {
             std::fs::write(root.join(".obsolete"), br#"{"pub.ext-1.0.0":true}"#).unwrap();
         }
 
-        let mut t = Vec::new();
-        push_obsolete_vscode_extensions(&mut t, &tmp);
-        assert_eq!(t.len(), 4, "四个分叉编辑器都该被扫到，实得 {}", t.len());
+        let targets = manifest_targets(&tmp, &tmp.join("roaming"));
+        assert_eq!(targets.len(), 4, "四个分叉编辑器都该被扫到：{targets:?}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 只报「清单里写着本地路径、而那个路径确实不在」的工作区目录。
+    /// 远程 URI、带百分号编码的 URI 和仍然存在的项目都不入表。
+    #[test]
+    fn orphaned_workspaces_follow_recorded_local_paths_only() {
+        let tmp = crate::core::testing::fixture("qc_orphaned_workspaces");
+        let home = tmp.join("home");
+        let storage = tmp.join("roaming/Code/User/workspaceStorage");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let recorded = |hash: &str, uri: &str| {
+            let dir = storage.join(hash);
+            std::fs::create_dir_all(&dir).unwrap();
+            // 用 serde_json 写：Windows 路径里的反斜杠必须转义，否则清单根本解不开。
+            std::fs::write(
+                dir.join("workspace.json"),
+                serde_json::json!({"folder": uri}).to_string(),
+            )
+            .unwrap();
+        };
+        let gone = home.join("gone-project");
+        let alive = home.join("alive-project");
+        std::fs::create_dir_all(&alive).unwrap();
+        recorded("orphan", &format!("file://{}", gone.display()));
+        recorded("alive", &format!("file://{}", alive.display()));
+        recorded("remote", "vscode-remote://ssh-remote+host/home/me/project");
+        recorded(
+            "encoded",
+            &format!("file://{}/my%20project", home.display()),
+        );
+
+        let targets = manifest_targets(&home, &tmp.join("roaming"));
+
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert_eq!(targets[0], storage.join("orphan"));
+        assert!(!gone.exists() && alive.is_dir());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1063,24 +793,218 @@ mod tests {
     #[test]
     fn agent_log_databases_are_listed_but_never_recommended() {
         let root = crate::core::testing::fixture("qc_agent_logs_db");
-        let codex = root.join(".codex");
-        std::fs::create_dir_all(&codex).unwrap();
+        let home = root.join("home");
+        for agent in [".codex", ".claude"] {
+            std::fs::create_dir_all(home.join(agent)).unwrap();
+            std::fs::write(home.join(agent).join("logs_2.sqlite"), b"db").unwrap();
+        }
+        let codex = home.join(".codex");
         for name in [
-            "logs_2.sqlite",
+            // 事务侧文件不是日志库本身，后缀筛选把它挡在外面。
+            "logs_2.sqlite-wal",
             "thread_history_1.sqlite",
             "state_5.sqlite",
             "memories_1.sqlite",
         ] {
             std::fs::write(codex.join(name), b"db").unwrap();
         }
-        let mut targets = Vec::new();
-        push_agent_log_databases(&mut targets, &root);
+        let targets = rule_directories(&home, &root.join("roaming"));
+        let log_databases: Vec<_> = targets
+            .iter()
+            .filter(|target| target.operation == Operation::File)
+            .collect();
 
-        assert_eq!(targets.len(), 1, "{targets:?}");
-        assert!(targets[0].path.ends_with("logs_2.sqlite"));
+        assert_eq!(log_databases.len(), 2, "{targets:?}");
+        assert!(log_databases
+            .iter()
+            .any(|target| target.path == codex.join("logs_2.sqlite")));
+        assert!(log_databases.iter().all(|target| !target.recommended
+            && target.category == CategoryId::AiAgents
+            && target.disposal == crate::core::cleaner::Disposal::Permanent));
         assert!(
-            !targets[0].recommended,
-            "日志库开着 WAL，预选只会制造必然失败"
+            log_databases.iter().any(|target| target
+                .label
+                .get(crate::core::i18n::Language::Zh)
+                .contains("Codex · 日志库 logs_2.sqlite")),
+            "日志库标签要带所有者：{:?}",
+            log_databases
+                .iter()
+                .map(|target| target.label.get(crate::core::i18n::Language::Zh))
+                .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 开发规则四条目录布局的隔离夹具：日志库、扩展 tasks、扩展清单与孤立工作区。
+    fn development_layout_fixture() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)
+    {
+        let root = crate::core::testing::fixture("development_layout_baseline");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let roaming = root.join("roaming");
+        for agent in [".codex", ".claude"] {
+            std::fs::create_dir_all(home.join(agent)).unwrap();
+            std::fs::write(home.join(agent).join("logs_2.sqlite"), b"db").unwrap();
+        }
+        std::fs::write(home.join(".codex/thread_history_1.sqlite"), b"db").unwrap();
+        std::fs::write(home.join(".codex/logs_2.sqlite-wal"), b"wal").unwrap();
+        let tasks = |host: &str, extension: &str| {
+            roaming
+                .join(host)
+                .join("User/globalStorage")
+                .join(extension)
+                .join("tasks")
+        };
+        std::fs::create_dir_all(tasks("Code", "saoudrizwan.claude-dev")).unwrap();
+        std::fs::create_dir_all(tasks("Code", "example.undeclared")).unwrap();
+        std::fs::create_dir_all(tasks("Trae", "github.copilot-chat")).unwrap();
+        // 扩展清单：一条目录还在、一条只剩记录、一条未被选中、一条带路径分隔符。
+        let extensions = home.join(".vscode/extensions");
+        std::fs::create_dir_all(extensions.join("pub.retired-1.0.0")).unwrap();
+        std::fs::write(
+            extensions.join(".obsolete"),
+            br#"{"pub.retired-1.0.0":true,"pub.ghost-0.9.0":true,"pub.kept-2.0.0":false,"../escape":true}"#,
+        )
+        .unwrap();
+        // 孤立工作区：只认清单里写着 home 内本地路径、而该路径确实不存在的那条。
+        let alive = home.join("alive-project");
+        std::fs::create_dir_all(&alive).unwrap();
+        for (hash, uri) in [
+            (
+                "orphan",
+                format!("file://{}", home.join("gone-project").display()),
+            ),
+            ("alive", format!("file://{}", alive.display())),
+            (
+                "remote",
+                "vscode-remote://ssh-remote+host/home/me/project".to_string(),
+            ),
+            ("encoded", format!("file://{}/my%20project", home.display())),
+        ] {
+            let dir = roaming.join("Code/User/workspaceStorage").join(hash);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("workspace.json"),
+                serde_json::json!({"folder": uri}).to_string(),
+            )
+            .unwrap();
+        }
+        (root, home, roaming)
+    }
+
+    fn layout_rows(targets: &[ScanTarget], root: &Path) -> Vec<serde_json::Value> {
+        // 记录清单里写着绝对项目路径，基线里用 <root> 归一，两边平台才可比。
+        let prefix = root.display().to_string();
+        let label = |target: &ScanTarget, language| {
+            target
+                .label
+                .get(language)
+                .replace(&prefix, "<root>")
+                .replace('\\', "/")
+        };
+        let mut rows: Vec<_> = targets
+            .iter()
+            .map(|target| {
+                serde_json::json!({
+                    "path": target.path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"),
+                    "category": format!("{:?}", target.category),
+                    "operation": target.operation,
+                    "disposal": target.disposal,
+                    "recommended": target.recommended,
+                    "zh": label(target, crate::core::i18n::Language::Zh),
+                    "en": label(target, crate::core::i18n::Language::En),
+                })
+            })
+            .collect();
+        rows.sort_by_key(|row| row["path"].as_str().unwrap().to_owned());
+        rows
+    }
+
+    /// 迁移金样：目标、推荐、操作、处置和双语标签与记录基线逐项一致。
+    #[test]
+    fn development_directory_layouts_preserve_baseline_and_share_probes() {
+        let (root, home, roaming) = development_layout_fixture();
+        let snapshot = crate::core::rules::snapshot();
+        let roots = crate::core::rules::directories::fixture_roots(&home, &roaming);
+        let (targets, reads) =
+            crate::core::rules::directories::scan_at(&snapshot, "development", &roots);
+        let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/development-layout-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(layout_rows(&targets, &root), expected);
+        assert!(targets.iter().all(|target| std::sync::Arc::ptr_eq(
+            &target.rule.snapshot,
+            &snapshot
+        ) && target.rule.id == "development"));
+        assert_eq!(
+            reads, 3,
+            "两条 agent 目录 + 一个 workspaceStorage 库存各读一次；声明候选只探一次"
+        );
+        // 未声明的扩展 id、幽灵清单条目与事务侧文件都不因为目录存在就进表。
+        assert!(!targets
+            .iter()
+            .any(|target| target.path.ends_with("example.undeclared/tasks")));
+        assert!(!targets
+            .iter()
+            .any(|target| target.path.ends_with("pub.ghost-0.9.0")));
+        assert!(!targets
+            .iter()
+            .any(|target| target.path.ends_with("workspaceStorage/alive")));
+        assert!(home.join(".codex/logs_2.sqlite-wal").exists());
+        let (again, _) = crate::core::rules::directories::scan_at(&snapshot, "development", &roots);
+        assert_eq!(layout_rows(&again, &root), expected, "同一夹具扫描可复现");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 扩展 tasks 的主机 × 扩展交叉展开来自规则，两个名单都不在 Rust 里。
+    #[test]
+    fn vscode_task_storage_follows_declared_hosts_and_extensions() {
+        let root = crate::core::testing::fixture("qc_vscode_tasks");
+        let home = root.join("home");
+        let roaming = root.join("roaming");
+        let global_storage = |host: &str, extension: &str| {
+            roaming
+                .join(host)
+                .join("User/globalStorage")
+                .join(extension)
+                .join("tasks")
+        };
+        for (host, extension) in [
+            ("Code", "saoudrizwan.claude-dev"),
+            ("Code", "example.undeclared"),
+            ("Trae", "kilocode.kilo-code"),
+            ("Unlisted Editor", "saoudrizwan.claude-dev"),
+        ] {
+            std::fs::create_dir_all(global_storage(host, extension)).unwrap();
+        }
+        let targets = rule_directories(&home, &roaming);
+        let storage = |host: &str, extension: &str| {
+            targets
+                .iter()
+                .find(|target| target.path == global_storage(host, extension))
+        };
+
+        let cline = storage("Code", "saoudrizwan.claude-dev").expect("declared host and extension");
+        assert_eq!(cline.operation, Operation::Contents);
+        assert_eq!(cline.category, CategoryId::AiAgents);
+        assert!(!cline.recommended, "会话缓存不预选");
+        assert_eq!(
+            cline.label.get(crate::core::i18n::Language::Zh),
+            "Code · Cline 会话缓存"
+        );
+        assert_eq!(
+            cline.label.get(crate::core::i18n::Language::En),
+            "Code · Cline sessions"
+        );
+        assert!(storage("Trae", "kilocode.kilo-code").is_some());
+        assert!(
+            storage("Code", "example.undeclared").is_none(),
+            "未声明的扩展 id 不能进表"
+        );
+        assert!(
+            storage("Unlisted Editor", "saoudrizwan.claude-dev").is_none(),
+            "未声明的主机不能进表"
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1099,13 +1023,20 @@ mod tests {
             r#"{"example.tool-1.0.0":true,"example.tool-2.0.0":false,"../escape":true}"#,
         )
         .unwrap();
-        let mut targets = Vec::new();
 
-        push_obsolete_vscode_extensions(&mut targets, &root);
+        let targets: Vec<_> = rule_directories(&root, &root.join("roaming"))
+            .into_iter()
+            .filter(|target| target.category == CategoryId::DevBuild)
+            .collect();
 
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 1, "{targets:?}");
         assert_eq!(targets[0].path, old);
         assert!(targets[0].recommended);
+        assert_eq!(
+            targets[0].label.get(crate::core::i18n::Language::Zh),
+            "过期 VS Code 扩展 · example.tool-1.0.0"
+        );
+        assert!(current.is_dir());
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -1,0 +1,21 @@
+=== 矩阵引用新鲜度抽样重跑 2026-10-06T14:41:01+08:00 ===
+--- 组1 全量迁移（6 个引用抽跑）
+test core::rules::tests::provider_policy_defaults_match_migration_baseline ... ok
+test core::rules::tests::explicit_path_policies_match_pre_migration_baseline ... ok
+test core::categories::browser::tests::browser_rule_only_fixture_surfaces_a_new_root_with_shared_leaves ... ok
+test core::categories::cache::tests::home_cache_catalog_children_preserve_the_migration_baseline ... ok
+test core::categories::dev::tests::development_directory_layouts_preserve_baseline_and_share_probes ... ok
+test core::rules::directories::tests::directory_layouts_preserve_baseline_and_share_reads ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 602 filtered out; finished in 0.18s
+--- 组2 错误规则（4 个引用抽跑）
+test core::rules::tests::root_scope_validation_rejects_skeleton_and_drive_escape ... ok
+test core::rules::directories::tests::catalog_children_reject_undeclared_unbounded_and_ambiguous_dispatch ... ok
+test core::rules::tests::malformed_rules_are_rejected_as_a_whole ... ok
+test core::rules::variables::tests::cycles_unknown_inputs_and_partial_enumeration_never_authorize ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 0.02s
+--- 组3 规则加载（4 个引用抽跑）
+test core::rules::tests::bundled_snapshot_is_stable_and_scoped_rules_do_not_replace_it ... ok
+test core::rules::tests::pinned_snapshot_survives_new_publication ... ok
+test core::categories::cache::tests::bundled_scan_surface_follows_the_embedded_catalog ... ok
+test core::rules::tests::manifest_only_fixture_generates_targets_and_rechecks_membership ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 0.19s

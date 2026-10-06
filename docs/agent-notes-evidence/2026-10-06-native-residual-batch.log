@@ -1,0 +1,12 @@
+=== native-residual batch 2026-10-06T01:31:22+08:00 ===
+
+test result: ok. 562 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 10.91s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.09s
+clippy_exit=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.64s
+build_exit=0
+schema=9 sequence=1 rules=12 bytes=38118
+  ERROR: docs\agent-notes\implemented\bug-fix\2026-10-06-native-residual-completion-verification.md: verification target(s) not found: HKCU\Software\QuickCleanerTest\<pid>
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff_clean

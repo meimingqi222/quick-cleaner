@@ -1,0 +1,23 @@
+=== Phase A: baseline (before TOML change) 2026-10-06T02:15:53+08:00 ===
+PROBE released-tool: category=UserTemp recommended=false rule=cache
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 0.03s
+     Running `target\debug\examples\rules.exe pack 1 target/rules-release-loop-a`
+Phase A embedded bundle: cache version 3 packages rows: ['uv', 'pip', 'pre-commit', 'node-gyp', 'typescript', 'go-build', 'gopls']
+=== Phase B: after TOML-only change + rebuild 2026-10-06T02:17:12+08:00 ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.10s
+PROBE released-tool: category=PackageCache recommended=true rule=cache
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 0.03s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 0.06s
+
+schema=9 sequence=1 rules=12 bytes=38210
+     Running `target\debug\examples\rules.exe pack 1 target/rules-release-loop-b`
+Phase B embedded bundle: cache version 4 packages rows: ['uv', 'pip', 'pre-commit', 'node-gyp', 'typescript', 'go-build', 'gopls', 'released-tool']
+schema 9 rules 12
+=== Phase C: reverted to production TOML + rebuild 2026-10-06T02:18:26+08:00 ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.38s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 0.05s
+
+schema=9 sequence=1 rules=12 bytes=38118
+     Running `target\debug\examples\rules.exe pack 1 target/rules-release-loop-c`
+Phase C embedded bundle: cache version 3 packages rows: ['uv', 'pip', 'pre-commit', 'node-gyp', 'typescript', 'go-build', 'gopls']
+bytes: 38118

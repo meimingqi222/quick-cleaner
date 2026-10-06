@@ -8,6 +8,8 @@ Status: implemented
 
 ## Decision
 
+The working directory is also captured as a present non-redirected directory with stable object identity. Replacing or removing it blocks the frozen operation; changes to its contents do not invalidate directory identity. OfficialOperation retains its own command clone, and the native callback requests command() again immediately before process creation rather than trusting a reference checked before the idle probe.
+
 `CleanupPlan` now carries an `OfficialOperation`: the exact command (provider, executable, arguments, working directory, frozen `installed_artifacts`) plus bounded file evidence — the interpreter and, when the interpreter route is chosen, the declared `module_file`. Windows evidence binds volume serial and file index; a missing or redirected module at scan freezes the no-op PowerShell recovery route instead of the interpreter route, so a module dropped after scanning is never executed. Execution takes the command exclusively from `scanned.official.command()`, which re-verifies every evidence artifact; `CleanupPlan::validate` re-checks it too, so early failures report the frozen step as Blocked instead of launching anything. The rebuilt adapter keeps only layout revalidation duty.
 
 ## Alternatives considered
@@ -19,6 +21,8 @@ Keeping the rebuilt command and only adding identity checks loses the scanned ro
 Plans whose official command was built by an older scan still fail safely: execution without a frozen command reports a missing scanned operation. Discovery hides an installation when frozen evidence cannot be captured, matching the fail-closed evidence contract. Registration scanning facts, full runtime/registration observation, parent-child range merging, remaining entry points, UI review, update failure matrix, golden baselines and macOS verification are still open in the GOAL matrix; this change is not full refactor acceptance.
 
 ## Verification
+
+- `src/core/rules/plan.rs::frozen_official_operation_retains_arguments_and_rejects_replaced_cwd`
 
 - `src/platform/windows/app_discovery.rs::frozen_official_command_rejects_replaced_interpreter`
 - `src/platform/windows/app_discovery.rs::frozen_official_command_rejects_replaced_module`

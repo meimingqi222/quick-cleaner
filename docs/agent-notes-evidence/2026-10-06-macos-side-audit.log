@@ -1,0 +1,6 @@
+=== macOS 侧独立复核 2026-10-06T14:31:55+08:00 ===
+-- 交叉检查（x86_64-apple-darwin）：0
+  error occurred in cc-rs: failed to find tool "cc": program not found (see https://docs.rs/cc/latest/cc/#compile-time-requirements for help)
+-- macOS 门控代码规模：28 文件 / 126 处 cfg(target_os = macos)
+-- macOS 专属测试（--list 中带 macos 门控的用例数，需在 macOS 二进制中枚举）
+-- CI：ci.yml 的 test-macos job 跑 fmt/build/clippy/test + 锚点并集校验

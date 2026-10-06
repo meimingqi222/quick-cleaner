@@ -1,0 +1,13 @@
+macOS 门控文件：28
+platform:: 引用符号：10
+疑似未定义（macOS 侧可能编译失败）：
+  macos::apps  用于 ['src\\ui\\actions\\apps.rs']
+  macos::disk_tree  用于 ['src\\core\\disk.rs', 'src\\platform\\macos\\cache.rs']
+  macos::index_v7  用于 ['src\\platform\\macos\\cache.rs']
+  macos::permission_drop  用于 ['src\\ui\\mod.rs']
+  macos::residuals  用于 ['src\\ui\\actions\\apps.rs']
+OK  src/platform/macos/apps.rs
+OK  src/platform/macos/disk_tree.rs
+OK  src/platform/macos/index_v7.rs
+OK  src/platform/macos/permission_drop.rs
+OK  src/platform/macos/residuals.rs

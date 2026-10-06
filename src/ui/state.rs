@@ -15,11 +15,8 @@ use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 #[derive(Default)]
-pub struct RuleUpdateState {
-    pub task: Option<Task<()>>,
-    pub checking: bool,
+pub struct RulePanelState {
     pub expanded: bool,
-    pub error: Option<String>,
 }
 
 /// 智能清理页的状态。
@@ -216,6 +213,41 @@ impl JunkState {
 
     pub fn selected_count(&self) -> usize {
         self.selected_items().count()
+    }
+
+    /// 本次确认实际会执行的规则（`id@版本`）、操作与被阻止原因。
+    ///
+    /// 只读取扫描期冻结的计划，不重新推断来源——确认界面和执行必须拿同一份
+    /// 计划，否则两边可能对「会删什么、会不会被阻止」给出不同答案。被阻止的
+    /// 计划在扫描期就带着原因冻结，这里只做去重展示。
+    pub fn selected_plan_summary(
+        &self,
+    ) -> (Vec<String>, Vec<crate::core::rules::Operation>, Vec<String>) {
+        let mut rules: Vec<String> = Vec::new();
+        let mut operations: Vec<crate::core::rules::Operation> = Vec::new();
+        let mut blocked: Vec<String> = Vec::new();
+        for item in self.selected_items() {
+            for plan in &item.plans {
+                let version = plan.rule.snapshot.definition(&plan.rule.id).version;
+                let label = format!("{}@{}", plan.rule.id, version);
+                if !rules.contains(&label) {
+                    rules.push(label);
+                }
+                for target in &plan.targets {
+                    if !operations.contains(&target.operation) {
+                        operations.push(target.operation.clone());
+                    }
+                }
+                for reason in &plan.blocked {
+                    if !blocked.contains(reason) {
+                        blocked.push(reason.clone());
+                    }
+                }
+            }
+        }
+        rules.sort();
+        operations.sort_by_key(|operation| format!("{operation:?}"));
+        (rules, operations, blocked)
     }
 
     fn selected_items(&self) -> impl Iterator<Item = &ScanItem> {
@@ -1072,6 +1104,46 @@ mod tests {
             crate::core::model::capture_identity(&real)
         );
 
+        let _ = std::fs::remove_file(&real);
+    }
+
+    /// 确认前的计划摘要：列出实际会执行的规则（`id@版本`），并带出被阻止的
+    /// 条目原因。只读已冻结计划，不重新推断。
+    #[test]
+    fn selected_plan_summary_lists_rule_versions_and_blocked_reasons() {
+        let real = crate::core::testing::file_path("qc_ui_plan_summary");
+        std::fs::write(&real, b"x").unwrap();
+        let mut item = item_with_identity(&real, CategoryId::UserTemp, 1, 1);
+        let mut plan = crate::core::rules::CleanupPlan::new(
+            crate::core::rules::RuleRef::engine(),
+            vec![crate::core::rules::PlannedTarget {
+                path: real.clone(),
+                operation: crate::core::rules::Operation::Contents,
+                identity: crate::core::model::capture_identity(&real),
+                disposal: crate::core::cleaner::Disposal::Permanent,
+            }],
+        );
+        plan.blocked
+            .push("Target covers a preserved path: keep".into());
+        item.plans.push(std::sync::Arc::new(plan));
+
+        let mut j = junk_fixture();
+        j.categories = vec![CategorySummary {
+            category: CategoryId::UserTemp,
+            total_size: 1,
+            items: vec![item],
+            partial: false,
+        }];
+        j.select_every();
+
+        let (rules, operations, blocked) = j.selected_plan_summary();
+        let engine_version = crate::core::rules::current().definition("engine").version;
+        assert_eq!(rules, vec![format!("engine@{engine_version}")]);
+        assert_eq!(operations, vec![crate::core::rules::Operation::Contents]);
+        assert_eq!(
+            blocked,
+            vec!["Target covers a preserved path: keep".to_string()]
+        );
         let _ = std::fs::remove_file(&real);
     }
 

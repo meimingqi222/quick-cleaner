@@ -1,0 +1,38 @@
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+   Compiling quick-cleaner v0.0.9 (D:\code\quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.47s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-a2e9477569695c40.exe)
+
+running 1 test
+test core::safety::tests::contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection ... FAILED
+
+failures:
+
+---- core::safety::tests::contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection stdout ----
+
+thread 'core::safety::tests::contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection' (52120) panicked at src\core\safety.rs:828:9:
+Temp contents must remain a supported scope
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    core::safety::tests::contents_scope_preserves_self_banned_roots_and_keeps_subtree_protection
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 517 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

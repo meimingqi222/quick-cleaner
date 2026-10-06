@@ -1,0 +1,5 @@
+    core::cleaner::tests::recycle_verification_rejects_reported_success_that_left_the_file
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 607 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--lib`

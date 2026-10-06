@@ -2,7 +2,7 @@
 
 use crate::core::cleaner::{
     clean_arbitrary_items, clean_targets, ArbitraryTarget, CleanFailure, CleanProgress,
-    CleanReport, CleanSnapshot, CleanTarget,
+    CleanReport, CleanSnapshot, CleanTarget, Disposal,
 };
 use crate::core::i18n::{bilingual, Text};
 use crate::core::model::{fmt_size, is_virtual_path};
@@ -20,10 +20,34 @@ impl crate::ui::Root {
             return;
         }
         let lang = self.language;
+        // 确认前把实际计划摆出来：规则版本、操作类型、被阻止的条目与原因。计划
+        // 在扫描期冻结，这里只读已冻结的计划，不重新推断。
+        let (rules, operations, blocked) = self.selected_plan_summary();
+        let mut detail = tr_confirm_clean_selected_detail(lang).to_string();
+        if !rules.is_empty() {
+            detail.push_str("\n\n");
+            detail.push_str(&tr_confirm_plan_rules(lang, &rules.join(", ")));
+        }
+        if !operations.is_empty() {
+            let names: Vec<&str> = operations
+                .iter()
+                .map(|operation| tr_operation_name(lang, operation))
+                .collect();
+            detail.push_str("\n\n");
+            detail.push_str(&tr_confirm_plan_operations(lang, &names.join(", ")));
+        }
+        if !blocked.is_empty() {
+            detail.push_str("\n\n");
+            detail.push_str(&tr_confirm_plan_blocked(
+                lang,
+                blocked.len(),
+                &blocked.join("; "),
+            ));
+        }
         self.confirm = Some(ConfirmRequest {
             title: tr_confirm_clean_selected_title(lang).to_string(),
             body: tr_confirm_delete_msg(lang, count, &fmt_size(self.selected_size())),
-            detail: tr_confirm_clean_selected_detail(lang).to_string(),
+            detail,
             kind: ConfirmKind::CleanSelected,
             app_data: false,
         });
@@ -43,10 +67,18 @@ impl crate::ui::Root {
         }
 
         let app_data = crate::core::safety::under_home_app_support(&path);
+        // 确认前说明实际计划：删除方式如实反映回收站设置（不能无条件宣称
+        // 「不进回收站」）、占用提醒，以及操作粒度——整目录（连同内容）还是
+        // 单个文件。
+        let mut detail = tr_confirm_disposal(lang, self.disposal() == Disposal::RecycleBin);
+        detail.push_str("\n\n");
+        detail.push_str(tr_confirm_running_caution(lang));
+        detail.push('\n');
+        detail.push_str(tr_confirm_path_operation(lang, path.is_dir()));
         self.confirm = Some(ConfirmRequest {
             title: tr_confirm_delete_title(lang).to_string(),
             body: tr_confirm_delete_path_msg(lang, &path.display().to_string(), &fmt_size(size)),
-            detail: tr_confirm_no_recycle_check_running(lang).to_string(),
+            detail,
             kind: ConfirmKind::CleanPath(path, size),
             app_data,
         });
@@ -61,6 +93,7 @@ impl crate::ui::Root {
             ConfirmKind::CleanSelected => self.start_clean(cx),
             ConfirmKind::CleanPath(p, size) => self.start_clean_path(p, size, cx),
             ConfirmKind::CleanDiskSelected => self.start_clean_disk_selected(cx),
+            ConfirmKind::CleanDeclutter(tab) => self.run_declutter_clean(tab, cx),
             ConfirmKind::UninstallApp(app) => self.execute_uninstall_app(*app, cx),
             ConfirmKind::KillProcess {
                 pid,

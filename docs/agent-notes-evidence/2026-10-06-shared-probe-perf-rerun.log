@@ -1,0 +1,4 @@
+(rerun on current binary: 13 rules / 40667 bytes)
+cache-catalog-extra: reads=[1] candidate_checks=[4] budget_blocked=0 wall_ms=[193, 33, 33, 35, 34] peak_rss_mb=[13.3, 13.3, 13.1, 13.3, 12.0]
+directory-layout-extra: reads=[1] candidate_checks=[1] budget_blocked=0 wall_ms=[31, 26, 28, 25, 25] peak_rss_mb=[11.8, 13.0, 11.9, 12.7, 12.9]
+manifest-layout-extra: reads=[1] candidate_checks=[2] budget_blocked=0 wall_ms=[40, 30, 29, 30, 30] peak_rss_mb=[11.8, 11.9, 13.0, 12.4, 13.1]

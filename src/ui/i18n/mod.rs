@@ -37,6 +37,8 @@ mod declutter;
 pub use declutter::*;
 mod rules;
 pub use rules::*;
+mod views;
+pub use views::*;
 
 use crate::core::i18n::Language;
 
@@ -1016,6 +1018,109 @@ pub fn tr_confirm_clean_selected_detail(lang: Language) -> &'static str {
     }
 }
 
+/// 确认框里的计划摘要：本次实际会执行的规则（`id@版本`）。
+pub fn tr_confirm_plan_rules(lang: Language, rules: &str) -> String {
+    match lang {
+        Language::Zh => format!("计划规则：{rules}"),
+        Language::En => format!("Planned rules: {rules}"),
+    }
+}
+
+/// 确认框里的计划摘要：被阻止、不会执行的条目数与原因。
+pub fn tr_confirm_plan_blocked(lang: Language, count: usize, reasons: &str) -> String {
+    match lang {
+        Language::Zh => format!("{count} 项被阻止，不会执行：{reasons}"),
+        Language::En => format!("{count} items are blocked and will not run: {reasons}"),
+    }
+}
+
+/// 确认框里的操作摘要：本次会执行哪些类型的操作。
+pub fn tr_confirm_plan_operations(lang: Language, operations: &str) -> String {
+    match lang {
+        Language::Zh => format!("操作：{operations}"),
+        Language::En => format!("Operations: {operations}"),
+    }
+}
+
+/// 单个操作类型的中英名称，用于确认框的操作摘要。
+pub fn tr_operation_name(
+    lang: Language,
+    operation: &crate::core::rules::Operation,
+) -> &'static str {
+    use crate::core::rules::Operation;
+    match (lang, operation) {
+        (Language::Zh, Operation::File) => "删除文件",
+        (Language::En, Operation::File) => "delete file",
+        (Language::Zh, Operation::Tree) => "删除目录树",
+        (Language::En, Operation::Tree) => "delete folder tree",
+        (Language::Zh, Operation::Contents) => "清空目录内容",
+        (Language::En, Operation::Contents) => "empty folder contents",
+        (Language::Zh, Operation::GitWorktree { .. }) => "移除工作区",
+        (Language::En, Operation::GitWorktree { .. }) => "remove worktree",
+        (Language::Zh, Operation::Docker { .. }) => "删除镜像",
+        (Language::En, Operation::Docker { .. }) => "remove image",
+        (Language::Zh, Operation::Brew) => "brew 清理",
+        (Language::En, Operation::Brew) => "brew cleanup",
+        (Language::Zh, Operation::Go) => "Go 缓存清理",
+        (Language::En, Operation::Go) => "Go cache cleanup",
+        (Language::Zh, Operation::Pnpm) => "pnpm store 清理",
+        (Language::En, Operation::Pnpm) => "pnpm store cleanup",
+        (Language::Zh, Operation::Snapshot { .. }) => "删除快照",
+        (Language::En, Operation::Snapshot { .. }) => "delete snapshot",
+        (Language::Zh, Operation::Trash) => "清空回收站",
+        (Language::En, Operation::Trash) => "empty trash",
+        (Language::Zh, Operation::Registration) => "删除登记项",
+        (Language::En, Operation::Registration) => "remove registration",
+        (Language::Zh, Operation::OfficialUninstall) => "运行官方卸载",
+        (Language::En, Operation::OfficialUninstall) => "run official uninstaller",
+        (Language::Zh, Operation::Native { .. }) => "删除原生残留",
+        (Language::En, Operation::Native { .. }) => "remove native residue",
+    }
+}
+
+/// 确认框里的范围摘要：列出这次实际会处理的路径。
+pub fn tr_confirm_scope(lang: Language, list: &str) -> String {
+    match lang {
+        Language::Zh => format!("范围：\n{list}"),
+        Language::En => format!("Scope:\n{list}"),
+    }
+}
+
+/// 范围太长时的摘要：列出前若干条，并说明总条数。
+pub fn tr_confirm_scope_truncated(lang: Language, total: usize, list: &str) -> String {
+    match lang {
+        Language::Zh => format!("范围（共 {total} 项，列出前若干）：\n{list}"),
+        Language::En => format!("Scope ({total} items, first shown):\n{list}"),
+    }
+}
+
+/// 确认框 detail 里的范围段（含前导空行）：列出前 12 条路径，过长时说明总数。
+/// 无路径时返回空串，调用方直接拼接即可。
+pub fn confirm_scope_detail(lang: Language, paths: &[String]) -> String {
+    const MAX: usize = 12;
+    if paths.is_empty() {
+        return String::new();
+    }
+    let shown = &paths[..paths.len().min(MAX)];
+    let list = shown.join("\n");
+    let body = if paths.len() > shown.len() {
+        tr_confirm_scope_truncated(lang, paths.len(), &list)
+    } else {
+        tr_confirm_scope(lang, &list)
+    };
+    format!("\n\n{body}")
+}
+
+/// 单路径删除确认里的操作说明：整目录（连同内容）还是单个文件。
+pub fn tr_confirm_path_operation(lang: Language, is_dir: bool) -> &'static str {
+    match (lang, is_dir) {
+        (Language::Zh, true) => "操作：删除整个目录及其内容。",
+        (Language::En, true) => "Operation: delete the whole folder and its contents.",
+        (Language::Zh, false) => "操作：删除这个文件。",
+        (Language::En, false) => "Operation: delete this file.",
+    }
+}
+
 pub fn tr_confirm_delete_selected_title(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "确认永久删除选中项",
@@ -1059,11 +1164,34 @@ pub fn tr_confirm_no_recycle(lang: Language) -> &'static str {
     }
 }
 
-/// 批量删除时的警告：多提醒一句「别把重要数据勾进去了」。
-pub fn tr_confirm_no_recycle_check_data(lang: Language) -> &'static str {
+/// 确认框里的删除方式摘要：如实反映当前设置。
+///
+/// 路径删除与磁盘透镜都尊重「删除到回收站」设置——确认框不能无条件宣称
+/// 「不进入回收站」，那句话只在永久删除时是真的。
+pub fn tr_confirm_disposal(lang: Language, recycle: bool) -> String {
+    match (lang, recycle) {
+        (Language::Zh, true) => "删除方式：移入回收站，可在回收站恢复。".to_string(),
+        (Language::En, true) => {
+            "Deletion method: move to the Recycle Bin; items can be restored from there."
+                .to_string()
+        }
+        (Language::Zh, false) => {
+            "删除方式：永久删除，不进入回收站，删除后无法恢复。请确认没有重要数据。".to_string()
+        }
+        (Language::En, false) => {
+            "Deletion method: permanently delete; files do not go to the Recycle Bin and cannot be recovered. Make sure nothing important is selected."
+                .to_string()
+        }
+    }
+}
+
+/// 删除时的占用提醒：正在使用的程序数据删除会失败或被跳过。
+pub fn tr_confirm_running_caution(lang: Language) -> &'static str {
     match lang {
-        Language::Zh => "文件与目录不会进入回收站，删除后无法恢复。请确认没有重要数据。",
-        Language::En => "Files and folders do not go to the Recycle Bin and cannot be recovered. Make sure nothing important is selected.",
+        Language::Zh => "请确认它不是正在使用的程序或数据；被占用或受保护的条目会跳过并如实报告。",
+        Language::En => {
+            "Make sure this is not data of a program that is currently running; protected or in-use items are skipped and reported."
+        }
     }
 }
 
@@ -1072,14 +1200,6 @@ pub fn tr_confirm_app_data_warning(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "目标位于 ~/Library/Application Support：这里存放应用数据（聊天记录、密码库、本地数据库等），永久删除后无法恢复。请确认你了解这些目录的用途。",
         Language::En => "The target is under ~/Library/Application Support - application data lives here (chat history, password vaults, local databases) and cannot be recovered once permanently deleted. Make sure you know what these directories contain.",
-    }
-}
-
-/// 删单个路径时的警告：多提醒一句「别删正在跑的程序的数据」。
-pub fn tr_confirm_no_recycle_check_running(lang: Language) -> &'static str {
-    match lang {
-        Language::Zh => "文件不会进入回收站，删除后无法恢复。请确认它不是正在使用的程序或数据。",
-        Language::En => "Files do not go to the Recycle Bin and cannot be recovered. Make sure this is not data of a program that is currently running.",
     }
 }
 
@@ -2243,6 +2363,66 @@ pub fn tr_update_install_busy_body(lang: Language) -> &'static str {
     }
 }
 
+// ---- 确认对话框的按钮 / 结果文案（原内联在 components/dialogs.rs）----
+
+pub fn tr_confirm_action_uninstall(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认卸载",
+        Language::En => "Uninstall",
+    }
+}
+
+pub fn tr_confirm_action_install(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "安装",
+        Language::En => "Install",
+    }
+}
+
+pub fn tr_confirm_action_delete_permanently(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "确认永久删除",
+        Language::En => "Delete Permanently",
+    }
+}
+
+pub fn tr_occupancy_more(lang: Language, hidden: usize) -> String {
+    match lang {
+        Language::Zh => format!("…以及另外 {hidden} 条"),
+        Language::En => format!("…and {hidden} more"),
+    }
+}
+
+pub fn tr_done_label(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "完成",
+        Language::En => "Done",
+    }
+}
+
+pub fn tr_clean_selected_button(lang: Language, count: usize, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("彻底清除所选 ({count}) · 释放 {size}"),
+        Language::En => format!("Clean Selected ({count}) · Free {size}"),
+    }
+}
+
+pub fn tr_residual_found_title(lang: Language, app: &str, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("发现「{app}」的 {count} 项关联残留"),
+        Language::En => format!("Found {count} residual items for \"{app}\""),
+    }
+}
+
+pub fn tr_residual_found_sub(lang: Language, size: &str) -> String {
+    match lang {
+        Language::Zh => format!("包括应用缓存、用户配置数据及注册表孤儿项，预计释放 {size}"),
+        Language::En => format!(
+            "Includes caches, app configuration and registry traces. Potential space: {size}"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod failure_detail_tests {
     use super::*;
@@ -2269,6 +2449,61 @@ mod failure_detail_tests {
                     tr_fail_reason(lang, FailReason::Unverified)
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod scope_detail_tests {
+    use super::*;
+
+    /// 范围段列出路径；无路径时为空；过长时只列前 12 条并说明总数。
+    #[test]
+    fn scope_detail_lists_paths_and_marks_truncation() {
+        let short = vec!["C:\\alpha".to_string(), "C:\\beta".to_string()];
+        for lang in [Language::Zh, Language::En] {
+            let detail = confirm_scope_detail(lang, &short);
+            assert!(detail.starts_with("\n\n"));
+            assert!(detail.contains("C:\\alpha") && detail.contains("C:\\beta"));
+            assert!(confirm_scope_detail(lang, &[]).is_empty());
+        }
+        let long: Vec<String> = (0..20).map(|i| format!("C:\\p{i}")).collect();
+        let detail = confirm_scope_detail(Language::En, &long);
+        assert!(detail.contains("20 items"), "{detail}");
+        assert!(detail.contains("C:\\p0"));
+        assert!(
+            !detail.contains("C:\\p19"),
+            "只列前 12 条，其余用总数说明：{detail}"
+        );
+    }
+
+    /// 删除方式摘要如实反映回收站设置：回收站路线不能宣称「无法恢复」，
+    /// 永久删除路线必须写明不可恢复——确认框与实际执行要一致。
+    #[test]
+    fn disposal_summary_reflects_the_recycle_setting() {
+        let permanent = tr_confirm_disposal(Language::Zh, false);
+        assert!(permanent.contains("永久删除"), "{permanent}");
+        assert!(permanent.contains("无法恢复"), "{permanent}");
+        let bin = tr_confirm_disposal(Language::En, true);
+        assert!(bin.contains("Recycle Bin"), "{bin}");
+        assert!(
+            !bin.contains("cannot be recovered"),
+            "回收站路线不能宣称不可恢复：{bin}"
+        );
+        assert!(
+            !tr_confirm_disposal(Language::Zh, true).contains("不进入回收站"),
+            "回收站路线不能宣称「不进入回收站」"
+        );
+    }
+
+    /// 单路径删除的操作说明区分整目录与单个文件，两种语言都有文案。
+    #[test]
+    fn path_operation_distinguishes_folder_and_file() {
+        for lang in [Language::Zh, Language::En] {
+            let dir = tr_confirm_path_operation(lang, true);
+            let file = tr_confirm_path_operation(lang, false);
+            assert!(!dir.is_empty() && !file.is_empty());
+            assert_ne!(dir, file);
         }
     }
 }

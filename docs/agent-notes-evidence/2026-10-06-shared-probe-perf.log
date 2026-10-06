@@ -1,0 +1,15 @@
+cache-catalog-extra run1 exit=0 wallMs=1216 peakWorkingSetMB=0 plans=4 blocked=0 directoryReads=1 inventoryEntries=4 probes= manifestReads=0 manifestRows=0 candidateChecks=4 budgetBlocked=0
+cache-catalog-extra run2 exit=0 wallMs=1037 peakWorkingSetMB=0 plans=4 blocked=0 directoryReads=1 inventoryEntries=4 probes= manifestReads=0 manifestRows=0 candidateChecks=4 budgetBlocked=0
+cache-catalog-extra run3 exit=0 wallMs=1023 peakWorkingSetMB=0 plans=4 blocked=0 directoryReads=1 inventoryEntries=4 probes= manifestReads=0 manifestRows=0 candidateChecks=4 budgetBlocked=0
+cache-catalog-extra run4 exit=0 wallMs=1015 peakWorkingSetMB=0 plans=4 blocked=0 directoryReads=1 inventoryEntries=4 probes= manifestReads=0 manifestRows=0 candidateChecks=4 budgetBlocked=0
+cache-catalog-extra run5 exit=0 wallMs=1038 peakWorkingSetMB=0 plans=4 blocked=0 directoryReads=1 inventoryEntries=4 probes= manifestReads=0 manifestRows=0 candidateChecks=4 budgetBlocked=0
+directory-layout-extra run1 exit=0 wallMs=1015 peakWorkingSetMB=0 plans=1 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=0 manifestRows=0 candidateChecks=1 budgetBlocked=0
+directory-layout-extra run2 exit=0 wallMs=1009 peakWorkingSetMB=0 plans=1 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=0 manifestRows=0 candidateChecks=1 budgetBlocked=0
+directory-layout-extra run3 exit=0 wallMs=1021 peakWorkingSetMB=0 plans=1 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=0 manifestRows=0 candidateChecks=1 budgetBlocked=0
+directory-layout-extra run4 exit=0 wallMs=1019 peakWorkingSetMB=0 plans=1 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=0 manifestRows=0 candidateChecks=1 budgetBlocked=0
+directory-layout-extra run5 exit=0 wallMs=1022 peakWorkingSetMB=0 plans=1 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=0 manifestRows=0 candidateChecks=1 budgetBlocked=0
+manifest-layout-extra run1 exit=0 wallMs=1036 peakWorkingSetMB=0 plans=2 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=2 manifestRows=3 candidateChecks=2 budgetBlocked=0
+manifest-layout-extra run2 exit=0 wallMs=1018 peakWorkingSetMB=0 plans=2 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=2 manifestRows=3 candidateChecks=2 budgetBlocked=0
+manifest-layout-extra run3 exit=0 wallMs=1046 peakWorkingSetMB=0 plans=2 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=2 manifestRows=3 candidateChecks=2 budgetBlocked=0
+manifest-layout-extra run4 exit=0 wallMs=1010 peakWorkingSetMB=0 plans=2 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=2 manifestRows=3 candidateChecks=2 budgetBlocked=0
+manifest-layout-extra run5 exit=0 wallMs=1027 peakWorkingSetMB=0 plans=2 blocked=0 directoryReads=1 inventoryEntries=1 probes= manifestReads=2 manifestRows=3 candidateChecks=2 budgetBlocked=0

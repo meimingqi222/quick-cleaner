@@ -1,0 +1,55 @@
+=== 矩阵「平台质量」行 Windows 侧八项必做命令 2026-10-06T14:27:53+08:00 ===
+--- 1/8 cargo fmt --check
+exit=0
+--- 2/8 cargo build
+exit=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.06s
+--- 3/8 cargo test --lib
+exit=0
+
+--- 4/8 cargo clippy --all-targets -- -D warnings
+exit=0
+--- 5/8 cargo run --example rules -- check
+schema=9 sequence=1 rules=13 bytes=40667
+exit=0
+--- 6/8 strict-anchors
+exit=0
+OK: regression notes under docs\agent-notes verified
+--- 7/8 check-pitfall-notes
+exit=0
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+--- 8/8 git diff --check
+exit=0
+--- test 结果行
+--- 9/9 UI 本地化守卫
+OK: no new inline UI strings (remaining baseline: 0)
+exit=0
+--- ignored 隔离测试清单
+core::devscan::bench_probe::compare_channels: test
+core::scanner::tests::scan_timing_profile: test
+platform::windows::app_discovery::tests::official_uninstall_process_preserves_data_and_completes_noop_with_verified_fallback: test
+platform::windows::app_discovery::tests::probe_live_hermes_discovery: test
+platform::windows::apps::uninstaller_probe::probe_uninstaller: test
+platform::windows::apps::uninstaller_stats::count_missing_uninstallers: test
+platform::windows::process::tests::inspect_local_official_command_lengths_without_running: test
+platform::windows::residuals::probe::probe_residuals: test
+platform::windows::source_install::tests::gateway_task_cleanup_requires_exact_installation_action: test
+
+9 tests, 0 benchmarks
+--- 隔离官方进程夹具（ignored，重跑确认新鲜度）
+failures:
+    platform::windows::app_discovery::tests::official_uninstall_process_preserves_data_and_completes_noop_with_verified_fallback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 605 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+--- 隔离官方进程夹具（QC_TEST_RUNTIME_DIR = uv-managed CPython 3.13.5）
+running 1 test
+test platform::windows::app_discovery::tests::official_uninstall_process_preserves_data_and_completes_noop_with_verified_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 605 filtered out; finished in 1.37s
+
+--- 回归记录统计
+67
+3
+OK: regression notes under docs\agent-notes verified

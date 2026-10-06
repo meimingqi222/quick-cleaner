@@ -1,0 +1,9 @@
+=== 2026-10-06T06:26:28.2240894+08:00 ===
+FMT exit=0
+BUILD exit=0
+TEST test result: ok. 591 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 10.24s exit=0
+CLIPPY exit=0
+CHECK schema=9 sequence=1 rules=13 bytes=40627 exit=0
+NOTES OK: regression notes under docs\agent-notes verified exit=0
+PIT 0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers exit=0
+DIFF exit=0

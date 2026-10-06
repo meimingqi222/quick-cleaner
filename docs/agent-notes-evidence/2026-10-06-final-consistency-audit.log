@@ -1,0 +1,16 @@
+=== 最终一致性审计 2026-10-06T15:06:14+08:00 ===
+--- 1) 八项必做命令（真实退出码）
+fmt=0
+build=0
+test=0
+
+clippy=0
+schema=9 sequence=1 rules=13 bytes=40667
+anchors=0
+0 error(s), 7 warning(s), 26 of 33 pitfall(s) carry Note: pointers
+diff=clean
+--- 2) 两个守卫
+OK: no new inline UI strings (remaining baseline: 0)
+OK: 345 identifier(s) resolved (609 test names); 3 doc(s) path-clean
+--- 3) 隔离官方进程夹具
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 608 filtered out; finished in 0.99s
