@@ -798,9 +798,17 @@ def covered_notes(notes, paths):
 
 
 def dump_anchors(notes):
-    """Print every `path::anchor` bound in a ## Verification section."""
+    """Print every `path::anchor` bound in a ## Verification section.
+
+    Archived notes are skipped: they are sealed (see the manifest) and therefore
+    cannot be edited to follow a renamed or retired test — the seal, not the live
+    test list, is what keeps them honest. Their anchors may legitimately name
+    tests that were later removed.
+    """
     count = 0
     for top in sorted(p for p in notes.iterdir() if p.is_dir() and p.name in LIFECYCLES):
+        if top.name == "archived":
+            continue
         for second in sorted(p for p in top.iterdir() if p.is_dir() and p.name in CLASSES):
             for md in sorted(second.glob("*.md")):
                 text = "\n".join(strip_fences(read_text_safe(md)))

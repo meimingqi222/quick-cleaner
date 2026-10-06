@@ -38,8 +38,9 @@ non-LaunchAgent residuals or for files with no loaded job.
 
 ## Verification
 
-macOS-only change: `src/platform/macos/residuals.rs::bootout_user_agent` and its call in
-`clean_residuals_inner`. This host has no macOS toolchain (`pub mod macos` is
+macOS-only change: the `bootout_user_agent` helper in `src/platform/macos/residuals.rs` and
+its call from `clean_residuals_inner` in the same file (no Rust test is bound — the code
+path only compiles on macOS). This host has no macOS toolchain (`pub mod macos` is
 `cfg(target_os = "macos")`, and cross-checking the target fails inside third-party C
 dependencies), so the change is **not compiled or executed here** — an honest limitation.
 What was verified locally: the inserted code is pattern-identical to the already-shipped
