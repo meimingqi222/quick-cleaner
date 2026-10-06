@@ -175,7 +175,7 @@ impl<F: FnMut(super::execution::SourceAction) -> Result<(), String>> CapabilityE
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 /// Run a command-based uninstall (a registered app's official uninstaller) through the
 /// shared capability runner, so the UI gets the same step evidence as source installs.
 ///
@@ -202,13 +202,13 @@ pub(crate) fn execute_registered(
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 struct RegisteredExecutor<R, V> {
     run: R,
     verify: V,
     error: Option<String>,
 }
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 impl<R: FnMut() -> Result<(), String>, V: FnMut(&CompletionCondition) -> Evidence>
     CapabilityExecutor for RegisteredExecutor<R, V>
 {
@@ -238,7 +238,7 @@ impl<R: FnMut() -> Result<(), String>, V: FnMut(&CompletionCondition) -> Evidenc
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 /// Run a native-residue cleanup (registry key/value, scheduled task or system
 /// extension) through the shared capability runner, so the residual channel gets the
 /// same `Revalidate → Apply → Verify` step evidence as every other entry.
@@ -266,13 +266,13 @@ pub(crate) fn execute_native_residual(
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 struct NativeResidualExecutor<A, V> {
     apply: A,
     verify: V,
     error: Option<String>,
 }
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 impl<A, V> CapabilityExecutor for NativeResidualExecutor<A, V>
 where
     A: FnMut(&PlannedTarget) -> Result<(), String>,
