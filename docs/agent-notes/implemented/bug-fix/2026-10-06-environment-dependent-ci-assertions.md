@@ -65,7 +65,10 @@ home cache (~/.cache) between the two calls failed with that one path as the ent
 while the narrowed invariants passed under the identical perturbation
 (docs/agent-notes-evidence/2026-10-06-ci-flake-scope-probe.log). The Windows spawn failure
 did not reproduce — the same commit's re-run is green — which is what identified it as
-environmental; the diagnostic change is what makes a recurrence decidable.
+environmental; the diagnostic change is what makes a recurrence decidable. With the change
+in place both platforms are green again in run 37469907140 (commit 5be7519): macOS
+`cargo test` 631 passed / 0 failed / 11 ignored, Windows 608 passed / 0 failed / 9 ignored,
+and the bound-anchor job passes on the union of the two test lists.
 
 Supersedes `2026-10-06-fixed-target-table-invariants.md`, which owned the assertion this
 note narrows; the archived note keeps the history and the duplicate-freedom half of its
