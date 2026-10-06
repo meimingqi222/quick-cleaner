@@ -152,7 +152,18 @@ def main() -> int:
     parser.add_argument("--update-baseline", action="store_true")
     args = parser.parse_args()
 
-    texts = {path: path.read_text(encoding="utf-8") for path in args.docs}
+    # `/docs/*` 在 .gitignore 里有意只放行 PITFALLS/agent-notes/evidence，因此
+    # 这些维护文档在 CI 检出里**不存在**——它们是本地工作文档，缺了就跳过并
+    # 明说，不把「文件不在」当成引用失实。
+    texts = {}
+    for path in args.docs:
+        if not path.exists():
+            print(f"skip: {path} 不在当前检出（.gitignore 的 /docs/* 策略）")
+            continue
+        texts[path] = path.read_text(encoding="utf-8")
+    if not texts:
+        print("OK: 没有可核对的文档（本地工作文档不在检出中）")
+        return 0
     identifiers = set()
     for text in texts.values():
         identifiers |= collect_identifiers(text)

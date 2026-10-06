@@ -103,9 +103,10 @@ jobs:
           pattern: testlist-*
       - run: python -X utf8 tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --dump-anchors > anchors.txt
       - run: python -X utf8 scripts/check-anchors-vs-tests.py anchors.txt testlist-windows/testlist-windows.txt testlist-macos/testlist-macos.txt
-      # 状态记录的引用守卫：矩阵映射引用的测试名必须在两个平台的并集里真实
-      # 存在，其余标识符须在源码/规则/工具/依赖清单里找得到。
-      - run: python -X utf8 scripts/check-status-references.py --tests testlist-windows/testlist-windows.txt testlist-macos/testlist-macos.txt
+      # 状态记录/维护文档的引用守卫**不在这里**：它的输入（docs/RULES.md、
+      # docs/CAPABILITIES.md、docs/RULES_REFACTOR_STATUS.md）被 .gitignore 的
+      # `/docs/*` 策略有意排除在检出之外，是本地工作文档。守卫作为本地检查运行：
+      #   python -X utf8 scripts/check-status-references.py --tests <cargo test --list 产物>
       # 验收脚本的回填块格式是交接链路的承重件：在非 macOS 主机上守护它，
       # 避免拿到 macOS 时发现块已不能直接粘贴。
       - run: bash scripts/macos-acceptance-format-test.sh
