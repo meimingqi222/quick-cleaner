@@ -44,7 +44,12 @@ Proved: real Windows CI run 37537438857 failed the two descendant-readiness
 assertions and the elevated cleanup assertion, recorded in
 `docs/agent-notes-evidence/2026-10-07-windows-ci-native-contention-red.log`.
 The local focused process tests pass. Elevated acceptance must be verified on the
-new CI run because this development session is not elevated.
+new CI run because this development session is not elevated. Run 37587437605
+then passed both process tests but still failed elevated ACL cleanup (701 passed,
+one failed). Serialization therefore addresses the observed process-fixture failure
+but does not fix the ACL failure. The elevated fixture prints only state booleans,
+counts and OS error codes on failure, without paths, SIDs or a machine log dump.
+The cleanup assertion stays a hard failure.
 
 Pitfalls P1-P47 reviewed: P6 elevated recovery, P20 owner failure handling,
 P23 hidden consoles, P40 command quoting, P43 bounded node-only ACL repair and

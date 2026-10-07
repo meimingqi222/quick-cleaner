@@ -2303,6 +2303,32 @@ mod tests {
 
         let p = CleanProgress::default();
         let result = clean_path(&base, &p);
+        if result != CleanResult::Ok {
+            eprintln!(
+                "ACL fixture: base_protected={} directory_protected={} live_database={} files={} failures={} directory_read_error={:?} file_metadata_error={:?}",
+                is_protected(&base),
+                is_protected(&locked),
+                crate::core::safety::is_live_database(&base),
+                p.files.load(Ordering::Relaxed),
+                p.failed.load(Ordering::Relaxed),
+                std::fs::read_dir(&locked).err().and_then(|e| e.raw_os_error()),
+                std::fs::symlink_metadata(locked.join("app.log"))
+                    .err()
+                    .and_then(|e| e.raw_os_error()),
+            );
+            if let Ok(reasons) = FAIL_REASONS.lock() {
+                for (path, reason) in reasons.iter().filter(|(path, _)| path.starts_with(&base)) {
+                    let kind = if path == &base {
+                        "root"
+                    } else if path == &locked {
+                        "directory"
+                    } else {
+                        "file"
+                    };
+                    eprintln!("ACL fixture: {kind} reason={reason:?}");
+                }
+            }
+        }
         assert_eq!(
             result,
             CleanResult::Ok,

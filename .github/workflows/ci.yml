@@ -43,6 +43,8 @@ jobs:
       # 属于 deny 级 lint，cargo build/test 全绿也照样漏过去。
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Verify elevated ACL cleanup
+        run: cargo test --lib core::cleaner::tests::acl_deny_delete_is_overridden_when_elevated -- --exact --nocapture
       - name: Run tests
         # Native process/ACL deadlines must not compete with other live probes.
         run: cargo test -- --test-threads=1
