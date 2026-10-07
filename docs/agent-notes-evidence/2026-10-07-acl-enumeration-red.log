@@ -1,0 +1,37 @@
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+   Compiling quick-cleaner v0.0.9 (<WORKSPACE>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.28s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-a8baeab00b67d819.exe)
+
+running 1 test
+�ѳɹ����� 1 ���ļ�; ���� 0 ���ļ�ʱʧ��
+�ѳɹ����� 1 ���ļ�; ���� 0 ���ļ�ʱʧ��
+
+thread 'core::cleaner::tests::denied_directory_enumeration_recovers_only_the_current_node' (68348) panicked at src\core\cleaner.rs:2307:36:
+called `Result::unwrap()` on an `Err` value: Os { code: 5, kind: PermissionDenied, message: "拒绝访问。" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::cleaner::tests::denied_directory_enumeration_recovers_only_the_current_node ... FAILED
+
+failures:
+
+failures:
+    core::cleaner::tests::denied_directory_enumeration_recovers_only_the_current_node
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 711 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `--lib`

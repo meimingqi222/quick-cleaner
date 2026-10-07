@@ -287,7 +287,7 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
     p.note(path);
     let mut subdirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    match std::fs::read_dir(path) {
+    match read_dir_with_access_recovery(path, crate::platform::force_delete_access) {
         Ok(rd) => {
             for entry in rd.flatten() {
                 let Ok(ft) = entry.file_type() else { continue };
@@ -333,6 +333,20 @@ pub fn delete_tree(path: &Path, p: &CleanProgress) -> CleanResult {
         // 只体现在返回值上，进度条里的失败数因此偏少。
         p.failed.fetch_add(1, Ordering::Relaxed);
         CleanResult::Failed
+    }
+}
+
+fn read_dir_with_access_recovery(
+    path: &Path,
+    recover: impl FnOnce(&Path) -> bool,
+) -> std::io::Result<std::fs::ReadDir> {
+    match std::fs::read_dir(path) {
+        Err(error) if is_access_denied(&error) => {
+            // A Windows Deny Delete DACL can also block enumeration before child deletion.
+            let _ = recover(path);
+            std::fs::read_dir(path)
+        }
+        result => result,
     }
 }
 
@@ -2252,6 +2266,58 @@ mod tests {
     /// 进程早已退出，句柄占用不是原因；提权后应能拆掉 ACL 再删。
     /// 未提权的测试环境直接跳过——`force_delete_access` 本身有
     /// `is_elevated` 闸门，这里只验证接线没有断。
+    #[cfg(windows)]
+    #[test]
+    fn denied_directory_enumeration_recovers_only_the_current_node() {
+        use std::os::windows::process::CommandExt;
+        let base = crate::core::testing::fixture("qc_acl_enumeration");
+        let locked = base.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let file = locked.join("app.log");
+        std::fs::write(&file, b"fixture").unwrap();
+        let sid = crate::platform::windows::security::current_user_sid().unwrap();
+        let trustee = format!("*{sid}");
+        assert!(std::process::Command::new("icacls")
+            .arg(&locked)
+            .args(["/deny", &format!("{trustee}:(D,DC)"), "/q"])
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            std::fs::read_dir(&locked).unwrap_err().raw_os_error(),
+            Some(5)
+        );
+        let mut recovered = Vec::new();
+        let read = read_dir_with_access_recovery(&locked, |path| {
+            recovered.push(path.to_path_buf());
+            std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/remove:d", &trustee, "/q"])
+                .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+                .status()
+                .is_ok_and(|status| status.success())
+        });
+        // Restore the fixture even if the guard regresses and never calls recovery.
+        let _ = std::process::Command::new("icacls")
+            .arg(&locked)
+            .args(["/remove:d", &trustee, "/q"])
+            .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
+            .status();
+        let entries: Vec<_> = read.unwrap().map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(recovered, vec![locked.clone()]);
+        assert_eq!(entries, vec![file.clone()]);
+        assert!(
+            file.is_file(),
+            "enumeration recovery must not delete children"
+        );
+        assert!(read_dir_with_access_recovery(&base.join("missing"), |_| {
+            panic!("NotFound must not authorize ACL recovery")
+        })
+        .is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn acl_deny_delete_is_overridden_when_elevated() {

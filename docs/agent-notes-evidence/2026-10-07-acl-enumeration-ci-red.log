@@ -1,0 +1,2 @@
+2026-10-07T07:47:28.7633375Z ACL fixture: base_protected=false directory_protected=false live_database=false files=0 failures=2 directory_read_error=Some(5) file_metadata_error=None
+2026-10-07T07:47:28.7633904Z ACL fixture: root reason=Other
