@@ -1,0 +1,14 @@
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7782509Z failures:
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7783350Z ---- core::cleaner::tests::acl_deny_delete_is_overridden_when_elevated stdout ----
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7784881Z thread 'core::cleaner::tests::acl_deny_delete_is_overridden_when_elevated' (9812) panicked at src\core\cleaner.rs:2306:9:
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7786408Z assertion `left == right` failed: 拆 ACL 后应删干净，locked 还在=true log 还在=true
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7786787Z   left: Failed
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7786980Z  right: Ok
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7797756Z ---- core::proc::tests::review_exited_parent_does_not_bypass_the_pipe_deadline stdout ----
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7798472Z thread 'core::proc::tests::review_exited_parent_does_not_bypass_the_pipe_deadline' (5524) panicked at src\core\proc.rs:212:9:
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7799032Z test must actually launch the descendant
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7806331Z ---- core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes stdout ----
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7807040Z thread 'core::proc::tests::review_timeout_kills_shim_descendants_and_closes_pipes' (7544) panicked at src\core\proc.rs:187:9:
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7807604Z test must actually launch the descendant
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7816779Z failures:
+Test (Windows)	UNKNOWN STEP	2026-10-06T22:07:13.7818534Z test result: FAILED. 699 passed; 3 failed; 9 ignored; 0 measured; 0 filtered out; finished in 153.00s

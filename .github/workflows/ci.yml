@@ -44,7 +44,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Run tests
-        run: cargo test
+        # Native process/ACL deadlines must not compete with other live probes.
+        run: cargo test -- --test-threads=1
       # 绑定 anchor 必须是测试二进制里真实存在的用例：文件内 substring 校验
       # 挡不住「改名后旧名字留在注释里」。#[cfg] 门控的用例只在对应平台的
       # 二进制里存在，所以两个 job 各产一份 --list 产物，由 verify-anchors
