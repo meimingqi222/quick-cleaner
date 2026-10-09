@@ -1,0 +1,41 @@
+Mutation: disable the manual-uninstall guard. No native uninstall is executed.
+   Compiling quick-cleaner v0.0.9 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.33s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-a208c38bff55122b)
+
+running 1 test
+
+thread 'core::rules::uninstall::tests::msime_manual_uninstall_matches_exact_editions' (497736) panicked at src/core/rules/uninstall.rs:223:13:
+app.msime.macos
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::rules::uninstall::tests::msime_manual_uninstall_matches_exact_editions ... FAILED
+
+failures:
+
+failures:
+    core::rules::uninstall::tests::msime_manual_uninstall_matches_exact_editions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 738 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+
+Native fixture regression: macOS parse_app_bundle uses Hkcu, not Unregistered.
+   Compiling quick-cleaner v0.0.9 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.55s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-a208c38bff55122b)
+
+running 1 test
+
+thread 'platform::macos::apps::script_uninstall::tests::msime_manual_uninstall_does_not_delete_either_bundle' (524791) panicked at src/platform/macos/script_uninstall.rs:466:13:
+assertion failed: super::super::run_uninstaller_and_wait(&app).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test platform::macos::apps::script_uninstall::tests::msime_manual_uninstall_does_not_delete_either_bundle ... FAILED
+
+failures:
+
+failures:
+    platform::macos::apps::script_uninstall::tests::msime_manual_uninstall_does_not_delete_either_bundle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 739 filtered out; finished in 0.17s
+
+error: test failed, to rerun pass `--lib`

@@ -1,0 +1,37 @@
+   Compiling quick-cleaner v0.0.9 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.10s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-a208c38bff55122b)
+
+running 7 tests
+
+thread 'platform::macos::apps::tests::qingjian_discovery_includes_both_input_method_roots' (331891) panicked at src/platform/macos/apps.rs:787:9:
+assertion failed: roots.contains(&(PathBuf::from("/Library/Input Methods"), false))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test platform::macos::apps::tests::qingjian_discovery_includes_both_input_method_roots ... FAILED
+
+thread 'core::rules::app_data::tests::qingjian_data_alias_requires_complete_registration_identity' (331886) panicked at src/core/rules/app_data.rs:76:9:
+assertion `left == right` failed
+  left: []
+ right: ["<tmp>/qc_qingjian_alias_98444/Qingjian"]
+test core::rules::app_data::tests::qingjian_data_alias_requires_complete_registration_identity ... FAILED
+test core::rules::app_data::tests::qingjian_data_alias_rejects_links_and_path_escape ... ok
+
+thread 'platform::macos::apps::input_method::tests::qingjian_script_uninstall_preserves_data_and_uses_verified_bytes' (331888) panicked at src/platform/macos/input_method.rs:215:9:
+assertion `left == right` failed
+  left: None
+ right: Some("<tmp>/qc_qingjian_script_success_98444/home ' $(ignored)/Library/Input Methods/Qingjian.app/Contents/Resources/uninstall.sh")
+test platform::macos::apps::input_method::tests::qingjian_script_uninstall_preserves_data_and_uses_verified_bytes ... FAILED
+test platform::macos::apps::input_method::tests::qingjian_script_verifies_both_copies_after_elevated_operation ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_rejects_unreviewed_content_and_redirected_paths ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_zero_exit_and_failure_do_not_grant_trash_fallback ... ok
+
+failures:
+
+failures:
+    core::rules::app_data::tests::qingjian_data_alias_requires_complete_registration_identity
+    platform::macos::apps::input_method::tests::qingjian_script_uninstall_preserves_data_and_uses_verified_bytes
+    platform::macos::apps::tests::qingjian_discovery_includes_both_input_method_roots
+
+test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 724 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `--lib`

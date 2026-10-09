@@ -620,6 +620,13 @@ impl crate::ui::Root {
         if self.residual.scanning || self.clean.running || !app.can_uninstall() {
             return;
         }
+        if cfg!(target_os = "macos")
+            && crate::core::rules::uninstall::requires_manual_uninstall(&app)
+        {
+            self.status = bilingual(|lang| tr_manual_uninstall_required(lang, &app.name));
+            cx.notify();
+            return;
+        }
         let lang = self.language;
         let app_name = app.name.clone();
         let size_str = if app.estimated_size > 0 {
@@ -650,6 +657,10 @@ impl crate::ui::Root {
         };
         if app.discovery.is_some() {
             detail = tr_discovered_uninstall_detail(lang).to_owned();
+        }
+        if crate::core::rules::uninstall::deletes_user_data(&app) {
+            detail.push('\n');
+            detail.push_str(tr_official_uninstall_deletes_data(lang));
         }
         if let Some(discovery) = &app.discovery {
             if let Some(reference) = discovery

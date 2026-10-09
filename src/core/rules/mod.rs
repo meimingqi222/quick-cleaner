@@ -1,9 +1,12 @@
 //! Bundled declarative policy selects fixed capabilities; deletion authority remains in safety/cleaner.
+#[cfg(any(test, windows))]
+pub(crate) mod app_data;
 pub mod directories;
 pub mod execution;
 pub mod facts;
 pub mod flow;
 mod plan;
+pub(crate) mod uninstall;
 pub mod variables;
 pub mod versions;
 pub use plan::{
@@ -78,6 +81,20 @@ pub struct RuleDefinition {
     pub catalogs: BTreeMap<String, Vec<Layout>>,
     #[serde(default)]
     pub locations: BTreeMap<String, Vec<ResidualLocation>>,
+    #[serde(default)]
+    pub app_data_aliases: Vec<AppDataAlias>,
+    #[serde(default)]
+    pub script_uninstallers: Vec<uninstall::ScriptUninstaller>,
+    #[serde(default)]
+    pub uninstall_data_warnings: Vec<uninstall::RegisteredUninstallWarning>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppDataAlias {
+    pub registry_id: String,
+    pub name: String,
+    pub publisher: String,
+    pub directory: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -299,6 +316,28 @@ impl RuleBundle {
         for rule in &self.rules {
             directories::validate(rule)?;
             versions::validate(rule)?;
+            uninstall::validate(rule)?;
+            if rule.app_data_aliases.len() > 128
+                || rule.app_data_aliases.iter().any(|alias| {
+                    rule.platform != "windows"
+                        || alias.registry_id.is_empty()
+                        || alias.registry_id.len() > 256
+                        || alias.registry_id.contains(['/', '\\'])
+                        || alias.registry_id.chars().any(char::is_control)
+                        || alias.name.trim().is_empty()
+                        || alias.name.len() > 256
+                        || alias.publisher.trim().is_empty()
+                        || alias.publisher.len() > 256
+                        || alias.directory.len() > 128
+                        || !crate::core::apps::is_safe_app_token(&alias.directory)
+                        || !alias
+                            .directory
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                })
+            {
+                return Err("Invalid registered app data alias".into());
+            }
             if rule.provider_policies.len() > 128
                 || rule.provider_policies.keys().any(|key| {
                     key.is_empty()

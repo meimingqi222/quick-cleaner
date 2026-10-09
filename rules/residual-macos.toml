@@ -1,10 +1,14 @@
 id = "residual-macos"
-version = 1
+version = 3
 platform = "macos"
 required = ["file", "registration"]
 
 # Bundle-ID evidence and family exclusion algorithms remain fixed in Rust.
 [lists]
+# 内部 GUI 卸载入口，没有可供外部调用的卸载命令。
+manual_uninstall_bundle_ids = ["app.msime.macos", "app.msime.inputmethod.MetasequoiaIME", "app.msime.macos.pinyin", "app.msime.inputmethod.pinyin", "app.msime.macos.wubi", "app.msime.inputmethod.wubi", "app.msime.macos.japanese", "app.msime.inputmethod.japanese", "app.msime.macos.vietnamese", "app.msime.inputmethod.vietnamese", "app.msime.macos.tibetan", "app.msime.inputmethod.tibetan"]
+
+manual_app_support_bundle_ids = ["app.qingjian.inputmethod"]
 helper_id_suffixes = [".helper.renderer", ".helper.plugin", ".helper.alerts", ".helper.gpu", ".helper.np", ".helper", ".shipit", ".sparkle", ".xpc"]
 shared_vendor_prefixes = ["com.apple", "com.google", "com.microsoft", "com.adobe", "com.amazon", "com.oracle", "com.jetbrains", "org.mozilla", "org.chromium", "com.electron", "net.java"]
 dot_config_parents = ["", ".config", ".cache", ".local/share", ".local/state"]
@@ -158,3 +162,15 @@ source = "AppSupportDir"
 [[locations.orphan_roots]]
 path = "LaunchAgents"
 source = "LaunchAgent"
+
+# qingjian-team/qingjian c08ae57；此摘要与参数组合保留学习数据和密钥。
+# 仅支持经过核验的独立脚本，不支持依赖脚本文件路径或旁置资源的脚本。
+[[script_uninstallers]]
+bundle_id = "app.qingjian.inputmethod"
+script = "Contents/Resources/uninstall.sh"
+sha256 = ["c08b62f66d9fe23222dd5e05565d56e98d3c9c6a39da7a6fab44c232bb76ac24"]
+interpreter = "sh"
+arguments = []
+preserves_user_data = true
+user_bundles = ["Library/Input Methods/Qingjian.app"]
+system_bundles = ["Library/Input Methods/Qingjian.app"]

@@ -75,8 +75,15 @@ struct ScanRoots<'a> {
 fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanResult {
     crate::core::rules::with_snapshot(crate::core::rules::current(), || {
         let mut result = scan_residuals_inner(app, roots);
+        let manual_data =
+            crate::core::rules::list("residual-macos", "manual_app_support_bundle_ids")
+                .iter()
+                .any(|id| id == &app.registry_subpath);
         for item in &mut result.items {
             item.rule = Some(crate::core::rules::RuleRef::new("residual-macos", None));
+            if manual_data && item.source == ResidualSource::AppSupportDir {
+                item.confidence = crate::core::apps::Confidence::Possible;
+            }
         }
         result
     })
@@ -1444,6 +1451,44 @@ mod tests {
             is_system_component: false,
             uninstaller_missing: true,
         }
+    }
+
+    #[test]
+    fn qingjian_learning_data_is_listed_but_not_preselected() {
+        let root = crate::core::testing::fixture("qc_qingjian_macos_data");
+        let home = root.join("home");
+        let data = home.join("Library/Application Support/Qingjian");
+        let logs = home.join("Library/Logs/Qingjian");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(data.join("config.toml"), "keep").unwrap();
+        let result = scan_residuals_in(
+            &make_app("Qingjian", "app.qingjian.inputmethod"),
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system"),
+                receipts: &root.join("receipts"),
+                darwin_cache: None,
+                applications: &root.join("Applications"),
+            },
+        );
+        let selected = result.default_selection();
+        let index = result
+            .items
+            .iter()
+            .position(
+                |item| matches!(&item.kind, ResidualKind::Directory(path, _) if path == &data),
+            )
+            .expect("learning data must remain available for explicit cleanup");
+        assert!(
+            !selected.contains(&index),
+            "learning data and keys require explicit selection"
+        );
+        assert!(result
+            .items
+            .iter()
+            .any(|item| matches!(&item.kind, ResidualKind::Directory(path, _) if path == &logs)));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

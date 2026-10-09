@@ -1,5 +1,5 @@
 id = "residual-windows"
-version = 3
+version = 5
 platform = "windows"
 required = ["file", "registration"]
 
@@ -32,3 +32,41 @@ com_classes_roots = ['SOFTWARE\\Classes', 'SOFTWARE\\Classes\\WOW6432Node']
 # 公共目录 / 骨架文件夹的归一化名。拿它们做反向包含匹配会把桌面、
 # 开始菜单根目录整棵当成某软件的残留。
 generic_folder_names = ["desktop", "documents", "downloads", "pictures", "videos", "music", "public", "users", "programs", "startup", "startmenu", "windows", "system", "system32", "temp", "tmp", "appdata", "programdata", "programfiles", "programfilesx86", "commonfiles", "common", "shared"]
+
+# qingjian-team/qingjian c08ae57 的 Inno Setup 登记与数据目录约定。
+# 必须同时匹配登记 ID、显示名、发布者；别名不进入模糊扫描。
+[[app_data_aliases]]
+registry_id = "{A7E3C1F2-5B94-4D6A-9C0E-2F8B1D3A6E70}_is1"
+name = "青简"
+publisher = "青简"
+directory = "Qingjian"
+
+[[uninstall_data_warnings]]
+registry_id = "{4391158B-18CF-4B7A-A924-7FBBC23FB3F8}_is1"
+name = "水杉输入法"
+publisher = "Metasequoia"
+
+[[uninstall_data_warnings]]
+registry_id = "{EB4125FA-5687-4698-9E43-2C4CA4652132}_is1"
+name = "Metasequoia IME 水杉拼音"
+publisher = "Metasequoia"
+
+[[uninstall_data_warnings]]
+registry_id = "{FF5943BF-0F4B-4999-8504-15235E4516C6}_is1"
+name = "Metasequoia IME 水杉五笔"
+publisher = "Metasequoia"
+
+[[uninstall_data_warnings]]
+registry_id = "{41454B5E-8298-42B8-BA6F-5DD2FE559E5E}_is1"
+name = "Metasequoia IME 水杉日语"
+publisher = "Metasequoia"
+
+[[uninstall_data_warnings]]
+registry_id = "{BA5F9864-3095-469D-BCB5-B0562EB51263}_is1"
+name = "Metasequoia IME 水杉越南语"
+publisher = "Metasequoia"
+
+[[uninstall_data_warnings]]
+registry_id = "{68802231-3EDF-4B67-B80F-DFB95A1BAD01}_is1"
+name = "Metasequoia IME 水杉藏文"
+publisher = "Metasequoia"

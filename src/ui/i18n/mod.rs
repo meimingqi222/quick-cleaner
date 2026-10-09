@@ -44,6 +44,20 @@ pub use views::*;
 
 use crate::core::i18n::Language;
 
+pub fn tr_manual_uninstall_required(lang: Language, name: &str) -> String {
+    match lang {
+        Language::Zh => format!("「{name}」需要通过官方设置界面卸载。输入法请先在系统设置中移除输入源，再使用软件的卸载入口；完成后移除配套设置应用，避免再次安装，并刷新软件列表。"),
+        Language::En => format!("Uninstall \"{name}\" through its official settings. For an input method, first remove its input sources in System Settings, then use its uninstall action. Afterwards remove the companion settings app to prevent reinstallation and refresh the app list."),
+    }
+}
+
+pub fn tr_official_uninstall_deletes_data(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "注意：此软件的官方卸载逻辑会直接删除用户数据。请先备份需要保留的数据（如词库、学习记录和设置，包括自定义目录中的数据）；后续残留勾选不能阻止这一步。",
+        Language::En => "The official uninstall action deletes user data. Back up anything you need to retain, such as dictionaries, learning records and settings, including data in custom directories; leftover selection cannot prevent this deletion.",
+    }
+}
+
 pub fn tr_discovered_uninstall_detail(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "将卸载程序，并清理已确认属于这份安装的依赖、快捷方式和环境登记。配置、会话和密钥保留；被其他安装使用的工具保留。请先退出应用和安装器。",

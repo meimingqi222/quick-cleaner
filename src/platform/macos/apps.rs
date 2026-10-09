@@ -13,21 +13,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "script_uninstall.rs"]
+mod script_uninstall;
+
 /// 枚举 macOS 系统中已安装的 .app 应用程序包
 ///
 /// 扫描目录顺序：用户应用 → 系统应用 → 用户级 Applications → Utilities。
 /// 系统应用（`/System/Applications`）标记为 `is_system_component`，不可卸载。
 pub fn list_installed_apps(live: &AtomicBool) -> Vec<InstalledApp> {
     let home = super::user_env::user_home();
-    let app_dirs: Vec<(PathBuf, bool)> = vec![
-        (PathBuf::from("/Applications"), false),
-        (PathBuf::from("/System/Applications"), true),
-        (PathBuf::from("/Applications/Utilities"), false),
-        // 用户级 Applications 目录（部分用户会在这里装 app）
-        home.as_ref()
-            .map(|h| (h.join("Applications"), false))
-            .unwrap_or((PathBuf::new(), false)),
-    ];
+    let app_dirs = app_roots(home.as_deref());
 
     // 先只枚举 bundle 路径。后面的 plist、Spotlight 和体积计算可以并行，
     // 避免串行处理一百多个大型 .app 把启动时间线性拉长。
@@ -69,6 +64,20 @@ pub fn list_installed_apps(live: &AtomicBool) -> Vec<InstalledApp> {
     apps
 }
 
+fn app_roots(home: Option<&Path>) -> Vec<(PathBuf, bool)> {
+    vec![
+        (PathBuf::from("/Applications"), false),
+        (PathBuf::from("/System/Applications"), true),
+        (PathBuf::from("/Applications/Utilities"), false),
+        (PathBuf::from("/Library/Input Methods"), false),
+        // 用户级 Applications 目录（部分用户会在这里装 app）
+        home.map(|h| (h.join("Applications"), false))
+            .unwrap_or((PathBuf::new(), false)),
+        home.map(|h| (h.join("Library/Input Methods"), false))
+            .unwrap_or((PathBuf::new(), false)),
+    ]
+}
+
 /// 从 .app bundle 的 `Info.plist` 读取元数据。
 fn parse_app_bundle(
     path: &Path,
@@ -91,7 +100,7 @@ fn parse_app_bundle(
     let id = bundle_id.clone().unwrap_or_else(|| name.clone());
 
     // 查找卸载程序：部分应用在 Resources 目录下有 Uninstall .app
-    let uninstaller = find_uninstaller(path);
+    let uninstaller = find_uninstaller(path, bundle_id.as_deref());
 
     Some(InstalledApp {
         discovery: None,
@@ -351,21 +360,49 @@ fn format_system_time(time: std::time::SystemTime) -> (Option<String>, u64) {
 /// 用 `defaults read` 命令而不是引入 `plist` crate——`defaults` 在所有
 /// macOS 上都有，且能处理二进制和 XML 两种格式。
 pub(crate) fn read_info_plist(plist_path: &Path) -> (Option<String>, Option<String>) {
-    let Ok(output) = std::process::Command::new("defaults")
+    let Ok(plist_path) = std::fs::canonicalize(plist_path) else {
+        return (None, None);
+    };
+    let Ok(output) = std::process::Command::new("/usr/bin/defaults")
         .arg("read")
-        .arg(plist_path)
+        .arg(&plist_path)
         .output()
     else {
         return (None, None);
     };
     if !output.status.success() {
-        return (None, None);
+        // CFPreferences 的 domain 读取可能被沙箱拒绝；plutil 直接读文件，
+        // 按键抽取也兼容带 Date/Data 的 plist，不要求整份能转成 JSON。
+        return (
+            plist_string(&plist_path, "CFBundleIdentifier"),
+            plist_string(&plist_path, "CFBundleShortVersionString"),
+        );
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
     let bundle_id = defaults_value(&text, "CFBundleIdentifier");
     let version = defaults_value(&text, "CFBundleShortVersionString");
     (bundle_id, version)
+}
+
+fn plist_string(path: &Path, key: &str) -> Option<String> {
+    let run = crate::core::proc::run_with_timeout(
+        "/usr/bin/plutil",
+        &[
+            std::ffi::OsStr::new("-extract"),
+            std::ffi::OsStr::new(key),
+            std::ffi::OsStr::new("raw"),
+            std::ffi::OsStr::new("-o"),
+            std::ffi::OsStr::new("-"),
+            path.as_os_str(),
+        ],
+        std::time::Duration::from_secs(2),
+    )?;
+    if !run.ok {
+        return None;
+    }
+    let value = String::from_utf8(run.stdout).ok()?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 /// 从 `defaults read` 的字典输出中提取简单的字符串字段。
@@ -388,7 +425,10 @@ fn defaults_value(text: &str, key: &str) -> Option<String> {
 ///
 /// 部分应用（如 Adobe、VMware）在 `Contents/Resources/` 下有独立的
 /// `Uninstall *.app`。找到则返回其路径，让 UI 优先调用它。
-fn find_uninstaller(app_path: &Path) -> Option<PathBuf> {
+fn find_uninstaller(app_path: &Path, bundle_id: Option<&str>) -> Option<PathBuf> {
+    if let Some(spec) = bundle_id.and_then(crate::core::rules::uninstall::script_for) {
+        return script_uninstall::uninstaller(app_path, &spec);
+    }
     let resources = app_path.join("Contents").join("Resources");
     if let Ok(entries) = std::fs::read_dir(&resources) {
         for entry in entries.flatten() {
@@ -448,6 +488,12 @@ pub(crate) fn alloc_size(m: &std::fs::Metadata) -> u64 {
 ///
 /// 系统自带的 App 在密封只读的系统卷上，删不掉也不该删，直接挡回去。
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
+    if crate::core::rules::uninstall::requires_manual_uninstall(app) {
+        return Err("此应用需要在官方设置界面完成卸载；未执行直接删除。".into());
+    }
+    if let Some(result) = script_uninstall::run(app) {
+        return result;
+    }
     let Some(loc) = &app.install_location else {
         return Err("未找到应用程序路径".into());
     };
@@ -558,6 +604,13 @@ pub fn bundle_is_still_installed(bundle_id: &str) -> Option<bool> {
     if bundle_id.trim().is_empty() {
         // 没有 bundle id 就无从查证 → 测不出，交给调用方 fail closed。
         return None;
+    }
+    let mut input_roots = vec![PathBuf::from("/Library/Input Methods")];
+    if let Some(home) = super::user_env::user_home() {
+        input_roots.push(home.join("Library/Input Methods"));
+    }
+    if bundle_ids_in_app_roots(&input_roots)?.contains(bundle_id) {
+        return Some(true);
     }
     let query = mdfind_bundle_query(bundle_id);
     let run = crate::core::proc::run_with_timeout("/usr/bin/mdfind", &[&query], MDFIND_TIMEOUT)?;
@@ -711,14 +764,11 @@ pub fn installed_bundle_ids() -> Option<std::collections::HashSet<String>> {
     // Spotlight 可以正常返回几百个应用，却单独漏掉被隐私设置排除的安装
     // 位置。常见安装目录再直接读一遍 Info.plist；读不全则不能用部分集合
     // 授权孤儿残留删除。
-    let mut roots = vec![
-        PathBuf::from("/Applications"),
-        PathBuf::from("/Applications/Utilities"),
-        PathBuf::from("/System/Applications"),
-    ];
-    if let Some(home) = super::user_env::user_home() {
-        roots.push(home.join("Applications"));
-    }
+    let roots: Vec<PathBuf> = app_roots(super::user_env::user_home().as_deref())
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect();
     ids.extend(bundle_ids_in_app_roots(&roots)?);
     Some(ids)
 }
@@ -767,6 +817,14 @@ fn is_real_bundle(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qingjian_discovery_includes_both_input_method_roots() {
+        let home = Path::new("/Users/fixture");
+        let roots = app_roots(Some(home));
+        assert!(roots.contains(&(PathBuf::from("/Library/Input Methods"), false)));
+        assert!(roots.contains(&(home.join("Library/Input Methods"), false)));
+    }
 
     #[test]
     fn list_apps_finds_something() {

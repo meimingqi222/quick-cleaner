@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.00s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-a208c38bff55122b)
+
+running 9 tests
+test platform::macos::apps::tests::qingjian_discovery_includes_both_input_method_roots ... ok
+test core::rules::app_data::tests::qingjian_data_alias_requires_complete_registration_identity ... ok
+test core::rules::app_data::tests::qingjian_data_alias_rejects_links_and_path_escape ... ok
+test platform::macos::residuals::tests::qingjian_learning_data_is_listed_but_not_preselected ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_uninstall_preserves_data_and_uses_verified_bytes ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_verifies_both_copies_after_elevated_operation ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_rejects_unreviewed_content_and_redirected_paths ... ok
+test platform::macos::apps::input_method::tests::qingjian_script_zero_exit_and_failure_do_not_grant_trash_fallback ... ok
+test platform::macos::apps::input_method::tests::qingjian_elevated_command_quotes_home_and_does_not_pass_purge ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 724 filtered out; finished in 0.19s

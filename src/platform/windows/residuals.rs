@@ -302,7 +302,7 @@ fn scan_residuals_inner(app: &InstalledApp) -> ResidualScanResult {
     scan_uninstall_entry(app, &mut items);
     scan_install_dir(app, &mut items);
     scan_orphan_ancestors(app, &mut items);
-    scan_data_dirs(&ctx, &mut items);
+    scan_data_dirs(app, &ctx, &mut items);
     scan_shortcuts(&ctx, &mut items);
     if let Some(discovery) = &app.discovery {
         for path in &discovery.shortcuts {
@@ -519,11 +519,7 @@ fn values_mention(h: HKEY, subpath: &str, sam: DWORD, ctx: &Ctx) -> bool {
 /// `%AppData%` / `%LocalAppData%` / `%ProgramData%` / `Program Files` 下的数据目录。
 ///
 /// 同名目录算「确定」，模糊匹配到的算「可能」。
-fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
-    if !ctx.name_is_matchable() {
-        return;
-    }
-
+fn scan_data_dirs(app: &InstalledApp, ctx: &Ctx, out: &mut Vec<ResidualItem>) {
     let mut roots: Vec<PathBuf> = Vec::new();
     // 主目录不可信时跳过用户级根：环境变量里的系统级根不受影响。
     if let Some(roaming) = super::user_env::real_user_roaming_appdata() {
@@ -541,6 +537,22 @@ fn scan_data_dirs(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         }
     }
 
+    scan_data_dirs_in(app, ctx, &roots, out);
+}
+
+fn scan_data_dirs_in(
+    app: &InstalledApp,
+    ctx: &Ctx,
+    roots: &[PathBuf],
+    out: &mut Vec<ResidualItem>,
+) {
+    // 别名必须有完整登记身份，数据仍由用户选择，不放宽短名称的模糊匹配。
+    for path in crate::core::rules::app_data::registered_data_directories(app, roots) {
+        push_dir(out, path, Confidence::Possible, ResidualSource::AppDataDir);
+    }
+    if !ctx.name_is_matchable() {
+        return;
+    }
     for root in roots {
         // 精确同名：<Root>\<AppName> 与 <Root>\<Publisher>\<AppName>
         let mut exact: Vec<PathBuf> = vec![root.join(&ctx.name_token)];
@@ -1833,6 +1845,36 @@ fn stop_windows_service(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::platform::windows::registry;
+
+    #[test]
+    fn qingjian_short_name_residual_scan_lists_exact_data_without_preselection() {
+        let root = crate::core::testing::fixture("qc_qingjian_residual");
+        let roots = [
+            root.join("roaming"),
+            root.join("local"),
+            root.join("programdata"),
+        ];
+        for path in &roots {
+            std::fs::create_dir_all(path.join("Qingjian")).unwrap();
+            std::fs::create_dir_all(path.join("QingjianOther")).unwrap();
+        }
+        let mut target = app("青简", "青简");
+        target.id = "{A7E3C1F2-5B94-4D6A-9C0E-2F8B1D3A6E70}_is1".into();
+        target.registry_subpath = format!(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+            target.id
+        );
+        let ctx = Ctx::new(&target);
+        assert!(!ctx.name_is_matchable());
+        let mut items = Vec::new();
+        scan_data_dirs_in(&target, &ctx, &roots, &mut items);
+        assert_eq!(items.len(), 3);
+        assert!(items
+            .iter()
+            .all(|item| item.confidence == Confidence::Possible && item.identity.is_some()));
+        assert!(items.iter().all(|item| matches!(&item.kind, ResidualKind::Directory(path, _) if path.file_name().unwrap() == "Qingjian")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn app(name: &str, publisher: &str) -> InstalledApp {
         InstalledApp {
