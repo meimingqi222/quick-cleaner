@@ -9,13 +9,13 @@
 use crate::core::dev_env::{DevAssetItem, DevAssetKind, PythonToolKind, SiteScope, VenvManager};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
-use crate::ui::adapters::search_box::{search_box, SearchBoxSpec};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeShape, BadgeSize, BadgeTone};
 use crate::ui::components::button::Button;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
 use crate::ui::components::list_row::{ListRow, RowGap, RowInset, RowRadius, RowVariant};
+use crate::ui::components::search_input::{search_box, SearchBoxSpec};
 use crate::ui::components::segmented::{
     ChipLook, ChipPadX, ChipRadius, SegmentItem, SegmentStyle, SegmentedControl,
 };
@@ -65,7 +65,7 @@ pub fn render_dev_environments_view(
             cursor_h: 13.,
             focused: search_focused,
             cursor_visible: root.cursor_blink_visible,
-            target: crate::ui::text_input::InputTarget::Apps,
+            binding: crate::ui::adapters::input::APPS_INPUT,
         },
         |this, cx| {
             this.apps.input.text.clear();
@@ -73,7 +73,10 @@ pub fn render_dev_environments_view(
             cx.notify();
         },
         |this, cx| {
-            this.text_input_delete(false, cx);
+            let input = &mut this.apps.input;
+            input.sel = crate::ui::text_input::delete_forward(&mut input.text, input.sel.clone());
+            input.marked = None;
+            cx.notify();
         },
         |this, cx| {
             this.apps.input.text.clear();
@@ -862,9 +865,6 @@ fn render_detail_panel(
                         .id(gpui::ElementId::Name(
                             format!("detail-pkg-scroll-{}", active_id).into(),
                         ))
-                        .flex_1()
-                        .min_h(px(0.))
-                        .overflow_scroll()
                         .p_3()
                         .flex()
                         .flex_col()
@@ -888,7 +888,10 @@ fn render_detail_panel(
                         .flex()
                         .flex_col()
                         .child(toolbar)
-                        .child(pkg_scroll_list)
+                        .child(crate::ui::components::scroll_area::ScrollView::new(
+                            gpui::ElementId::Name(format!("detail-pkg-area-{active_id}").into()),
+                            pkg_scroll_list,
+                        ))
                         .into_any_element()
                 }
                 None => div()

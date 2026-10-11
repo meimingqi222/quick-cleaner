@@ -24,6 +24,7 @@ pub mod dialog;
 pub mod donut;
 pub mod feedback;
 pub mod icons;
+pub mod input;
 pub mod list_row;
 pub mod menu;
 pub mod meter;
@@ -31,6 +32,8 @@ pub mod overlay;
 pub mod popover;
 pub mod progress;
 pub mod scroll;
+pub mod scroll_area;
+pub mod search_input;
 pub mod segmented;
 pub mod tooltip;
 
@@ -38,5 +41,6 @@ pub use cards::card;
 pub use controls::{checkbox, page_heading, CheckState};
 pub use icons::*;
 pub use progress::render_scan_line;
-pub use scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
 pub use tooltip::{path_tooltip, text_tooltip};
+
+pub use search_input::{search_box, SearchBoxSpec};

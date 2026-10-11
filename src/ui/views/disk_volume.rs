@@ -5,10 +5,15 @@ use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::*;
 use crate::ui::components::list_row::{ListRow, RowHover, RowInset, RowVariant};
+use crate::ui::components::menu::{Menu, MenuBorder};
+use crate::ui::components::overlay::OverlayPolicy;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, IntoElement, SharedString};
+use gpui::{
+    div, point, prelude::*, px, rgb, AnyElement, Bounds, Context, IntoElement, Pixels, SharedString,
+};
+use std::cell::Cell;
 
 pub(super) fn format_volume_label(vol: &VolumeId, lang: Language) -> String {
     let raw = vol.display();
@@ -65,6 +70,15 @@ pub(super) fn render_volume_selector_button(
                 .text_color(rgb(TEXT))
                 .hover(|h| h.bg(rgb(SURF_HIGH)).border_color(rgb(PRIMARY)))
         })
+        .relative()
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                |bounds, _, _, _| TRIGGER_BOUNDS.with(|c| c.set(Some(bounds))),
+            )
+            .absolute()
+            .size_full(),
+        )
         .child(icon_disk(if is_open { PRIMARY } else { TEXT }, 13.))
         .child(
             div()
@@ -171,62 +185,75 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
         })
         .collect();
 
-    let dropdown_card = div()
-        .id("disk-volume-dropdown-card")
-        .w(px(320.))
-        .max_h(px(380.))
+    // 行数多时只滚动列表，头部固定。
+    let list = div()
+        .id("disk-volume-dropdown-list")
+        .max_h(px(LIST_MAX_H))
         .overflow_scroll()
-        .bg(rgb(CARD))
-        .border_1()
-        .border_color(rgba(OUTLINE_VAR, 0.7))
-        .rounded_xl()
-        .shadow_lg()
-        .p_2()
         .flex()
         .flex_col()
         .gap_1()
-        .child(
-            div()
-                .px_3()
-                .py_1p5()
-                .flex()
-                .items_center()
-                .justify_between()
-                .border_b_1()
-                .border_color(rgba(OUTLINE_VAR, 0.3))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(MUTED))
-                        .child(title),
-                )
-                .child(div().text_xs().text_color(rgb(OUTLINE)).child(count_hint)),
-        )
         .children(items);
 
-    // 浮层全屏遮罩与定位
-    let overlay = div()
-        .id("disk-volume-dropdown-backdrop")
-        .absolute()
-        .inset_0()
-        .on_mouse_down(
-            gpui::MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
-                this.close_disk_volume_menu();
-                cx.notify();
-            }),
-        )
+    let header = div()
+        .flex()
+        .items_center()
+        .justify_between()
         .child(
             div()
-                .absolute()
-                .top(px(168.))
-                .left(px(280.))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .child(dropdown_card),
-        );
+                .text_xs()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(MUTED))
+                .child(title),
+        )
+        .child(div().text_xs().text_color(rgb(OUTLINE)).child(count_hint));
 
-    Some(overlay.into_any_element())
+    let trigger = trigger_bounds();
+    let anchor = match trigger {
+        Some(b) => point(b.origin.x, b.origin.y + b.size.height + px(TRIGGER_GAP)),
+        None => point(px(FALLBACK_LEFT), px(FALLBACK_TOP)),
+    };
+    let estimated_h = (HEADER_H + volumes.len() as f32 * ROW_H).min(LIST_MAX_H + HEADER_H);
+
+    let view = cx.entity();
+    let menu = Menu::new("disk-volume-dropdown-card", anchor)
+        .width(320.)
+        .estimated_height(estimated_h)
+        .border(MenuBorder::Soft)
+        .header(header)
+        // 触发钮自己的 click 负责 toggle；排除它，避免先被外部点击关掉又被 toggle 打开。
+        .exclude_opt(trigger)
+        .on_dismiss(move |_, app| {
+            view.update(app, |this, cx| {
+                this.dismiss_overlay_outside(crate::ui::shell::OverlayId::DiskVolume, cx);
+                cx.notify();
+            })
+        })
+        .child(list);
+
+    Some(
+        OverlayPolicy::POPUP.layer_at(
+            menu,
+            root.overlays
+                .priority(crate::ui::shell::OverlayId::DiskVolume),
+        ),
+    )
 }
+
+thread_local! {
+    /// 上一帧触发钮的窗口坐标；界面只在主线程绘制，所以用线程局部量即可。
+    static TRIGGER_BOUNDS: Cell<Option<Bounds<Pixels>>> = const { Cell::new(None) };
+}
+
+fn trigger_bounds() -> Option<Bounds<Pixels>> {
+    TRIGGER_BOUNDS.with(Cell::get)
+}
+
+/// 下拉锚点：触发钮左下角再留一点间隙。
+const TRIGGER_GAP: f32 = 4.;
+/// 触发钮还没布局过时的回退位置。
+const FALLBACK_LEFT: f32 = 280.;
+const FALLBACK_TOP: f32 = 168.;
+const LIST_MAX_H: f32 = 320.;
+const HEADER_H: f32 = 40.;
+const ROW_H: f32 = 48.;

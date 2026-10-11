@@ -2,8 +2,8 @@
 //! components 不得依赖这里。
 
 pub mod dialogs;
+pub mod input;
 pub mod progress;
-pub mod search_box;
 pub mod updater_dialog;
 
 pub use dialogs::{
@@ -11,7 +11,6 @@ pub use dialogs::{
     ConfirmRequest,
 };
 pub use progress::{render_progress_bar, render_uninstall_progress};
-pub use search_box::{search_box, SearchBoxSpec};
 pub use updater_dialog::render_update_dialog;
 
 use crate::core::model::Check;

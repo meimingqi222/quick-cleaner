@@ -67,6 +67,12 @@ fanprobe = []
 authprobe = []
 fseprobe = []
 thermalprobe = []
+ui-gallery = []
+
+[[example]]
+name = "ui-gallery"
+path = "examples/ui_gallery.rs"
+required-features = ["ui-gallery"]
 
 [[example]]
 name = "mftscan"

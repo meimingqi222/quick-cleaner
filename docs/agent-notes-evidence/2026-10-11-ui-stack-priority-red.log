@@ -1,0 +1,38 @@
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+   Compiling quick-cleaner v0.0.10 (D:\code\quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.89s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-eeeca2cb5f632608.exe)
+
+running 1 test
+test ui::shell::overlay_stack::tests::nested_close_is_children_first_and_render_order_matches_escape ... FAILED
+
+failures:
+
+---- ui::shell::overlay_stack::tests::nested_close_is_children_first_and_render_order_matches_escape stdout ----
+
+thread 'ui::shell::overlay_stack::tests::nested_close_is_children_first_and_render_order_matches_escape' (35868) panicked at src\ui\shell\overlay_stack.rs:302:9:
+assertion failed: stack.priority(OverlayId::StatusSearch) > stack.priority(OverlayId::Confirm)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::shell::overlay_stack::tests::nested_close_is_children_first_and_render_order_matches_escape
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 792 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

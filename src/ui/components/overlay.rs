@@ -39,6 +39,11 @@ pub struct OverlayPolicy {
 }
 
 impl OverlayPolicy {
+    pub const PERSISTENT: Self = Self {
+        modal: false,
+        close_on_outside: false,
+        close_on_escape: false,
+    };
     pub const MODAL: Self = Self {
         modal: true,
         close_on_outside: false,
@@ -87,6 +92,10 @@ impl OverlayPolicy {
         } else {
             overlay_layer(content)
         }
+    }
+
+    pub fn layer_at(self, content: impl IntoElement, priority: usize) -> AnyElement {
+        deferred(content).priority(priority).into_any_element()
     }
 }
 

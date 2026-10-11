@@ -5,8 +5,8 @@ use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::badge::{Badge, BadgeTone};
 use crate::ui::components::button::Button;
-use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
+use crate::ui::components::dialog::DialogFrame;
 use crate::ui::components::icons::*;
 use crate::ui::components::list_row::{ListRow, RowInset, RowRadius};
 use crate::ui::i18n::*;
@@ -87,83 +87,68 @@ pub fn render_confirm_dialog(
         ERROR
     };
 
-    div()
-        .absolute()
-        .inset_0()
-        .occlude()
-        .bg(rgba(0x000000, 0.45))
+    let header = div().flex().items_center().gap_3().child(badge).child(
+        div()
+            .text_lg()
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(rgb(TEXT))
+            .child(req.title.clone()),
+    );
+    let footer = div()
         .flex()
-        .items_center()
-        .justify_center()
+        .justify_end()
+        .gap_2()
+        .pt_2()
         .child(
-            card()
-                .w(px(460.))
-                .shadow_2xl()
-                .p_6()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div().flex().items_center().gap_3().child(badge).child(
-                        div()
-                            .text_lg()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(TEXT))
-                            .child(req.title.clone()),
-                    ),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(TEXT))
-                        .child(req.body.clone()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(detail_color))
-                        .child(req.detail.clone()),
-                )
-                .when(req.app_data, |d| {
-                    d.child(
-                        div()
-                            .rounded_md()
-                            .bg(rgb(ERROR_CONTAINER))
-                            .border_1()
-                            .border_color(rgb(ERROR))
-                            .px_3()
-                            .py_2()
-                            .text_xs()
-                            .text_color(rgb(ERROR))
-                            .child(tr_confirm_app_data_warning(lang)),
-                    )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .pt_2()
-                        .child(
-                            Button::ghost("confirm-cancel", cancel_label).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.confirm = None;
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            if is_fan_install || is_update {
-                                Button::primary("confirm-accept", confirm_label)
-                            } else {
-                                Button::danger("confirm-accept", confirm_label)
-                            }
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_accept(cx);
-                            })),
-                        ),
-                ),
+            Button::ghost("confirm-cancel", cancel_label).on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.confirm = None;
+                    cx.notify();
+                },
+            )),
         )
+        .child(
+            if is_fan_install || is_update {
+                Button::primary("confirm-accept", confirm_label)
+            } else {
+                Button::danger("confirm-accept", confirm_label)
+            }
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.confirm_accept(cx);
+            })),
+        );
+
+    DialogFrame::new("confirm-dialog")
+        .priority(root.overlays.priority(crate::ui::shell::OverlayId::Confirm))
+        .width(460.)
+        .header(header)
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(TEXT))
+                .child(req.body.clone()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(detail_color))
+                .child(req.detail.clone()),
+        )
+        .when(req.app_data, |d| {
+            d.child(
+                div()
+                    .rounded_md()
+                    .bg(rgb(ERROR_CONTAINER))
+                    .border_1()
+                    .border_color(rgb(ERROR))
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(ERROR))
+                    .child(tr_confirm_app_data_warning(lang)),
+            )
+        })
+        .footer(footer)
 }
 
 /// 残留弹窗顶部的占用警示条。扫描时发现该应用的进程/launchd 任务仍在，
@@ -269,20 +254,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
     // 空态文案也分两种口径：按应用扫出来的「没残留」说的是卸载干不干净，
     // 孤儿扫描说的则是「用户目录里没有找不到主人的东西」。
     let (empty_title, empty_desc) = match res.scope {
-        ResidualScope::OrphanLeftovers => (
-            tr_orphan_empty_title(lang),
-            tr_orphan_empty_desc(lang),
+        ResidualScope::OrphanLeftovers => (tr_orphan_empty_title(lang), tr_orphan_empty_desc(lang)),
+        ResidualScope::App => (
+            tr_residual_app_empty_title(lang),
+            tr_residual_app_empty_desc(lang),
         ),
-        ResidualScope::App => match lang {
-            Language::Zh => (
-                "该软件未发现关联的文件或注册表残留",
-                "官方卸载已彻底清理所有文件与配置注册表。",
-            ),
-            Language::En => (
-                "No residual files or registry traces found",
-                "Uninstallation has cleanly removed all associated files and registry configurations.",
-            ),
-        },
     };
 
     let item_rows: Vec<gpui::AnyElement> = if is_empty {
@@ -502,125 +478,112 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
     };
 
     Some(
-        div()
-            .id("residual-modal-backdrop")
-            .absolute()
-            .inset_0()
-            .occlude()
-            .bg(rgba(0x000000, 0.45))
-            .flex()
-            .items_center()
-            .justify_center()
+        DialogFrame::new("residual-modal-card")
+            .priority(
+                root.overlays
+                    .priority(crate::ui::shell::OverlayId::Residual),
+            )
+            .width(760.)
+            .max_height(580.)
+            .gap(16.)
             .child(
-                card()
-                    .id("residual-modal-card")
-                    .w(px(760.))
-                    .max_h(px(580.))
-                    .shadow_2xl()
-                    .p_6()
+                div()
                     .flex()
-                    .flex_col()
+                    .items_start()
                     .gap_4()
+                    .child(icon_badge(
+                        icon_search(PRIMARY, 20.),
+                        PRIMARY_FIXED,
+                        PRIMARY,
+                        44.,
+                    ))
                     .child(
                         div()
-                            .flex()
-                            .items_start()
-                            .gap_4()
-                            .child(icon_badge(
-                                icon_search(PRIMARY, 20.),
-                                PRIMARY_FIXED,
-                                PRIMARY,
-                                44.,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .text_lg()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(TEXT))
-                                            .child(modal_title),
-                                    )
-                                    .child(div().text_xs().text_color(rgb(MUTED)).child(modal_sub)),
-                            ),
-                    )
-                    // 占用警示：必须在「彻底清除」按钮之前出现，否则用户
-                    // 只会在失败日志里见到活数据库闸门的拒绝原因。
-                    // 没扫出残留时不显示——「无残留」和「会删除失败」
-                    // 同屏是自相矛盾的。
-                    .when(!is_empty && res.occupancy.is_occupied(), |d| {
-                        d.child(render_occupancy_banner(&res.occupancy, lang))
-                    })
-                    // 系统扩展引导：程序注销不了，只能用户自己去设置里关。
-                    // 和占用条同一样式（提示不是错误），按钮直达登录项与扩展。
-                    .when(!is_empty && has_sysext, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .p_3()
-                                .rounded_lg()
-                                .bg(rgb(CAUTION_CONTAINER))
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(icon_sparkle(CAUTION, 14.))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(rgb(CAUTION))
-                                                .child(tr_residual_sysext_title(lang)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(CAUTION))
-                                        .pl(px(22.))
-                                        .child(tr_residual_sysext_advice(lang)),
-                                )
-                                .child(
-                                    div().flex().justify_end().child(
-                                        Button::small(
-                                            "resid-open-sysext-settings",
-                                            tr_residual_sysext_open(lang),
-                                        )
-                                        .colors(PRIMARY_FIXED, PRIMARY)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.open_system_extension_settings(cx);
-                                            }),
-                                        ),
-                                    ),
-                                ),
-                        )
-                    })
-                    .child(
-                        div()
-                            .id("resid-list-scroll")
                             .flex_1()
-                            .max_h(px(320.))
-                            .overflow_scroll()
-                            .border_1()
-                            .border_color(rgba(OUTLINE_VAR, 0.5))
-                            .rounded_xl()
-                            .p_2()
                             .flex()
                             .flex_col()
-                            .gap_1()
-                            .children(item_rows),
-                    )
-                    .child(footer),
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child(modal_title),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(modal_sub)),
+                    ),
             )
-            .into_any_element(),
+            // 占用警示：必须在「彻底清除」按钮之前出现，否则用户
+            // 只会在失败日志里见到活数据库闸门的拒绝原因。
+            // 没扫出残留时不显示——「无残留」和「会删除失败」
+            // 同屏是自相矛盾的。
+            .when(!is_empty && res.occupancy.is_occupied(), |d| {
+                d.child(render_occupancy_banner(&res.occupancy, lang))
+            })
+            // 系统扩展引导：程序注销不了，只能用户自己去设置里关。
+            // 和占用条同一样式（提示不是错误），按钮直达登录项与扩展。
+            .when(!is_empty && has_sysext, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .p_3()
+                        .rounded_lg()
+                        .bg(rgb(CAUTION_CONTAINER))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(icon_sparkle(CAUTION, 14.))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(CAUTION))
+                                        .child(tr_residual_sysext_title(lang)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(CAUTION))
+                                .pl(px(22.))
+                                .child(tr_residual_sysext_advice(lang)),
+                        )
+                        .child(
+                            div().flex().justify_end().child(
+                                Button::small(
+                                    "resid-open-sysext-settings",
+                                    tr_residual_sysext_open(lang),
+                                )
+                                .colors(PRIMARY_FIXED, PRIMARY)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.open_system_extension_settings(cx);
+                                    },
+                                )),
+                            ),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .id("resid-list-scroll")
+                    .flex_1()
+                    .max_h(px(320.))
+                    .overflow_scroll()
+                    .border_1()
+                    .border_color(rgba(OUTLINE_VAR, 0.5))
+                    .rounded_xl()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(item_rows),
+            )
+            .footer(footer),
     )
 }
 
@@ -683,151 +646,136 @@ pub fn render_fda_onboarding_modal(
     };
 
     Some(
-        div()
-            .id("fda-modal-backdrop")
-            .absolute()
-            .inset_0()
-            .occlude()
-            .bg(rgba(0x000000, 0.45))
-            .flex()
-            .items_center()
-            .justify_center()
+        DialogFrame::new("fda-modal-card")
+            .priority(root.overlays.priority(crate::ui::shell::OverlayId::Fda))
+            .width(580.)
+            .gap(16.)
+            // 头部
             .child(
-                card()
-                    .id("fda-modal-card")
-                    .w(px(580.))
-                    .shadow_2xl()
-                    .p_6()
+                div()
                     .flex()
-                    .flex_col()
+                    .items_start()
                     .gap_4()
-                    // 头部
+                    .child(icon_badge(
+                        icon_shield(PRIMARY, 22.),
+                        PRIMARY_FIXED,
+                        PRIMARY,
+                        48.,
+                    ))
                     .child(
                         div()
-                            .flex()
-                            .items_start()
-                            .gap_4()
-                            .child(icon_badge(
-                                icon_shield(PRIMARY, 22.),
-                                PRIMARY_FIXED,
-                                PRIMARY,
-                                48.,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_lg()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(TEXT))
-                                            .child(tr_fda_title(lang)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(tr_fda_desc(lang)),
-                                    ),
-                            ),
-                    )
-                    // 步骤列表
-                    .child(
-                        div()
+                            .flex_1()
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .child(step_item(
-                                "1",
-                                tr_fda_step1_title(lang),
-                                tr_fda_step1_desc(lang),
-                            ))
-                            .child(step_item(
-                                "2",
-                                tr_fda_step2_title(lang),
-                                tr_fda_step2_desc(lang),
-                            ))
-                            .child(step_item(
-                                "3",
-                                tr_fda_step3_title(lang),
-                                tr_fda_step3_desc(lang),
-                            )),
-                    )
-                    // 贴心提示
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child(tr_fda_title(lang)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(tr_fda_desc(lang)),
+                            ),
+                    ),
+            )
+            // 步骤列表
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(step_item(
+                        "1",
+                        tr_fda_step1_title(lang),
+                        tr_fda_step1_desc(lang),
+                    ))
+                    .child(step_item(
+                        "2",
+                        tr_fda_step2_title(lang),
+                        tr_fda_step2_desc(lang),
+                    ))
+                    .child(step_item(
+                        "3",
+                        tr_fda_step3_title(lang),
+                        tr_fda_step3_desc(lang),
+                    )),
+            )
+            // 贴心提示
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(rgb(SURF_HIGH))
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(tr_fda_notice(lang)),
+            )
+            // 底部操作区
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgba(OUTLINE_VAR, 0.4))
+                    // 不再自动提示复选框
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .bg(rgb(SURF_HIGH))
-                            .text_xs()
-                            .text_color(rgb(OUTLINE))
-                            .child(tr_fda_notice(lang)),
+                            .id("fda-dont-ask-toggle")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .child(checkbox(check_state.into()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(tr_fda_dont_ask(lang)),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_fda_dismissed(cx);
+                            })),
                     )
-                    // 底部操作区
+                    // 按钮组
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(rgba(OUTLINE_VAR, 0.4))
-                            // 不再自动提示复选框
+                            .gap_2()
                             .child(
-                                div()
-                                    .id("fda-dont-ask-toggle")
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .cursor_pointer()
-                                    .child(checkbox(check_state.into()))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(tr_fda_dont_ask(lang)),
-                                    )
+                                Button::ghost("fda-later-btn", tr_fda_btn_later(lang)).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.close_fda_guide(cx);
+                                    }),
+                                ),
+                            )
+                            .child(
+                                Button::small("fda-check-btn", tr_fda_btn_check(lang))
+                                    .colors(SURF_HIGH, TEXT)
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_fda_dismissed(cx);
+                                        this.check_fda_permission(cx);
                                     })),
                             )
-                            // 按钮组
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        Button::ghost("fda-later-btn", tr_fda_btn_later(lang))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.close_fda_guide(cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::small("fda-check-btn", tr_fda_btn_check(lang))
-                                            .colors(SURF_HIGH, TEXT)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.check_fda_permission(cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::primary(
-                                            "fda-open-settings-btn",
-                                            tr_fda_btn_open_settings(lang),
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.open_fda_settings(cx);
-                                            }),
-                                        ),
-                                    ),
+                                Button::primary(
+                                    "fda-open-settings-btn",
+                                    tr_fda_btn_open_settings(lang),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.open_fda_settings(cx);
+                                    },
+                                )),
                             ),
                     ),
-            )
-            .into_any_element(),
+            ),
     )
 }

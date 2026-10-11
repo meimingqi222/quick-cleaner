@@ -90,6 +90,34 @@ pub fn tr_discovered_remove_files(lang: Language) -> &'static str {
     }
 }
 
+pub fn tr_apps_ctx_open_folder(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打开安装目录",
+        Language::En => "Open Install Location",
+    }
+}
+
+pub fn tr_apps_ctx_uninstall(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "官方常规卸载",
+        Language::En => "Standard Uninstall",
+    }
+}
+
+pub fn tr_apps_ctx_force_clean(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "强力残留清理",
+        Language::En => "Force Residual Clean",
+    }
+}
+
+pub fn tr_apps_ctx_copy_path(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "复制安装路径",
+        Language::En => "Copy Install Path",
+    }
+}
+
 pub fn tr_btn_remove_program(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "移除文件",
@@ -714,6 +742,23 @@ pub fn tr_orphan_empty_desc(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "用户目录里没有找不到主人的缓存与配置。",
         Language::En => "Nothing in your user library belongs to an app that is gone.",
+    }
+}
+
+/// 按单个应用扫残留、结果为空：说的是官方卸载是否把文件和注册表清干净。
+pub fn tr_residual_app_empty_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "该软件未发现关联的文件或注册表残留",
+        Language::En => "No residual files or registry traces found",
+    }
+}
+
+pub fn tr_residual_app_empty_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "官方卸载已彻底清理所有文件与配置注册表。",
+        Language::En => {
+            "Uninstallation has cleanly removed all associated files and registry configurations."
+        }
     }
 }
 

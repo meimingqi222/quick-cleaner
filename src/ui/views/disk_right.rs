@@ -292,15 +292,10 @@ pub(super) fn render_right_browser_pane(
         .child(top_bar)
         .children(path_bar)
         .child(list_header)
-        .child(
-            div()
-                .id("disk-browser-rows")
-                .flex_1()
-                .overflow_scroll()
-                .flex()
-                .flex_col()
-                .children(rows),
-        )
+        .child(crate::ui::components::scroll_area::ScrollView::new(
+            "disk-browser-rows",
+            div().flex().flex_col().children(rows),
+        ))
         .into_any_element()
 }
 

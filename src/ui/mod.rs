@@ -33,7 +33,7 @@ use crate::ui::adapters::{
 };
 use crate::ui::components::render_scan_line;
 use crate::ui::i18n::*;
-use crate::ui::shell::{render_sidebar, render_top_bar, View};
+use crate::ui::shell::{render_sidebar, render_top_bar, OverlayStack, View};
 use crate::ui::theme::*;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
@@ -42,7 +42,7 @@ use crate::ui::views::{
     DeclutterContextMenu, DeclutterState, DiskTab,
 };
 
-use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, Task, Window};
+use gpui::{div, prelude::*, px, rgb, Context, IntoElement, KeyDownEvent, Render, Task, Window};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -97,6 +97,12 @@ pub struct Root {
     pub monitor: StatusState,
     /// 自动更新：GitHub Releases 检测、下载校验与安装交接。
     pub update: crate::ui::state::UpdateState,
+    /// 当前打开的浮层及顺序，每帧由 `sync_overlays` 从各浮层状态推导。
+    pub overlays: OverlayStack,
+    pub active_input: Option<crate::ui::components::input::InputBinding<Root>>,
+    /// 根节点自己的焦点句柄：按键只沿焦点链派发，窗口无焦点时 Esc 到不了根 div，
+    /// 所以有浮层打开且无焦点时把焦点放在这里。永远不抢已有焦点。
+    pub root_focus: gpui::FocusHandle,
     /// macOS 整盘索引缓存。垃圾扫描和磁盘透镜共用这一份。
     /// 不再单独持有用户目录索引——整盘索引已包含用户目录，
     /// 省掉 ~700MB 重复内存。
@@ -174,7 +180,6 @@ impl Root {
                     .iter()
                     .map(|&c| (c, gpui::UniformListScrollHandle::new()))
                     .collect(),
-                scroll_drag: None,
             },
 
             apps: AppsState {
@@ -191,7 +196,6 @@ impl Root {
                 view: Vec::new(),
                 view_key: None,
                 scroll: gpui::UniformListScrollHandle::new(),
-                scroll_drag: None,
                 context_menu: None,
             },
 
@@ -243,7 +247,6 @@ impl Root {
                 #[cfg(windows)]
                 indices: Vec::new(),
                 scroll: gpui::UniformListScrollHandle::new(),
-                scroll_drag: None,
                 search_task: None,
                 search_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 is_searching: false,
@@ -256,6 +259,9 @@ impl Root {
             monitor: StatusState::new(status_focus_handle),
 
             update: crate::ui::state::UpdateState::default(),
+            overlays: OverlayStack::default(),
+            active_input: None,
+            root_focus: cx.focus_handle(),
 
             #[cfg(not(windows))]
             macos_root_index: None,
@@ -856,6 +862,15 @@ impl Root {
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_render_caches();
+        self.sync_overlays(window, cx);
+        let background_input_focused = self.search.input.focus_handle.is_focused(window)
+            || self.apps.input.focus_handle.is_focused(window)
+            || self.monitor.input.focus_handle.is_focused(window);
+        if (self.overlays.modal_on_top() && background_input_focused)
+            || (!self.overlays.is_empty() && window.focused(cx).is_none())
+        {
+            window.focus(&self.root_focus);
+        }
 
         self.cursor_blink_wanted = self.search.input.focus_handle.is_focused(window)
             || self.apps.input.focus_handle.is_focused(window)
@@ -914,6 +929,10 @@ impl Render for Root {
         let mut root = div()
             .size_full()
             .min_w(px(0.))
+            .track_focus(&self.root_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_root_escape(event, window, cx);
+            }))
             .relative()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -942,6 +961,7 @@ impl Render for Root {
                     .child(self.status.get(self.language).to_string()),
             );
 
+        // 层级由各浮层的 deferred priority 决定；这里的追加顺序只决定同级先后。
         if let Some(req) = self.confirm.clone() {
             root = root.child(render_confirm_dialog(self, &req, cx));
         }

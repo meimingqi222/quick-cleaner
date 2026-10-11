@@ -1,9 +1,9 @@
 name: Verify regression notes
 on:
   push:
-    paths: ['docs/agent-notes/**', 'src/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
+    paths: ['docs/agent-notes/**', 'src/**', 'scripts/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
   pull_request:
-    paths: ['docs/agent-notes/**', 'src/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
+    paths: ['docs/agent-notes/**', 'src/**', 'scripts/**', 'tools/regression-notes/**', '.github/workflows/agent-notes.yml']
   workflow_dispatch:
 jobs:
   verify:
@@ -18,4 +18,5 @@ jobs:
       - run: python -X utf8 -m unittest discover -s tools/regression-notes/tests
       - run: python -X utf8 scripts/check-pitfall-notes.py
       - run: python -X utf8 scripts/check-ui-localization.py
-      - run: python -X utf8 scripts/check-ui-boundaries.py
+      - run: python -X utf8 scripts/check-ui-components.py
+      - run: python -X utf8 -m unittest discover -s scripts -p test_ui_components.py

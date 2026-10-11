@@ -11,8 +11,8 @@ use crate::ui::components::overlay::{anchored_position, DismissHandler};
 use crate::ui::components::ClickHandler;
 use crate::ui::theme::*;
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, App, ClickEvent, ElementId, FontWeight, ParentElement,
-    Pixels, Point, SharedString, Window,
+    div, prelude::*, px, rgb, AnyElement, App, Bounds, ClickEvent, ElementId, FontWeight,
+    ParentElement, Pixels, Point, SharedString, Window,
 };
 use std::rc::Rc;
 
@@ -167,7 +167,12 @@ pub struct Menu {
     border: MenuBorder,
     header: Option<AnyElement>,
     on_dismiss: Option<DismissHandler>,
+    excludes: Vec<Bounds<Pixels>>,
     children: Vec<AnyElement>,
+}
+
+fn in_any(bounds: &[Bounds<Pixels>], position: Point<Pixels>) -> bool {
+    bounds.iter().any(|b| b.contains(&position))
 }
 
 impl Menu {
@@ -181,6 +186,7 @@ impl Menu {
             border: MenuBorder::default(),
             header: None,
             on_dismiss: None,
+            excludes: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -206,6 +212,21 @@ impl Menu {
     pub fn header(mut self, header: impl IntoElement) -> Self {
         self.header = Some(header.into_any_element());
         self
+    }
+
+    /// 落在该区域内的外部 mouse down 不触发 `on_dismiss`，可多次调用。
+    /// 用于打开菜单的触发钮：由触发钮自己的 click 负责 toggle，避免先关后开。
+    pub fn exclude(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.excludes.push(bounds);
+        self
+    }
+
+    /// `exclude` 的 `Option` 版本；`None` 时不排除（触发钮尚未布局过）。
+    pub fn exclude_opt(self, bounds: Option<Bounds<Pixels>>) -> Self {
+        match bounds {
+            Some(bounds) => self.exclude(bounds),
+            None => self,
+        }
     }
 
     /// 菜单自身以外的 mouse down（任意键）触发；菜单内部的点击不触发。
@@ -266,7 +287,12 @@ impl RenderOnce for Menu {
             .on_any_mouse_up(|_, _, cx| cx.stop_propagation());
 
         if let Some(handler) = self.on_dismiss {
-            menu = menu.on_mouse_down_out(move |_, window, cx| handler(window, cx));
+            let excludes = self.excludes;
+            menu = menu.on_mouse_down_out(move |event, window, cx| {
+                if !in_any(&excludes, event.position) {
+                    handler(window, cx);
+                }
+            });
         }
 
         let menu = menu.when_some(self.header, |d, header| {
@@ -319,6 +345,10 @@ mod tests {
                 crate::ui::components::overlay::overlay_layer(
                     Menu::new("fixture-menu", point(px(50.), px(50.)))
                         .width(100.)
+                        .exclude(Bounds::new(
+                            point(px(300.), px(300.)),
+                            gpui::size(px(50.), px(50.)),
+                        ))
                         .on_dismiss(move |_, app| {
                             dismiss_view.update(app, |this, cx| {
                                 this.dismissed += 1;
@@ -374,6 +404,27 @@ mod tests {
             assert_eq!(this.picked, 1);
             assert_eq!(this.dismissed, 0);
         });
+    }
+
+    #[gpui::test]
+    fn click_inside_excluded_bounds_does_not_dismiss(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(Fixture::new);
+        cx.simulate_click(point(px(320.), px(320.)), Modifiers::none());
+        view.read_with(cx, |this, _| {
+            assert_eq!(this.dismissed, 0, "excluded region is not an outside click");
+            assert!(this.open);
+            assert!(this.table_clicks > 0, "click still reaches the trigger");
+        });
+    }
+
+    #[test]
+    fn in_any_checks_every_region() {
+        let a = Bounds::new(point(px(0.), px(0.)), gpui::size(px(10.), px(10.)));
+        let b = Bounds::new(point(px(100.), px(100.)), gpui::size(px(10.), px(10.)));
+        assert!(in_any(&[a, b], point(px(105.), px(105.))));
+        assert!(in_any(&[a, b], point(px(5.), px(5.))));
+        assert!(!in_any(&[a, b], point(px(50.), px(50.))));
+        assert!(!in_any(&[], point(px(5.), px(5.))));
     }
 
     #[gpui::test]

@@ -4,11 +4,8 @@ use crate::core::apps::InstalledApp;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::app_icons::try_get_icon;
 use crate::ui::components::button::{Button, IconButton, IconButtonVariant};
-use crate::ui::components::cards::card;
 use crate::ui::components::list_row::{ListRow, RowInset};
-use crate::ui::components::scroll::{
-    drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
-};
+use crate::ui::components::scroll_area::{table_shell, virtual_list, ScrollArea};
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, img, prelude::*, px, rgb, AnyElement, Context, Div, ImageSource, SharedString};
@@ -261,30 +258,13 @@ pub(super) fn render_apps_list_card(
         ListBody::Rows(n) => *n,
         ListBody::Placeholder(_) => 0,
     };
-    let base = root.apps.scroll.0.borrow().base_handle.clone();
-    let metrics = scroll_metrics(&base, 340.0, row_count as f32 * APP_ROW_H);
-
-    let scrollbar_el = metrics.map(|m| {
-        scrollbar("apps-scroll-thumb", m, |thumb| {
-            thumb.on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                    let mouse_y: f32 = event.position.y.into();
-                    let start_top: f32 =
-                        (-this.apps.scroll.0.borrow().base_handle.offset().y).into();
-                    this.apps.scroll_drag = Some((mouse_y, start_top.max(0.0)));
-                    cx.notify();
-                }),
-            )
-        })
-    });
-
     let body_el: AnyElement = match body {
         ListBody::Placeholder(el) => el,
         // 148 款软件按旧写法是每帧构造上千个元素；uniform_list 只渲染视口内的行
-        ListBody::Rows(n) => gpui::uniform_list(
+        ListBody::Rows(n) => virtual_list(
             SharedString::from(format!("apps-list-rows-{}", root.apps.gen)),
             n,
+            root.apps.scroll.clone(),
             cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
                 let picked: Vec<crate::core::apps::InstalledApp> = range
                     .clone()
@@ -298,45 +278,20 @@ pub(super) fn render_apps_list_card(
                     .collect()
             }),
         )
-        .track_scroll(root.apps.scroll.clone())
         .size_full()
-        .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)))
         .into_any_element(),
     };
 
-    card()
-        .flex_1()
-        .min_h(px(340.))
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .child(table_header)
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .relative()
-                .child(body_el)
-                .children(scrollbar_el)
-                // 拖拽期间的 move/up 走窗口级监听，鼠标滑出卡片也不会断流
-                .child(drag_capture(
-                    cx.entity(),
-                    |this, mouse_y, cx| {
-                        let Some(start) = this.apps.scroll_drag else {
-                            return;
-                        };
-                        let base = this.apps.scroll.0.borrow().base_handle.clone();
-                        if let Some(new_top) = drag_to_offset(&base, start, mouse_y) {
-                            base.set_offset(gpui::point(px(0.0), px(-new_top)));
-                            cx.notify();
-                        }
-                    },
-                    |this, cx| {
-                        if this.apps.scroll_drag.take().is_some() {
-                            cx.notify();
-                        }
-                    },
-                )),
-        )
-        .child(list_footer)
+    table_shell(
+        table_header,
+        ScrollArea::new(
+            "apps_components-scroll",
+            root.apps.scroll.0.borrow().base_handle.clone(),
+            340.,
+            row_count as f32 * APP_ROW_H,
+            body_el,
+        ),
+        list_footer,
+    )
+    .min_h(px(340.))
 }

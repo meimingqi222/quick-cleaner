@@ -2,7 +2,7 @@
 
 use crate::core::updater::UpdateStatus;
 use crate::ui::components::button::Button;
-use crate::ui::components::cards::card;
+use crate::ui::components::dialog::{DialogDensity, DialogFrame};
 use crate::ui::components::icons::icon_app_logo;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -87,121 +87,99 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
         _ => None,
     };
 
-    div()
-        .absolute()
-        .inset_0()
-        .occlude()
-        .bg(rgba(0x000000, 0.45))
-        .flex()
-        .items_center()
-        .justify_center()
+    DialogFrame::new("update-dialog")
+        .width(420.)
+        .density(DialogDensity::Compact)
+        .priority(root.overlays.priority(crate::ui::shell::OverlayId::Update))
         .child(
-            card()
-                .w(px(420.))
-                .p_5()
+            div()
                 .flex()
-                .flex_col()
-                .gap_4()
+                .items_center()
+                .gap_3()
+                .child(icon_app_logo(36.))
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(icon_app_logo(36.))
+                        .flex_col()
                         .child(
                             div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(TEXT))
-                                        .child(tr_update_dialog_title(lang)),
-                                )
-                                .child(div().text_sm().text_color(rgb(MUTED)).child(title)),
-                        ),
-                )
-                .when(!body.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(OUTLINE))
-                            .max_h(px(120.))
-                            .overflow_hidden()
-                            .child(body),
-                    )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .when(show_skip, |d| {
-                                    d.child(
-                                        Button::small("update-skip", tr_update_skip_version(lang))
-                                            .colors(SURF_HIGH, TEXT)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.skip_this_update_version(cx);
-                                            })),
-                                    )
-                                })
-                                .when(release_url.is_some(), |d| {
-                                    d.child(
-                                        Button::small(
-                                            "update-open-release",
-                                            tr_update_open_release(lang),
-                                        )
-                                        .colors(SURF_HIGH, TEXT)
-                                        .on_click(
-                                            cx.listener(|this, _, _, _cx| {
-                                                if let Some(url) = match &this.update.status {
-                                                    UpdateStatus::Available {
-                                                        release_url, ..
-                                                    }
-                                                    | UpdateStatus::Downloading {
-                                                        release_url,
-                                                        ..
-                                                    } => Some(release_url.clone()),
-                                                    _ => None,
-                                                } {
-                                                    this.open_update_release_page(url);
-                                                }
-                                            }),
-                                        ),
-                                    )
-                                }),
+                                .text_base()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(TEXT))
+                                .child(tr_update_dialog_title(lang)),
                         )
-                        .child(div().flex().items_center().gap_2().child(
-                            Button::ghost("update-later", tr_update_later(lang)).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.dismiss_update_dialog(cx);
-                                }),
-                            ),
-                        )),
-                )
+                        .child(div().text_sm().text_color(rgb(MUTED)).child(title)),
+                ),
+        )
+        .when(!body.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(OUTLINE))
+                    .max_h(px(120.))
+                    .overflow_hidden()
+                    .child(body),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
                 .child(
-                    Button::primary("update-primary", primary_label)
-                        .disabled(!primary_enabled)
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| match &this.update.status {
-                                UpdateStatus::Available { .. } => this.start_update_download(cx),
-                                UpdateStatus::Downloaded { .. } => this.install_update_now(cx),
-                                UpdateStatus::Error { .. } => this.retry_update(cx),
-                                UpdateStatus::Idle { .. }
-                                | UpdateStatus::Checking { .. }
-                                | UpdateStatus::NotAvailable { .. } => {
-                                    this.check_for_updates_manual(cx)
-                                }
-                                _ => {}
-                            }),
-                        ),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when(show_skip, |d| {
+                            d.child(
+                                Button::small("update-skip", tr_update_skip_version(lang))
+                                    .colors(SURF_HIGH, TEXT)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.skip_this_update_version(cx);
+                                    })),
+                            )
+                        })
+                        .when(release_url.is_some(), |d| {
+                            d.child(
+                                Button::small("update-open-release", tr_update_open_release(lang))
+                                    .colors(SURF_HIGH, TEXT)
+                                    .on_click(cx.listener(|this, _, _, _cx| {
+                                        if let Some(url) = match &this.update.status {
+                                            UpdateStatus::Available { release_url, .. }
+                                            | UpdateStatus::Downloading { release_url, .. } => {
+                                                Some(release_url.clone())
+                                            }
+                                            _ => None,
+                                        } {
+                                            this.open_update_release_page(url);
+                                        }
+                                    })),
+                            )
+                        }),
+                )
+                .child(div().flex().items_center().gap_2().child(
+                    Button::ghost("update-later", tr_update_later(lang)).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.dismiss_update_dialog(cx);
+                        },
+                    )),
+                )),
+        )
+        .child(
+            Button::primary("update-primary", primary_label)
+                .disabled(!primary_enabled)
+                .on_click(
+                    cx.listener(move |this, _, _, cx| match &this.update.status {
+                        UpdateStatus::Available { .. } => this.start_update_download(cx),
+                        UpdateStatus::Downloaded { .. } => this.install_update_now(cx),
+                        UpdateStatus::Error { .. } => this.retry_update(cx),
+                        UpdateStatus::Idle { .. }
+                        | UpdateStatus::Checking { .. }
+                        | UpdateStatus::NotAvailable { .. } => this.check_for_updates_manual(cx),
+                        _ => {}
+                    }),
                 ),
         )
 }

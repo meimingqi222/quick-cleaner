@@ -5,6 +5,7 @@
 //! 采用 GPUI 底层平台字体引擎（DirectWrite / CoreText）进行真实排版与精确命中测试。
 
 use crate::ui::components::icons::icon_search;
+use crate::ui::components::input::{InputBinding, InputHost};
 use crate::ui::text_input::{
     clamp_to_boundary, index_for_mouse_x, paint_search_text, SearchTextPaint,
 };
@@ -15,7 +16,7 @@ use gpui::{
 };
 
 /// 搜索框外观规格
-pub struct SearchBoxSpec<'a> {
+pub struct SearchBoxSpec<'a, T: 'static> {
     /// 唯一 DOM id（`div().id(...)`）
     pub id: SharedString,
     /// 焦点句柄
@@ -41,20 +42,20 @@ pub struct SearchBoxSpec<'a> {
     /// 光标是否在闪烁可见相位
     pub cursor_visible: bool,
     /// 目标输入框（Apps / File / Status）
-    pub target: crate::ui::text_input::InputTarget,
+    pub binding: InputBinding<T>,
 }
 
 /// 渲染一个搜索框。
 ///
 /// `on_clear` / `on_backspace` / `on_escape` 是三个编辑动作的回调，
 /// `on_bounds` 在 IME canvas paint 时被调用，用来存储搜索框位置给输入法候选窗口。
-pub fn search_box(
-    spec: SearchBoxSpec,
-    on_clear: impl Fn(&mut crate::ui::Root, &mut Context<crate::ui::Root>) + 'static,
-    on_backspace: impl Fn(&mut crate::ui::Root, &mut Context<crate::ui::Root>) + 'static,
-    on_escape: impl Fn(&mut crate::ui::Root, &mut Context<crate::ui::Root>) + 'static,
-    on_bounds: impl Fn(&mut crate::ui::Root, Bounds<Pixels>) + 'static,
-    cx: &mut Context<crate::ui::Root>,
+pub fn search_box<T: gpui::EntityInputHandler>(
+    spec: SearchBoxSpec<'_, T>,
+    on_clear: impl Fn(&mut T, &mut Context<T>) + 'static,
+    on_backspace: impl Fn(&mut T, &mut Context<T>) + 'static,
+    on_escape: impl Fn(&mut T, &mut Context<T>) + 'static,
+    on_bounds: impl Fn(&mut T, Bounds<Pixels>) + 'static,
+    cx: &mut Context<T>,
 ) -> Stateful<Div> {
     let SearchBoxSpec {
         id,
@@ -69,7 +70,7 @@ pub fn search_box(
         cursor_h,
         focused,
         cursor_visible,
-        target,
+        binding,
     } = spec;
 
     let sel = clamp_to_boundary(text, selection);
@@ -107,7 +108,7 @@ pub fn search_box(
                         },
                     );
                     text_entity.update(cx, |this, _| {
-                        this.text_input_by_target_mut(target).text_hit = Some(hit);
+                        binding.input_mut(this).text_hit = Some(hit);
                     });
                 },
             )
@@ -152,7 +153,7 @@ pub fn search_box(
                     .child("✕")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         on_clear(this, cx);
-                        this.poke_cursor_blink(cx);
+                        binding.activity(this, cx);
                     })),
             )
         })
@@ -162,15 +163,15 @@ pub fn search_box(
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 fh.focus(window);
                 if event.click_count >= 2 {
-                    let input = this.text_input_by_target_mut(target);
+                    let input = binding.input_mut(this);
                     input.sel = 0..input.text.len();
                     input.text_drag = None;
                     input.marked = None;
-                    this.poke_cursor_blink(cx);
+                    binding.activity(this, cx);
                     return;
                 }
                 let mouse_x: f32 = event.position.x.into();
-                let input = this.text_input_by_target_mut(target);
+                let input = binding.input_mut(this);
                 let idx = index_for_mouse_x(
                     &input.text,
                     mouse_x,
@@ -178,46 +179,68 @@ pub fn search_box(
                     font_size,
                     window,
                 );
-                let input = this.text_input_by_target_mut(target);
+                let input = binding.input_mut(this);
                 input.sel = idx..idx;
                 input.text_drag = Some(idx);
                 input.marked = None;
-                this.poke_cursor_blink(cx);
+                binding.activity(this, cx);
             })
         })
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _window, cx| {
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if (binding.on_key)(this, event, window, cx) {
+                cx.stop_propagation();
+                return;
+            }
             let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
             let shift = event.keystroke.modifiers.shift;
             match event.keystroke.key.as_str() {
                 "backspace" => on_backspace(this, cx),
-                "delete" => this.text_input_delete_target(target, cx),
+                "delete" => {
+                    let input = binding.input_mut(this);
+                    input.sel =
+                        crate::ui::text_input::delete_forward(&mut input.text, input.sel.clone());
+                    input.marked = None;
+                    binding.changed(this, cx);
+                }
                 "escape" => on_escape(this, cx),
                 // 光标移动不改文本，两个框都只要重绘
                 "left" => {
-                    this.text_input_move_left_target(target, shift);
+                    let input = binding.input_mut(this);
+                    input.sel =
+                        crate::ui::text_input::move_left(&input.text, input.sel.clone(), shift);
+                    input.marked = None;
                     cx.notify();
                 }
                 "right" => {
-                    this.text_input_move_right_target(target, shift);
+                    let input = binding.input_mut(this);
+                    input.sel =
+                        crate::ui::text_input::move_right(&input.text, input.sel.clone(), shift);
+                    input.marked = None;
                     cx.notify();
                 }
                 "home" => {
-                    this.text_input_move_home_target(target, shift);
+                    let input = binding.input_mut(this);
+                    input.sel =
+                        crate::ui::text_input::move_home(&input.text, input.sel.clone(), shift);
+                    input.marked = None;
                     cx.notify();
                 }
                 "end" => {
-                    this.text_input_move_end_target(target, shift);
+                    let input = binding.input_mut(this);
+                    input.sel =
+                        crate::ui::text_input::move_end(&input.text, input.sel.clone(), shift);
+                    input.marked = None;
                     cx.notify();
                 }
                 // Ctrl+A：全选
                 "a" if ctrl => {
-                    let input = this.text_input_by_target_mut(target);
+                    let input = binding.input_mut(this);
                     input.sel = 0..input.text.len();
                     cx.notify();
                 }
                 // Ctrl+C：复制选中文本
                 "c" if ctrl => {
-                    let input = this.text_input_by_target(target);
+                    let input = binding.input(this);
                     let text = input.text[input.selection()].to_string();
                     if !text.is_empty() {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
@@ -225,16 +248,16 @@ pub fn search_box(
                 }
                 // Ctrl+X：剪切选中文本
                 "x" if ctrl => {
-                    let input = this.text_input_by_target_mut(target);
+                    let input = binding.input_mut(this);
                     let sel = input.selection();
                     let cut = input.text[sel.clone()].to_string();
                     if !cut.is_empty() {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
-                        let input = this.text_input_by_target_mut(target);
+                        let input = binding.input_mut(this);
                         input.text.replace_range(sel.clone(), "");
                         input.sel = sel.start..sel.start;
                         input.marked = None;
-                        this.after_text_edit_target(target, cx);
+                        binding.changed(this, cx);
                     }
                 }
                 // Ctrl+V：粘贴
@@ -242,19 +265,19 @@ pub fn search_box(
                     if let Some(item) = cx.read_from_clipboard() {
                         if let Some(pasted) = item.text() {
                             // 粘贴替换的是选区，不是 IME 组合中的那段
-                            let input = this.text_input_by_target_mut(target);
+                            let input = binding.input_mut(this);
                             let sel = input.selection();
                             input.text.replace_range(sel.clone(), &pasted);
                             let caret = sel.start + pasted.len();
                             input.sel = caret..caret;
                             input.marked = None;
-                            this.after_text_edit_target(target, cx);
+                            binding.changed(this, cx);
                         }
                     }
                 }
                 _ => {}
             }
-            this.poke_cursor_blink(cx);
+            binding.activity(this, cx);
         }))
         // IME canvas：把 EntityInputHandler 挂到焦点上，同时注册
         // 窗口级鼠标拖拽/抬起事件来实现文本选区拖拽
@@ -266,6 +289,7 @@ pub fn search_box(
                 move |_, bounds: Bounds<Pixels>, window, cx| {
                     entity.update(cx, |this, _| {
                         on_bounds(this, bounds);
+                        (binding.register)(this, binding, window);
                     });
                     window.handle_input(
                         &handle,
@@ -284,7 +308,7 @@ pub fn search_box(
                         }
                         let mouse_x: f32 = event.position.x.into();
                         ent.update(cx, |this, cx| {
-                            let input = this.text_input_by_target(target);
+                            let input = binding.input(this);
                             let Some(anchor) = input.text_drag else {
                                 return;
                             };
@@ -295,9 +319,8 @@ pub fn search_box(
                                 fsize,
                                 window,
                             );
-                            this.text_input_by_target_mut(target).sel =
-                                cur.min(anchor)..cur.max(anchor);
-                            this.poke_cursor_blink(cx);
+                            binding.input_mut(this).sel = cur.min(anchor)..cur.max(anchor);
+                            binding.activity(this, cx);
                         });
                     });
 
@@ -311,12 +334,7 @@ pub fn search_box(
                             return;
                         }
                         ent2.update(cx, |this, cx| {
-                            if this
-                                .text_input_by_target_mut(target)
-                                .text_drag
-                                .take()
-                                .is_some()
-                            {
+                            if binding.input_mut(this).text_drag.take().is_some() {
                                 cx.notify();
                             }
                         });

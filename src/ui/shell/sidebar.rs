@@ -106,7 +106,18 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 .text_color(rgb(fg_color))
                 .child(v.title_lang(lang)),
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if this.view != v {
+                this.close_context_menu();
+                this.close_declutter_context_menu();
+                this.close_disk_volume_menu();
+                this.monitor.search_popover.dismiss();
+                this.active_input = None;
+                this.search.input.marked = None;
+                this.apps.input.marked = None;
+                this.monitor.input.marked = None;
+                window.focus(&this.root_focus);
+            }
             this.view = v;
             if v == View::Status {
                 this.start_status_monitor(cx);

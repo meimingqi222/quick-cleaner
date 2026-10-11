@@ -8,9 +8,7 @@ use crate::ui::components::controls::page_heading;
 use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
 use crate::ui::components::icons::*;
 use crate::ui::components::list_row::{ListRow, RowInset};
-use crate::ui::components::scroll::{
-    drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
-};
+use crate::ui::components::scroll_area::{table_shell, virtual_list, ScrollArea};
 use crate::ui::components::segmented::{ChipLook, ToggleChip};
 use crate::ui::components::{path_tooltip, text_tooltip};
 use crate::ui::i18n::*;
@@ -357,8 +355,8 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
 
     let sel = crate::ui::text_input::clamp_to_boundary(&query, selection);
 
-    crate::ui::adapters::search_box::search_box(
-        crate::ui::adapters::search_box::SearchBoxSpec {
+    crate::ui::components::search_input::search_box(
+        crate::ui::components::search_input::SearchBoxSpec {
             id: SharedString::from("file-search-box"),
             focus_handle: &search_focus_handle,
             text: &query,
@@ -371,7 +369,7 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
             cursor_h: 15.,
             focused,
             cursor_visible: root.cursor_blink_visible,
-            target: crate::ui::text_input::InputTarget::File,
+            binding: crate::ui::adapters::input::FILE_INPUT,
         },
         |this, cx| this.file_search_clear(cx),
         |this, cx| this.file_search_backspace(cx),
@@ -391,27 +389,10 @@ fn render_results_card(
 ) -> Div {
     let n = root.search.results.len();
 
-    let base = root.search.scroll.0.borrow().base_handle.clone();
-    let metrics = scroll_metrics(&base, 340.0, n as f32 * ROW_H);
-
-    let scrollbar_el = metrics.map(|m| {
-        scrollbar("search-scroll-thumb", m, |thumb| {
-            thumb.on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                    let mouse_y: f32 = event.position.y.into();
-                    let start_top: f32 =
-                        (-this.search.scroll.0.borrow().base_handle.offset().y).into();
-                    this.search.scroll_drag = Some((mouse_y, start_top.max(0.0)));
-                    cx.notify();
-                }),
-            )
-        })
-    });
-
-    let list_el = gpui::uniform_list(
+    let list_el = virtual_list(
         SharedString::from("search-results-rows"),
         n,
+        root.search.scroll.clone(),
         cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
             let lang = this.language;
             let results = &this.search.results;
@@ -423,45 +404,21 @@ fn render_results_card(
                 .collect()
         }),
     )
-    .track_scroll(root.search.scroll.clone())
     .size_full()
-    .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)))
     .into_any_element();
 
-    card()
-        .flex_1()
-        .min_h(px(340.))
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .child(table_header)
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .relative()
-                .child(list_el)
-                .children(scrollbar_el)
-                .child(drag_capture(
-                    cx.entity(),
-                    |this, mouse_y, cx| {
-                        let Some(start) = this.search.scroll_drag else {
-                            return;
-                        };
-                        let base = this.search.scroll.0.borrow().base_handle.clone();
-                        if let Some(new_top) = drag_to_offset(&base, start, mouse_y) {
-                            base.set_offset(gpui::point(px(0.0), px(-new_top)));
-                            cx.notify();
-                        }
-                    },
-                    |this, cx| {
-                        if this.search.scroll_drag.take().is_some() {
-                            cx.notify();
-                        }
-                    },
-                )),
-        )
-        .child(list_footer)
+    table_shell(
+        table_header,
+        ScrollArea::new(
+            "search-scroll",
+            root.search.scroll.0.borrow().base_handle.clone(),
+            340.,
+            n as f32 * ROW_H,
+            list_el,
+        ),
+        list_footer,
+    )
+    .min_h(px(340.))
 }
 
 fn render_result_row(

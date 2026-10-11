@@ -17,6 +17,8 @@ coverage/
 !/docs/PITFALLS.md
 !/docs/UI_MIGRATION.md
 !/docs/UI_POPOVER.md
+!/docs/UI_COMPONENTS.md
+!/docs/ui-baselines/
 !/docs/agent-notes/
 !/docs/compose/
 /docs/compose/*

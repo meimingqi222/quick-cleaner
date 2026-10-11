@@ -13,11 +13,13 @@ use crate::ui::components::cards::card;
 use crate::ui::components::controls::page_heading;
 use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
 use crate::ui::components::icons::*;
+use crate::ui::components::menu::{Menu, MenuBorder, MenuItem, MenuTone};
+use crate::ui::components::overlay::OverlayPolicy;
 use crate::ui::components::segmented::{SegmentItem, SegmentStyle, SegmentedControl};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
+use gpui::{div, point, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
 
 pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
@@ -337,8 +339,8 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
 
-    let search_box = crate::ui::adapters::search_box::search_box(
-        crate::ui::adapters::search_box::SearchBoxSpec {
+    let search_box = crate::ui::components::search_input::search_box(
+        crate::ui::components::search_input::SearchBoxSpec {
             id: SharedString::from("apps-search-box"),
             focus_handle: &apps_focus_handle,
             text: &search_text,
@@ -351,7 +353,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             cursor_h: 13.,
             focused: search_focused,
             cursor_visible: root.cursor_blink_visible,
-            target: crate::ui::text_input::InputTarget::Apps,
+            binding: crate::ui::adapters::input::APPS_INPUT,
         },
         |this, cx| {
             this.search_clear();
@@ -596,7 +598,10 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .into_any_element()
 }
 
-/// 渲染软件条目悬浮右键上下文菜单（打开目录、卸载、Windows 上还有强力清理、复制路径）
+/// 菜单左上角相对右键位置的回退量，让光标落在菜单内。
+const MENU_CURSOR_OFFSET: f32 = 10.;
+
+/// 渲染软件条目右键上下文菜单（打开目录、卸载、Windows 上还有强力清理、复制路径）
 pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
     let lang = root.language;
     let menu = root.apps.context_menu.as_ref()?;
@@ -607,210 +612,111 @@ pub fn render_apps_context_menu(root: &Root, cx: &mut Context<Root>) -> Option<A
         .as_ref()
         .map(|p| p.exists())
         .unwrap_or(false);
-    let app_loc = app.install_location.clone();
-
-    // 限制菜单弹出位置不超出视口边界
-    let x = (menu.x - 10.).clamp(10., 1040.);
-    let y = (menu.y - 10.).clamp(10., 620.);
 
     let app_for_uninst = app.clone();
     let app_for_resid = app.clone();
-    let app_for_loc = app_loc.clone();
+    let app_for_loc = app.install_location.clone();
     let app_for_copy = app.clone();
-    let app_name_for_loc = app.name.clone();
 
-    let (ctx_open_folder, ctx_uninstall, mut ctx_force_clean, ctx_copy_path) = match lang {
-        Language::Zh => (
-            "打开安装目录",
-            "官方常规卸载",
-            "强力残留清理",
-            "复制安装路径",
-        ),
-        Language::En => (
-            "Open Install Location",
-            "Standard Uninstall",
-            "Force Residual Clean",
-            "Copy Install Path",
-        ),
+    let ctx_force_clean = if app.discovery.is_some() {
+        tr_discovered_remove_files(lang)
+    } else {
+        tr_apps_ctx_force_clean(lang)
     };
-    if app.discovery.is_some() {
-        ctx_force_clean = tr_discovered_remove_files(lang);
-    }
 
-    let menu_view = div()
-        .id("apps-context-menu-backdrop")
-        .absolute()
-        .inset_0()
-        .on_mouse_down(
-            gpui::MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
-                this.close_context_menu();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            gpui::MouseButton::Right,
-            cx.listener(|this, _, _, cx| {
-                this.close_context_menu();
-                cx.notify();
-            }),
-        )
+    let header = div()
+        .flex()
+        .flex_col()
         .child(
-            card()
-                .id("apps-context-menu-card")
-                .absolute()
-                .left(px(x))
-                .top(px(y))
-                .w(px(230.))
-                .p_1()
-                .rounded_xl()
-                .bg(rgb(CARD))
-                .border_1()
-                .border_color(rgb(SURF_HIGHEST))
-                .shadow_xl()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(rgba(OUTLINE_VAR, 0.4))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(truncate(&app.name, 24)),
-                        )
-                        .when(app.discovery.is_some(), |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .child(tr_app_discovery_label(lang, can_uninstall)),
-                            )
-                        })
-                        .when(!app.version.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .child(format!("v{}", app.version)),
-                            )
-                        }),
-                )
-                // 1. 打开安装目录
-                .child(
-                    div()
-                        .id("ctx-open-folder")
-                        .px_3()
-                        .py(px(7.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .when(has_location, |d| {
-                            d.text_color(rgb(TEXT)).hover(|h| h.bg(rgb(SURF_HIGH)))
-                        })
-                        .when(!has_location, |d| d.text_color(rgb(OUTLINE)))
-                        .child(ctx_open_folder)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(ref loc) = app_for_loc {
-                                crate::platform::reveal_in_explorer(loc);
-                            } else {
-                                this.status =
-                                    bilingual(|l| tr_status_no_install_path(l, &app_name_for_loc));
-                            }
-                            this.close_context_menu();
-                            cx.notify();
-                        })),
-                )
-                // 2. 官方常规卸载
-                .child(
-                    div()
-                        .id("ctx-uninstall")
-                        .px_3()
-                        .py(px(7.))
-                        .rounded_md()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .when(can_uninstall, |d| {
-                            d.cursor_pointer()
-                                .text_color(rgb(TEXT))
-                                .hover(|h| h.bg(rgb(SURF_HIGH)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_context_menu();
-                                    this.request_uninstall_app(app_for_uninst.clone(), cx);
-                                }))
-                        })
-                        .when(!can_uninstall, |d| d.text_color(rgb(OUTLINE)))
-                        .child(ctx_uninstall),
-                )
-                // 3. 强力深度清理（仅 Windows：可删安装目录和卸载登记项）
-                .when(!cfg!(target_os = "macos"), |d| {
-                    d.child(
-                        div()
-                            .id("ctx-residual-clean")
-                            .px_3()
-                            .py(px(7.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(PRIMARY))
-                            .hover(|h| h.bg(rgba(PRIMARY, 0.08)))
-                            .child(ctx_force_clean)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.close_context_menu();
-                                this.start_residual_scan(app_for_resid.clone(), cx);
-                            })),
-                    )
-                })
-                // 4. 复制安装路径
-                .child(
-                    div()
-                        .id("ctx-copy-path")
-                        .px_3()
-                        .py(px(7.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(MUTED))
-                        .hover(|h| h.bg(rgb(SURF_HIGH)))
-                        .child(ctx_copy_path)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(ref loc) = app_for_copy.install_location {
-                                let shown = loc.display().to_string();
-                                this.status = bilingual(|l| tr_status_install_path(l, &shown));
-                            } else {
-                                let name = app_for_copy.name.clone();
-                                this.status = bilingual(|l| tr_status_no_install_path(l, &name));
-                            }
-                            this.close_context_menu();
-                            cx.notify();
-                        })),
-                ),
-        );
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(TEXT))
+                .child(truncate(&app.name, 24)),
+        )
+        .when(app.discovery.is_some(), |d| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(tr_app_discovery_label(lang, can_uninstall)),
+            )
+        })
+        .when(!app.version.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(format!("v{}", app.version)),
+            )
+        });
 
-    Some(menu_view.into_any_element())
+    let open_folder = MenuItem::new("ctx-open-folder", tr_apps_ctx_open_folder(lang))
+        .disabled(!has_location)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if let Some(ref loc) = app_for_loc {
+                crate::platform::reveal_in_explorer(loc);
+            }
+            this.close_context_menu();
+            cx.notify();
+        }));
+    let uninstall = MenuItem::new("ctx-uninstall", tr_apps_ctx_uninstall(lang))
+        .disabled(!can_uninstall)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.close_context_menu();
+            this.request_uninstall_app(app_for_uninst.clone(), cx);
+        }));
+    let copy_path = MenuItem::new("ctx-copy-path", tr_apps_ctx_copy_path(lang))
+        .tone(MenuTone::Muted)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if let Some(ref loc) = app_for_copy.install_location {
+                let shown = loc.display().to_string();
+                this.status = bilingual(|l| tr_status_install_path(l, &shown));
+            } else {
+                let name = app_for_copy.name.clone();
+                this.status = bilingual(|l| tr_status_no_install_path(l, &name));
+            }
+            this.close_context_menu();
+            cx.notify();
+        }));
+
+    let view = cx.entity();
+    let menu_view = Menu::new(
+        "apps-context-menu-card",
+        point(
+            px(menu.x - MENU_CURSOR_OFFSET),
+            px(menu.y - MENU_CURSOR_OFFSET),
+        ),
+    )
+    .width(230.)
+    .border(MenuBorder::Solid)
+    .header(header)
+    .on_dismiss(move |_, app| {
+        view.update(app, |this, cx| {
+            this.dismiss_overlay_outside(crate::ui::shell::OverlayId::AppsMenu, cx);
+            cx.notify();
+        })
+    })
+    .child(open_folder)
+    .child(uninstall)
+    // 强力清理仅 Windows：可删安装目录和卸载登记项
+    .when(!cfg!(target_os = "macos"), |m| {
+        m.child(
+            MenuItem::new("ctx-residual-clean", ctx_force_clean)
+                .tone(MenuTone::Primary)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_context_menu();
+                    this.start_residual_scan(app_for_resid.clone(), cx);
+                })),
+        )
+    })
+    .child(copy_path);
+
+    Some(
+        OverlayPolicy::POPUP.layer_at(
+            menu_view,
+            root.overlays
+                .priority(crate::ui::shell::OverlayId::AppsMenu),
+        ),
+    )
 }

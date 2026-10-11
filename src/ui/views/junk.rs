@@ -11,9 +11,7 @@ use crate::ui::components::controls::{checkbox, page_heading};
 use crate::ui::components::feedback::LoadingState;
 use crate::ui::components::icons::*;
 use crate::ui::components::list_row::{ListRow, RowInset};
-use crate::ui::components::scroll::{
-    drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
-};
+use crate::ui::components::scroll_area::{virtual_list, ScrollArea};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -96,14 +94,10 @@ fn render_category_items(
     };
     let list_h = (count as f32 * ITEM_ROW_H).min(LIST_MAX_H);
 
-    // 先算滚动条：列表需要据此决定是否给它让出右侧宽度，
-    // 否则最右边的「大小」列会被滑块压住。
-    let base = handle.0.borrow().base_handle.clone();
-    let metrics = scroll_metrics(&base, list_h, count as f32 * ITEM_ROW_H);
-
-    let list = gpui::uniform_list(
+    let list = virtual_list(
         SharedString::from(format!("junk-items-{id:?}")),
         count,
+        handle.clone(),
         cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
             let lang = this.language;
             let Some(summary) = this.junk.categories.iter().find(|c| c.category == id) else {
@@ -146,39 +140,22 @@ fn render_category_items(
                 .collect()
         }),
     )
-    .track_scroll(handle.clone())
-    .h(px(list_h))
-    .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)));
+    .h(px(list_h));
 
-    let bar = metrics.map(|m| {
-        scrollbar(
-            SharedString::from(format!("junk-thumb-{id:?}")),
-            m,
-            |thumb| {
-                thumb.on_mouse_down(
-                    gpui::MouseButton::Left,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                        let Some(h) = this.junk.scroll.get(&id) else {
-                            return;
-                        };
-                        let top: f32 = (-h.0.borrow().base_handle.offset().y).into();
-                        let mouse_y: f32 = event.position.y.into();
-                        this.junk.scroll_drag = Some((id, mouse_y, top.max(0.0)));
-                        cx.notify();
-                    }),
-                )
-            },
-        )
-    });
-
+    let base = handle.0.borrow().base_handle.clone();
     div()
         .relative()
         .h(px(list_h))
         .border_t_1()
         .border_color(rgba(OUTLINE_VAR, 0.4))
         .bg(rgb(CARD))
-        .child(list)
-        .children(bar)
+        .child(ScrollArea::new(
+            SharedString::from(format!("junk-scroll-{id:?}")),
+            base,
+            list_h,
+            count as f32 * ITEM_ROW_H,
+            list,
+        ))
         .into_any_element()
 }
 
@@ -804,29 +781,6 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         )
         .children(skipped_banner)
         .child(body)
-        // 滚动条拖拽的 move/up 走窗口级监听：鼠标拖出滑块、拖出整页
-        // 甚至拖出窗口，事件都还接得住。
-        .child(drag_capture(
-            cx.entity(),
-            |this, mouse_y, cx| {
-                let Some((id, start_y, start_top)) = this.junk.scroll_drag else {
-                    return;
-                };
-                let Some(handle) = this.junk.scroll.get(&id) else {
-                    return;
-                };
-                let base = handle.0.borrow().base_handle.clone();
-                if let Some(new_top) = drag_to_offset(&base, (start_y, start_top), mouse_y) {
-                    base.set_offset(gpui::point(px(0.0), px(-new_top)));
-                    cx.notify();
-                }
-            },
-            |this, cx| {
-                if this.junk.scroll_drag.take().is_some() {
-                    cx.notify();
-                }
-            },
-        ))
         .into_any_element()
 }
 

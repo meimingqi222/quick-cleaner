@@ -34,8 +34,6 @@ pub struct JunkState {
     /// 每个分类展开后各自的滚动位置。「项目构建产物」这类可能有近千条，
     /// 必须走虚拟化列表，而 uniform_list 需要一个长期持有的滚动句柄。
     pub scroll: std::collections::HashMap<CategoryId, gpui::UniformListScrollHandle>,
-    /// 正在拖拽哪个分类的滚动条滑块：(分类, 按下时鼠标 y, 按下时滚动偏移)
-    pub scroll_drag: Option<(CategoryId, f32, f32)>,
 }
 
 impl JunkState {
@@ -304,100 +302,7 @@ impl JunkState {
 ///
 /// 必须与屏幕上实际画出的字形是同一份 `ShapedLine`：用另一套字体/字重
 /// 再 layout 一次，或用固定像素去猜文本起点，都会把光标点偏一格。
-pub struct SearchTextHit {
-    pub bounds: gpui::Bounds<gpui::Pixels>,
-    pub line: gpui::ShapedLine,
-}
-
-/// 一个单行文本输入框的全部状态。
-///
-/// Apps 搜索框和文件搜索框本来各带一套完全相同的字段，`text_input.rs`
-/// 的每个方法、`search_box.rs` 的每个回调都要写一遍
-/// `if is_file_search { …search… } else { …apps… }`——两份实现已经开始
-///各自漂移。现在两边共用这一个结构体，分支只剩「拿哪一个」。
-pub struct TextInputState {
-    pub text: String,
-    /// 光标/选区的**字节**范围
-    pub sel: std::ops::Range<usize>,
-    /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
-    pub marked: Option<std::ops::Range<usize>>,
-    /// 输入框最近一次绘制的位置，用来定位输入法候选窗口
-    pub bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    /// 文本区真实排版（绘制与点击命中共用）
-    pub text_hit: Option<SearchTextHit>,
-    /// 文本拖拽选区的锚点字节偏移（鼠标按下时的位置）
-    pub text_drag: Option<usize>,
-    pub focus_handle: gpui::FocusHandle,
-}
-
-impl TextInputState {
-    pub fn new(focus_handle: gpui::FocusHandle) -> Self {
-        Self {
-            text: String::new(),
-            sel: 0..0,
-            marked: None,
-            bounds: None,
-            text_hit: None,
-            text_drag: None,
-            focus_handle,
-        }
-    }
-
-    /// 光标（或选区）的字节范围，已钳到合法的字符边界。
-    pub fn selection(&self) -> std::ops::Range<usize> {
-        crate::ui::text_input::clamp_to_boundary(&self.text, self.sel.clone())
-    }
-
-    /// 把光标收到末尾。内容被外部改动（清空按钮、切换筛选）后要调一次，
-    /// 否则残留的旧偏移会指到字符串外面。
-    pub fn reset_caret(&mut self) {
-        let end = self.text.len();
-        self.sel = end..end;
-        self.marked = None;
-    }
-
-    pub fn clear(&mut self) {
-        self.text.clear();
-        self.reset_caret();
-    }
-
-    pub fn set_text(&mut self, text: &str) {
-        self.text = text.to_string();
-        self.reset_caret();
-    }
-
-    /// 提交文本：普通打字与输入法确认后的汉字都走这里。
-    pub fn replace(&mut self, range_utf16: Option<&std::ops::Range<usize>>, new_text: &str) {
-        let (sel, marked) = crate::ui::text_input::replace_text(
-            &mut self.text,
-            &self.sel,
-            &self.marked,
-            range_utf16,
-            new_text,
-        );
-        self.sel = sel;
-        self.marked = marked;
-    }
-
-    /// 组合中的文本：输入法候选阶段的拼音串，尚未确认。
-    pub fn replace_and_mark(
-        &mut self,
-        range_utf16: Option<&std::ops::Range<usize>>,
-        new_text: &str,
-        new_selected_range_utf16: Option<&std::ops::Range<usize>>,
-    ) {
-        let (sel, marked) = crate::ui::text_input::replace_and_mark_text(
-            &mut self.text,
-            &self.sel,
-            &self.marked,
-            range_utf16,
-            new_text,
-            new_selected_range_utf16,
-        );
-        self.sel = sel;
-        self.marked = marked;
-    }
-}
+pub use crate::ui::components::input::{SearchTextHit, TextInputState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AppsTab {
@@ -700,7 +605,6 @@ pub struct AppsState {
     pub(super) view_key: Option<AppsViewKey>,
     /// 软件表也走虚拟化列表，句柄需长期持有
     pub scroll: gpui::UniformListScrollHandle,
-    pub scroll_drag: Option<(f32, f32)>,
     pub context_menu: Option<AppsContextMenu>,
 }
 
@@ -749,8 +653,7 @@ pub struct SearchState {
     pub indices: Vec<std::sync::Arc<crate::core::disk::ScanResult>>,
     /// 搜索结果虚拟列表
     pub scroll: gpui::UniformListScrollHandle,
-    /// 滚动条拖拽状态：(按下时鼠标 y, 按下时滚动 top)
-    pub scroll_drag: Option<(f32, f32)>,
+
     /// 异步搜索任务句柄（用于防抖）
     pub search_task: Option<Task<()>>,
     /// 每次输入变化递增；后台遍历定期检查，及时终止已过期查询。
@@ -1021,8 +924,7 @@ pub struct StatusState {
     /// 复制命令行成功的提示计时标记
     pub cmd_copied_feedback: bool,
     pub proc_scroll: gpui::UniformListScrollHandle,
-    /// 滚动条滑块的拖拽起点（按下时的鼠标 y、当时的滚动偏移）。
-    pub proc_scroll_drag: Option<(f32, f32)>,
+
     /// 风扇控制任务（切档 + 每 3 秒重申目标转速的保活循环）。
     /// thermalmonitord 会在控制进程退出后收回风扇，应用退出即自动恢复，
     /// 无需额外的退出清理。
@@ -1112,7 +1014,6 @@ impl StatusState {
             selected_proc_mem_history: Vec::with_capacity(STATUS_HISTORY_LEN),
             cmd_copied_feedback: false,
             proc_scroll: gpui::UniformListScrollHandle::new(),
-            proc_scroll_drag: None,
             fan_task: None,
             input: TextInputState::new(focus_handle),
             filter_tab: crate::core::status::ProcFilterTab::default(),
@@ -1440,7 +1341,6 @@ mod tests {
             selected: HashSet::new(),
             expanded: HashSet::new(),
             scroll: std::collections::HashMap::new(),
-            scroll_drag: None,
         }
     }
 
