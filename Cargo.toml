@@ -1,6 +1,6 @@
 [package]
 name = "quick-cleaner"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2021"
 default-run = "quick-cleaner"
 
@@ -23,9 +23,8 @@ toml = "0.8"
 chrono = "0.4"
 lz4_flex = "0.14.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-# 状态监控页的 CPU / 内存 / 进程 / 网络采样。关掉默认特性只留需要的，
-# 否则会把用户枚举、磁盘枚举等一整套拉进编译。
-sysinfo = { version = "0.37", default-features = false, features = ["system", "network", "multithread"] }
+# 状态监控页的 CPU / 内存 / 进程 / 网络采样与用户信息。关掉默认特性只留需要的。
+sysinfo = { version = "0.37", default-features = false, features = ["system", "network", "multithread", "user"] }
 # 自动更新：阻塞 HTTP 拉 GitHub Releases，无 async runtime
 ureq = { version = "2.12", features = ["json"] }
 # 解压发行 zip；sha2 做 sidecar 校验
@@ -48,7 +47,7 @@ libc = "0.2"
 objc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl"] }
+winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl", "iphlpapi", "tcpmib", "udpmib", "iprtrmib"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
@@ -132,3 +131,6 @@ required-features = ["authprobe"]
 # drop(lock) 再 resignKeyWindow）。升级到官方带修复的版本后删掉本节。
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
+
+[dev-dependencies]
+gpui = { version = "0.2.2", default-features = false, features = ["test-support"] }

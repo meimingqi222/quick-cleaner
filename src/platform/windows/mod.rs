@@ -51,8 +51,8 @@ pub use security::{
 };
 pub use status::{
     elevated_fan_control, fan_control_supported, fan_helper_installed, install_fan_helper,
-    process_unique_id, read_battery, read_gpus, read_thermal, set_fan_mode, system_uptime_secs,
-    terminate_process, uninstall_fan_helper,
+    process_ports_map, process_threads_map, process_unique_id, read_battery, read_gpus,
+    read_thermal, set_fan_mode, system_uptime_secs, terminate_process, uninstall_fan_helper,
 };
 pub use updater::{
     apply_update_and_restart, cleanup_previous_update_leftovers, is_packaged_install, open_url,

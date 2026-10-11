@@ -77,10 +77,10 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                 let l_name = item.filename.clone();
 
                 let icon_el = match item.icon_type {
-                    0 => icon_badge(icon_video(0x0078d4, 18.), 0xe0f2fe, 0x0078d4, 36.),
-                    1 => icon_badge(icon_zip(0x7547ab, 18.), 0xefdbff, 0x7547ab, 36.),
-                    2 => icon_badge(icon_folder_large(0x059669, 18.), 0xd1fae5, 0x059669, 36.),
-                    _ => icon_badge(icon_photos_similar(0x974700, 18.), 0xffdbc8, 0x974700, 36.),
+                    0 => icon_badge(icon_video(0x0078d4, 14.), 0xe0f2fe, 0x0078d4, 28.),
+                    1 => icon_badge(icon_zip(0x7547ab, 14.), 0xefdbff, 0x7547ab, 28.),
+                    2 => icon_badge(icon_folder_large(0x059669, 14.), 0xd1fae5, 0x059669, 28.),
+                    _ => icon_badge(icon_photos_similar(0x974700, 14.), 0xffdbc8, 0x974700, 28.),
                 };
 
                 div()
@@ -89,8 +89,8 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_6()
-                    .py_4()
+                    .px_4()
+                    .py_2p5()
                     .border_b_1()
                     .border_color(rgba(OUTLINE_VAR, 0.2))
                     .when(is_sel, |d| d.bg(rgba(PRIMARY, 0.05)))
@@ -111,7 +111,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                             .min_w(px(0.))
                             .flex()
                             .items_center()
-                            .gap_4()
+                            .gap_3()
                             .cursor_pointer()
                             .child(checkbox(if is_sel {
                                 crate::core::model::Check::On
@@ -231,16 +231,16 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                 .flex_1()
                 .min_h(px(0.))
                 .overflow_scroll()
-                .p_8()
-                .pb_8()
+                .p_5()
+                .pb_5()
                 .flex()
                 .flex_col()
-                .gap_6()
+                .gap_4()
                 .child(tab_nav)
                 .child(
                     div()
                         .flex_none()
-                        .p_6()
+                        .p_4()
                         .rounded_xl()
                         .bg(rgb(CARD))
                         .border_1()
@@ -248,7 +248,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                         .shadow_sm()
                         .flex()
                         .flex_col()
-                        .gap_4()
+                        .gap_3()
                         .child(
                             div()
                                 .flex()
@@ -260,7 +260,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         .flex_col()
                                         .child(
                                             div()
-                                                .text_xl()
+                                                .text_lg()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(TEXT))
                                                 .child(tr_declutter_large_files_heading(lang)),
@@ -285,7 +285,7 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                         )
                                         .child(
                                             div()
-                                                .text_xl()
+                                                .text_base()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(ERROR))
                                                 .child(fmt_size(total_found)),

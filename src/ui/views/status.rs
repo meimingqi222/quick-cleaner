@@ -9,24 +9,26 @@
 use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_mem, fmt_size, truncate};
 use crate::core::status::{gpu_labels, FanMode, StatusSnapshot, STATUS_PROCESS_TABLE_H};
+use crate::ui::app_icons::try_get_icon;
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::page_heading;
 use crate::ui::components::donut::{render_donut, DonutSegment};
 use crate::ui::components::icons::*;
+use crate::ui::components::popover::{
+    popover_list, popover_overlay, popover_row, popover_surface, PopoverCandidate, PopoverSpec,
+};
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
+use crate::ui::components::text_tooltip;
 use crate::ui::i18n::*;
-use crate::ui::state::{ProcSort, ProcSortKey, STATUS_HISTORY_LEN};
+use crate::ui::state::{ProcSort, ProcSortKey, StatusTab, STATUS_HISTORY_LEN};
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{
     div, img, prelude::*, px, relative, rgb, AnyElement, Context, Div, ImageSource, SharedString,
-    Stateful,
+    Stateful, Window,
 };
-
-/// 进程表里每行 CPU 迷你条的像素宽度。
-const CPU_BAR_W: f32 = 40.;
 
 /// 网络卡片图标：圆形线框 + 十字经纬，不引入新字形依赖。
 fn icon_globe(fg: u32, size: f32) -> AnyElement {
@@ -325,7 +327,7 @@ fn history_bars(history: &[f32]) -> Div {
 }
 
 /// 进程行的 CPU 迷你条 + 数值。>50% 红、>15% 橙、其余灰。
-fn cpu_cell(cpu: f32) -> Div {
+fn cpu_cell(cpu: f32, width: f32) -> Div {
     let (bar_color, text_color) = if cpu > 50.0 {
         (ERROR, ERROR)
     } else if cpu > 15.0 {
@@ -334,15 +336,15 @@ fn cpu_cell(cpu: f32) -> Div {
         (OUTLINE_VAR, MUTED)
     };
     div()
-        .w(px(96.))
+        .w(px(width))
         .flex_none()
         .flex()
         .items_center()
         .justify_end()
-        .gap_2()
+        .gap_1p5()
         .child(
             div()
-                .w(px(CPU_BAR_W))
+                .w(px(24.))
                 .h(px(3.))
                 .rounded_full()
                 .bg(rgb(SURF_HIGHEST))
@@ -357,12 +359,12 @@ fn cpu_cell(cpu: f32) -> Div {
         )
         .child(
             div()
-                .w(px(40.))
+                .w(px(38.))
                 .text_right()
                 .text_xs()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(text_color))
-                .child(format!("{cpu:.1}")),
+                .child(format!("{cpu:.1}%")),
         )
 }
 
@@ -941,25 +943,27 @@ fn render_fan_card(snap: &StatusSnapshot, root: &Root, cx: &mut Context<Root>) -
 ///
 /// 图标是异步提取的，第一拍多半还没就绪——回退块和图标同尺寸同位置，
 /// 换上真图标时行高不跳。
-fn process_icon(proc: &crate::core::status::ProcInfo) -> AnyElement {
-    const SIZE: f32 = 26.;
-    if let Some(image) = proc
-        .icon_source
-        .as_deref()
-        .and_then(crate::ui::app_icons::try_get_icon)
-    {
+/// 进程图标渲染：优先用进程真实图标，若提取中或无图标则回退到首字母色块。
+fn process_icon_from_source(
+    icon_source: Option<&std::path::Path>,
+    name: &str,
+    pid: u32,
+    size: f32,
+) -> AnyElement {
+    if let Some(image) = icon_source.and_then(crate::ui::app_icons::try_get_icon) {
         return img(ImageSource::from(image))
-            .id(SharedString::from(format!("proc-icon-{}", proc.pid)))
-            .w(px(SIZE))
-            .h(px(SIZE))
+            .id(SharedString::from(format!("proc-icon-{pid}")))
+            .w(px(size))
+            .h(px(size))
+            .rounded(px(3.))
             .flex_none()
             .into_any_element();
     }
     div()
-        .w(px(SIZE))
-        .h(px(SIZE))
+        .w(px(size))
+        .h(px(size))
         .flex_none()
-        .rounded_md()
+        .rounded(px(3.))
         .bg(rgb(SURF_LOW))
         .border_1()
         .border_color(rgba(OUTLINE_VAR, 0.5))
@@ -969,23 +973,196 @@ fn process_icon(proc: &crate::core::status::ProcInfo) -> AnyElement {
         .text_xs()
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(rgb(MUTED))
-        .child(proc.name.chars().take(2).collect::<String>().to_uppercase())
+        .child(name.chars().take(2).collect::<String>().to_uppercase())
         .into_any_element()
 }
 
-/// 进程表左右内边距（= Tailwind 的 `px_5`）。表头要按它对齐，所以取成常量。
-const TABLE_PAD_X: f32 = 20.0;
+/// 格式化进程启动时间（本地时间 + 相对时长）
+fn fmt_proc_start_time(start_time: u64, lang: Language) -> String {
+    if start_time == 0 {
+        return "-".into();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let ago_secs = now.saturating_sub(start_time);
+    let ago_str = if ago_secs < 60 {
+        match lang {
+            Language::Zh => "刚刚".into(),
+            Language::En => "just now".into(),
+        }
+    } else if ago_secs < 3600 {
+        match lang {
+            Language::Zh => format!("{}分钟前", ago_secs / 60),
+            Language::En => format!("{}m ago", ago_secs / 60),
+        }
+    } else if ago_secs < 86400 {
+        match lang {
+            Language::Zh => format!("{}小时前", ago_secs / 3600),
+            Language::En => format!("{}h ago", ago_secs / 3600),
+        }
+    } else {
+        match lang {
+            Language::Zh => format!("{}天前", ago_secs / 86400),
+            Language::En => format!("{}d ago", ago_secs / 86400),
+        }
+    };
+    if let Some(dt) = chrono::DateTime::from_timestamp(start_time as i64, 0) {
+        let local = dt.with_timezone(&chrono::Local);
+        match lang {
+            Language::Zh => format!("{} · {}", local.format("%m月%d日 %H:%M"), ago_str),
+            Language::En => format!("{} · {}", local.format("%b %d, %H:%M"), ago_str),
+        }
+    } else {
+        ago_str
+    }
+}
 
-/// 进程表的行高。`uniform_list` 要求等高，写死以便它精确布局。
-const PROC_ROW_H: f32 = 46.0;
-const PROC_CPU_COL_W: f32 = 96.0;
-const PROC_MEM_COL_W: f32 = 88.0;
-const PROC_ACTION_COL_W: f32 = 48.0;
+/// 本地化进程状态文本
+fn localize_proc_status(status_text: &str, lang: Language) -> &'static str {
+    match status_text {
+        "Run" | "Running" => match lang {
+            Language::Zh => "运行中",
+            Language::En => "Running",
+        },
+        "Sleep" | "Sleeping" => match lang {
+            Language::Zh => "休眠",
+            Language::En => "Sleeping",
+        },
+        "Idle" => match lang {
+            Language::Zh => "空闲",
+            Language::En => "Idle",
+        },
+        "Stop" | "Stopped" => match lang {
+            Language::Zh => "已暂停",
+            Language::En => "Stopped",
+        },
+        "Zombie" => match lang {
+            Language::Zh => "僵尸",
+            Language::En => "Zombie",
+        },
+        _ => match lang {
+            Language::Zh => "正常",
+            Language::En => "Normal",
+        },
+    }
+}
+
+/// 迷你 CPU 趋势条形波形图（24 点）
+fn render_mini_sparkline(history: &[f32], max_val: f32, color: u32, height: f32) -> AnyElement {
+    const COUNT: usize = 24;
+    let mut bars = div().flex().items_end().gap(px(2.)).h(px(height)).w_full();
+    for i in 0..COUNT {
+        let val = if i + history.len() >= COUNT {
+            history[i + history.len() - COUNT]
+        } else {
+            0.0
+        };
+        let ratio = if max_val > 0.0 {
+            (val / max_val).clamp(0.08, 1.0)
+        } else {
+            0.08
+        };
+        let h = (height * ratio).max(2.5);
+        bars = bars.child(
+            div()
+                .flex_1()
+                .h(px(h))
+                .rounded(px(1.5))
+                .bg(rgba(color, 0.4 + 0.6 * ratio)),
+        );
+    }
+    bars.into_any_element()
+}
+
+/// 迷你内存趋势条形波形图（24 点）
+fn render_mini_mem_sparkline(history: &[u64], color: u32, height: f32) -> AnyElement {
+    const COUNT: usize = 24;
+    let max_bytes = history.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let mut bars = div().flex().items_end().gap(px(2.)).h(px(height)).w_full();
+    for i in 0..COUNT {
+        let val = if i + history.len() >= COUNT {
+            history[i + history.len() - COUNT] as f32
+        } else {
+            0.0
+        };
+        let ratio = (val / max_bytes).clamp(0.08, 1.0);
+        let h = (height * ratio).max(2.5);
+        bars = bars.child(
+            div()
+                .flex_1()
+                .h(px(h))
+                .rounded(px(1.5))
+                .bg(rgba(color, 0.4 + 0.6 * ratio)),
+        );
+    }
+    bars.into_any_element()
+}
+
+/// 详细信息键值对单行
+fn detail_kv(label: &str, value: &str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_xs()
+        .py(px(2.))
+        .child(div().text_color(rgb(OUTLINE)).child(label.to_string()))
+        .child(
+            div()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(TEXT))
+                .child(value.to_string()),
+        )
+}
+
+/// 渲染端口胶囊徽章
+fn render_ports_badge(ports: &[u16]) -> Option<Div> {
+    if ports.is_empty() {
+        return None;
+    }
+    let mut badges = div().flex().items_center().gap_1();
+    for &p in ports.iter().take(2) {
+        badges = badges.child(
+            div()
+                .px(px(4.))
+                .py(px(0.5))
+                .rounded(px(3.))
+                .bg(rgba(PRIMARY, 0.12))
+                .text_color(rgb(PRIMARY))
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(format!(":{p}")),
+        );
+    }
+    if ports.len() > 2 {
+        badges = badges.child(
+            div()
+                .px(px(3.))
+                .py(px(0.5))
+                .rounded(px(3.))
+                .bg(rgb(SURF_LOW))
+                .text_color(rgb(MUTED))
+                .text_xs()
+                .child(format!("+{}", ports.len() - 2)),
+        );
+    }
+    Some(badges)
+}
+
+/// 进程表左右内边距。表头要按它对齐，所以取成常量。
+const TABLE_PAD_X: f32 = 16.0;
+
+/// 进程表的行高。`uniform_list` 要求等高，紧凑排布（32px）避免大字老年机感。
+const PROC_ROW_H: f32 = 32.0;
+const PROC_CPU_COL_W: f32 = 72.0;
+const PROC_MEM_COL_W: f32 = 80.0;
+const PROC_THREADS_COL_W: f32 = 54.0;
+const PROC_CPU_TIME_COL_W: f32 = 74.0;
+const PROC_PID_COL_W: f32 = 58.0;
+const PROC_USER_COL_W: f32 = 82.0;
 
 /// 可排序的列表头。当前排序列显示方向箭头，点击切换。
-///
-/// `width` 为 `None` 时是自适应的名称列（左对齐、占满剩余宽度），
-/// `Some(w)` 是固定宽度的数值列（右对齐，和行内单元格对齐）。
 fn sort_header(
     label: String,
     key: ProcSortKey,
@@ -1003,10 +1180,9 @@ fn sort_header(
     base.flex()
         .items_center()
         .gap(px(2.))
-        // 名称列兼作表格标题，字号大一档；数值列是普通表头。
-        .map(|d| if numeric { d.text_xs() } else { d.text_sm() })
-        .font_weight(if active || !numeric {
-            gpui::FontWeight::SEMIBOLD
+        .text_xs()
+        .font_weight(if active {
+            gpui::FontWeight::BOLD
         } else {
             gpui::FontWeight::MEDIUM
         })
@@ -1018,14 +1194,387 @@ fn sort_header(
         .cursor_pointer()
         .hover(|h| h.text_color(rgb(if active { PRIMARY } else { MUTED })))
         .child(label)
-        // 只给当前排序列画箭头。每列都挂一个灰箭头会让表头糊成一片，
-        // 反而看不出正在按哪列排。
-        .when(active, |d| d.child(if sort.desc { "↓" } else { "↑" }))
+        .when(active, |d| d.child(if sort.desc { " ↓" } else { " ↑" }))
         .on_click(cx.listener(move |this, _, _, cx| this.sort_processes(key, cx)))
 }
 
-/// 单行进程。行高固定为 [`PROC_ROW_H`]，虚拟列表要求等高。
+/// 进程行渲染：支持 GroupHeader (折叠父组)、GroupChild (展开子项)、Single (单进程)。
 fn render_process_row(
+    root: &Root,
+    item: &crate::ui::state::ProcDisplayItem,
+    snap: &StatusSnapshot,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let selected_pid = root.monitor.selected_proc_pid;
+
+    match item {
+        crate::ui::state::ProcDisplayItem::GroupHeader {
+            group_key,
+            name,
+            icon_source,
+            count,
+            expanded,
+            total_cpu,
+            total_mem,
+            total_threads,
+            total_cpu_time_ms,
+            representative_pid,
+            user,
+            child_indices: _,
+        } => {
+            let pid = *representative_pid;
+            let is_selected = selected_pid == Some(pid);
+            let gkey = group_key.clone();
+            let expanded_val = *expanded;
+
+            div()
+                .id(SharedString::from(format!("grp-row-{gkey}")))
+                .h(px(PROC_ROW_H))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(px(TABLE_PAD_X))
+                .border_b_1()
+                .border_color(rgba(OUTLINE_VAR, 0.35))
+                .cursor_pointer()
+                .when(is_selected, |d| d.bg(rgba(PRIMARY, 0.15)))
+                .when(!is_selected, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_proc_item(pid, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .min_w(px(0.))
+                        .flex_1()
+                        .child(
+                            // 展开/折叠箭头
+                            div()
+                                .id(SharedString::from(format!("toggle-grp-{gkey}")))
+                                .w(px(16.))
+                                .h(px(16.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                .child(if expanded_val {
+                                    icon_chevron_down(MUTED, 10.)
+                                } else {
+                                    icon_chevron_right(MUTED, 10.)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_proc_group(gkey.clone(), cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(process_icon_from_source(
+                            icon_source.as_deref(),
+                            name,
+                            pid,
+                            18.,
+                        ))
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(truncate(name, 28).to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .py(px(0.5))
+                                        .rounded_md()
+                                        .bg(rgba(OUTLINE_VAR, 0.5))
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(MUTED))
+                                        .child(count.to_string()),
+                                ),
+                        ),
+                )
+                .child(cpu_cell(*total_cpu, PROC_CPU_COL_W))
+                .child(
+                    div()
+                        .w(px(PROC_MEM_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(TEXT))
+                        .child(fmt_mem(*total_mem)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_THREADS_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(total_threads.to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_CPU_TIME_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(crate::core::status::fmt_cpu_time(*total_cpu_time_ms)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_PID_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child("-"),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_USER_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(truncate(user.as_deref().unwrap_or("-"), 12).to_string()),
+                )
+                .into_any_element()
+        }
+        crate::ui::state::ProcDisplayItem::GroupChild { process_index, .. } => {
+            let Some(proc) = snap.processes.get(*process_index) else {
+                return div().into_any_element();
+            };
+            let pid = proc.pid;
+            let is_selected = selected_pid == Some(pid);
+
+            let ports_badge = render_ports_badge(&proc.ports);
+
+            div()
+                .id(SharedString::from(format!("child-row-{pid}")))
+                .h(px(PROC_ROW_H))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(px(TABLE_PAD_X))
+                .border_b_1()
+                .border_color(rgba(OUTLINE_VAR, 0.35))
+                .cursor_pointer()
+                .when(is_selected, |d| d.bg(rgba(PRIMARY, 0.15)))
+                .when(!is_selected, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_proc_item(pid, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .min_w(px(0.))
+                        .flex_1()
+                        .child(
+                            // 缩进短线指示
+                            div()
+                                .w(px(16.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .w(px(2.))
+                                        .h(px(8.))
+                                        .rounded_full()
+                                        .bg(rgba(OUTLINE_VAR, 0.6)),
+                                ),
+                        )
+                        .child(process_icon_from_source(
+                            proc.icon_source.as_deref(),
+                            &proc.name,
+                            pid,
+                            16.,
+                        ))
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::NORMAL)
+                                        .text_color(rgb(TEXT))
+                                        .child(truncate(&proc.name, 30).to_string()),
+                                )
+                                .children(ports_badge),
+                        ),
+                )
+                .child(cpu_cell(proc.cpu, PROC_CPU_COL_W))
+                .child(
+                    div()
+                        .w(px(PROC_MEM_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(TEXT))
+                        .child(fmt_mem(proc.mem_bytes)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_THREADS_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(proc.threads.to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_CPU_TIME_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(crate::core::status::fmt_cpu_time(proc.cpu_time_ms)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_PID_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(proc.pid.to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_USER_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(truncate(proc.user.as_deref().unwrap_or("-"), 12).to_string()),
+                )
+                .into_any_element()
+        }
+        crate::ui::state::ProcDisplayItem::Single { process_index } => {
+            let Some(proc) = snap.processes.get(*process_index) else {
+                return div().into_any_element();
+            };
+            let pid = proc.pid;
+            let is_selected = selected_pid == Some(pid);
+
+            let ports_badge = render_ports_badge(&proc.ports);
+
+            div()
+                .id(SharedString::from(format!("single-row-{pid}")))
+                .h(px(PROC_ROW_H))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(px(TABLE_PAD_X))
+                .border_b_1()
+                .border_color(rgba(OUTLINE_VAR, 0.35))
+                .cursor_pointer()
+                .when(is_selected, |d| d.bg(rgba(PRIMARY, 0.15)))
+                .when(!is_selected, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_proc_item(pid, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .min_w(px(0.))
+                        .flex_1()
+                        .child(div().w(px(16.)).flex_none()) // 对齐占位
+                        .child(process_icon_from_source(
+                            proc.icon_source.as_deref(),
+                            &proc.name,
+                            pid,
+                            18.,
+                        ))
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(TEXT))
+                                        .child(truncate(&proc.name, 32).to_string()),
+                                )
+                                .children(ports_badge),
+                        ),
+                )
+                .child(cpu_cell(proc.cpu, PROC_CPU_COL_W))
+                .child(
+                    div()
+                        .w(px(PROC_MEM_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(TEXT))
+                        .child(fmt_mem(proc.mem_bytes)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_THREADS_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(proc.threads.to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_CPU_TIME_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(crate::core::status::fmt_cpu_time(proc.cpu_time_ms)),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_PID_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(proc.pid.to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(PROC_USER_COL_W))
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(truncate(proc.user.as_deref().unwrap_or("-"), 12).to_string()),
+                )
+                .into_any_element()
+        }
+    }
+}
+
+/// 侧滑进程详情抽屉面板（对标 Pulse 设计）
+fn render_proc_detail_drawer(
     root: &Root,
     proc: &crate::core::status::ProcInfo,
     cx: &mut Context<Root>,
@@ -1035,83 +1584,900 @@ fn render_process_row(
     let start_time = proc.start_time;
     let unique_id = proc.unique_id;
     let name = proc.name.clone();
+
     div()
-        .h(px(PROC_ROW_H))
-        .w_full()
+        .w(px(330.))
+        .flex_none()
+        .h_full()
+        .bg(rgb(CARD))
+        .border_l_1()
+        .border_color(rgba(OUTLINE_VAR, 0.4))
         .flex()
-        .items_center()
-        .px_5()
-        .border_b_1()
-        .border_color(rgba(OUTLINE_VAR, 0.35))
+        .flex_col()
+        .overflow_hidden()
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w(px(0.))
                 .flex_1()
-                .child(process_icon(proc))
+                .min_h(px(0.))
+                .overflow_hidden()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                // 顶部 Header：大图标 + 标题 + 副标题 + 关闭按钮
                 .child(
                     div()
-                        .min_w(px(0.))
                         .flex()
-                        .flex_col()
+                        .items_start()
+                        .justify_between()
+                        .gap_2()
                         .child(
                             div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(TEXT))
-                                .child(truncate(&proc.name, 40).to_string()),
+                                .flex()
+                                .items_center()
+                                .gap_2p5()
+                                .min_w(px(0.))
+                                .child(process_icon_from_source(
+                                    proc.icon_source.as_deref(),
+                                    &proc.name,
+                                    pid,
+                                    36.,
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w(px(0.))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .text_color(rgb(TEXT))
+                                                .truncate()
+                                                .child(proc.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .truncate()
+                                                .child(format!(
+                                                    "PID {} · {}",
+                                                    proc.pid,
+                                                    proc.user.as_deref().unwrap_or("-")
+                                                )),
+                                        ),
+                                ),
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(format!("PID {}", proc.pid)),
+                                .id("btn-close-detail")
+                                .w(px(22.))
+                                .h(px(22.))
+                                .rounded_md()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                .child(icon_close(MUTED, 14.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_proc_detail(cx);
+                                })),
                         ),
-                ),
-        )
-        .child(cpu_cell(proc.cpu))
-        .child(
-            div()
-                .w(px(PROC_MEM_COL_W))
-                .flex_none()
-                .text_right()
-                .text_xs()
-                .text_color(rgb(OUTLINE))
-                .child(fmt_mem(proc.mem_bytes)),
-        )
-        .child(
-            div()
-                .w(px(PROC_ACTION_COL_W))
-                .flex_none()
-                .flex()
-                .justify_end()
+                )
+                // 快捷操作栏：退出 / 强制退出 / 打开位置
                 .child(
                     div()
-                        .id(SharedString::from(format!("kill-{pid}")))
-                        .px_2()
-                        .py(px(3.))
-                        .rounded_md()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(MUTED))
-                        .cursor_pointer()
-                        .hover(|h| h.bg(rgb(ERROR_CONTAINER)).text_color(rgb(ERROR)))
-                        .child(tr_status_end(lang))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_kill_process(pid, start_time, unique_id, name.clone(), cx);
-                        })),
-                ),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child({
+                            let n = name.clone();
+                            div()
+                                .id("btn-detail-quit")
+                                .flex_1()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(SURF_LOW))
+                                .border_1()
+                                .border_color(rgba(OUTLINE_VAR, 0.6))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(rgb(TEXT))
+                                .cursor_pointer()
+                                .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                .child(tr_status_proc_exit(lang))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.request_kill_process(
+                                        pid,
+                                        start_time,
+                                        unique_id,
+                                        n.clone(),
+                                        cx,
+                                    );
+                                }))
+                        })
+                        .child({
+                            let n = name.clone();
+                            div()
+                                .id("btn-detail-force-quit")
+                                .flex_1()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgba(ERROR, 0.1))
+                                .border_1()
+                                .border_color(rgba(ERROR, 0.35))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(rgb(ERROR))
+                                .cursor_pointer()
+                                .hover(|h| h.bg(rgba(ERROR, 0.2)))
+                                .child(tr_status_proc_force_exit(lang))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.force_kill_process(
+                                        pid,
+                                        start_time,
+                                        unique_id,
+                                        n.clone(),
+                                        cx,
+                                    );
+                                }))
+                        })
+                        .when(proc.exe_path.is_some(), |d| {
+                            let path_buf =
+                                std::path::PathBuf::from(proc.exe_path.as_ref().unwrap());
+                            d.child(
+                                div()
+                                    .id("btn-detail-reveal")
+                                    .w(px(28.))
+                                    .h(px(28.))
+                                    .rounded_md()
+                                    .bg(rgb(SURF_LOW))
+                                    .border_1()
+                                    .border_color(rgba(OUTLINE_VAR, 0.6))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                    .child(icon_folder(MUTED, 13.))
+                                    .tooltip(text_tooltip(tr_status_proc_reveal(lang)))
+                                    .on_click(cx.listener(move |_, _, _, _| {
+                                        crate::platform::reveal_in_explorer(&path_buf);
+                                    })),
+                            )
+                        }),
+                )
+                // CPU 性能卡片与走势
+                .child(
+                    div()
+                        .rounded_lg()
+                        .bg(rgba(PRIMARY, 0.08))
+                        .border_1()
+                        .border_color(rgba(PRIMARY, 0.18))
+                        .p_2p5()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(PRIMARY))
+                                        .child("CPU"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(format!("{:.1}%", proc.cpu)),
+                                ),
+                        )
+                        .child(render_mini_sparkline(
+                            &root.monitor.selected_proc_cpu_history,
+                            100.0,
+                            PRIMARY,
+                            24.,
+                        )),
+                )
+                // 内存性能卡片与走势
+                .child(
+                    div()
+                        .rounded_lg()
+                        .bg(rgba(0x10B981, 0.08))
+                        .border_1()
+                        .border_color(rgba(0x10B981, 0.2))
+                        .p_2p5()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(0x059669))
+                                        .child(tr_status_card_memory(lang)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(TEXT))
+                                        .child(fmt_mem(proc.mem_bytes)),
+                                ),
+                        )
+                        .child(render_mini_mem_sparkline(
+                            &root.monitor.selected_proc_mem_history,
+                            0x10B981,
+                            24.,
+                        )),
+                )
+                // 详细信息列表
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .pt_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(MUTED))
+                                .mb_1()
+                                .child(tr_status_proc_detail_title(lang)),
+                        )
+                        .child(detail_kv(
+                            tr_th_cpu_time(lang),
+                            &crate::core::status::fmt_cpu_time(proc.cpu_time_ms),
+                        ))
+                        .child(detail_kv(tr_th_threads(lang), &proc.threads.to_string()))
+                        .child(detail_kv(
+                            tr_status_proc_rss(lang),
+                            &fmt_mem(proc.mem_bytes),
+                        ))
+                        .child(detail_kv(
+                            tr_status_proc_vms(lang),
+                            &fmt_mem(proc.virtual_mem_bytes),
+                        ))
+                        .child(detail_kv(
+                            tr_status_proc_disk_read(lang),
+                            &format!(
+                                "{} · {}",
+                                fmt_size(proc.disk_read_bps as u64) + "/s",
+                                fmt_mem(proc.disk_read_bytes)
+                            ),
+                        ))
+                        .child(detail_kv(
+                            tr_status_proc_disk_write(lang),
+                            &format!(
+                                "{} · {}",
+                                fmt_size(proc.disk_written_bps as u64) + "/s",
+                                fmt_mem(proc.disk_written_bytes)
+                            ),
+                        ))
+                        .child(detail_kv(
+                            tr_status_proc_start_time(lang),
+                            &fmt_proc_start_time(proc.start_time, lang),
+                        ))
+                        .child(detail_kv(
+                            tr_status_proc_status(lang),
+                            localize_proc_status(&proc.status_text, lang),
+                        ))
+                        .when(proc.parent_pid.is_some(), |d| {
+                            let ppid = proc.parent_pid.unwrap();
+                            let pname = proc.parent_name.as_deref().unwrap_or("process");
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .text_xs()
+                                    .py(px(2.))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(OUTLINE))
+                                            .child(tr_status_proc_parent(lang)),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("parent-proc-{ppid}")))
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .text_color(rgb(PRIMARY))
+                                            .cursor_pointer()
+                                            .hover(|h| h.underline())
+                                            .child(icon_folder(PRIMARY, 11.))
+                                            .child(format!("{pname} {ppid}"))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_proc_item(ppid, cx);
+                                            })),
+                                    ),
+                            )
+                        }),
+                )
+                // 命令行卡片
+                .when(proc.cmd_line.is_some(), |d| {
+                    let cmd = proc.cmd_line.as_ref().unwrap().clone();
+                    let cmd_clone = cmd.clone();
+                    let copied = root.monitor.cmd_copied_feedback;
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .pt_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(rgb(MUTED))
+                                            .child(tr_status_proc_cmd(lang)),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("btn-copy-cmd")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_1p5()
+                                            .py(px(1.))
+                                            .rounded_md()
+                                            .bg(rgb(SURF_LOW))
+                                            .hover(|h| h.bg(rgb(SURF_HIGH)))
+                                            .cursor_pointer()
+                                            .child(icon_copy(
+                                                if copied { PRIMARY } else { MUTED },
+                                                11.,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(if copied {
+                                                        PRIMARY
+                                                    } else {
+                                                        MUTED
+                                                    }))
+                                                    .child(if copied {
+                                                        tr_status_proc_copied(lang)
+                                                    } else {
+                                                        tr_status_proc_copy_cmd(lang)
+                                                    }),
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.copy_proc_cmd(cmd_clone.clone(), cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded_md()
+                                    .bg(rgb(SURF_LOW))
+                                    .border_1()
+                                    .border_color(rgba(OUTLINE_VAR, 0.4))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child(truncate(&cmd, 160).to_string()),
+                            ),
+                    )
+                }),
         )
+}
+
+/// 端口搜索匹配条目
+struct PortMatchItem<'a> {
+    port: u16,
+    proc_name: &'a str,
+    icon_source: Option<&'a std::path::Path>,
+    pid: u32,
+    is_system: bool,
+}
+
+/// 渲染微型进程图标（用于 Popover 条目内）
+fn render_popover_icon(
+    _proc_name: &str,
+    icon_source: Option<&std::path::Path>,
+    pid: u32,
+    is_system: bool,
+) -> AnyElement {
+    const SIZE: f32 = 16.0;
+    if let Some(image) = icon_source.and_then(try_get_icon) {
+        let src = ImageSource::from(image);
+        return img(src)
+            .id(SharedString::from(format!("pop-icon-{pid}")))
+            .w(px(SIZE))
+            .h(px(SIZE))
+            .rounded(px(3.))
+            .flex_none()
+            .into_any_element();
+    }
+    if is_system {
+        div()
+            .w(px(SIZE))
+            .h(px(SIZE))
+            .rounded(px(3.))
+            .bg(rgb(SURF_HIGH))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon_gear(MUTED, 10.))
+            .into_any_element()
+    } else {
+        div()
+            .w(px(SIZE))
+            .h(px(SIZE))
+            .rounded(px(3.))
+            .bg(rgba(PRIMARY, 0.12))
+            .border_1()
+            .border_color(rgba(PRIMARY, 0.25))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon_apps(PRIMARY, 10.))
+            .into_any_element()
+    }
+}
+
+/// 搜索框正下方的端口智能匹配浮层（Popover）
+fn matching_ports<'a>(snap: &'a StatusSnapshot, search_text: &str) -> Vec<PortMatchItem<'a>> {
+    // 1. 搜集所有正在监听/打开网络端口的进程条目
+    let mut entries: Vec<PortMatchItem> = Vec::new();
+    for proc in &snap.processes {
+        let is_system = proc.pid <= 4
+            || proc.name.eq_ignore_ascii_case("system")
+            || proc.name.eq_ignore_ascii_case("registry")
+            || proc.name.eq_ignore_ascii_case("smss.exe")
+            || proc.name.eq_ignore_ascii_case("csrss.exe")
+            || proc.name.eq_ignore_ascii_case("services.exe")
+            || proc.name.eq_ignore_ascii_case("svchost.exe")
+            || proc.name.eq_ignore_ascii_case("lsass.exe");
+
+        for &port in &proc.ports {
+            entries.push(PortMatchItem {
+                port,
+                proc_name: &proc.name,
+                icon_source: proc.icon_source.as_deref(),
+                pid: proc.pid,
+                is_system,
+            });
+        }
+    }
+    // 按端口号升序排列
+    entries.sort_by_key(|e| e.port);
+
+    // 2. 判断输入是否含有端口前缀 ':'
+    let (is_port_query, sub_query) = if let Some(idx) = search_text.find(':') {
+        let sub = search_text[idx + 1..].trim();
+        (true, sub)
+    } else {
+        (false, "")
+    };
+
+    // 3. 动态过滤
+    if is_port_query && !sub_query.is_empty() {
+        entries
+            .into_iter()
+            .filter(|e| {
+                e.port.to_string().starts_with(sub_query)
+                    || e.port.to_string().contains(sub_query)
+                    || e.proc_name
+                        .to_lowercase()
+                        .contains(&sub_query.to_lowercase())
+            })
+            .collect()
+    } else {
+        entries
+    }
+}
+
+fn search_syntax_items(lang: Language) -> [(&'static str, &'static str, &'static str); 6] {
+    [
+        (
+            "msedge, \"NVIDIA Overlay\"",
+            tr_status_search_hint_multi_desc(lang),
+            "msedge, \"NVIDIA Overlay\"",
+        ),
+        ("cpu >", tr_status_search_hint_cpu_desc(lang), "cpu > "),
+        ("mem >", tr_status_search_hint_mem_desc(lang), "mem > "),
+        ("user:", tr_status_search_hint_user_desc(lang), "user:"),
+        (":3000", tr_status_search_hint_port_desc(lang), ":"),
+        (
+            "-helper",
+            tr_status_search_hint_exclude_desc(lang),
+            "-helper",
+        ),
+    ]
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum CandidateContent {
+    #[default]
+    Query,
+    Syntax,
+    Process {
+        source: Option<std::path::PathBuf>,
+        pid: u32,
+        system: bool,
+    },
+    Port {
+        source: Option<std::path::PathBuf>,
+        pid: u32,
+        system: bool,
+        port: u16,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SearchCandidate {
+    pub id: String,
+    pub query: String,
+    pub keep_open: bool,
+    label: String,
+    detail: String,
+    content: CandidateContent,
+}
+
+impl PopoverCandidate for SearchCandidate {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+pub(crate) fn status_search_candidates(root: &Root) -> Vec<SearchCandidate> {
+    let Some(snap) = root.monitor.snapshot.as_ref() else {
+        return Vec::new();
+    };
+    search_candidates(
+        snap,
+        &root.monitor.proc_view,
+        &root.monitor.input.text,
+        root.language,
+    )
+}
+
+fn search_candidates(
+    snap: &StatusSnapshot,
+    view: &[usize],
+    text: &str,
+    lang: Language,
+) -> Vec<SearchCandidate> {
+    if text.trim().starts_with(':') || text.trim().to_lowercase().starts_with("port:") {
+        return matching_ports(snap, text)
+            .into_iter()
+            .take(80)
+            .map(|p| SearchCandidate {
+                id: format!("pop-port-{}-{}", p.port, p.pid),
+                query: format!(":{}", p.port),
+                keep_open: false,
+                label: p.proc_name.into(),
+                detail: format!("#{}", p.pid),
+                content: CandidateContent::Port {
+                    source: p.icon_source.map(std::path::Path::to_path_buf),
+                    pid: p.pid,
+                    system: p.is_system,
+                    port: p.port,
+                },
+            })
+            .collect();
+    }
+    let mut candidates = Vec::new();
+    if !text.trim().is_empty() {
+        candidates.push(SearchCandidate {
+            id: "status-search-current-query".into(),
+            query: text.into(),
+            keep_open: false,
+            label: tr_status_search_query(lang, text),
+            detail: String::new(),
+            content: CandidateContent::Query,
+        });
+        candidates.extend(
+            process_search_groups(&snap.processes, view)
+                .into_iter()
+                .take(8)
+                .map(|(p, count)| SearchCandidate {
+                    id: format!("status-search-process-{}", p.name.to_lowercase()),
+                    query: format!("\"{}\"", p.name),
+                    keep_open: false,
+                    label: p.name.clone(),
+                    detail: tr_status_search_process_count(lang, count),
+                    content: CandidateContent::Process {
+                        source: p.icon_source.clone(),
+                        pid: p.pid,
+                        system: p.pid <= 4,
+                    },
+                }),
+        );
+    }
+    candidates.extend(
+        search_syntax_items(lang)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, (example, desc, query))| {
+                syntax_completion(query, text).map(|completion| (i, example, desc, completion))
+            })
+            .map(|(i, example, desc, query)| SearchCandidate {
+                id: format!("syntax-hint-{i}"),
+                label: if example.starts_with("mem") || example.starts_with("cpu") {
+                    query.trim_end().to_owned()
+                } else {
+                    example.into()
+                },
+                query,
+                keep_open: true,
+                detail: desc.into(),
+                content: CandidateContent::Syntax,
+            }),
+    );
+    let lower = text.trim().to_ascii_lowercase();
+    if ["mem", "cpu", "user"]
+        .iter()
+        .any(|field| lower.starts_with(field))
+    {
+        candidates.sort_by_key(|item| item.content != CandidateContent::Syntax);
+    }
+    candidates
+}
+
+#[cfg(test)]
+fn candidate_index(selected: Option<&str>, candidates: &[SearchCandidate]) -> Option<usize> {
+    crate::ui::components::popover::candidate_index(selected, candidates)
+}
+
+#[cfg(test)]
+fn next_search_candidate(
+    selected: Option<&str>,
+    candidates: &[SearchCandidate],
+    backwards: bool,
+) -> Option<usize> {
+    crate::ui::components::popover::next_candidate(selected, candidates, backwards)
+}
+
+fn syntax_completion(template: &str, query: &str) -> Option<String> {
+    let compact = query
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase();
+    for field in ["mem", "cpu"] {
+        if template.starts_with(field) {
+            if let Some(rest) = compact.strip_prefix(field) {
+                return match rest {
+                    "" => Some(format!("{field} > ")),
+                    ">" | "<" | ">=" | "<=" => Some(format!("{field} {rest} ")),
+                    _ => None,
+                };
+            }
+        }
+    }
+    template
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase()
+        .contains(&compact)
+        .then(|| template.to_owned())
+}
+
+#[cfg(test)]
+fn syntax_hint_matches(example: &str, query: &str) -> bool {
+    syntax_completion(example, query).is_some()
+}
+
+fn process_search_groups<'a>(
+    processes: &'a [crate::core::status::ProcInfo],
+    view: &[usize],
+) -> Vec<(&'a crate::core::status::ProcInfo, usize)> {
+    let mut groups = std::collections::BTreeMap::new();
+    for proc in view.iter().filter_map(|&i| processes.get(i)) {
+        let group = groups.entry(proc.name.to_lowercase()).or_insert((proc, 0));
+        group.1 += 1;
+    }
+    groups.into_values().collect()
+}
+
+fn render_status_search_popover(
+    root: &Root,
+    snap: &StatusSnapshot,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let lang = root.language;
+    let text = &root.monitor.input.text;
+    let port_query =
+        text.trim().starts_with(':') || text.trim().to_lowercase().starts_with("port:");
+    let candidates = status_search_candidates(root);
+    let selected = root.monitor.search_popover.selection(&candidates);
+    let rows = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let mut row = popover_row(
+                item.id.clone().into(),
+                selected == Some(index),
+                |this: &mut Root| &mut this.monitor.search_popover,
+                cx,
+            );
+            match &item.content {
+                CandidateContent::Query => {
+                    row = row.child(icon_search(PRIMARY, 12.));
+                }
+                CandidateContent::Syntax => {}
+                CandidateContent::Process {
+                    source,
+                    pid,
+                    system,
+                } => {
+                    row = row.child(render_popover_icon(
+                        &item.label,
+                        source.as_deref(),
+                        *pid,
+                        *system,
+                    ));
+                }
+                CandidateContent::Port {
+                    source,
+                    pid,
+                    system,
+                    port,
+                } => {
+                    row = row
+                        .child(
+                            div()
+                                .flex_none()
+                                .px_1p5()
+                                .rounded_md()
+                                .text_xs()
+                                .text_color(rgb(PRIMARY))
+                                .child(format!(":{port}")),
+                        )
+                        .child(render_popover_icon(
+                            &item.label,
+                            source.as_deref(),
+                            *pid,
+                            *system,
+                        ));
+                }
+            }
+            row = row
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_xs()
+                        .text_color(rgb(TEXT))
+                        .child(item.label.clone()),
+                )
+                .when(!item.detail.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(OUTLINE))
+                            .child(item.detail.clone()),
+                    )
+                });
+            row.on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.status_choose_search_candidate(&item.query, item.keep_open, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let empty = rows.is_empty();
+    let sub_query = text.split_once(':').map_or("", |(_, q)| q.trim());
+    let list = popover_list(
+        "status-search-candidates".into(),
+        &root.monitor.search_popover,
+        240.,
+    )
+    .children(rows)
+    .when(empty, |d| {
+        d.child(
+            div()
+                .px_2()
+                .py_4()
+                .text_xs()
+                .text_color(rgb(OUTLINE))
+                .child(if sub_query.is_empty() {
+                    tr_status_popover_no_ports(lang).to_string()
+                } else {
+                    tr_status_popover_no_matching_ports(lang, sub_query)
+                }),
+        )
+    });
+    let header = div()
+        .flex_none()
+        .px_3()
+        .py_2()
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_xs()
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(rgb(MUTED))
+        .child(if port_query {
+            tr_status_popover_ports(lang)
+        } else {
+            tr_status_search_hint_title(lang)
+        })
+        .when(port_query, |d| {
+            d.child(matching_ports(snap, text).len().to_string())
+        });
+    popover_overlay(
+        popover_surface(
+            PopoverSpec {
+                id: "status-proc-search-popover".into(),
+                width: 320.,
+                top: 34.,
+                max_height: 320.,
+                anchor_bounds: root.monitor.input.bounds,
+            },
+            |this: &mut Root, window, cx| {
+                this.monitor.search_popover.dismiss();
+                if this.monitor.input.focus_handle.is_focused(window) {
+                    window.blur();
+                }
+                cx.notify();
+            },
+            cx,
+        )
+        .child(header)
+        .child(list)
+        .when(port_query, |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(tr_status_popover_tip(lang)),
+            )
+        }),
+    )
 }
 
 /// 进程表。九百来个进程全量铺开会让整页掉到个位数帧率，所以和软件管理表
 /// 一样走 `uniform_list`：只构造视口内的十几行，配一条自绘滚动条。
-fn render_process_table(root: &Root, snap: &StatusSnapshot, cx: &mut Context<Root>) -> Div {
+fn render_process_table(
+    root: &Root,
+    snap: &StatusSnapshot,
+    window: &mut Window,
+    cx: &mut Context<Root>,
+) -> Div {
     let lang = root.language;
     let sort = root.monitor.proc_sort;
-    let row_count = root.monitor.proc_view.len();
+    let row_count = root.monitor.proc_display_items.len();
 
     let base = root.monitor.proc_scroll.0.borrow().base_handle.clone();
     let metrics = scroll_metrics(&base, STATUS_PROCESS_TABLE_H, row_count as f32 * PROC_ROW_H);
@@ -1137,27 +2503,32 @@ fn render_process_table(root: &Root, snap: &StatusSnapshot, cx: &mut Context<Roo
             let Some(snap) = this.monitor.snapshot.clone() else {
                 return Vec::new();
             };
-            let picked: Vec<crate::core::status::ProcInfo> = range
-                .filter_map(|i| {
-                    this.monitor
-                        .proc_view
-                        .get(i)
-                        .and_then(|&j| snap.processes.get(j))
-                        .cloned()
-                })
+            let picked_items: Vec<crate::ui::state::ProcDisplayItem> = range
+                .filter_map(|i| this.monitor.proc_display_items.get(i).cloned())
                 .collect();
-            // 图标按可见区间懒加载：九百个进程一次性全提取会白读几百次磁盘，
-            // 而且用户多半只看前十几行。
-            this.load_visible_process_icons(
-                picked
-                    .iter()
-                    .filter_map(|p| p.icon_source.clone())
-                    .collect(),
-                cx,
-            );
-            picked
+            // 图标按可见区间懒加载
+            let mut icon_paths = Vec::new();
+            for item in &picked_items {
+                match item {
+                    crate::ui::state::ProcDisplayItem::GroupHeader { icon_source, .. } => {
+                        if let Some(src) = icon_source {
+                            icon_paths.push(src.clone());
+                        }
+                    }
+                    crate::ui::state::ProcDisplayItem::GroupChild { process_index, .. }
+                    | crate::ui::state::ProcDisplayItem::Single { process_index } => {
+                        if let Some(p) = snap.processes.get(*process_index) {
+                            if let Some(src) = &p.icon_source {
+                                icon_paths.push(src.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            this.load_visible_process_icons(icon_paths, cx);
+            picked_items
                 .iter()
-                .map(|p| render_process_row(this, p, cx))
+                .map(|item| render_process_row(this, item, &snap, cx))
                 .collect()
         }),
     )
@@ -1165,33 +2536,158 @@ fn render_process_table(root: &Root, snap: &StatusSnapshot, cx: &mut Context<Roo
     .size_full()
     .when(metrics.is_some(), |l| l.pr(px(SCROLLBAR_W)));
 
-    card()
-        .w_full()
-        .h(px(STATUS_PROCESS_TABLE_H))
-        .overflow_hidden()
+    // 搜索框状态
+    let search_focused = root.monitor.input.focus_handle.is_focused(window);
+    let search_text = root.monitor.input.text.clone();
+    let status_focus_handle = root.monitor.input.focus_handle.clone();
+    let search_sel = root.monitor.input.sel.clone();
+    let search_marked = root.monitor.input.marked.clone();
+    let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
+
+    let search_box_el = crate::ui::components::search_box::search_box(
+        crate::ui::components::search_box::SearchBoxSpec {
+            id: SharedString::from("status-proc-search-box"),
+            focus_handle: &status_focus_handle,
+            text: &search_text,
+            placeholder: SharedString::from(tr_status_proc_search_placeholder(lang)),
+            selection: sel,
+            marked: search_marked,
+            width: 210.,
+            height: 28.,
+            font_size: 11.5,
+            cursor_h: 12.,
+            focused: search_focused,
+            cursor_visible: root.cursor_blink_visible,
+            target: crate::ui::text_input::InputTarget::Status,
+        },
+        |this, cx| this.status_search_clear(cx),
+        |this, cx| this.status_search_backspace(cx),
+        |this, cx| this.status_search_escape(cx),
+        |this, bounds| {
+            this.monitor.input.bounds = Some(bounds);
+        },
+        cx,
+    )
+    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+        if matches!(event.keystroke.key.as_str(), "up" | "down" | "enter")
+            && this.monitor.input.marked.is_none()
+        {
+            this.status_search_candidate_key(&event.keystroke.key, cx);
+            cx.stop_propagation();
+        }
+    }));
+
+    // 分类胶囊按钮组
+    let current_tab = root.monitor.filter_tab;
+    let filter_tabs = [
+        (
+            crate::core::status::ProcFilterTab::All,
+            tr_status_tab_all(lang),
+        ),
+        (
+            crate::core::status::ProcFilterTab::App,
+            tr_status_tab_app(lang),
+        ),
+        (
+            crate::core::status::ProcFilterTab::User,
+            tr_status_tab_user(lang),
+        ),
+        (
+            crate::core::status::ProcFilterTab::System,
+            tr_status_tab_system(lang),
+        ),
+    ];
+    let tab_buttons: Vec<AnyElement> = filter_tabs
+        .into_iter()
+        .map(|(tab, label)| {
+            let is_active = current_tab == tab;
+            div()
+                .id(SharedString::from(format!("proc-tab-{tab:?}")))
+                .px_2p5()
+                .py(px(3.))
+                .rounded_md()
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(if is_active {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::MEDIUM
+                })
+                .when(is_active, |d| {
+                    d.bg(rgb(PRIMARY_FIXED))
+                        .border_1()
+                        .border_color(rgb(PRIMARY))
+                        .text_color(rgb(PRIMARY))
+                })
+                .when(!is_active, |d| {
+                    d.bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgba(OUTLINE_VAR, 0.7))
+                        .text_color(rgb(MUTED))
+                        .hover(|h| h.bg(rgb(SURF_LOW)).text_color(rgb(TEXT)))
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.status_set_filter_tab(tab, cx);
+                }))
+                .into_any_element()
+        })
+        .collect();
+
+    let popover_el = root
+        .monitor
+        .search_popover
+        .is_open(search_focused)
+        .then(|| render_status_search_popover(root, snap, cx));
+
+    let search_box_container = div()
+        .relative()
+        .child(search_box_el)
+        .children(popover_el)
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.monitor.search_popover.dismissed() {
+                    this.monitor.search_popover.reopen();
+                    cx.notify();
+                }
+            }),
+        );
+
+    let selected_proc = root
+        .monitor
+        .selected_proc_pid
+        .and_then(|pid| snap.processes.iter().find(|p| p.pid == pid));
+
+    let (filtered_cpu, filtered_mem): (f32, u64) = root
+        .monitor
+        .proc_view
+        .iter()
+        .filter_map(|&i| snap.processes.get(i))
+        .fold((0.0, 0), |(cpu_acc, mem_acc), p| {
+            (cpu_acc + p.cpu, mem_acc + p.mem_bytes)
+        });
+
+    let table_pane = div()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
         .flex()
         .flex_col()
         .child(
             div()
-                .pl_5()
-                // 注意不能写成 `.px_5().pr(SCROLLBAR_W)`：`pr` 是**覆盖**右内边距
-                // 而不是叠加，那样表头右边距只剩 12px，而行内容是 20px（px_5）
-                // 再加列表让给滚动条的 12px，两边差 20px，列就对不齐了。
+                .pl(px(TABLE_PAD_X))
                 .pr(px(
                     TABLE_PAD_X + if metrics.is_some() { SCROLLBAR_W } else { 0. }
                 ))
-                .py_3()
+                .py_2()
                 .bg(rgb(SURF_LOW))
                 .border_b_1()
                 .border_color(rgba(OUTLINE_VAR, 0.4))
                 .flex()
                 .items_center()
                 .child(sort_header(
-                    format!(
-                        "{} ({})",
-                        tr_status_processes(lang),
-                        commas(snap.process_count as u64)
-                    ),
+                    tr_th_proc_name(lang).to_string(),
                     ProcSortKey::Name,
                     None,
                     sort,
@@ -1211,7 +2707,34 @@ fn render_process_table(root: &Root, snap: &StatusSnapshot, cx: &mut Context<Roo
                     sort,
                     cx,
                 ))
-                .child(div().w(px(PROC_ACTION_COL_W)).flex_none()),
+                .child(sort_header(
+                    tr_th_threads(lang).to_string(),
+                    ProcSortKey::Threads,
+                    Some(PROC_THREADS_COL_W),
+                    sort,
+                    cx,
+                ))
+                .child(sort_header(
+                    tr_th_cpu_time(lang).to_string(),
+                    ProcSortKey::CpuTime,
+                    Some(PROC_CPU_TIME_COL_W),
+                    sort,
+                    cx,
+                ))
+                .child(sort_header(
+                    tr_th_pid(lang).to_string(),
+                    ProcSortKey::Pid,
+                    Some(PROC_PID_COL_W),
+                    sort,
+                    cx,
+                ))
+                .child(sort_header(
+                    tr_th_user(lang).to_string(),
+                    ProcSortKey::User,
+                    Some(PROC_USER_COL_W),
+                    sort,
+                    cx,
+                )),
         )
         .child(
             div()
@@ -1240,14 +2763,107 @@ fn render_process_table(root: &Root, snap: &StatusSnapshot, cx: &mut Context<Roo
                     },
                 )),
         )
+        // 底部状态栏：统计显示进程数及已筛选进程的总消耗
+        .child(
+            div()
+                .px(px(TABLE_PAD_X))
+                .py_1p5()
+                .bg(rgb(SURF_LOW))
+                .border_t_1()
+                .border_color(rgba(OUTLINE_VAR, 0.4))
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(tr_status_proc_count_detail(
+                    lang,
+                    root.monitor.proc_view.len(),
+                    snap.process_count,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(format!("CPU: {:.1}%", filtered_cpu))
+                        .child(format!(
+                            "{}: {}",
+                            tr_status_card_memory(lang),
+                            fmt_mem(filtered_mem)
+                        )),
+                ),
+        );
+
+    card()
+        .w_full()
+        .flex_1()
+        .min_h(px(0.))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        // 顶部操作工具栏：标题与统计在左，搜索框与分类药丸在右
+        .child(
+            div()
+                .relative()
+                .px(px(TABLE_PAD_X))
+                .py_2p5()
+                .bg(rgb(CARD))
+                .border_b_1()
+                .border_color(rgba(OUTLINE_VAR, 0.3))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(TEXT))
+                                .child(tr_status_processes(lang)),
+                        )
+                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                            tr_status_proc_count_summary(
+                                lang,
+                                root.monitor.proc_view.len(),
+                                snap.process_count,
+                            ),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(search_box_container)
+                        .child(div().flex().items_center().gap_1().children(tab_buttons)),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex_1()
+                .min_h(px(0.))
+                .flex()
+                .flex_row()
+                .child(table_pane)
+                .when_some(selected_proc, |d, p| {
+                    d.child(render_proc_detail_drawer(root, p, cx))
+                }),
+        )
 }
 
 /// 状态监控页入口。
-pub fn render_status_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
+pub fn render_status_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
 
-    let body = match &root.monitor.snapshot {
-        None => div()
+    let Some(snap) = &root.monitor.snapshot else {
+        return div()
             .size_full()
             .flex()
             .flex_col()
@@ -1260,72 +2876,216 @@ pub fn render_status_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(tr_status_loading(lang).to_string()),
-            ),
-        Some(snap) => div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .w_full()
-            // 4×2：上排是「算得快不快」（健康总览 + 三个计算资源），
-            // 下排是「装得下、连得上、撑得住」（存储 / 网络 / 电源 / 散热）。
-            // 同类指标横向对齐，扫一眼就能定位。
-            //
-            // GPU 和电池两张卡按硬件有无决定是否出现：台式机上一张永远写着
-            // 「无内置电池」的卡只是在占位置，Windows 上同理。缺席时整张卡
-            // 不渲染，由 `card_rows` 补齐末行宽度。
-            .children(card_rows(
-                [
-                    Some(render_health_card(root, snap)),
-                    Some(render_cpu_card(snap, &root.monitor.cpu_history, root)),
-                    (!snap.gpus.is_empty()).then(|| {
-                        // 选中的那张；选择由采样任务维护，这里只要兜住
-                        // 「刚换过卡、这一拍还没轮到」的一帧。
-                        let selected = root
-                            .monitor
-                            .gpu_selected
-                            .as_ref()
-                            .and_then(|id| snap.gpus.iter().position(|g| &g.id == id))
-                            .unwrap_or(0);
-                        let history = root
-                            .monitor
-                            .gpu_history
-                            .get(&snap.gpus[selected].id)
-                            .map(Vec::as_slice)
-                            .unwrap_or(&[]);
-                        render_gpu_card(&snap.gpus, selected, history, root, cx)
-                    }),
-                    Some(render_memory_card(snap, root)),
-                    Some(render_disk_card(root)),
-                    Some(render_network_card(snap, root)),
-                    snap.battery
-                        .as_ref()
-                        .map(|bat| render_battery_card(bat, root)),
-                    Some(render_fan_card(snap, root, cx)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-            ))
-            .child(render_process_table(root, snap, cx)),
+            )
+            .into_any_element();
     };
 
-    div()
-        .id("status-scroll")
-        .size_full()
-        .min_w(px(0.))
-        .overflow_scroll()
-        .flex()
-        .flex_col()
-        .p_8()
-        .gap_4()
-        .child(page_heading(
-            tr_status_heading(lang),
-            tr_status_subheading(lang),
-        ))
-        // 不能给这层套 flex_1 + min_h(0)：那会把内容高度钉死在视口高度，
-        // 于是超出的部分被裁掉而不是滚动出来——八张卡加进程表正好撑破一屏，
-        // 页面因此完全滚不动。让它按内容自然高度撑开，外层的 overflow_scroll
-        // 才有东西可滚。
-        .child(div().flex().flex_col().child(body))
-        .into_any_element()
+    match root.monitor.tab {
+        StatusTab::Overview => div()
+            .id("status-overview-scroll")
+            .size_full()
+            .min_w(px(0.))
+            .overflow_scroll()
+            .flex()
+            .flex_col()
+            .p_5()
+            .gap_4()
+            .child(page_heading(
+                tr_status_overview_heading(lang),
+                tr_status_overview_subheading(lang),
+            ))
+            .child(
+                div().flex().flex_col().children(card_rows(
+                    [
+                        Some(render_health_card(root, snap)),
+                        Some(render_cpu_card(snap, &root.monitor.cpu_history, root)),
+                        (!snap.gpus.is_empty()).then(|| {
+                            let selected = root
+                                .monitor
+                                .gpu_selected
+                                .as_ref()
+                                .and_then(|id| snap.gpus.iter().position(|g| &g.id == id))
+                                .unwrap_or(0);
+                            let history = root
+                                .monitor
+                                .gpu_history
+                                .get(&snap.gpus[selected].id)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[]);
+                            render_gpu_card(&snap.gpus, selected, history, root, cx)
+                        }),
+                        Some(render_memory_card(snap, root)),
+                        Some(render_disk_card(root)),
+                        Some(render_network_card(snap, root)),
+                        snap.battery
+                            .as_ref()
+                            .map(|bat| render_battery_card(bat, root)),
+                        Some(render_fan_card(snap, root, cx)),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                )),
+            )
+            .into_any_element(),
+        StatusTab::Processes => {
+            let total_threads: u64 = snap.processes.iter().map(|p| p.threads as u64).sum();
+            div()
+                .id("status-processes-page")
+                .size_full()
+                .min_w(px(0.))
+                .p_5()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div().flex().items_baseline().justify_between().child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child(tr_status_proc_heading(lang)),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                "{} · {}",
+                                tr_status_proc_subheading(lang, snap.process_count),
+                                tr_status_thread_count(lang, total_threads),
+                            ))),
+                    ),
+                )
+                .child(render_process_table(root, snap, window, cx))
+                .into_any_element()
+        }
+    }
+}
+
+#[cfg(test)]
+mod search_popover_tests {
+    use super::*;
+
+    #[test]
+    fn process_suggestions_group_only_filtered_processes() {
+        let proc = crate::core::status::ProcInfo {
+            pid: 100,
+            start_time: 0,
+            unique_id: None,
+            name: "msedge".into(),
+            cpu: 0.,
+            mem_bytes: 0,
+            icon_source: None,
+            ports: vec![],
+            threads: 0,
+            cpu_time_ms: 0,
+            user: None,
+            exe_path: None,
+            ..Default::default()
+        };
+        let mut same_name = proc.clone();
+        same_name.pid = 101;
+        same_name.name = "MSEDGE".into();
+        let mut other = proc.clone();
+        other.pid = 102;
+        other.name = "Memory Compression".into();
+        let processes = vec![proc, same_name, other];
+        let groups = process_search_groups(&processes, &[0, 1]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1, 2);
+        assert_eq!(groups[0].0.name, "msedge");
+        let groups = process_search_groups(&processes, &[2]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0.name, "Memory Compression");
+        assert!(process_search_groups(&processes, &[]).is_empty());
+    }
+
+    #[test]
+    fn popover_keyboard_navigation_wraps_and_survives_filter_changes() {
+        let candidates = vec![
+            SearchCandidate {
+                id: "query".into(),
+                query: "mem".into(),
+                keep_open: false,
+                ..Default::default()
+            },
+            SearchCandidate {
+                id: "process".into(),
+                query: "\"Memory Compression\"".into(),
+                keep_open: false,
+                ..Default::default()
+            },
+            SearchCandidate {
+                id: "syntax".into(),
+                query: "mem > 1 GB".into(),
+                keep_open: true,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(candidate_index(None, &candidates), Some(0));
+        assert_eq!(next_search_candidate(None, &candidates, false), Some(1));
+        assert_eq!(
+            next_search_candidate(Some("query"), &candidates, true),
+            Some(2)
+        );
+        assert_eq!(
+            next_search_candidate(Some("syntax"), &candidates, false),
+            Some(0)
+        );
+        assert_eq!(candidate_index(Some("process"), &candidates[1..]), Some(0));
+        assert_eq!(
+            candidate_index(Some("vanished-process"), &candidates),
+            Some(0)
+        );
+        assert_eq!(next_search_candidate(None, &[], true), None);
+        assert_eq!(
+            next_search_candidate(None, &candidates[..1], false),
+            Some(0)
+        );
+        let chosen = &candidates[candidate_index(Some("syntax"), &candidates).unwrap()];
+        assert_eq!(chosen.query, "mem > 1 GB");
+        assert!(chosen.keep_open);
+        assert!(!candidates[1].keep_open);
+    }
+
+    #[test]
+    fn typing_filters_syntax_suggestions() {
+        assert!(syntax_hint_matches("mem > 1 GB", "mem"));
+        assert!(!syntax_hint_matches("cpu > 10", "mem"));
+        assert!(syntax_hint_matches("msedge, \"NVIDIA Overlay\"", "MS"));
+        assert!(syntax_hint_matches("cpu > 10", ""));
+        assert!(!syntax_hint_matches("mem > 1 GB", "no-such-process"));
+    }
+
+    #[test]
+    fn search_completion_leaves_threshold_values_to_the_user() {
+        let snap = StatusSnapshot::default();
+        for (text, expected) in [
+            ("mem", "mem > "),
+            ("mem>", "mem > "),
+            ("mem<=", "mem <= "),
+            ("cpu", "cpu > "),
+            ("user", "user:"),
+        ] {
+            let items = search_candidates(&snap, &[], text, Language::En);
+            let item = items
+                .iter()
+                .find(|item| item.content == CandidateContent::Syntax)
+                .expect(text);
+            assert_eq!(items[0].content, CandidateContent::Syntax, "{text}");
+            assert_eq!(item.query, expected, "{text}");
+            assert!(item.keep_open);
+        }
+        for text in ["mem>1", "mem > 512 MB", "cpu>20", "user:SYSTEM"] {
+            let items = search_candidates(&snap, &[], text, Language::En);
+            assert!(
+                !items
+                    .iter()
+                    .any(|item| item.content == CandidateContent::Syntax),
+                "completed input must not be replaced: {text}"
+            );
+        }
+    }
 }

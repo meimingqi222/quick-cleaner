@@ -57,13 +57,13 @@ impl View {
 
     pub fn render_icon(&self, fg: u32) -> AnyElement {
         match self {
-            View::Dashboard => icon_dashboard(fg, 18.),
-            View::Status => icon_pulse(fg, 18.),
-            View::Junk => icon_trash(fg, 18.),
-            View::Apps => icon_apps(fg, 18.),
-            View::Disk => icon_disk(fg, 18.),
-            View::Declutter => icon_declutter(fg, 18.),
-            View::Search => icon_search(fg, 18.),
+            View::Dashboard => icon_dashboard(fg, 15.),
+            View::Status => icon_pulse(fg, 15.),
+            View::Junk => icon_trash(fg, 15.),
+            View::Apps => icon_apps(fg, 15.),
+            View::Disk => icon_disk(fg, 15.),
+            View::Declutter => icon_declutter(fg, 15.),
+            View::Search => icon_search(fg, 15.),
         }
     }
 }
@@ -81,19 +81,19 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 "nav-{}",
                 v.title_lang(Language::En)
             )))
-            .h(px(44.))
+            .h(px(34.))
             .flex()
             .items_center()
-            .gap_3()
-            .px_3()
-            .rounded_xl()
+            .gap_2p5()
+            .px_2p5()
+            .rounded_lg()
             .cursor_pointer()
             .when(active, |d| d.bg(rgb(PRIMARY_FIXED)))
             .when(!active, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
             .child(
                 div()
-                    .w(px(24.))
-                    .h(px(24.))
+                    .w(px(20.))
+                    .h(px(20.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -102,9 +102,9 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             .child(
                 div()
                     .flex_1()
-                    .text_sm()
+                    .text_xs()
                     .font_weight(if active {
-                        gpui::FontWeight::BOLD
+                        gpui::FontWeight::SEMIBOLD
                     } else {
                         gpui::FontWeight::MEDIUM
                     })
@@ -135,7 +135,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         .collect();
 
     div()
-        .w(px(240.))
+        .w(px(190.))
         .flex_none()
         .h_full()
         .bg(rgb(BG))
@@ -149,22 +149,22 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             div()
                 .flex()
                 .flex_col()
-                .gap_4()
-                .p_4()
+                .gap_3()
+                .p_3()
                 // 品牌区
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap_3()
-                        .px_2()
-                        .py_2()
+                        .gap_2p5()
+                        .px_1p5()
+                        .py_1()
                         .child(
                             div()
-                                .w(px(38.))
-                                .h(px(38.))
+                                .w(px(26.))
+                                .h(px(26.))
                                 .flex_none()
-                                .child(icon_app_logo(38.)),
+                                .child(icon_app_logo(26.)),
                         )
                         .child(
                             div()
@@ -172,7 +172,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 .flex_col()
                                 .child(
                                     div()
-                                        .text_base()
+                                        .text_sm()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
                                         .child(tr_app_title(lang)),
@@ -186,38 +186,38 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         ),
                 )
                 // 导航项列表
-                .child(div().flex().flex_col().gap_1().children(items)),
+                .child(div().flex().flex_col().gap_0p5().children(items)),
         )
         // 底栏统计与语言切换
         .child(
             div()
-                .p_4()
+                .p_3()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_2p5()
                 .border_t_1()
                 .border_color(rgba(OUTLINE_VAR, 0.4))
                 .child(
                     div()
-                        .px_3()
-                        .py_3()
-                        .rounded_xl()
+                        .px_2p5()
+                        .py_2()
+                        .rounded_lg()
                         .bg(rgb(CARD))
                         .border_1()
                         .border_color(rgba(OUTLINE_VAR, 0.4))
                         .flex()
                         .items_center()
-                        .gap_3()
+                        .gap_2p5()
                         .child(
                             div()
-                                .w(px(32.))
-                                .h(px(32.))
-                                .rounded_lg()
+                                .w(px(26.))
+                                .h(px(26.))
+                                .rounded_md()
                                 .bg(rgb(PRIMARY_FIXED))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(icon_trash(PRIMARY, 16.)),
+                                .child(icon_trash(PRIMARY, 13.)),
                         )
                         .child(
                             div()
@@ -231,7 +231,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                 )
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(PRIMARY))
                                         .child(crate::core::model::fmt_size(

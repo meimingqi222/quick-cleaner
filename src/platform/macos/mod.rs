@@ -44,8 +44,8 @@ pub use inuse::{detect_inuse, spot_check_inuse};
 pub use iokit::{read_battery, read_gpus};
 pub use residuals::{clean_residuals, detect_occupancy, scan_residuals, verify_residuals};
 pub use status::{
-    fan_control_supported, process_unique_id, read_thermal, set_fan_mode, system_uptime_secs,
-    terminate_process,
+    fan_control_supported, process_ports_map, process_threads_map, process_unique_id, read_thermal,
+    set_fan_mode, system_uptime_secs, terminate_process,
 };
 pub use trash::{empty_trash, is_system_trash, move_to_trash};
 pub use updater::{

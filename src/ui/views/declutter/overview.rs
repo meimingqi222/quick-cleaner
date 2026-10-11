@@ -27,10 +27,10 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .size_full()
         .min_h(px(0.))
         .overflow_scroll()
-        .p_8()
+        .p_5()
         .flex()
         .flex_col()
-        .gap_6()
+        .gap_5()
         // --- 1. Hero 区域 ---
         .child(
             div()
@@ -40,12 +40,12 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .justify_between()
                 .border_b_1()
                 .border_color(rgba(OUTLINE_VAR, 0.25))
-                .pb_6()
+                .pb_4()
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_2()
+                        .gap_1p5()
                         .max_w(px(580.))
                         .child(
                             // 扫描中 / 扫描完成显示耗时，未扫描时不显示徽章
@@ -101,14 +101,14 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         )
                         .child(
                             div()
-                                .text_3xl()
+                                .text_lg()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
                                 .child(tr_declutter_overview_heading(lang)),
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_xs()
                                 .text_color(rgb(MUTED))
                                 .child(tr_declutter_overview_subheading(lang)),
                         ),
@@ -179,7 +179,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             div()
                                 .id("card-bento-downloads")
                                 .flex_1()
-                                .p_6()
+                                .p_4()
                                 .rounded_xl()
                                 .bg(rgb(CARD))
                                 .border_1()
@@ -190,7 +190,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .flex()
                                 .flex_col()
                                 .justify_between()
-                                .min_h(px(190.))
+                                .min_h(px(150.))
                                 .child(
                                     div()
                                         .flex()
@@ -200,12 +200,12 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             div()
                                                 .flex()
                                                 .items_center()
-                                                .gap_4()
+                                                .gap_3()
                                                 .child(icon_badge(
-                                                    icon_downloads(0x0078d4, 24.),
+                                                    icon_downloads(0x0078d4, 16.),
                                                     0xe0f2fe,
                                                     0x0078d4,
-                                                    48.,
+                                                    30.,
                                                 ))
                                                 .child(
                                                     div()
@@ -214,7 +214,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .gap_1()
                                                         .child(
                                                             div()
-                                                                .text_base()
+                                                                .text_sm()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
                                                                 .child(tr_declutter_overview_downloads_title(lang)),
@@ -257,7 +257,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_2xl()
+                                                        .text_lg()
                                                         .font_weight(gpui::FontWeight::BOLD)
                                                         .text_color(rgb(0x0078d4))
                                                         .child(if state.scanned {
@@ -313,7 +313,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .id("card-bento-large-files")
                                 .w(px(310.))
                                 .flex_none()
-                                .p_6()
+                                .p_4()
                                 .rounded_xl()
                                 .bg(rgb(CARD))
                                 .border_1()
@@ -324,21 +324,21 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .flex()
                                 .flex_col()
                                 .justify_between()
-                                .min_h(px(190.))
+                                .min_h(px(150.))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_3()
                                         .child(icon_badge(
-                                            icon_weight(0xba1a1a, 20.),
+                                            icon_weight(0xba1a1a, 16.),
                                             0xffdad6,
                                             0xba1a1a,
-                                            38.,
+                                            30.,
                                         ))
                                         .child(
                                             div()
-                                                .text_base()
+                                                .text_sm()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(rgb(TEXT))
                                                 .child(tr_declutter_large_files_title(lang)),
@@ -436,7 +436,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             div()
                                 .id("card-bento-duplicates")
                                 .flex_1()
-                                .p_6()
+                                .p_4()
                                 .rounded_xl()
                                 .bg(rgb(CARD))
                                 .border_1()
@@ -447,7 +447,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .flex()
                                 .flex_col()
                                 .justify_between()
-                                .min_h(px(160.))
+                                .min_h(px(135.))
                                 .child(
                                     div()
                                         .flex()
@@ -459,10 +459,10 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(icon_badge(
-                                                    icon_files_duplicate(0x7547ab, 20.),
+                                                    icon_files_duplicate(0x7547ab, 16.),
                                                     0xefdbff,
                                                     0x7547ab,
-                                                    38.,
+                                                    30.,
                                                 ))
                                                 .child(
                                                     div()
@@ -470,7 +470,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .flex_col()
                                                         .child(
                                                             div()
-                                                                .text_base()
+                                                                .text_sm()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
                                                                 .child(tr_declutter_duplicates_title(lang)),
@@ -496,7 +496,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .gap_2()
                                                 .child(
                                                     div()
-                                                        .text_2xl()
+                                                        .text_lg()
                                                         .font_weight(gpui::FontWeight::BOLD)
                                                         .text_color(rgb(TEXT))
                                                         .child(format!("{dup_count}")),
@@ -530,7 +530,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             div()
                                 .id("card-bento-similar-photos")
                                 .flex_1()
-                                .p_6()
+                                .p_4()
                                 .rounded_xl()
                                 .bg(rgb(CARD))
                                 .border_1()
@@ -541,7 +541,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .flex()
                                 .flex_col()
                                 .justify_between()
-                                .min_h(px(160.))
+                                .min_h(px(135.))
                                 .child(
                                     div()
                                         .flex()
@@ -553,10 +553,10 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(icon_badge(
-                                                    icon_photos_similar(0x974700, 20.),
+                                                    icon_photos_similar(0x974700, 16.),
                                                     0xffdbc8,
                                                     0x974700,
-                                                    38.,
+                                                    30.,
                                                 ))
                                                 .child(
                                                     div()
@@ -564,7 +564,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .flex_col()
                                                         .child(
                                                             div()
-                                                                .text_base()
+                                                                .text_sm()
                                                                 .font_weight(gpui::FontWeight::BOLD)
                                                                 .text_color(rgb(TEXT))
                                                                 .child(tr_declutter_photos_title(lang)),

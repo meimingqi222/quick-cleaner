@@ -566,7 +566,7 @@ fn scan_data_dirs_in(
         }
 
         // 模糊：枚举一层子目录，名字相近的报为「可能」
-        let Ok(rd) = std::fs::read_dir(&root) else {
+        let Ok(rd) = std::fs::read_dir(root) else {
             continue;
         };
         for entry in rd.flatten().take(4000) {

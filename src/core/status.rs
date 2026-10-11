@@ -155,6 +155,358 @@ pub struct ProcInfo {
     /// 取图标用的路径：macOS 是进程所属的 `.app` 包，Windows 是可执行文件本身。
     /// 守护进程、命令行工具这类不属于任何应用的进程是 `None`，UI 回退到首字母。
     pub icon_source: Option<std::path::PathBuf>,
+    /// 进程打开/监听的本地网络端口列表（已排序去重）。
+    pub ports: Vec<u16>,
+    /// 活动线程数。
+    pub threads: u32,
+    /// 进程累计 CPU 消耗时间（毫秒）。
+    pub cpu_time_ms: u64,
+    /// 运行所属用户账户名称（如 SYSTEM, 当前用户名等）。
+    pub user: Option<String>,
+    /// 可执行文件绝对路径。
+    pub exe_path: Option<String>,
+    /// 虚拟内存（字节）。
+    pub virtual_mem_bytes: u64,
+    /// 累计磁盘读取（字节）。
+    pub disk_read_bytes: u64,
+    /// 累计磁盘写入（字节）。
+    pub disk_written_bytes: u64,
+    /// 磁盘读取速率（字节/秒）。
+    pub disk_read_bps: f64,
+    /// 磁盘写入速率（字节/秒）。
+    pub disk_written_bps: f64,
+    /// 父进程 PID。
+    pub parent_pid: Option<u32>,
+    /// 父进程名称。
+    pub parent_name: Option<String>,
+    /// 完整命令行参数。
+    pub cmd_line: Option<String>,
+    /// 运行状态文本。
+    pub status_text: String,
+}
+
+impl Default for ProcInfo {
+    fn default() -> Self {
+        Self {
+            pid: 0,
+            start_time: 0,
+            unique_id: None,
+            name: String::new(),
+            cpu: 0.0,
+            mem_bytes: 0,
+            icon_source: None,
+            ports: Vec::new(),
+            threads: 1,
+            cpu_time_ms: 0,
+            user: None,
+            exe_path: None,
+            virtual_mem_bytes: 0,
+            disk_read_bytes: 0,
+            disk_written_bytes: 0,
+            disk_read_bps: 0.0,
+            disk_written_bps: 0.0,
+            parent_pid: None,
+            parent_name: None,
+            cmd_line: None,
+            status_text: String::from("Running"),
+        }
+    }
+}
+
+/// 格式化累计 CPU 时间（与任务管理器口径一致）：
+/// 超 1 小时为 `H:MM:SS`，不足 1 小时为 `M:SS.ss`。
+pub fn fmt_cpu_time(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    let hundredths = (ms % 1000) / 10;
+    if hours > 0 {
+        format!("{hours}:{mins:02}:{secs:02}")
+    } else {
+        format!("{mins}:{secs:02}.{hundredths:02}")
+    }
+}
+
+/// 进程分类切页
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProcFilterTab {
+    #[default]
+    All,
+    App,
+    User,
+    System,
+}
+
+impl ProcFilterTab {
+    pub const ALL: [ProcFilterTab; 4] = [
+        ProcFilterTab::All,
+        ProcFilterTab::App,
+        ProcFilterTab::User,
+        ProcFilterTab::System,
+    ];
+}
+
+/// 判断进程是否符合分类 Tab 范围
+pub fn matches_proc_tab(proc: &ProcInfo, tab: ProcFilterTab, current_user: Option<&str>) -> bool {
+    match tab {
+        ProcFilterTab::All => true,
+        ProcFilterTab::App => {
+            if proc.icon_source.is_some() {
+                return true;
+            }
+            if let Some(path) = &proc.exe_path {
+                let p = path.to_lowercase();
+                if p.contains("program files")
+                    || p.contains("appdata")
+                    || p.contains("/applications/")
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        ProcFilterTab::User => {
+            if let Some(u) = &proc.user {
+                let lower = u.to_lowercase();
+                if lower.contains("system")
+                    || lower.contains("local service")
+                    || lower.contains("network service")
+                    || lower == "root"
+                    || lower.starts_with('_')
+                {
+                    return false;
+                }
+                if let Some(cur) = current_user {
+                    let cur_lower = cur.to_lowercase();
+                    return lower.contains(&cur_lower);
+                }
+                true
+            } else {
+                proc.pid > 100 && proc.icon_source.is_some()
+            }
+        }
+        ProcFilterTab::System => {
+            if proc.pid <= 4 {
+                return true;
+            }
+            if let Some(u) = &proc.user {
+                let lower = u.to_lowercase();
+                if lower.contains("system")
+                    || lower.contains("local service")
+                    || lower.contains("network service")
+                    || lower == "root"
+                    || lower.starts_with('_')
+                {
+                    return true;
+                }
+            }
+            if let Some(path) = &proc.exe_path {
+                let p = path.to_lowercase();
+                if p.contains("\\system32\\") || p.contains("/system/") {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// 匹配搜索框查询语法：
+/// - 逗号/分号多项搜索：`msedge, "NVIDIA Overlay"`（满足任一即通过）
+/// - 端口匹配：`:3000` 或 `:80`（匹配监听/占用端口）
+/// - CPU/内存阈值过滤：`cpu > 10`, `mem > 1 GB`, `mem > 500`（默认 MB）
+/// - 用户过滤：`user:SYSTEM`
+/// - 排除过滤：`-helper`
+/// - 基础文本/PID/路径搜索
+pub fn match_proc_query(proc: &ProcInfo, query: &str) -> bool {
+    let raw = query.trim();
+    if raw.is_empty() {
+        return true;
+    }
+
+    let clauses = split_query_clauses(raw);
+    if clauses.is_empty() {
+        return true;
+    }
+
+    clauses
+        .iter()
+        .any(|clause| match_proc_single_clause(proc, clause))
+}
+
+fn split_query_clauses(input: &str) -> Vec<String> {
+    let mut clauses = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in input.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+            ',' | ';' if !in_quotes => {
+                let trimmed = current.trim().trim_matches('"').trim().to_string();
+                if !trimmed.is_empty() {
+                    clauses.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    let trimmed = current.trim().trim_matches('"').trim().to_string();
+    if !trimmed.is_empty() {
+        clauses.push(trimmed);
+    }
+    clauses
+}
+
+fn match_proc_single_clause(proc: &ProcInfo, clause: &str) -> bool {
+    let c = clause.trim();
+    let folded = c.to_ascii_lowercase();
+    if c.is_empty() {
+        return true;
+    }
+
+    // 1. 排除语法：-keyword
+    if let Some(rest) = c.strip_prefix('-') {
+        let neg = rest.trim();
+        if !neg.is_empty() {
+            let matches_neg = proc.name.to_lowercase().contains(&neg.to_lowercase())
+                || proc
+                    .exe_path
+                    .as_deref()
+                    .is_some_and(|p| p.to_lowercase().contains(&neg.to_lowercase()));
+            return !matches_neg;
+        }
+    }
+
+    // 2. 端口号匹配：按 : 输入端口号，如 `:3000`
+    if let Some(port_str) = c.strip_prefix(':') {
+        let port_str = port_str.trim();
+        if let Ok(port) = port_str.parse::<u16>() {
+            return proc.ports.contains(&port);
+        } else if !port_str.is_empty() {
+            return proc
+                .ports
+                .iter()
+                .any(|p| p.to_string().starts_with(port_str));
+        }
+    }
+
+    // 3. 用户过滤：user:SYSTEM
+    if let Some(u_target) = folded.strip_prefix("user:") {
+        let u_target = u_target.trim().to_lowercase();
+        return proc
+            .user
+            .as_deref()
+            .is_some_and(|u| u.to_lowercase().contains(&u_target));
+    }
+
+    // 4. CPU 过滤：cpu > 10 / cpu < 5
+    if let Some(rest) = folded.strip_prefix("cpu") {
+        let rest = rest.trim();
+        if let Some((op, val)) = parse_op_val(rest) {
+            return match op {
+                ">" => proc.cpu > val,
+                ">=" => proc.cpu >= val,
+                "<" => proc.cpu < val,
+                "<=" => proc.cpu <= val,
+                _ => true,
+            };
+        }
+    }
+
+    // 5. 内存过滤：mem > 1 GB / mem > 500 MB
+    if let Some(rest) = folded.strip_prefix("mem") {
+        let rest = rest.trim();
+        if let Some((op, bytes)) = parse_mem_op_val(rest) {
+            return match op.as_str() {
+                ">" => proc.mem_bytes > bytes,
+                ">=" => proc.mem_bytes >= bytes,
+                "<" => proc.mem_bytes < bytes,
+                "<=" => proc.mem_bytes <= bytes,
+                _ => true,
+            };
+        }
+    }
+
+    // 6. 普通文本 / PID / 路径匹配
+    let lower_c = c.to_lowercase();
+    if proc.name.to_lowercase().contains(&lower_c) {
+        return true;
+    }
+    if proc.pid.to_string() == c {
+        return true;
+    }
+    if let Some(path) = &proc.exe_path {
+        if path.to_lowercase().contains(&lower_c) {
+            return true;
+        }
+    }
+    if let Ok(port) = c.parse::<u16>() {
+        if proc.ports.contains(&port) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn parse_op_val(s: &str) -> Option<(&str, f32)> {
+    let s = s.trim();
+    let (op, num_str) = if let Some(r) = s.strip_prefix(">=") {
+        (">=", r)
+    } else if let Some(r) = s.strip_prefix("<=") {
+        ("<=", r)
+    } else if let Some(r) = s.strip_prefix('>') {
+        (">", r)
+    } else if let Some(r) = s.strip_prefix('<') {
+        ("<", r)
+    } else {
+        return None;
+    };
+    let val: f32 = num_str.trim().trim_end_matches('%').trim().parse().ok()?;
+    (val.is_finite() && val >= 0.).then_some((op, val))
+}
+
+fn parse_mem_op_val(s: &str) -> Option<(String, u64)> {
+    let s = s.trim();
+    let (op, num_str) = if let Some(r) = s.strip_prefix(">=") {
+        (">=", r)
+    } else if let Some(r) = s.strip_prefix("<=") {
+        ("<=", r)
+    } else if let Some(r) = s.strip_prefix('>') {
+        (">", r)
+    } else if let Some(r) = s.strip_prefix('<') {
+        ("<", r)
+    } else {
+        return None;
+    };
+    let num_str = num_str.trim().to_ascii_uppercase();
+    let (number, multiplier) = [
+        ("GIB", 1024_u64.pow(3)),
+        ("GB", 1024_u64.pow(3)),
+        ("G", 1024_u64.pow(3)),
+        ("MIB", 1024_u64.pow(2)),
+        ("MB", 1024_u64.pow(2)),
+        ("M", 1024_u64.pow(2)),
+        ("KIB", 1024),
+        ("KB", 1024),
+        ("K", 1024),
+        ("B", 1),
+    ]
+    .into_iter()
+    .find_map(|(unit, factor)| num_str.strip_suffix(unit).map(|number| (number, factor)))
+    .unwrap_or((&num_str, 1024 * 1024));
+    let bytes = number.trim().parse::<f64>().ok()? * multiplier as f64;
+    if !bytes.is_finite() || bytes < 0. || bytes >= u64::MAX as f64 {
+        return None;
+    }
+    Some((op.to_string(), bytes as u64))
 }
 
 /// 一拍采样结果的纯数据快照。错误信息与文案全部语言中立，本地化在 UI 层做。
@@ -188,6 +540,7 @@ pub struct StatusSnapshot {
 pub struct StatusSampler {
     sys: System,
     nets: Networks,
+    users: sysinfo::Users,
     /// 每个接口上一拍的累计收发字节数 (rx, tx)。
     ///
     /// 速率按**单接口**对基线求差再汇总，而不是对「所有接口之和」求差：
@@ -209,6 +562,7 @@ impl StatusSampler {
         let mut sampler = Self {
             sys: System::new(),
             nets: Networks::new_with_refreshed_list(),
+            users: sysinfo::Users::new_with_refreshed_list(),
             net_baseline: std::collections::HashMap::new(),
             last_sample: None,
         };
@@ -252,6 +606,9 @@ impl StatusSampler {
         self.sys.refresh_processes(ProcessesToUpdate::All, true);
         self.nets.refresh(true);
 
+        let ports_map = crate::platform::process_ports_map();
+        let threads_map = crate::platform::process_threads_map();
+
         let (rx_bytes, tx_bytes) = self.update_net_baseline();
         let elapsed = self
             .last_sample
@@ -285,17 +642,81 @@ impl StatusSampler {
                 if raw_name.is_empty() {
                     return None;
                 }
+                let pid = p.pid().as_u32();
                 let exe = p.exe();
+                let ports = ports_map.get(&pid).cloned().unwrap_or_default();
+                let threads = threads_map.get(&pid).copied().unwrap_or(1);
+                let cpu_time_ms = p.accumulated_cpu_time();
+                let user = p
+                    .user_id()
+                    .and_then(|uid| self.users.get_user_by_id(uid))
+                    .map(|u| u.name().to_string())
+                    .or_else(|| {
+                        #[cfg(windows)]
+                        if pid == 4 {
+                            Some("SYSTEM".to_string())
+                        } else {
+                            None
+                        }
+                        #[cfg(not(windows))]
+                        None
+                    });
+                let exe_path = exe.map(|e| e.to_string_lossy().to_string());
+                let du = p.disk_usage();
+                let disk_read_bytes = du.total_read_bytes;
+                let disk_written_bytes = du.total_written_bytes;
+                let disk_read_bps = du.read_bytes as f64 / elapsed;
+                let disk_written_bps = du.written_bytes as f64 / elapsed;
+                let virtual_mem_bytes = p.virtual_memory();
+                let parent_pid = p.parent().map(|ppid| ppid.as_u32());
+                let parent_name = p.parent().and_then(|ppid| {
+                    self.sys
+                        .process(ppid)
+                        .map(|parent_p| parent_p.name().to_string_lossy().trim().to_string())
+                });
+                let cmd_line = {
+                    let cmd = p.cmd();
+                    if cmd.is_empty() {
+                        exe_path.clone()
+                    } else {
+                        Some(
+                            cmd.iter()
+                                .map(|s| {
+                                    let text = s.to_string_lossy();
+                                    if text.contains(' ') && !text.starts_with('"') {
+                                        format!("\"{text}\"")
+                                    } else {
+                                        text.to_string()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )
+                    }
+                };
+                let status_text = format!("{:?}", p.status());
                 Some(ProcInfo {
-                    pid: p.pid().as_u32(),
+                    pid,
                     start_time: p.start_time(),
-                    unique_id: crate::platform::process_unique_id(p.pid().as_u32()),
+                    unique_id: crate::platform::process_unique_id(pid),
                     name: process_display_name(&raw_name, exe),
                     cpu: p.cpu_usage(),
                     mem_bytes: p.memory(),
-                    // exe() 对别的用户 / root 的进程会拿不到，那种情况下留 None，
-                    // UI 显示首字母占位。
                     icon_source: exe.and_then(icon_source_path),
+                    ports,
+                    threads,
+                    cpu_time_ms,
+                    user,
+                    exe_path,
+                    virtual_mem_bytes,
+                    disk_read_bytes,
+                    disk_written_bytes,
+                    disk_read_bps,
+                    disk_written_bps,
+                    parent_pid,
+                    parent_name,
+                    cmd_line,
+                    status_text,
                 })
             })
             .collect();
@@ -867,5 +1288,95 @@ mod tests {
         assert!(is_loopback_interface("Loopback Pseudo-Interface 1"));
         assert!(!is_loopback_interface("Local Area Connection"));
         assert!(!is_loopback_interface("lower-deck-ethernet"));
+    }
+
+    #[test]
+    fn process_search_memory_defaults_to_mb_and_accepts_shorthand() {
+        let p = ProcInfo {
+            pid: 1,
+            start_time: 0,
+            unique_id: None,
+            name: "test".into(),
+            cpu: 0.,
+            mem_bytes: 2 * 1024 * 1024,
+            icon_source: None,
+            ports: vec![],
+            threads: 1,
+            cpu_time_ms: 0,
+            user: None,
+            exe_path: None,
+            ..Default::default()
+        };
+        for query in [
+            "mem>1",
+            "mem > 1 MB",
+            "mem>1m",
+            "MEM>=2",
+            "mem<1g",
+            "mem <= 2048k",
+        ] {
+            assert!(match_proc_query(&p, query), "{query}");
+        }
+        for query in ["mem>2", "mem>3m", "mem<1", "mem>NaN", "mem>inf", "mem>-1"] {
+            assert!(!match_proc_query(&p, query), "{query}");
+        }
+    }
+
+    #[test]
+    fn process_search_query_matches_ports_and_clauses() {
+        let p = ProcInfo {
+            pid: 1234,
+            start_time: 1000,
+            unique_id: None,
+            name: "web_server".into(),
+            cpu: 15.5,
+            mem_bytes: 2 * 1024 * 1024 * 1024,
+            icon_source: None,
+            ports: vec![80, 443, 3000],
+            threads: 16,
+            cpu_time_ms: 65_000,
+            user: Some("meimingqi".into()),
+            exe_path: Some("C:\\App\\web_server.exe".into()),
+            ..Default::default()
+        };
+
+        // 端口匹配 (:3000)
+        assert!(match_proc_query(&p, ":3000"));
+        assert!(match_proc_query(&p, ":80"));
+        assert!(!match_proc_query(&p, ":8080"));
+
+        // 多项搜索
+        assert!(match_proc_query(&p, "msedge, web_server"));
+        assert!(match_proc_query(&p, "\"other\", \"web_server\""));
+        assert!(!match_proc_query(&p, "msedge, chrome"));
+
+        // CPU 过滤
+        assert!(match_proc_query(&p, "cpu > 10"));
+        assert!(!match_proc_query(&p, "cpu > 20"));
+        assert!(match_proc_query(&p, "cpu < 20"));
+
+        // 内存过滤
+        assert!(match_proc_query(&p, "mem > 1 GB"));
+        assert!(!match_proc_query(&p, "mem > 3 GB"));
+
+        // 用户过滤
+        assert!(match_proc_query(&p, "user:meimingqi"));
+        assert!(!match_proc_query(&p, "user:SYSTEM"));
+
+        // 排除过滤
+        assert!(!match_proc_query(&p, "-server"));
+        assert!(match_proc_query(&p, "-helper"));
+
+        // 普通 PID 与名称
+        assert!(match_proc_query(&p, "1234"));
+        assert!(match_proc_query(&p, "server"));
+    }
+
+    #[test]
+    fn cpu_time_formatting_matches_spec() {
+        assert_eq!(fmt_cpu_time(850), "0:00.85");
+        assert_eq!(fmt_cpu_time(49_230), "0:49.23");
+        assert_eq!(fmt_cpu_time(852_090), "14:12.09");
+        assert_eq!(fmt_cpu_time(3_883_000), "1:04:43");
     }
 }

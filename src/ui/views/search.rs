@@ -18,7 +18,7 @@ use gpui::{
 };
 
 /// 搜索结果行高
-const ROW_H: f32 = 40.;
+const ROW_H: f32 = 34.;
 
 pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let lang = root.language;
@@ -366,7 +366,7 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
         .id("file-search-view")
         .size_full()
         .min_w(px(0.))
-        .p_8()
+        .p_5()
         .flex()
         .flex_col()
         .gap_4()
@@ -401,7 +401,7 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
             cursor_h: 15.,
             focused,
             cursor_visible: root.cursor_blink_visible,
-            is_file_search: true,
+            target: crate::ui::text_input::InputTarget::File,
         },
         |this, cx| this.file_search_clear(cx),
         |this, cx| this.file_search_backspace(cx),
@@ -569,7 +569,7 @@ fn render_result_row(
                 .justify_end()
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(if hit.size >= 1024 * 1024 * 1024 {
                             rgb(PRIMARY)

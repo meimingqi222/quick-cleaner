@@ -912,6 +912,14 @@ fn unlock_fan_control(conn: u32) -> Result<(), FanError> {
     ))
 }
 
+pub fn process_ports_map() -> std::collections::HashMap<u32, Vec<u16>> {
+    std::collections::HashMap::new()
+}
+
+pub fn process_threads_map() -> std::collections::HashMap<u32, u32> {
+    std::collections::HashMap::new()
+}
+
 #[cfg(test)]
 mod tests {
     fn apple_duty(requested: f32, temp_c: Option<f32>) -> Option<f32> {

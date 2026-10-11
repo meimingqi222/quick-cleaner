@@ -47,10 +47,10 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
     }
 }
 
-/// 单行条目的高度。uniform_list 要求行高一致，这里写死以便它精确布局。
-const ITEM_ROW_H: f32 = 52.0;
+/// 单行条目的高度。uniform_list 要求行高一致，紧凑排布。
+const ITEM_ROW_H: f32 = 36.0;
 /// 展开区最多占多高，超出部分自己滚。
-const LIST_MAX_H: f32 = 420.0;
+const LIST_MAX_H: f32 = 380.0;
 
 /// 渲染某个分类展开后的条目列表。
 ///
@@ -203,7 +203,7 @@ fn item_row(
         .flex()
         .items_center()
         .gap_3()
-        .px_5()
+        .px_4()
         .bg(rgb(CARD))
         .hover(|h| h.bg(rgb(SURF_LOW)))
         .cursor_pointer()
@@ -232,7 +232,7 @@ fn item_row(
                         .gap_2()
                         .child(
                             div()
-                                .text_sm()
+                                .text_xs()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(rgb(TEXT))
                                 .child(label),
@@ -464,11 +464,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
 
     let found = card()
         .flex_none()
-        .px_5()
-        .py_3()
+        .px_3()
+        .py_1p5()
         .flex()
         .items_center()
-        .gap_4()
+        .gap_3()
         .child(
             div()
                 .flex()
@@ -482,7 +482,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 )
                 .child(
                     div()
-                        .text_xl()
+                        .text_sm()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(if total > 0 { ERROR } else { PRIMARY }))
                         .child(if root.junk.scanned {
@@ -494,8 +494,8 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         )
         .child(
             div()
-                .w(px(36.))
-                .h(px(36.))
+                .w(px(26.))
+                .h(px(26.))
                 .flex_none()
                 .rounded_full()
                 .bg(rgb(if total > 0 {
@@ -506,7 +506,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon_trash(if total > 0 { ERROR } else { PRIMARY }, 18.)),
+                .child(icon_trash(if total > 0 { ERROR } else { PRIMARY }, 13.)),
         );
 
     let (heading_title, heading_sub) = match lang {
@@ -565,9 +565,9 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         let head = div()
             .flex()
             .items_center()
-            .gap_4()
-            .px_5()
-            .py_4()
+            .gap_3()
+            .px_4()
+            .py_2p5()
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -592,13 +592,13 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .min_w(px(0.))
                     .flex()
                     .items_center()
-                    .gap_4()
+                    .gap_3()
                     .cursor_pointer()
                     .child(icon_badge(
-                        category_icon(id, safety_color(safety), 18.),
+                        category_icon(id, safety_color(safety), 14.),
                         safety_container(safety),
                         safety_color(safety),
-                        38.,
+                        28.,
                     ))
                     .child(
                         div()
@@ -613,8 +613,8 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .gap_2()
                                     .child(
                                         div()
-                                            .text_base()
-                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(rgb(TEXT))
                                             .child(id.name_lang(lang)),
                                     )
@@ -646,7 +646,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_xs()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(if dim { OUTLINE } else { safety_color(safety) }))
                             // 构建产物走第二阶段异步检索，没跑完之前显示「检索中」
@@ -667,7 +667,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     )
                     .child(
                         div()
-                            .w(px(16.))
+                            .w(px(14.))
                             .flex_none()
                             .text_xs()
                             .font_weight(gpui::FontWeight::BOLD)
@@ -782,8 +782,9 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .children(cards)
+            .pb(px(80.))
             .into_any_element()
     };
 
@@ -792,7 +793,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .size_full()
         .min_w(px(0.))
         .overflow_scroll()
-        .p_8()
+        .p_5()
         .flex()
         .flex_col()
         .gap_5()
@@ -846,8 +847,8 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
     div()
         .flex_none()
         .w_full()
-        .px_8()
-        .py_3()
+        .px_5()
+        .py_2p5()
         .bg(rgb(BG))
         .border_t_1()
         .border_color(rgba(OUTLINE_VAR, 0.5))
@@ -857,10 +858,10 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
             div()
                 .flex()
                 .items_center()
-                .gap_6()
-                .pl_6()
-                .pr(px(6.))
-                .py(px(6.))
+                .gap_5()
+                .pl_5()
+                .pr(px(5.))
+                .py(px(4.))
                 .rounded_full()
                 .bg(rgb(CARD))
                 .border_1()
@@ -888,7 +889,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_lg()
+                                        .text_base()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
                                         .child(fmt_size(size)),

@@ -691,10 +691,10 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                 .flex_1()
                 .min_h(px(0.))
                 .overflow_scroll()
-                .p_8()
+                .p_5()
                 .flex()
                 .flex_col()
-                .gap_6()
+                .gap_4()
                 .child(tab_nav)
                 .child(
                     div()
@@ -717,7 +717,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                 )
                                 .child(
                                     div()
-                                        .text_2xl()
+                                        .text_lg()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
                                         .child(tr_declutter_photos_heading(lang)),

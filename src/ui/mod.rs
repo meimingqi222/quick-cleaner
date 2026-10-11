@@ -126,6 +126,7 @@ impl Root {
         let disk_space = volume_spaces.get(&disk_volume).copied();
         let apps_focus_handle = cx.focus_handle();
         let search_focus_handle = cx.focus_handle();
+        let status_focus_handle = cx.focus_handle();
         // 有配置文件就照配置文件，没有就按系统显示语言（中文系统用中文，其余英文）
         let settings = Settings::load();
         #[cfg(target_os = "macos")]
@@ -251,7 +252,7 @@ impl Root {
                 gen: 0,
             },
 
-            monitor: StatusState::default(),
+            monitor: StatusState::new(status_focus_handle),
 
             update: crate::ui::state::UpdateState::default(),
 
@@ -856,14 +857,15 @@ impl Render for Root {
         self.refresh_render_caches();
 
         self.cursor_blink_wanted = self.search.input.focus_handle.is_focused(window)
-            || self.apps.input.focus_handle.is_focused(window);
+            || self.apps.input.focus_handle.is_focused(window)
+            || self.monitor.input.focus_handle.is_focused(window);
         if self.cursor_blink_wanted {
             self.ensure_cursor_blink(cx);
         }
 
         let content = match self.view {
             View::Dashboard => render_dashboard_view(self, cx),
-            View::Status => render_status_view(self, cx),
+            View::Status => render_status_view(self, window, cx),
             View::Junk => render_junk_view(self, cx),
             View::Apps if self.residual.uninstall.is_some() => render_uninstall_progress(self),
             View::Apps => render_apps_view(self, window, cx),

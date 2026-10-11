@@ -16,6 +16,7 @@ pub mod controls;
 pub mod dialogs;
 pub mod donut;
 pub mod icons;
+pub mod popover;
 pub mod progress;
 pub mod scroll;
 pub mod search_box;

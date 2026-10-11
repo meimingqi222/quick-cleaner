@@ -1,0 +1,37 @@
+warning: unreachable expression
+  --> vendor\gpui\src\elements\surface.rs:35:21
+   |
+34 |         source: source.into(),
+   |                 ------------- any code following this expression is unreachable
+35 |         object_fit: ObjectFit::Contain,
+   |                     ^^^^^^^^^^^^^^^^^^ unreachable expression
+   |
+note: this expression has type `SurfaceSource`, which is uninhabited
+  --> vendor\gpui\src\elements\surface.rs:34:17
+   |
+34 |         source: source.into(),
+   |                 ^^^^^^^^^^^^^
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gpui` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.50s
+     Running unittests src\lib.rs (target\debug\deps\quick_cleaner-05cefeb0c0ef9fc0.exe)
+
+running 1 test
+test core::status::tests::process_search_memory_defaults_to_mb_and_accepts_shorthand ... FAILED
+
+failures:
+
+---- core::status::tests::process_search_memory_defaults_to_mb_and_accepts_shorthand stdout ----
+
+thread 'core::status::tests::process_search_memory_defaults_to_mb_and_accepts_shorthand' (4176) panicked at src\core\status.rs:1205:13:
+mem>1m
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    core::status::tests::process_search_memory_defaults_to_mb_and_accepts_shorthand
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 729 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

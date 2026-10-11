@@ -1202,3 +1202,58 @@ impl FileVisualKind {
             .into_any_element()
     }
 }
+
+/// 复制图标（双层重叠小方块）
+pub fn icon_copy(fg: u32, size: f32) -> AnyElement {
+    let box_s = size * 0.65;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .relative()
+        .child(
+            div()
+                .absolute()
+                .top(px(0.))
+                .left(px(0.))
+                .w(px(box_s))
+                .h(px(box_s))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(fg)),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom(px(0.))
+                .right(px(0.))
+                .w(px(box_s))
+                .h(px(box_s))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(fg)),
+        )
+        .into_any_element()
+}
+
+/// 关闭叉叉图标
+pub fn icon_close(fg: u32, size: f32) -> AnyElement {
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(fg))
+                .child("×"),
+        )
+        .into_any_element()
+}
+
+/// 文件夹小图标
+pub fn icon_folder(fg: u32, size: f32) -> AnyElement {
+    icon_folder_file(fg, size)
+}

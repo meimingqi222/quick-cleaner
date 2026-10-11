@@ -58,7 +58,7 @@ pub fn render_dev_environments_view(
             cursor_h: 13.,
             focused: search_focused,
             cursor_visible: root.cursor_blink_visible,
-            is_file_search: false,
+            target: crate::ui::text_input::InputTarget::Apps,
         },
         |this, cx| {
             this.apps.input.text.clear();

@@ -1998,6 +1998,249 @@ pub fn tr_status_kill_failed(lang: Language, name: &str, err: &str) -> String {
     }
 }
 
+pub fn tr_status_proc_search_placeholder(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "搜索进程、:端口、用户…",
+        Language::En => "Search processes, :port, user…",
+    }
+}
+
+pub fn tr_status_popover_ports(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "端口",
+        Language::En => "Ports",
+    }
+}
+
+pub fn tr_status_popover_no_matching_ports(lang: Language, port: &str) -> String {
+    match lang {
+        Language::Zh => format!("未找到占用端口 :{port} 的进程"),
+        Language::En => format!("No process listening on :{port}"),
+    }
+}
+
+pub fn tr_status_popover_no_ports(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "当前无进程占用监听端口",
+        Language::En => "No processes listening on ports",
+    }
+}
+
+pub fn tr_status_popover_tip(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "点击条目快速筛选 · 支持 cpu>10, mem>1GB, -排除",
+        Language::En => "Click to filter · Supports cpu>10, mem>1GB, -exclude",
+    }
+}
+
+pub fn tr_status_tab_all(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "全部",
+        Language::En => "All",
+    }
+}
+
+pub fn tr_status_tab_app(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "App",
+        Language::En => "Apps",
+    }
+}
+
+pub fn tr_status_tab_user(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "我的进程",
+        Language::En => "My Processes",
+    }
+}
+
+pub fn tr_status_tab_system(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "系统",
+        Language::En => "System",
+    }
+}
+
+pub fn tr_th_threads(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "线程",
+        Language::En => "Threads",
+    }
+}
+
+pub fn tr_th_cpu_time(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "CPU 时间",
+        Language::En => "CPU Time",
+    }
+}
+
+pub fn tr_th_user(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "用户",
+        Language::En => "User",
+    }
+}
+
+pub fn tr_th_pid(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "PID",
+        Language::En => "PID",
+    }
+}
+
+pub fn tr_th_proc_name(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "名称",
+        Language::En => "Name",
+    }
+}
+
+pub fn tr_status_proc_count_summary(lang: Language, filtered: usize, total: usize) -> String {
+    match lang {
+        Language::Zh => {
+            if filtered == total {
+                format!("{total} 个运行中")
+            } else {
+                format!("{total} 个运行中 · 匹配 {filtered} 个")
+            }
+        }
+        Language::En => {
+            if filtered == total {
+                format!("{total} running")
+            } else {
+                format!("{total} running · {filtered} matched")
+            }
+        }
+    }
+}
+
+pub fn tr_status_tab_overview(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "硬件概览",
+        Language::En => "Hardware",
+    }
+}
+
+pub fn tr_status_tab_processes_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "进程管理",
+        Language::En => "Processes",
+    }
+}
+
+pub fn tr_status_live_monitoring(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "实时监测",
+        Language::En => "Live",
+    }
+}
+
+pub fn tr_status_paused(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已暂停",
+        Language::En => "Paused",
+    }
+}
+
+pub fn tr_btn_refresh_now(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "立即刷新",
+        Language::En => "Refresh Now",
+    }
+}
+
+pub fn tr_status_overview_heading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "硬件概览",
+        Language::En => "Hardware Overview",
+    }
+}
+
+pub fn tr_status_overview_subheading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "实时监测系统硬件健康、资源占用与温度转速",
+        Language::En => "Live monitoring of hardware health, resource usage, and thermals",
+    }
+}
+
+pub fn tr_status_proc_heading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "进程管理",
+        Language::En => "Process Manager",
+    }
+}
+
+pub fn tr_status_proc_subheading(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个运行中"),
+        Language::En => format!("{count} running"),
+    }
+}
+
+pub fn tr_status_thread_count(lang: Language, count: u64) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个线程"),
+        Language::En => format!("{count} threads"),
+    }
+}
+
+pub fn tr_status_proc_count_detail(lang: Language, filtered: usize, total: usize) -> String {
+    match lang {
+        Language::Zh => format!("显示 {filtered} 个进程，共 {total} 个"),
+        Language::En => format!("Showing {filtered} of {total} processes"),
+    }
+}
+
+pub fn tr_status_search_hint_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "按名称、路径、PID、端口或用户搜索",
+        Language::En => "Search by name, path, PID, port, or user",
+    }
+}
+
+pub fn tr_status_search_hint_port_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "监听 3000 端口",
+        Language::En => "Listen on port 3000",
+    }
+}
+
+pub fn tr_status_search_hint_cpu_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "填写 CPU 阈值，默认单位 %",
+        Language::En => "Threshold in %",
+    }
+}
+
+pub fn tr_status_search_hint_mem_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "阈值默认 MB，支持 m / g",
+        Language::En => "Value in MB; m / g accepted",
+    }
+}
+
+pub fn tr_status_search_hint_user_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "填写运行用户",
+        Language::En => "Enter process owner",
+    }
+}
+
+pub fn tr_status_search_hint_exclude_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "排除 helper",
+        Language::En => "Exclude helper",
+    }
+}
+
+pub fn tr_status_search_hint_multi_desc(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "同时搜索多个",
+        Language::En => "Search multiple",
+    }
+}
+
 pub fn tr_fan_mode_auto(lang: Language) -> &'static str {
     match lang {
         Language::Zh => "自动",
@@ -2521,5 +2764,124 @@ mod scope_detail_tests {
             assert!(!dir.is_empty() && !file.is_empty());
             assert_ne!(dir, file);
         }
+    }
+}
+
+pub fn tr_status_search_query(lang: Language, query: &str) -> String {
+    match lang {
+        Language::Zh => format!("搜索“{query}”"),
+        Language::En => format!("Search “{query}”"),
+    }
+}
+
+pub fn tr_status_search_process_count(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个进程"),
+        Language::En => format!("{count} processes"),
+    }
+}
+
+pub fn tr_status_proc_detail_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "进程详情",
+        Language::En => "Process Details",
+    }
+}
+
+pub fn tr_status_proc_exit(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "退出",
+        Language::En => "Quit",
+    }
+}
+
+pub fn tr_status_proc_force_exit(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "强制退出",
+        Language::En => "Force Quit",
+    }
+}
+
+pub fn tr_status_proc_reveal(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打开文件所在位置",
+        Language::En => "Open File Location",
+    }
+}
+
+pub fn tr_status_proc_rss(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "常驻内存",
+        Language::En => "Physical Memory (RSS)",
+    }
+}
+
+pub fn tr_status_proc_vms(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "虚拟内存",
+        Language::En => "Virtual Memory",
+    }
+}
+
+pub fn tr_status_proc_disk_read(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "磁盘读取",
+        Language::En => "Disk Read",
+    }
+}
+
+pub fn tr_status_proc_disk_write(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "磁盘写入",
+        Language::En => "Disk Write",
+    }
+}
+
+pub fn tr_status_proc_start_time(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "启动时间",
+        Language::En => "Start Time",
+    }
+}
+
+pub fn tr_status_proc_status(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "状态",
+        Language::En => "Status",
+    }
+}
+
+pub fn tr_status_proc_parent(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "父进程",
+        Language::En => "Parent Process",
+    }
+}
+
+pub fn tr_status_proc_cmd(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "命令",
+        Language::En => "Command Line",
+    }
+}
+
+pub fn tr_status_proc_copied(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已复制",
+        Language::En => "Copied",
+    }
+}
+
+pub fn tr_status_proc_copy_cmd(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "复制命令行",
+        Language::En => "Copy Command",
+    }
+}
+
+pub fn tr_status_proc_instances(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 个进程实例"),
+        Language::En => format!("{count} instances"),
     }
 }

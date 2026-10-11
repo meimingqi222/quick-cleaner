@@ -138,7 +138,7 @@ pub(super) fn render_right_browser_pane(
             (false, Language::En) => "No large files found",
         };
         vec![div()
-            .p_8()
+            .p_6()
             .flex()
             .items_center()
             .justify_center()

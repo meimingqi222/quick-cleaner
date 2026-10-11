@@ -509,36 +509,78 @@ pub fn replace_and_mark_text(
     (new_sel, new_marked)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InputTarget {
+    Apps,
+    File,
+    Status,
+}
+
 impl Root {
-    /// 按「是不是文件搜索框」取输入框状态。
-    ///
-    /// 两个搜索框的编辑逻辑完全一样，差异只有两处：落在哪个
-    /// `TextInputState` 上，以及改完之后的收尾动作（文件搜索要重新
-    /// 触发查询，Apps 搜索只需要重绘）。前者由这里收口，后者见
-    /// [`Self::after_text_edit`]。
-    pub fn text_input(&self, is_file_search: bool) -> &TextInputState {
-        if is_file_search {
-            &self.search.input
+    pub fn active_input_target(&self, window: &Window) -> InputTarget {
+        if self.search.input.focus_handle.is_focused(window) {
+            InputTarget::File
+        } else if self.monitor.input.focus_handle.is_focused(window) {
+            InputTarget::Status
         } else {
-            &self.apps.input
+            InputTarget::Apps
         }
     }
 
-    pub fn text_input_mut(&mut self, is_file_search: bool) -> &mut TextInputState {
-        if is_file_search {
-            &mut self.search.input
-        } else {
-            &mut self.apps.input
+    pub fn text_input_by_target(&self, target: InputTarget) -> &TextInputState {
+        match target {
+            InputTarget::Apps => &self.apps.input,
+            InputTarget::File => &self.search.input,
+            InputTarget::Status => &self.monitor.input,
         }
+    }
+
+    pub fn text_input_by_target_mut(&mut self, target: InputTarget) -> &mut TextInputState {
+        match target {
+            InputTarget::Apps => &mut self.apps.input,
+            InputTarget::File => &mut self.search.input,
+            InputTarget::Status => &mut self.monitor.input,
+        }
+    }
+
+    pub fn after_text_edit_target(&mut self, target: InputTarget, cx: &mut Context<Self>) {
+        match target {
+            InputTarget::File => self.search_input_changed(cx),
+            InputTarget::Status => {
+                self.monitor.search_popover.edited();
+                self.rebuild_proc_view();
+                cx.notify();
+            }
+            InputTarget::Apps => cx.notify(),
+        }
+    }
+
+    pub fn text_input(&self, is_file_search: bool) -> &TextInputState {
+        self.text_input_by_target(if is_file_search {
+            InputTarget::File
+        } else {
+            InputTarget::Apps
+        })
+    }
+
+    pub fn text_input_mut(&mut self, is_file_search: bool) -> &mut TextInputState {
+        self.text_input_by_target_mut(if is_file_search {
+            InputTarget::File
+        } else {
+            InputTarget::Apps
+        })
     }
 
     /// 文本改动后的收尾：文件搜索走防抖查询，Apps 搜索重绘即可。
     pub fn after_text_edit(&mut self, is_file_search: bool, cx: &mut Context<Self>) {
-        if is_file_search {
-            self.search_input_changed(cx);
-        } else {
-            cx.notify();
-        }
+        self.after_text_edit_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            cx,
+        );
     }
 
     /// 退格：删掉光标前的一个字符或整个选区。
@@ -552,41 +594,90 @@ impl Root {
         self.apps.input.clear();
     }
 
-    pub fn text_input_delete(&mut self, is_file_search: bool, cx: &mut Context<Self>) {
-        let input = self.text_input_mut(is_file_search);
+    pub fn text_input_delete_target(&mut self, target: InputTarget, cx: &mut Context<Self>) {
+        let input = self.text_input_by_target_mut(target);
         input.sel = delete_forward(&mut input.text, input.sel.clone());
         input.marked = None;
-        self.after_text_edit(is_file_search, cx);
+        self.after_text_edit_target(target, cx);
     }
 
-    pub fn text_input_move_left(&mut self, is_file_search: bool, shift: bool) {
-        let input = self.text_input_mut(is_file_search);
+    pub fn text_input_delete(&mut self, is_file_search: bool, cx: &mut Context<Self>) {
+        self.text_input_delete_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            cx,
+        );
+    }
+
+    pub fn text_input_move_left_target(&mut self, target: InputTarget, shift: bool) {
+        let input = self.text_input_by_target_mut(target);
         input.sel = move_left(&input.text, input.sel.clone(), shift);
         input.marked = None;
     }
 
-    pub fn text_input_move_right(&mut self, is_file_search: bool, shift: bool) {
-        let input = self.text_input_mut(is_file_search);
+    pub fn text_input_move_left(&mut self, is_file_search: bool, shift: bool) {
+        self.text_input_move_left_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            shift,
+        );
+    }
+
+    pub fn text_input_move_right_target(&mut self, target: InputTarget, shift: bool) {
+        let input = self.text_input_by_target_mut(target);
         input.sel = move_right(&input.text, input.sel.clone(), shift);
         input.marked = None;
     }
 
-    pub fn text_input_move_home(&mut self, is_file_search: bool, shift: bool) {
-        let input = self.text_input_mut(is_file_search);
+    pub fn text_input_move_right(&mut self, is_file_search: bool, shift: bool) {
+        self.text_input_move_right_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            shift,
+        );
+    }
+
+    pub fn text_input_move_home_target(&mut self, target: InputTarget, shift: bool) {
+        let input = self.text_input_by_target_mut(target);
         input.sel = move_home(&input.text, input.sel.clone(), shift);
         input.marked = None;
     }
 
-    pub fn text_input_move_end(&mut self, is_file_search: bool, shift: bool) {
-        let input = self.text_input_mut(is_file_search);
+    pub fn text_input_move_home(&mut self, is_file_search: bool, shift: bool) {
+        self.text_input_move_home_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            shift,
+        );
+    }
+
+    pub fn text_input_move_end_target(&mut self, target: InputTarget, shift: bool) {
+        let input = self.text_input_by_target_mut(target);
         input.sel = move_end(&input.text, input.sel.clone(), shift);
         input.marked = None;
     }
 
-    /// 判断当前 IME 输入应该路由到哪个搜索框。
-    /// 两个焦点句柄都不在焦点时默认走 apps 搜索框（保持向后兼容）。
-    fn file_search_focused(&self, window: &Window) -> bool {
-        self.search.input.focus_handle.is_focused(window)
+    pub fn text_input_move_end(&mut self, is_file_search: bool, shift: bool) {
+        self.text_input_move_end_target(
+            if is_file_search {
+                InputTarget::File
+            } else {
+                InputTarget::Apps
+            },
+            shift,
+        );
     }
 }
 
@@ -598,7 +689,8 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let input = self.text_input(self.file_search_focused(window));
+        let target = self.active_input_target(window);
+        let input = self.text_input_by_target(target);
         let range = clamp_to_boundary(&input.text, range_from_utf16(&input.text, &range_utf16));
         actual_range.replace(range_to_utf16(&input.text, &range));
         Some(input.text[range].to_string())
@@ -610,7 +702,8 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let input = self.text_input(self.file_search_focused(window));
+        let target = self.active_input_target(window);
+        let input = self.text_input_by_target(target);
         Some(UTF16Selection {
             range: range_to_utf16(&input.text, &input.selection()),
             reversed: false,
@@ -622,7 +715,8 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        let input = self.text_input(self.file_search_focused(window));
+        let target = self.active_input_target(window);
+        let input = self.text_input_by_target(target);
         input
             .marked
             .as_ref()
@@ -630,8 +724,8 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        let is_file = self.file_search_focused(window);
-        self.text_input_mut(is_file).marked = None;
+        let target = self.active_input_target(window);
+        self.text_input_by_target_mut(target).marked = None;
     }
 
     /// 提交文本：普通打字与输入法确认后的汉字都走这里。
@@ -642,10 +736,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let is_file = self.file_search_focused(window);
-        self.text_input_mut(is_file)
+        let target = self.active_input_target(window);
+        self.text_input_by_target_mut(target)
             .replace(range_utf16.as_ref(), new_text);
-        self.after_text_edit(is_file, cx);
+        self.after_text_edit_target(target, cx);
         self.poke_cursor_blink(cx);
     }
 
@@ -658,9 +752,9 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let is_file = self.file_search_focused(window);
+        let target = self.active_input_target(window);
         let still_composing = {
-            let input = self.text_input_mut(is_file);
+            let input = self.text_input_by_target_mut(target);
             input.replace_and_mark(
                 range_utf16.as_ref(),
                 new_text,
@@ -668,15 +762,10 @@ impl EntityInputHandler for Root {
             );
             input.marked.is_some()
         };
-        // 组词期间不触发搜索：拼音串不是用户要搜的内容，之前的实现每个按键
-        // 都走 `after_text_edit`，防抖被反复重置后拿着半截拼音真的去搜了。
-        // 确认后的汉字走 `replace_text_in_range`，那里才收尾。唯一的例外是
-        // 组词被清空（Esc 或删完拼音，`replace_and_mark` 对空文本会把
-        // marked 归 None），文本已回到组词前，按普通编辑收尾。
         if still_composing {
             cx.notify();
         } else {
-            self.after_text_edit(is_file, cx);
+            self.after_text_edit_target(target, cx);
         }
         self.poke_cursor_blink(cx);
     }
@@ -689,7 +778,8 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let input = self.text_input(self.file_search_focused(window));
+        let target = self.active_input_target(window);
+        let input = self.text_input_by_target(target);
         if let Some(hit) = input.text_hit.as_ref() {
             let range = clamp_to_boundary(&input.text, range_from_utf16(&input.text, &range_utf16));
             let x1 = hit.line.x_for_index(range.start.min(hit.line.len()));
@@ -711,10 +801,13 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let is_file = self.file_search_focused(window);
-        // 两个框的字号不同，命中测试必须跟实际绘制用的一致
-        let font_size = if is_file { 13.0 } else { 12.0 };
-        let input = self.text_input(is_file);
+        let target = self.active_input_target(window);
+        let font_size = if target == InputTarget::File {
+            13.0
+        } else {
+            12.0
+        };
+        let input = self.text_input_by_target(target);
         let byte_idx = index_for_mouse_x(
             &input.text,
             f32::from(point.x),

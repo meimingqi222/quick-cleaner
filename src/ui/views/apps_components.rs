@@ -54,7 +54,7 @@ pub(super) fn render_app_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
+                .text_xs()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(rgb(PRIMARY))
                 .child(initial.clone())
@@ -168,7 +168,7 @@ pub(super) fn render_app_row(
                 .w(px(95.))
                 .flex_none()
                 .text_right()
-                .text_sm()
+                .text_xs()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(if app.estimated_size >= 1024 * 1024 * 1024 {
                     rgb(PRIMARY)
@@ -259,10 +259,10 @@ pub(super) fn render_app_row(
 }
 
 /// 行内应用图标边长。
-const APP_ICON_SIZE: f32 = 48.0;
+const APP_ICON_SIZE: f32 = 32.0;
 
 /// 软件表的行高。uniform_list 要求等高，因此行内名称强制单行。
-pub(super) const APP_ROW_H: f32 = 80.0;
+pub(super) const APP_ROW_H: f32 = 54.0;
 
 /// 操作列宽度。macOS 只有「卸载」+ 更多，Windows 还要放下「强力清理」。
 pub(super) const APP_ACTIONS_COL_W: f32 = if cfg!(target_os = "macos") {

@@ -50,8 +50,8 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_6()
-                    .py_4()
+                    .px_4()
+                    .py_2p5()
                     .border_b_1()
                     .border_color(rgba(OUTLINE_VAR, 0.2))
                     .when(is_sel, |d| d.bg(rgba(PRIMARY, 0.05)))
@@ -72,7 +72,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .min_w(px(0.))
                             .flex()
                             .items_center()
-                            .gap_4()
+                            .gap_3()
                             .cursor_pointer()
                             .child(checkbox(if is_sel {
                                 crate::core::model::Check::On
@@ -80,10 +80,10 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 crate::core::model::Check::Off
                             }))
                             .child(icon_badge(
-                                icon_downloads(0x0078d4, 18.),
+                                icon_downloads(0x0078d4, 14.),
                                 0xe0f2fe,
                                 0x0078d4,
-                                36.,
+                                28.,
                             ))
                             .child(
                                 div()
@@ -213,16 +213,16 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .flex_1()
                 .min_h(px(0.))
                 .overflow_scroll()
-                .p_8()
-                .pb_8()
+                .p_5()
+                .pb_5()
                 .flex()
                 .flex_col()
-                .gap_6()
+                .gap_4()
                 .child(tab_nav)
                 .child(
                     div()
                         .flex_none()
-                        .p_6()
+                        .p_4()
                         .rounded_xl()
                         .bg(rgb(CARD))
                         .border_1()
@@ -237,7 +237,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .flex_col()
                                 .child(
                                     div()
-                                        .text_xl()
+                                        .text_lg()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(rgb(TEXT))
                                         .child(tr_declutter_downloads_heading(lang)),
@@ -251,7 +251,7 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         )
                         .child(
                             div()
-                                .text_xl()
+                                .text_base()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(PRIMARY))
                                 .child(tr_declutter_downloads_count(

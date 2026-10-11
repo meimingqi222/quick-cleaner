@@ -185,3 +185,189 @@ pub fn install_fan_helper(_prompt: &str) -> Result<(), FanError> {
 pub fn uninstall_fan_helper(_prompt: &str) -> Result<(), FanError> {
     Err(FanError::Other("当前平台不支持风扇控制".into()))
 }
+
+/// 枚举所有进程关联的本地网络端口（TCP + UDP, IPv4 + IPv6）。
+pub fn process_ports_map() -> std::collections::HashMap<u32, Vec<u16>> {
+    let mut map: std::collections::HashMap<u32, Vec<u16>> = std::collections::HashMap::new();
+
+    // 1. TCP IPv4
+    unsafe {
+        let mut size: winapi::shared::minwindef::DWORD = 0;
+        let _ = winapi::um::iphlpapi::GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            2, // AF_INET
+            winapi::shared::iprtrmib::TCP_TABLE_OWNER_PID_ALL,
+            0,
+        );
+        if size > 0 {
+            let mut buf = vec![0u8; size as usize];
+            if winapi::um::iphlpapi::GetExtendedTcpTable(
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                2,
+                winapi::shared::iprtrmib::TCP_TABLE_OWNER_PID_ALL,
+                0,
+            ) == 0
+            {
+                let table = &*(buf
+                    .as_ptr()
+                    .cast::<winapi::shared::tcpmib::MIB_TCPTABLE_OWNER_PID>());
+                let entries = table.dwNumEntries as usize;
+                let rows = std::slice::from_raw_parts(table.table.as_ptr(), entries);
+                for row in rows {
+                    let port = u16::from_be(row.dwLocalPort as u16);
+                    if port > 0 {
+                        map.entry(row.dwOwningPid).or_default().push(port);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. TCP IPv6
+    unsafe {
+        let mut size: winapi::shared::minwindef::DWORD = 0;
+        let _ = winapi::um::iphlpapi::GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            23, // AF_INET6
+            winapi::shared::iprtrmib::TCP_TABLE_OWNER_PID_ALL,
+            0,
+        );
+        if size > 0 {
+            let mut buf = vec![0u8; size as usize];
+            if winapi::um::iphlpapi::GetExtendedTcpTable(
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                23,
+                winapi::shared::iprtrmib::TCP_TABLE_OWNER_PID_ALL,
+                0,
+            ) == 0
+            {
+                let table = &*(buf
+                    .as_ptr()
+                    .cast::<winapi::shared::tcpmib::MIB_TCP6TABLE_OWNER_PID>());
+                let entries = table.dwNumEntries as usize;
+                let rows = std::slice::from_raw_parts(table.table.as_ptr(), entries);
+                for row in rows {
+                    let port = u16::from_be(row.dwLocalPort as u16);
+                    if port > 0 {
+                        map.entry(row.dwOwningPid).or_default().push(port);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. UDP IPv4
+    unsafe {
+        let mut size: winapi::shared::minwindef::DWORD = 0;
+        let _ = winapi::um::iphlpapi::GetExtendedUdpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            2, // AF_INET
+            winapi::shared::iprtrmib::UDP_TABLE_OWNER_PID,
+            0,
+        );
+        if size > 0 {
+            let mut buf = vec![0u8; size as usize];
+            if winapi::um::iphlpapi::GetExtendedUdpTable(
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                2,
+                winapi::shared::iprtrmib::UDP_TABLE_OWNER_PID,
+                0,
+            ) == 0
+            {
+                let table = &*(buf
+                    .as_ptr()
+                    .cast::<winapi::shared::udpmib::MIB_UDPTABLE_OWNER_PID>());
+                let entries = table.dwNumEntries as usize;
+                let rows = std::slice::from_raw_parts(table.table.as_ptr(), entries);
+                for row in rows {
+                    let port = u16::from_be(row.dwLocalPort as u16);
+                    if port > 0 {
+                        map.entry(row.dwOwningPid).or_default().push(port);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. UDP IPv6
+    unsafe {
+        let mut size: winapi::shared::minwindef::DWORD = 0;
+        let _ = winapi::um::iphlpapi::GetExtendedUdpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            23, // AF_INET6
+            winapi::shared::iprtrmib::UDP_TABLE_OWNER_PID,
+            0,
+        );
+        if size > 0 {
+            let mut buf = vec![0u8; size as usize];
+            if winapi::um::iphlpapi::GetExtendedUdpTable(
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                23,
+                winapi::shared::iprtrmib::UDP_TABLE_OWNER_PID,
+                0,
+            ) == 0
+            {
+                let table = &*(buf
+                    .as_ptr()
+                    .cast::<winapi::shared::udpmib::MIB_UDP6TABLE_OWNER_PID>());
+                let entries = table.dwNumEntries as usize;
+                let rows = std::slice::from_raw_parts(table.table.as_ptr(), entries);
+                for row in rows {
+                    let port = u16::from_be(row.dwLocalPort as u16);
+                    if port > 0 {
+                        map.entry(row.dwOwningPid).or_default().push(port);
+                    }
+                }
+            }
+        }
+    }
+
+    for ports in map.values_mut() {
+        ports.sort_unstable();
+        ports.dedup();
+    }
+    map
+}
+
+/// 批量获取各进程的活动线程数。
+pub fn process_threads_map() -> std::collections::HashMap<u32, u32> {
+    let mut map = std::collections::HashMap::new();
+    unsafe {
+        let snap = winapi::um::tlhelp32::CreateToolhelp32Snapshot(
+            winapi::um::tlhelp32::TH32CS_SNAPPROCESS,
+            0,
+        );
+        if snap == winapi::um::handleapi::INVALID_HANDLE_VALUE {
+            return map;
+        }
+        let mut entry: winapi::um::tlhelp32::PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<winapi::um::tlhelp32::PROCESSENTRY32W>()
+            as winapi::shared::minwindef::DWORD;
+        if winapi::um::tlhelp32::Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                map.insert(entry.th32ProcessID, entry.cntThreads);
+                if winapi::um::tlhelp32::Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        winapi::um::handleapi::CloseHandle(snap);
+    }
+    map
+}

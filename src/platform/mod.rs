@@ -108,6 +108,8 @@ macro_rules! platform_contract {
             let _: fn() -> u64 = system_uptime_secs;
             let _: fn(u32, u64, Option<u64>) -> Result<(), String> = terminate_process;
             let _: fn(u32) -> Option<u64> = process_unique_id;
+            let _: fn() -> HashMap<u32, Vec<u16>> = process_ports_map;
+            let _: fn() -> HashMap<u32, u32> = process_threads_map;
             let _: fn() -> bool = fan_control_supported;
             let _: fn(FanMode) -> Result<(), FanError> = set_fan_mode;
             let _: fn(FanMode) -> Result<(), FanError> = elevated_fan_control;
@@ -181,8 +183,8 @@ pub use windows::{
     elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
     force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    open_url, process_unique_id, read_battery, read_gpus, read_thermal,
-    relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
+    open_url, process_ports_map, process_threads_map, process_unique_id, read_battery, read_gpus,
+    read_thermal, relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
     run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
     system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
     user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,
@@ -199,8 +201,8 @@ pub use macos::{
     elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
     force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
     is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    open_url, process_unique_id, read_battery, read_gpus, read_thermal,
-    relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
+    open_url, process_ports_map, process_threads_map, process_unique_id, read_battery, read_gpus,
+    read_thermal, relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
     run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
     system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
     user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,

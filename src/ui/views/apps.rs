@@ -173,7 +173,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             .id("apps-view")
             .size_full()
             .min_w(px(0.))
-            .p_8()
+            .p_5()
             .flex()
             .flex_col()
             .gap_4()
@@ -203,15 +203,16 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             card()
                 .flex_1()
                 .min_w(px(140.))
-                .p_4()
+                .px_4()
+                .py_3()
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_disk(PRIMARY, 20.),
+                    icon_disk(PRIMARY, 18.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    44.,
+                    36.,
                 ))
                 .child(
                     div()
@@ -228,7 +229,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         )
                         .child(
                             div()
-                                .text_xl()
+                                .text_base()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
                                 .child(fmt_size(total_app_size)),
@@ -239,15 +240,16 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             card()
                 .flex_1()
                 .min_w(px(140.))
-                .p_4()
+                .px_4()
+                .py_3()
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_apps(PRIMARY, 20.),
+                    icon_apps(PRIMARY, 18.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    44.,
+                    36.,
                 ))
                 .child(
                     div()
@@ -264,7 +266,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         )
                         .child(
                             div()
-                                .text_xl()
+                                .text_base()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(TEXT))
                                 .child(total_apps_display),
@@ -275,15 +277,16 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             card()
                 .flex_1()
                 .min_w(px(140.))
-                .p_4()
+                .px_4()
+                .py_3()
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_clock(CAUTION, 20.),
+                    icon_clock(CAUTION, 18.),
                     CAUTION_CONTAINER,
                     CAUTION,
-                    44.,
+                    36.,
                 ))
                 .child(
                     div()
@@ -300,7 +303,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         )
                         .child(
                             div()
-                                .text_xl()
+                                .text_base()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(rgb(CAUTION))
                                 .child(stale_apps_display),
@@ -373,7 +376,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             cursor_h: 13.,
             focused: search_focused,
             cursor_visible: root.cursor_blink_visible,
-            is_file_search: false,
+            target: crate::ui::text_input::InputTarget::Apps,
         },
         |this, cx| {
             this.search_clear();
@@ -627,7 +630,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .id("apps-view")
         .size_full()
         .min_w(px(0.))
-        .p_8()
+        .p_5()
         .flex()
         .flex_col()
         .gap_4()

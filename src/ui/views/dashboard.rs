@@ -16,9 +16,9 @@ use gpui::{
 use std::time::Duration;
 
 pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
-    const RING: f32 = 280.;
-    const DOT: f32 = 14.;
-    const TRACK: f32 = 8.;
+    const RING: f32 = 230.;
+    const DOT: f32 = 12.;
+    const TRACK: f32 = 6.;
 
     let lang = root.language;
     let total = root.total_cleanable();
@@ -117,7 +117,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                 // 不给上限的话，英文那些长句会直接顶出圆边。
                 .max_w(px(RING - 56. - 24.))
                 .text_center()
-                .text_2xl()
+                .text_xl()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(rgb(ON_PRIMARY))
                 .child(big),
@@ -189,17 +189,18 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             card()
                 .id("quick-junk")
                 .flex_1()
-                .p_4()
+                .px_3p5()
+                .py_3()
                 .cursor_pointer()
                 .hover(|h| h.bg(rgb(SURF_LOW)))
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_trash(PRIMARY, 18.),
+                    icon_trash(PRIMARY, 15.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    38.,
+                    30.,
                 ))
                 .child(
                     div()
@@ -229,17 +230,18 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             card()
                 .id("quick-apps")
                 .flex_1()
-                .p_4()
+                .px_3p5()
+                .py_3()
                 .cursor_pointer()
                 .hover(|h| h.bg(rgb(SURF_LOW)))
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_apps(PRIMARY, 18.),
+                    icon_apps(PRIMARY, 15.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    38.,
+                    30.,
                 ))
                 .child(
                     div()
@@ -272,17 +274,18 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             card()
                 .id("quick-disk")
                 .flex_1()
-                .p_4()
+                .px_3p5()
+                .py_3()
                 .cursor_pointer()
                 .hover(|h| h.bg(rgb(SURF_LOW)))
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_disk(PRIMARY, 18.),
+                    icon_disk(PRIMARY, 15.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    38.,
+                    30.,
                 ))
                 .child(
                     div()
@@ -315,17 +318,18 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             card()
                 .id("quick-declutter")
                 .flex_1()
-                .p_4()
+                .px_3p5()
+                .py_3()
                 .cursor_pointer()
                 .hover(|h| h.bg(rgb(SURF_LOW)))
                 .flex()
                 .items_center()
                 .gap_3()
                 .child(icon_badge(
-                    icon_declutter(PRIMARY, 18.),
+                    icon_declutter(PRIMARY, 15.),
                     PRIMARY_FIXED,
                     PRIMARY,
-                    38.,
+                    30.,
                 ))
                 .child(
                     div()
@@ -360,8 +364,8 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_6()
-        .p_8()
+        .gap_5()
+        .p_5()
         .child(ring)
         .child(
             div()

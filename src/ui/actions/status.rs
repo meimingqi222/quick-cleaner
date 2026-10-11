@@ -11,6 +11,7 @@ use std::time::Duration;
 /// 采样周期。CPU / 进程 / 网络都是差值型指标，2 秒一拍足够顺滑，
 /// 也让 SMC 读数不至于高频打扰硬件。
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+const SAMPLE_SLICE: Duration = Duration::from_millis(100);
 
 /// 默认选中的 GPU：当前最忙的那张。双显卡机器上核显常年在跑桌面合成，
 /// 独显只在真干活时才醒，一上来就把用户带到有数据的那张。
@@ -43,6 +44,7 @@ impl crate::ui::Root {
         if self.monitor.task.is_some() {
             return;
         }
+        let refresh_trigger = self.monitor.refresh_trigger.clone();
         self.monitor.task = Some(cx.spawn(async move |this, cx| {
             // 采样器必须整个任务期间存活：CPU% / 网络速率都是对上一次
             // 采样的差值，换了采样器第一拍全是失真读数。后台 spawn 要求
@@ -71,48 +73,85 @@ impl crate::ui::Root {
                 sampler = Some(returned);
                 let keep = this
                     .update(cx, |this, cx| {
-                        if let Some((volume, space)) = volume_space {
-                            this.disk.volume_spaces.insert(volume.clone(), space);
-                            if this.disk.volume == volume {
-                                this.disk.space = Some(space);
+                        let manual = refresh_trigger.load(std::sync::atomic::Ordering::Relaxed);
+                        if !this.monitor.paused || manual {
+                            if let Some((volume, space)) = volume_space {
+                                this.disk.volume_spaces.insert(volume.clone(), space);
+                                if this.disk.volume == volume {
+                                    this.disk.space = Some(space);
+                                }
                             }
-                        }
-                        push_history(&mut this.monitor.cpu_history, snap.cpu_usage);
-                        for gpu in &snap.gpus {
-                            if let Some(util) = gpu.utilization {
-                                push_history(
-                                    this.monitor.gpu_history.entry(gpu.id.clone()).or_default(),
-                                    util,
-                                );
+                            push_history(&mut this.monitor.cpu_history, snap.cpu_usage);
+                            for gpu in &snap.gpus {
+                                if let Some(util) = gpu.utilization {
+                                    push_history(
+                                        this.monitor.gpu_history.entry(gpu.id.clone()).or_default(),
+                                        util,
+                                    );
+                                }
                             }
+                            // 没选过、或者选中的那张卡不见了（驱动重载、外接显卡
+                            // 拔掉），就落到当前最忙的那张上。
+                            let selected_gone = this
+                                .monitor
+                                .gpu_selected
+                                .as_ref()
+                                .is_none_or(|id| !snap.gpus.iter().any(|g| &g.id == id));
+                            if selected_gone {
+                                this.monitor.gpu_selected = busiest_gpu(&snap.gpus);
+                            }
+                            this.monitor.snapshot = Some(snap);
+                            this.monitor.fan_helper_installed = helper_installed;
+                            this.rebuild_proc_view();
+                            cx.notify();
                         }
-                        // 没选过、或者选中的那张卡不见了（驱动重载、外接显卡
-                        // 拔掉），就落到当前最忙的那张上。
-                        let selected_gone = this
-                            .monitor
-                            .gpu_selected
-                            .as_ref()
-                            .is_none_or(|id| !snap.gpus.iter().any(|g| &g.id == id));
-                        if selected_gone {
-                            this.monitor.gpu_selected = busiest_gpu(&snap.gpus);
-                        }
-                        this.monitor.snapshot = Some(snap);
-                        this.monitor.fan_helper_installed = helper_installed;
-                        this.rebuild_proc_view();
-                        cx.notify();
                         this.view == crate::ui::components::View::Status
                     })
                     .unwrap_or(false);
                 if !keep {
                     break;
                 }
-                cx.background_executor().timer(SAMPLE_INTERVAL).await;
+                // 等待下一拍（2000ms），每 100ms 检查一次是否有立即刷新打断
+                let slices = (SAMPLE_INTERVAL.as_millis() / SAMPLE_SLICE.as_millis()).max(1);
+                for _ in 0..slices {
+                    if refresh_trigger.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    cx.background_executor().timer(SAMPLE_SLICE).await;
+                }
             }
             this.update(cx, |this, _| {
                 this.monitor.task = None;
             })
             .ok();
         }));
+    }
+
+    /// 切换状态监控的子标签页（硬件概览 / 进程管理）
+    pub fn set_status_tab(&mut self, tab: crate::ui::state::StatusTab, cx: &mut Context<Self>) {
+        if self.monitor.tab != tab {
+            self.monitor.tab = tab;
+            cx.notify();
+        }
+    }
+
+    /// 切换监控的暂停/恢复状态
+    pub fn toggle_status_pause(&mut self, cx: &mut Context<Self>) {
+        self.monitor.paused = !self.monitor.paused;
+        if !self.monitor.paused {
+            self.monitor
+                .refresh_trigger
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        cx.notify();
+    }
+
+    /// 立即触发一拍状态采样
+    pub fn refresh_status_now(&mut self, cx: &mut Context<Self>) {
+        self.monitor
+            .refresh_trigger
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        cx.notify();
     }
 
     /// 切换 GPU 卡片显示的那张卡。
@@ -123,36 +162,218 @@ impl crate::ui::Root {
         }
     }
 
-    /// 按当前排序重建进程表的下标视图。
-    ///
-    /// 排序结果算一次存下来，而不是塞进虚拟列表的每帧回调——那样九百个
-    /// 进程会每帧重排一遍。快照更新和用户点表头时各调一次。
+    /// 按当前排序与过滤重建进程表的下标视图与分组平铺项。
     pub fn rebuild_proc_view(&mut self) {
         let Some(snap) = &self.monitor.snapshot else {
             self.monitor.proc_view.clear();
+            self.monitor.proc_display_items.clear();
             return;
         };
         let sort = self.monitor.proc_sort;
-        let mut view: Vec<usize> = (0..snap.processes.len()).collect();
-        view.sort_by(|&a, &b| {
-            let (x, y) = (&snap.processes[a], &snap.processes[b]);
-            let ord = match sort.key {
-                // partial_cmp 的 None 只可能来自 NaN：真出现了就当相等，
-                // 不能 unwrap——排序比较器里 panic 会直接带走整个进程。
-                ProcSortKey::Cpu => x
-                    .cpu
-                    .partial_cmp(&y.cpu)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                ProcSortKey::Memory => x.mem_bytes.cmp(&y.mem_bytes),
-                ProcSortKey::Name => x.name.to_lowercase().cmp(&y.name.to_lowercase()),
-                ProcSortKey::Pid => x.pid.cmp(&y.pid),
-            };
-            // 主键相等时按 PID 兜底，保证顺序稳定：否则每拍重排都可能把
-            // 并列的两行换位置，看起来像在乱跳。
-            let ord = if sort.desc { ord.reverse() } else { ord };
-            ord.then(x.pid.cmp(&y.pid))
-        });
+        let query = self.monitor.input.text.trim();
+        let tab = self.monitor.filter_tab;
+        let current_user = std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .ok();
+        let current_user_ref = current_user.as_deref();
+
+        let (view, display_items) = compute_proc_display_items(
+            snap,
+            sort,
+            query,
+            tab,
+            &self.monitor.expanded_groups,
+            current_user_ref,
+        );
+
         self.monitor.proc_view = view;
+        self.monitor.proc_display_items = display_items;
+
+        // 6. 更新选中进程的历史读数
+        if let Some(selected_pid) = self.monitor.selected_proc_pid {
+            if let Some(p) = snap.processes.iter().find(|p| p.pid == selected_pid) {
+                push_history(&mut self.monitor.selected_proc_cpu_history, p.cpu);
+                self.monitor.selected_proc_mem_history.push(p.mem_bytes);
+                let excess = self
+                    .monitor
+                    .selected_proc_mem_history
+                    .len()
+                    .saturating_sub(STATUS_HISTORY_LEN);
+                if excess > 0 {
+                    self.monitor.selected_proc_mem_history.drain(0..excess);
+                }
+            } else {
+                // 进程已退出，取消选中
+                self.monitor.selected_proc_pid = None;
+                self.monitor.selected_proc_cpu_history.clear();
+                self.monitor.selected_proc_mem_history.clear();
+            }
+        }
+    }
+
+    /// 切换某组多进程的折叠/展开状态
+    pub fn toggle_proc_group(&mut self, group_key: String, cx: &mut Context<Self>) {
+        if self.monitor.expanded_groups.contains(&group_key) {
+            self.monitor.expanded_groups.remove(&group_key);
+        } else {
+            self.monitor.expanded_groups.insert(group_key);
+        }
+        self.rebuild_proc_view();
+        cx.notify();
+    }
+
+    /// 选中/取消选中进程，开启或切换右侧侧滑抽屉
+    pub fn select_proc_item(&mut self, pid: u32, cx: &mut Context<Self>) {
+        if self.monitor.selected_proc_pid == Some(pid) {
+            self.monitor.selected_proc_pid = None;
+            self.monitor.selected_proc_cpu_history.clear();
+            self.monitor.selected_proc_mem_history.clear();
+        } else {
+            self.monitor.selected_proc_pid = Some(pid);
+            self.monitor.selected_proc_cpu_history.clear();
+            self.monitor.selected_proc_mem_history.clear();
+            if let Some(snap) = &self.monitor.snapshot {
+                if let Some(p) = snap.processes.iter().find(|p| p.pid == pid) {
+                    self.monitor.selected_proc_cpu_history.push(p.cpu);
+                    self.monitor.selected_proc_mem_history.push(p.mem_bytes);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// 关闭右侧侧滑抽屉
+    pub fn close_proc_detail(&mut self, cx: &mut Context<Self>) {
+        self.monitor.selected_proc_pid = None;
+        self.monitor.selected_proc_cpu_history.clear();
+        self.monitor.selected_proc_mem_history.clear();
+        cx.notify();
+    }
+
+    /// 复制进程命令行到剪贴板并提示
+    pub fn copy_proc_cmd(&mut self, cmd: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd));
+        self.monitor.cmd_copied_feedback = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1500))
+                .await;
+            this.update(cx, |this, cx| {
+                this.monitor.cmd_copied_feedback = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn reset_status_search_selection(&mut self) {
+        self.monitor.search_popover.reset_selection();
+    }
+
+    pub fn status_search_candidate_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        use crate::ui::components::popover::PopoverKey;
+        let candidates = crate::ui::views::status::status_search_candidates(self);
+        match self.monitor.search_popover.handle_key(
+            key,
+            self.monitor.input.marked.is_some(),
+            &candidates,
+        ) {
+            PopoverKey::Confirm(index) => {
+                let item = &candidates[index];
+                self.status_choose_search_candidate(&item.query, item.keep_open, cx);
+            }
+            PopoverKey::Changed | PopoverKey::Dismissed => cx.notify(),
+            PopoverKey::Unhandled => {}
+        }
+    }
+
+    pub fn status_choose_search_candidate(
+        &mut self,
+        query: &str,
+        keep_open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.status_apply_search_query(query, cx);
+        if keep_open {
+            self.monitor.search_popover.reopen();
+        } else {
+            self.monitor.search_popover.dismiss();
+        }
+    }
+
+    /// 清空进程搜索框
+    pub fn status_search_clear(&mut self, cx: &mut Context<Self>) {
+        self.monitor.input.clear();
+        self.monitor.search_popover.reopen();
+        self.reset_status_search_selection();
+        self.rebuild_proc_view();
+        cx.notify();
+    }
+
+    /// 进程搜索框退格
+    pub fn status_search_backspace(&mut self, cx: &mut Context<Self>) {
+        let input = &mut self.monitor.input;
+        input.sel = crate::ui::text_input::delete_backward(&mut input.text, input.sel.clone());
+        input.marked = None;
+        self.monitor.search_popover.reopen();
+        self.reset_status_search_selection();
+        self.rebuild_proc_view();
+        cx.notify();
+    }
+
+    /// 进程搜索框按 Esc 处理：
+    /// 若 Popover 浮层当前正在显示，优先收起浮层；
+    /// 若浮层已收起或未满足显示条件，且搜索框有内容，则清空搜索框。
+    pub fn status_search_escape(&mut self, cx: &mut Context<Self>) {
+        if self.monitor.input.marked.is_some() {
+            return;
+        }
+        if self.monitor.search_popover.is_open(true) {
+            self.status_search_candidate_key("escape", cx);
+        } else if !self.monitor.input.text.is_empty() {
+            self.status_search_clear(cx);
+        }
+    }
+
+    /// 切换进程分类 Tab
+    pub fn status_set_filter_tab(
+        &mut self,
+        tab: crate::core::status::ProcFilterTab,
+        cx: &mut Context<Self>,
+    ) {
+        if self.monitor.filter_tab != tab {
+            self.monitor.filter_tab = tab;
+            self.rebuild_proc_view();
+            self.monitor
+                .proc_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+            cx.notify();
+        }
+    }
+
+    /// 应用搜索建议或关键字填入
+    pub fn status_apply_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.monitor.input.set_text(query);
+        self.reset_status_search_selection();
+        // 若填入的是端口搜索前缀 ":" 则保持/开启浮层，否则收起浮层露出表格过滤结果
+        if query == ":" {
+            self.monitor.search_popover.reopen();
+        } else {
+            self.monitor.search_popover.dismiss();
+        }
+        self.rebuild_proc_view();
+        self.monitor
+            .proc_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+        cx.notify();
     }
 
     /// 点击进程表表头：切换排序列 / 方向。
@@ -501,6 +722,536 @@ impl crate::ui::Root {
             Ok(()) => tr_status_kill_ok(l, &name).to_string(),
             Err(err) => tr_status_kill_failed(l, &name, err).to_string(),
         });
+        if self.monitor.selected_proc_pid == Some(pid) {
+            self.close_proc_detail(cx);
+        }
+        self.refresh_status_now(cx);
         cx.notify();
+    }
+
+    /// 强制退出进程（立即强制终止）
+    pub fn force_kill_process(
+        &mut self,
+        pid: u32,
+        start_time: u64,
+        unique_id: Option<u64>,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let result = crate::platform::terminate_process(pid, start_time, unique_id);
+        self.status = bilingual(|l| match &result {
+            Ok(()) => tr_status_kill_ok(l, &name).to_string(),
+            Err(err) => tr_status_kill_failed(l, &name, err).to_string(),
+        });
+        if self.monitor.selected_proc_pid == Some(pid) {
+            self.close_proc_detail(cx);
+        }
+        self.refresh_status_now(cx);
+        cx.notify();
+    }
+}
+
+/// 纯函数：根据排序、搜索关键字、Tab 过滤和当前用户展开的分组集合，
+/// 将采样快照中的进程聚合分组，并展平成供虚拟滚动列表渲染的平铺条目。
+pub fn compute_proc_display_items(
+    snap: &crate::core::status::StatusSnapshot,
+    sort: ProcSort,
+    query: &str,
+    tab: crate::core::status::ProcFilterTab,
+    expanded_groups: &std::collections::HashSet<String>,
+    current_user_ref: Option<&str>,
+) -> (Vec<usize>, Vec<crate::ui::state::ProcDisplayItem>) {
+    // 1. 过滤匹配项
+    let view: Vec<usize> = (0..snap.processes.len())
+        .filter(|&idx| {
+            let proc = &snap.processes[idx];
+            if !crate::core::status::matches_proc_tab(proc, tab, current_user_ref) {
+                return false;
+            }
+            if !query.is_empty() && !crate::core::status::match_proc_query(proc, query) {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // 2. 将匹配项按进程名称聚合分组
+    let mut groups: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for &idx in &view {
+        let proc = &snap.processes[idx];
+        let key = proc.name.to_lowercase();
+        groups.entry(key).or_default().push(idx);
+    }
+
+    // 3. 构建顶层项（单进程或多进程组）
+    enum TopItem {
+        Group {
+            group_key: String,
+            name: String,
+            icon_source: Option<std::path::PathBuf>,
+            count: usize,
+            total_cpu: f32,
+            total_mem: u64,
+            total_threads: u32,
+            total_cpu_time_ms: u64,
+            representative_pid: u32,
+            user: Option<String>,
+            child_indices: Vec<usize>,
+        },
+        Single {
+            process_index: usize,
+        },
+    }
+
+    let mut top_items: Vec<TopItem> = Vec::new();
+    for (group_key, mut indices) in groups {
+        if indices.len() == 1 {
+            top_items.push(TopItem::Single {
+                process_index: indices[0],
+            });
+        } else {
+            // 组内子项按当前列排序
+            indices.sort_by(|&a, &b| {
+                let (x, y) = (&snap.processes[a], &snap.processes[b]);
+                let ord = match sort.key {
+                    ProcSortKey::Cpu => x
+                        .cpu
+                        .partial_cmp(&y.cpu)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    ProcSortKey::Memory => x.mem_bytes.cmp(&y.mem_bytes),
+                    ProcSortKey::Name => x.name.to_lowercase().cmp(&y.name.to_lowercase()),
+                    ProcSortKey::Pid => x.pid.cmp(&y.pid),
+                    ProcSortKey::Threads => x.threads.cmp(&y.threads),
+                    ProcSortKey::CpuTime => x.cpu_time_ms.cmp(&y.cpu_time_ms),
+                    ProcSortKey::User => x
+                        .user
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(y.user.as_deref().unwrap_or("")),
+                };
+                let ord = if sort.desc { ord.reverse() } else { ord };
+                ord.then(x.pid.cmp(&y.pid))
+            });
+
+            let first = &snap.processes[indices[0]];
+            let name = first.name.clone();
+            let icon_source = first.icon_source.clone();
+            let mut total_cpu = 0.0;
+            let mut total_mem = 0;
+            let mut total_threads = 0;
+            let mut total_cpu_time_ms = 0;
+            let mut representative_pid = first.pid;
+            let user = first.user.clone();
+
+            for &idx in &indices {
+                let p = &snap.processes[idx];
+                total_cpu += p.cpu;
+                total_mem += p.mem_bytes;
+                total_threads += p.threads;
+                total_cpu_time_ms += p.cpu_time_ms;
+            }
+
+            // 挑选 representative_pid：如果存在某个进程是组内其它进程的 parent，选它
+            let pids: std::collections::HashSet<u32> =
+                indices.iter().map(|&i| snap.processes[i].pid).collect();
+            for &idx in &indices {
+                let p = &snap.processes[idx];
+                if let Some(ppid) = p.parent_pid {
+                    if pids.contains(&ppid) {
+                        representative_pid = ppid;
+                        break;
+                    }
+                }
+            }
+
+            top_items.push(TopItem::Group {
+                group_key,
+                name,
+                icon_source,
+                count: indices.len(),
+                total_cpu,
+                total_mem,
+                total_threads,
+                total_cpu_time_ms,
+                representative_pid,
+                user,
+                child_indices: indices,
+            });
+        }
+    }
+
+    // 4. 对顶层项按当前排序列与方向排序
+    top_items.sort_by(|a, b| {
+        let (cpu_a, mem_a, name_a, pid_a, threads_a, cpu_time_a, user_a) = match a {
+            TopItem::Group {
+                total_cpu,
+                total_mem,
+                name,
+                representative_pid,
+                total_threads,
+                total_cpu_time_ms,
+                user,
+                ..
+            } => (
+                *total_cpu,
+                *total_mem,
+                name.as_str(),
+                *representative_pid,
+                *total_threads,
+                *total_cpu_time_ms,
+                user.as_deref().unwrap_or(""),
+            ),
+            TopItem::Single { process_index } => {
+                let p = &snap.processes[*process_index];
+                (
+                    p.cpu,
+                    p.mem_bytes,
+                    p.name.as_str(),
+                    p.pid,
+                    p.threads,
+                    p.cpu_time_ms,
+                    p.user.as_deref().unwrap_or(""),
+                )
+            }
+        };
+        let (cpu_b, mem_b, name_b, pid_b, threads_b, cpu_time_b, user_b) = match b {
+            TopItem::Group {
+                total_cpu,
+                total_mem,
+                name,
+                representative_pid,
+                total_threads,
+                total_cpu_time_ms,
+                user,
+                ..
+            } => (
+                *total_cpu,
+                *total_mem,
+                name.as_str(),
+                *representative_pid,
+                *total_threads,
+                *total_cpu_time_ms,
+                user.as_deref().unwrap_or(""),
+            ),
+            TopItem::Single { process_index } => {
+                let p = &snap.processes[*process_index];
+                (
+                    p.cpu,
+                    p.mem_bytes,
+                    p.name.as_str(),
+                    p.pid,
+                    p.threads,
+                    p.cpu_time_ms,
+                    p.user.as_deref().unwrap_or(""),
+                )
+            }
+        };
+
+        let ord = match sort.key {
+            ProcSortKey::Cpu => cpu_a
+                .partial_cmp(&cpu_b)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            ProcSortKey::Memory => mem_a.cmp(&mem_b),
+            ProcSortKey::Name => name_a.to_lowercase().cmp(&name_b.to_lowercase()),
+            ProcSortKey::Pid => pid_a.cmp(&pid_b),
+            ProcSortKey::Threads => threads_a.cmp(&threads_b),
+            ProcSortKey::CpuTime => cpu_time_a.cmp(&cpu_time_b),
+            ProcSortKey::User => user_a.to_lowercase().cmp(&user_b.to_lowercase()),
+        };
+        let ord = if sort.desc { ord.reverse() } else { ord };
+        ord.then(pid_a.cmp(&pid_b))
+    });
+
+    // 5. 展平成平铺渲染列表 proc_display_items
+    let mut display_items = Vec::new();
+    for item in top_items {
+        match item {
+            TopItem::Group {
+                group_key,
+                name,
+                icon_source,
+                count,
+                total_cpu,
+                total_mem,
+                total_threads,
+                total_cpu_time_ms,
+                representative_pid,
+                user,
+                child_indices,
+            } => {
+                let expanded = expanded_groups.contains(&group_key);
+                display_items.push(crate::ui::state::ProcDisplayItem::GroupHeader {
+                    group_key: group_key.clone(),
+                    name,
+                    icon_source,
+                    count,
+                    expanded,
+                    total_cpu,
+                    total_mem,
+                    total_threads,
+                    total_cpu_time_ms,
+                    representative_pid,
+                    user,
+                    child_indices: child_indices.clone(),
+                });
+                if expanded {
+                    for child_idx in child_indices {
+                        display_items.push(crate::ui::state::ProcDisplayItem::GroupChild {
+                            group_key: group_key.clone(),
+                            process_index: child_idx,
+                        });
+                    }
+                }
+            }
+            TopItem::Single { process_index } => {
+                display_items.push(crate::ui::state::ProcDisplayItem::Single { process_index });
+            }
+        }
+    }
+
+    (view, display_items)
+}
+
+/// 输入只筛选建议；浮层的生命周期由焦点和显式关闭控制。
+#[cfg(test)]
+fn status_popover_should_show(search_focused: bool, dismissed: bool, _search_text: &str) -> bool {
+    let mut state = crate::ui::components::popover::PopoverState::default();
+    if dismissed {
+        state.dismiss();
+    }
+    state.is_open(search_focused)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_popover_visibility_rules() {
+        // 1. 未聚焦时绝不展示
+        assert!(!status_popover_should_show(false, false, ""));
+        assert!(!status_popover_should_show(false, false, ":80"));
+        assert!(!status_popover_should_show(false, false, "chrome"));
+
+        // 2. 聚焦且未关闭：输入为空展示语法帮助
+        assert!(status_popover_should_show(true, false, ""));
+        assert!(status_popover_should_show(true, false, "   "));
+
+        // 3. 聚焦且未关闭：输入含冒号展示端口匹配
+        assert!(status_popover_should_show(true, false, ":"));
+        assert!(status_popover_should_show(true, false, ":80"));
+        assert!(status_popover_should_show(true, false, "port:443"));
+
+        // 输入只改变建议内容，不改变浮层可见性。
+        assert!(status_popover_should_show(true, false, "chrome"));
+        assert!(status_popover_should_show(true, false, "mem > 1 GB"));
+        assert!(status_popover_should_show(true, false, "-helper"));
+
+        assert!(status_popover_should_show(true, false, "mem"));
+        assert!(status_popover_should_show(true, false, "ms"));
+
+        // 5. 用户主动按 Esc 或点击收起（dismissed = true）：无论内容为何均不展示
+        assert!(!status_popover_should_show(true, true, ""));
+        assert!(!status_popover_should_show(true, true, ":80"));
+        assert!(!status_popover_should_show(true, true, "chrome"));
+    }
+
+    fn make_test_proc(
+        pid: u32,
+        name: &str,
+        cpu: f32,
+        mem_mb: u64,
+        parent_pid: Option<u32>,
+    ) -> crate::core::status::ProcInfo {
+        crate::core::status::ProcInfo {
+            pid,
+            name: name.to_string(),
+            cpu,
+            mem_bytes: mem_mb * 1024 * 1024,
+            parent_pid,
+            threads: 4,
+            cpu_time_ms: 1000,
+            ..Default::default()
+        }
+    }
+
+    fn make_test_snapshot(
+        procs: Vec<crate::core::status::ProcInfo>,
+    ) -> crate::core::status::StatusSnapshot {
+        let process_count = procs.len();
+        crate::core::status::StatusSnapshot {
+            processes: procs,
+            process_count,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn proc_aggregation_and_expansion_logic() {
+        let procs = vec![
+            make_test_proc(100, "msedge.exe", 1.5, 200, None),
+            make_test_proc(101, "msedge.exe", 2.0, 300, Some(100)),
+            make_test_proc(102, "msedge.exe", 0.5, 100, Some(100)),
+            make_test_proc(200, "notepad.exe", 0.1, 50, None),
+        ];
+        let snap = make_test_snapshot(procs);
+        let mut expanded_groups = std::collections::HashSet::new();
+
+        // 1. 折叠状态（默认未展开 msedge.exe）
+        let (view, items) = compute_proc_display_items(
+            &snap,
+            ProcSort::default(),
+            "",
+            crate::core::status::ProcFilterTab::All,
+            &expanded_groups,
+            None,
+        );
+
+        assert_eq!(view.len(), 4, "4 个进程全部匹配");
+        assert_eq!(
+            items.len(),
+            2,
+            "折叠后只有 2 行：1 个 msedge 聚合头 + 1 个 notepad 单进程"
+        );
+
+        match &items[0] {
+            crate::ui::state::ProcDisplayItem::GroupHeader {
+                group_key,
+                count,
+                expanded,
+                total_cpu,
+                total_mem,
+                representative_pid,
+                child_indices,
+                ..
+            } => {
+                assert_eq!(group_key, "msedge.exe");
+                assert_eq!(*count, 3);
+                assert!(!expanded);
+                assert!((total_cpu - 4.0).abs() < 0.001);
+                assert_eq!(*total_mem, 600 * 1024 * 1024);
+                assert_eq!(*representative_pid, 100, "识别 PID 100 为父进程代表 PID");
+                assert_eq!(child_indices.len(), 3);
+            }
+            _ => panic!("第一项应当是 GroupHeader"),
+        }
+
+        match &items[1] {
+            crate::ui::state::ProcDisplayItem::Single { process_index } => {
+                assert_eq!(snap.processes[*process_index].name, "notepad.exe");
+            }
+            _ => panic!("第二项应当是 Single"),
+        }
+
+        // 2. 展开 msedge.exe 分组
+        expanded_groups.insert("msedge.exe".to_string());
+        let (_, expanded_items) = compute_proc_display_items(
+            &snap,
+            ProcSort::default(),
+            "",
+            crate::core::status::ProcFilterTab::All,
+            &expanded_groups,
+            None,
+        );
+
+        assert_eq!(
+            expanded_items.len(),
+            5,
+            "展开后为 1 (GroupHeader) + 3 (GroupChild) + 1 (Single) = 5 行"
+        );
+        match &expanded_items[0] {
+            crate::ui::state::ProcDisplayItem::GroupHeader { expanded, .. } => {
+                assert!(expanded);
+            }
+            _ => panic!("第一项应当是已展开的 GroupHeader"),
+        }
+        for (i, item) in expanded_items[1..4].iter().enumerate() {
+            match item {
+                crate::ui::state::ProcDisplayItem::GroupChild {
+                    group_key,
+                    process_index,
+                } => {
+                    assert_eq!(group_key, "msedge.exe");
+                    assert_eq!(snap.processes[*process_index].name, "msedge.exe");
+                }
+                _ => panic!("第 {} 项应当是 GroupChild", i + 1),
+            }
+        }
+    }
+
+    #[test]
+    fn proc_sorting_by_aggregated_metrics() {
+        let procs = vec![
+            make_test_proc(10, "worker.exe", 3.0, 100, None),
+            make_test_proc(11, "worker.exe", 4.0, 100, None),
+            make_test_proc(20, "single.exe", 5.0, 100, None),
+        ];
+        let snap = make_test_snapshot(procs);
+        let expanded = std::collections::HashSet::new();
+
+        // worker 总 CPU 是 7.0，single 是 5.0
+        // CPU 降序 (默认) -> worker 应该在第一项
+        let (_, items_desc) = compute_proc_display_items(
+            &snap,
+            ProcSort {
+                key: ProcSortKey::Cpu,
+                desc: true,
+            },
+            "",
+            crate::core::status::ProcFilterTab::All,
+            &expanded,
+            None,
+        );
+        // worker 组内 PID 11 CPU (4.0) 高于 PID 10 (3.0)，降序时选为代表 PID
+        assert_eq!(items_desc[0].pid(&snap), 11);
+
+        // CPU 升序 -> single (5.0) 应该在第一项
+        let (_, items_asc) = compute_proc_display_items(
+            &snap,
+            ProcSort {
+                key: ProcSortKey::Cpu,
+                desc: false,
+            },
+            "",
+            crate::core::status::ProcFilterTab::All,
+            &expanded,
+            None,
+        );
+        assert_eq!(items_asc[0].pid(&snap), 20);
+    }
+
+    #[test]
+    fn proc_display_item_pid_lookup() {
+        let procs = vec![
+            make_test_proc(100, "app.exe", 1.0, 100, None),
+            make_test_proc(101, "app.exe", 1.0, 100, None),
+            make_test_proc(200, "other.exe", 1.0, 100, None),
+        ];
+        let snap = make_test_snapshot(procs);
+
+        let header = crate::ui::state::ProcDisplayItem::GroupHeader {
+            group_key: "app.exe".into(),
+            name: "app.exe".into(),
+            icon_source: None,
+            count: 2,
+            expanded: false,
+            total_cpu: 2.0,
+            total_mem: 200,
+            total_threads: 8,
+            total_cpu_time_ms: 2000,
+            representative_pid: 100,
+            user: None,
+            child_indices: vec![0, 1],
+        };
+        let child = crate::ui::state::ProcDisplayItem::GroupChild {
+            group_key: "app.exe".into(),
+            process_index: 1,
+        };
+        let single = crate::ui::state::ProcDisplayItem::Single { process_index: 2 };
+
+        assert_eq!(header.pid(&snap), 100);
+        assert_eq!(child.pid(&snap), 101);
+        assert_eq!(single.pid(&snap), 200);
     }
 }

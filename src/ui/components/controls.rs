@@ -42,17 +42,17 @@ pub fn page_heading(title: &str, subtitle: &str) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap_0p5()
         .child(
             div()
-                .text_2xl()
+                .text_lg()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(rgb(TEXT))
                 .child(title.to_string()),
         )
         .child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(rgb(MUTED))
                 .child(subtitle.to_string()),
         )

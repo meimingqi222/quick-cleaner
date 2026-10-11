@@ -361,6 +361,11 @@ impl TextInputState {
         self.reset_caret();
     }
 
+    pub fn set_text(&mut self, text: &str) {
+        self.text = text.to_string();
+        self.reset_caret();
+    }
+
     /// 提交文本：普通打字与输入法确认后的汉字都走这里。
     pub fn replace(&mut self, range_utf16: Option<&std::ops::Range<usize>>, new_text: &str) {
         let (sel, marked) = crate::ui::text_input::replace_text(
@@ -924,6 +929,9 @@ pub enum ProcSortKey {
     Memory,
     Name,
     Pid,
+    Threads,
+    CpuTime,
+    User,
 }
 
 /// 进程表的排序状态。默认 CPU 降序——和活动监视器一致，也是绝大多数人
@@ -946,8 +954,8 @@ impl Default for ProcSort {
 impl ProcSort {
     /// 点击某一列表头：本来就是这一列就反向，否则换列并取该列的默认方向。
     ///
-    /// 数值列（CPU / 内存 / PID）默认降序——「谁最占资源」是首要问题；
-    /// 名称列默认升序，那是字典序该有的样子。
+    /// 数值列（CPU / 内存 / PID / 线程 / CPU时间）默认降序——「谁最占资源」是首要问题；
+    /// 名称与用户列默认升序，那是字典序该有的样子。
     pub fn toggled(self, key: ProcSortKey) -> Self {
         if self.key == key {
             Self {
@@ -957,14 +965,13 @@ impl ProcSort {
         } else {
             Self {
                 key,
-                desc: !matches!(key, ProcSortKey::Name),
+                desc: !matches!(key, ProcSortKey::Name | ProcSortKey::User),
             }
         }
     }
 }
 
 /// 状态监控页的状态。快照由后台轮询任务整包写入，渲染侧只读。
-#[derive(Default)]
 pub struct StatusState {
     /// 最近一拍采样。None = 监控还没热身完，页面显示加载态。
     pub snapshot: Option<StatusSnapshot>,
@@ -1001,6 +1008,18 @@ pub struct StatusState {
     /// 与软件管理页的 `apps.view` 同一套路：排序结果算一次存下来，
     /// 而不是在每帧的虚拟列表回调里重排九百个进程。
     pub proc_view: Vec<usize>,
+    /// 平铺后的可视行列表（含折叠/展开），供虚拟列表直接索引
+    pub proc_display_items: Vec<ProcDisplayItem>,
+    /// 用户当前展开的分组 key 集合（例如 "msedge", "conhost"）
+    pub expanded_groups: std::collections::HashSet<String>,
+    /// 当前选中的进程 PID（若有则展开右侧侧滑详情抽屉）
+    pub selected_proc_pid: Option<u32>,
+    /// 选定进程的 CPU 历史走势（最近 24 拍）
+    pub selected_proc_cpu_history: Vec<f32>,
+    /// 选定进程的内存历史走势（最近 24 拍）
+    pub selected_proc_mem_history: Vec<u64>,
+    /// 复制命令行成功的提示计时标记
+    pub cmd_copied_feedback: bool,
     pub proc_scroll: gpui::UniformListScrollHandle,
     /// 滚动条滑块的拖拽起点（按下时的鼠标 y、当时的滚动偏移）。
     pub proc_scroll_drag: Option<(f32, f32)>,
@@ -1008,6 +1027,101 @@ pub struct StatusState {
     /// thermalmonitord 会在控制进程退出后收回风扇，应用退出即自动恢复，
     /// 无需额外的退出清理。
     pub fan_task: Option<Task<()>>,
+    /// 进程搜索输入框
+    pub input: TextInputState,
+    /// 进程分类切页
+    pub filter_tab: crate::core::status::ProcFilterTab,
+    pub search_popover: crate::ui::components::popover::PopoverState,
+    /// 状态监控当前选中的子标签页 (硬件概览 / 进程管理)
+    pub tab: StatusTab,
+    /// 是否暂停实时采样刷新
+    pub paused: bool,
+    /// 触发立即刷新的标志位
+    pub refresh_trigger: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// 进程管理表格中实际渲染的平铺项（保证 uniform_list 虚拟滚动的 60fps 性能）。
+#[derive(Clone, Debug)]
+pub enum ProcDisplayItem {
+    /// 聚合多进程的父项
+    GroupHeader {
+        group_key: String,
+        name: String,
+        icon_source: Option<std::path::PathBuf>,
+        count: usize,
+        expanded: bool,
+        total_cpu: f32,
+        total_mem: u64,
+        total_threads: u32,
+        total_cpu_time_ms: u64,
+        representative_pid: u32,
+        user: Option<String>,
+        child_indices: Vec<usize>,
+    },
+    /// 展开状态下的子进程项
+    GroupChild {
+        group_key: String,
+        process_index: usize,
+    },
+    /// 单一独立进程（该应用/进程仅有 1 个实例）
+    Single { process_index: usize },
+}
+
+impl ProcDisplayItem {
+    /// 返回该项代表的主 PID（用于选中状态匹配）
+    pub fn pid(&self, snap: &crate::core::status::StatusSnapshot) -> u32 {
+        match self {
+            ProcDisplayItem::GroupHeader {
+                representative_pid, ..
+            } => *representative_pid,
+            ProcDisplayItem::GroupChild { process_index, .. }
+            | ProcDisplayItem::Single { process_index } => {
+                snap.processes.get(*process_index).map_or(0, |p| p.pid)
+            }
+        }
+    }
+}
+
+/// 状态监控子标签页 (硬件概览 / 进程管理)
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum StatusTab {
+    #[default]
+    Overview,
+    Processes,
+}
+
+impl StatusState {
+    pub fn new(focus_handle: gpui::FocusHandle) -> Self {
+        Self {
+            snapshot: None,
+            cpu_history: Vec::with_capacity(STATUS_HISTORY_LEN),
+            gpu_history: std::collections::HashMap::new(),
+            gpu_selected: None,
+            task: None,
+            fan_mode: FanMode::Auto,
+            fan_applying: false,
+            fan_stale: false,
+            fan_helper_installed: false,
+            fan_generation: 0,
+            proc_sort: ProcSort::default(),
+            proc_view: Vec::new(),
+            proc_display_items: Vec::new(),
+            expanded_groups: std::collections::HashSet::new(),
+            selected_proc_pid: None,
+            selected_proc_cpu_history: Vec::with_capacity(STATUS_HISTORY_LEN),
+            selected_proc_mem_history: Vec::with_capacity(STATUS_HISTORY_LEN),
+            cmd_copied_feedback: false,
+            proc_scroll: gpui::UniformListScrollHandle::new(),
+            proc_scroll_drag: None,
+            fan_task: None,
+            input: TextInputState::new(focus_handle),
+            filter_tab: crate::core::status::ProcFilterTab::default(),
+            search_popover: crate::ui::components::popover::PopoverState::default(),
+            tab: StatusTab::Overview,
+            paused: false,
+            refresh_trigger: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

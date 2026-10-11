@@ -203,7 +203,7 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         .size_full()
         .min_w(px(0.))
         .overflow_scroll()
-        .p_8()
+        .p_5()
         .flex()
         .flex_col()
         .gap_5()
