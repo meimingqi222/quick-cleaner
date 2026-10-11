@@ -9,15 +9,22 @@
 use crate::core::dev_env::{DevAssetItem, DevAssetKind, PythonToolKind, SiteScope, VenvManager};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
-use crate::ui::components::buttons::{danger_button, small_button};
-use crate::ui::components::controls::{checkbox, loading_state_view};
-use crate::ui::components::search_box::{search_box, SearchBoxSpec};
+use crate::ui::adapters::search_box::{search_box, SearchBoxSpec};
+use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
+use crate::ui::components::badge::{Badge, BadgeShape, BadgeSize, BadgeTone};
+use crate::ui::components::button::Button;
+use crate::ui::components::controls::checkbox;
+use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
+use crate::ui::components::list_row::{ListRow, RowGap, RowInset, RowRadius, RowVariant};
+use crate::ui::components::segmented::{
+    ChipLook, ChipPadX, ChipRadius, SegmentItem, SegmentStyle, SegmentedControl,
+};
 use crate::ui::components::{path_tooltip, text_tooltip};
 use crate::ui::i18n::*;
 use crate::ui::state::{DevEnvFilterTab, DevEnvState};
 use crate::ui::theme::*;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, MouseDownEvent, SharedString, Window};
 use std::time::SystemTime;
 
 pub fn render_dev_environments_view(
@@ -135,20 +142,14 @@ pub fn render_dev_environments_view(
                     MUTED,
                 ))
                 .child(
-                    div()
-                        .id("dev-rescan-btn")
-                        .flex_none()
-                        .child(small_button(
-                            tr_dev_btn_rescan(lang).to_string(),
-                            SURF_HIGH,
-                            TEXT,
-                            !busy,
-                        ))
-                        .when(!busy, |d| {
-                            d.on_click(cx.listener(|this, _, _, cx| {
+                    div().flex_none().child(
+                        Button::small("dev-rescan-btn", tr_dev_btn_rescan(lang))
+                            .colors(SURF_HIGH, TEXT)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.start_dev_env_scan(cx);
-                            }))
-                        }),
+                            })),
+                    ),
                 ),
         );
 
@@ -163,16 +164,10 @@ pub fn render_dev_environments_view(
             .gap_3()
             .child(header_row)
             .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(loading_state_view(
-                        tr_dev_overview_title(lang),
-                        tr_dev_overview_desc(lang),
-                        root.anim_phase,
-                    )),
+                div().flex_1().flex().items_center().justify_center().child(
+                    LoadingState::new(tr_dev_overview_title(lang), root.anim_phase)
+                        .description(tr_dev_overview_desc(lang)),
+                ),
             )
             .into_any_element();
     }
@@ -222,27 +217,22 @@ pub fn render_dev_environments_view(
 }
 
 /// 顶部小胶囊统计
-fn metric_pill(label: &'static str, value: String, value_color: u32) -> AnyElement {
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .px_2p5()
-        .py(px(3.))
-        .rounded_full()
-        .bg(rgb(SURF_HIGH))
-        .border_1()
-        .border_color(rgba(OUTLINE_VAR, 0.4))
-        .child(div().text_xs().text_color(rgb(OUTLINE)).child(label))
-        .child(
+fn metric_pill(label: &'static str, value: String, value_color: u32) -> Badge {
+    Badge::new(value)
+        .shape(BadgeShape::Pill)
+        .padding(10., 3.)
+        .gap(6.)
+        .no_shrink()
+        .border(rgba(OUTLINE_VAR, 0.4))
+        .weight(gpui::FontWeight::BOLD)
+        .tone(BadgeTone::custom(SURF_HIGH, value_color))
+        .leading(
             div()
                 .text_xs()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(value_color))
-                .child(value),
+                .font_weight(gpui::FontWeight::NORMAL)
+                .text_color(rgb(OUTLINE))
+                .child(label),
         )
-        .into_any_element()
 }
 
 /// 左侧 Master 列表面板
@@ -278,44 +268,30 @@ fn render_master_panel(
         ),
     ];
 
-    let filter_tab_bar =
-        div()
-            .flex()
-            .items_center()
-            .flex_wrap()
-            .gap_1()
-            .children(tabs.into_iter().map(|(tab, label)| {
-                let active = dev.filter_tab == tab;
-                div()
-                    .id(SharedString::from(format!("tab-filter-{tab:?}")))
-                    .px_2()
-                    .py(px(3.))
-                    .rounded_full()
-                    .text_xs()
-                    .font_weight(if active {
-                        gpui::FontWeight::BOLD
-                    } else {
-                        gpui::FontWeight::MEDIUM
-                    })
-                    .cursor_pointer()
-                    .border_1()
-                    .when(active, |d| {
-                        d.bg(rgb(PRIMARY_FIXED))
-                            .border_color(rgb(PRIMARY))
-                            .text_color(rgb(PRIMARY))
-                    })
-                    .when(!active, |d| {
-                        d.bg(rgb(CARD))
-                            .border_color(rgba(OUTLINE_VAR, 0.6))
-                            .text_color(rgb(MUTED))
-                            .hover(|h| h.bg(rgb(SURF_LOW)))
-                    })
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.apps.dev.filter_tab = tab;
-                        cx.notify();
-                    }))
-            }));
+    let filter_tab_bar = SegmentedControl::new(
+        "dev-filter",
+        dev.filter_tab,
+        cx.listener(|this, tab: &DevEnvFilterTab, _, cx| {
+            this.apps.dev.filter_tab = *tab;
+            cx.notify();
+        }),
+    )
+    .style(SegmentStyle::Chip)
+    .chip_look(ChipLook {
+        pad_x: ChipPadX::X2,
+        pad_y: 3.,
+        radius: ChipRadius::Full,
+        rest_border: Some(0.6),
+        weight_sel: gpui::FontWeight::BOLD,
+        weight_rest: gpui::FontWeight::MEDIUM,
+        ..ChipLook::CHIP
+    })
+    .gap(4.)
+    .wrap(true)
+    .items(
+        tabs.into_iter()
+            .map(|(tab, label)| SegmentItem::new(tab, label)),
+    );
 
     // 收集匹配过滤与搜索的条目
     let show_python = matches!(
@@ -406,16 +382,8 @@ fn render_master_panel(
     }
 
     if item_count == 0 {
-        master_rows = master_rows.child(
-            div()
-                .p_6()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .text_color(rgb(OUTLINE))
-                .child(tr_dev_empty(lang)),
-        );
+        master_rows =
+            master_rows.child(EmptyState::new(tr_dev_empty(lang)).style(EmptyStateStyle::Inline));
     }
 
     div()
@@ -500,7 +468,9 @@ fn render_master_row(
                 format!("cb-master-{}", item.id).into(),
             ))
             .flex_none()
-            .child(checkbox(if checked { Check::On } else { Check::Off }))
+            .child(checkbox(
+                (if checked { Check::On } else { Check::Off }).into(),
+            ))
             .when(!busy, |d| {
                 d.on_click(cx.listener(move |this, _, _, cx| {
                     this.apps.dev.toggle_select(&item_id);
@@ -559,90 +529,79 @@ fn render_master_row(
 
     let size_text = fmt_size(item.size.exclusive_reclaimable_bytes);
 
-    div()
-        .id(gpui::ElementId::Name(
-            format!("row-master-{}", item.id).into(),
-        ))
+    let text_col = div()
         .flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .p_2()
-        .rounded_lg()
-        .cursor_pointer()
-        .border_1()
-        .when(active, |d| {
-            d.bg(rgba(PRIMARY_FIXED, 0.45)).border_color(rgb(PRIMARY))
-        })
-        .when(!active, |d| {
-            d.bg(rgb(CARD))
-                .border_color(rgba(OUTLINE_VAR, 0.2))
-                .hover(|h| h.bg(rgb(SURF_LOW)))
-        })
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.select_active_dev_env(select_id.clone(), cx);
-        }))
+        .flex_col()
+        .gap(px(1.))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap_2()
-                .flex_1()
-                .min_w(px(0.))
-                .child(cb)
                 .child(
                     div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(TEXT))
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .child(item.display_name().to_string()),
-                                )
-                                .child(badge_chip(badge_text, badge_bg, badge_fg)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(sub_desc),
-                        ),
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(item.display_name().to_string()),
+                )
+                .child(
+                    Badge::new(badge_text)
+                        .shape(BadgeShape::Pill)
+                        .size(BadgeSize::Compact)
+                        .tone(BadgeTone::custom(badge_bg, badge_fg)),
                 ),
         )
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .flex_none()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(if active { rgb(PRIMARY) } else { rgb(MUTED) })
-                        .child(size_text),
-                )
-                .when(active, |d| {
-                    d.child(div().text_xs().text_color(rgb(PRIMARY)).child("▸"))
-                }),
+                .text_xs()
+                .text_color(rgb(OUTLINE))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(sub_desc),
+        );
+
+    let size_col = div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .flex_none()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if active { rgb(PRIMARY) } else { rgb(MUTED) })
+                .child(size_text),
         )
-        .into_any_element()
+        .when(active, |d| {
+            d.child(div().text_xs().text_color(rgb(PRIMARY)).child("▸"))
+        });
+
+    ListRow::new(gpui::ElementId::Name(
+        format!("row-master-{}", item.id).into(),
+    ))
+    .variant(RowVariant::Boxed)
+    .inset(RowInset::P2)
+    .gap(RowGap::Tight)
+    .selected(active)
+    .leading(cb)
+    .content(text_col)
+    .trailing(size_col)
+    .on_click(cx.listener({
+        let select_id = select_id.clone();
+        move |this, _, _, cx| {
+            this.select_active_dev_env(select_id.clone(), cx);
+        }
+    }))
+    // gpui 的 on_click 对右键也触发，原行为是右键同样选中该行。
+    .on_right_click(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+        this.select_active_dev_env(select_id.clone(), cx);
+    }))
+    .into_any_element()
 }
 
 /// 右侧 Detail 详情与全高包管理面板
@@ -735,18 +694,20 @@ fn render_detail_panel(
                                         .child(active_item.display_name().to_string()),
                                 )
                                 .when(active_item.is_active_env, |d| {
-                                    d.child(badge_chip(
-                                        tr_dev_badge_active(lang),
-                                        CAUTION_CONTAINER,
-                                        CAUTION,
-                                    ))
+                                    d.child(
+                                        Badge::new(tr_dev_badge_active(lang))
+                                            .shape(BadgeShape::Pill)
+                                            .size(BadgeSize::Compact)
+                                            .tone(BadgeTone::Caution),
+                                    )
                                 })
                                 .when(!can_remove, |d| {
-                                    d.child(badge_chip(
-                                        tr_dev_badge_display_only(lang),
-                                        CARD,
-                                        OUTLINE,
-                                    ))
+                                    d.child(
+                                        Badge::new(tr_dev_badge_display_only(lang))
+                                            .shape(BadgeShape::Pill)
+                                            .size(BadgeSize::Compact)
+                                            .tone(BadgeTone::custom(CARD, OUTLINE)),
+                                    )
                                 }),
                         )
                         .child(
@@ -766,21 +727,17 @@ fn render_detail_panel(
                 .when(can_remove, |d| {
                     let target = active_item.clone();
                     d.child(
-                        div()
-                            .id(gpui::ElementId::Name(
+                        Button::small(
+                            gpui::ElementId::Name(
                                 format!("dev-remove-header-{}", active_item.id).into(),
-                            ))
-                            .child(small_button(
-                                tr_dev_btn_remove(lang).to_string(),
-                                CARD,
-                                ERROR,
-                                !busy,
-                            ))
-                            .when(!busy, |d| {
-                                d.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_remove_dev_asset(target.clone(), cx);
-                                }))
-                            }),
+                            ),
+                            tr_dev_btn_remove(lang),
+                        )
+                        .colors(CARD, ERROR)
+                        .disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_remove_dev_asset(target.clone(), cx);
+                        })),
                     )
                 }),
         )
@@ -820,23 +777,18 @@ fn render_detail_panel(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(loading_state_view(
-                    tr_dev_site_loading(lang),
-                    tr_dev_overview_desc(lang),
-                    anim_phase,
-                ))
+                .child(
+                    LoadingState::new(tr_dev_site_loading(lang), anim_phase)
+                        .description(tr_dev_overview_desc(lang)),
+                )
                 .into_any_element()
         } else {
             let packages = dev.site_packages.get(&active_id);
             match packages {
-                Some(pkgs) if pkgs.is_empty() => div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(rgb(OUTLINE))
-                    .child(tr_dev_site_empty(lang))
+                Some(pkgs) if pkgs.is_empty() => EmptyState::new(tr_dev_site_empty(lang))
+                    .style(EmptyStateStyle::Inline)
+                    .flush()
+                    .fill()
                     .into_any_element(),
                 Some(pkgs) => {
                     let total_pkgs = pkgs.len();
@@ -873,42 +825,36 @@ fn render_detail_panel(
                                 .items_center()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .id(gpui::ElementId::Name(
+                                    Button::small(
+                                        gpui::ElementId::Name(
                                             format!("btn-detail-all-{}", active_id).into(),
-                                        ))
-                                        .child(small_button(
-                                            tr_dev_site_select_all(lang).to_string(),
-                                            SURF_LOW,
-                                            TEXT,
-                                            !busy,
-                                        ))
-                                        .when(!busy, |d| {
-                                            d.on_click(cx.listener(move |this, _, _, cx| {
-                                                this.apps
-                                                    .dev
-                                                    .select_site_packages(&site_id_all, true);
-                                                cx.notify();
-                                            }))
-                                        }),
+                                        ),
+                                        tr_dev_site_select_all(lang),
+                                    )
+                                    .colors(SURF_LOW, TEXT)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.apps.dev.select_site_packages(&site_id_all, true);
+                                            cx.notify();
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    div()
-                                        .id(gpui::ElementId::Name(
+                                    Button::small(
+                                        gpui::ElementId::Name(
                                             format!("btn-detail-invert-{}", active_id).into(),
-                                        ))
-                                        .child(small_button(
-                                            tr_dev_batch_invert(lang).to_string(),
-                                            SURF_LOW,
-                                            TEXT,
-                                            !busy,
-                                        ))
-                                        .when(!busy, |d| {
-                                            d.on_click(cx.listener(move |this, _, _, cx| {
-                                                this.apps.dev.invert_site_packages(&site_id_invert);
-                                                cx.notify();
-                                            }))
-                                        }),
+                                        ),
+                                        tr_dev_batch_invert(lang),
+                                    )
+                                    .colors(SURF_LOW, TEXT)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.apps.dev.invert_site_packages(&site_id_invert);
+                                            cx.notify();
+                                        },
+                                    )),
                                 ),
                         );
 
@@ -1181,7 +1127,9 @@ fn render_package_row(
                 format!("cb-detail-pkg-{}", package.id).into(),
             ))
             .flex_none()
-            .child(checkbox(if checked { Check::On } else { Check::Off }))
+            .child(checkbox(
+                (if checked { Check::On } else { Check::Off }).into(),
+            ))
             .when(!busy, |d| {
                 d.on_click(cx.listener(move |this, _, _, cx| {
                     this.apps.dev.toggle_select(&pkg_id);
@@ -1198,99 +1146,83 @@ fn render_package_row(
             .flex_none()
     };
 
-    let mut row = div()
+    // ListRow 的 P2 内边距比原来的 pl_3 少 4px，由首个子项补上。
+    let leading = div().pl_1().child(cb);
+
+    let text_col = div()
         .flex()
-        .items_center()
-        .justify_between()
-        .gap_3()
-        .p_2()
-        .pl_3()
-        .rounded_md()
-        .bg(rgb(CARD))
-        .border_1()
-        .border_color(rgba(OUTLINE_VAR, 0.2))
-        .hover(|h| h.bg(rgb(SURF_LOW)))
-        .child(cb)
-        .child({
+        .flex_col()
+        .gap(px(2.))
+        .overflow_hidden()
+        // 第一行：包名加粗 + 版本独立微胶囊 + 安装时间
+        .child(
             div()
                 .flex()
-                .flex_col()
-                .gap(px(2.))
-                .flex_1()
-                .min_w(px(0.))
-                .overflow_hidden()
-                // 第一行：包名加粗 + 版本独立微胶囊 + 安装时间
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id(gpui::ElementId::Name(
-                                    format!("dev-pkg-name-{}", package.id).into(),
-                                ))
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(package.display_name().to_string()),
-                        )
-                        .children(version.map(|v| {
-                            div()
-                                .px(px(6.))
-                                .py(px(1.))
-                                .rounded_full()
-                                .bg(rgb(SURF_HIGH))
-                                .border_1()
-                                .border_color(rgba(OUTLINE_VAR, 0.4))
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(PRIMARY))
-                                .child(format!("v{v}"))
-                        }))
-                        .children(age_text.map(|age| {
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(format!("· {age}"))
-                        })),
-                )
-                // 第二行：精炼差异目录名，鼠标悬停 Tooltip 显示完整绝对路径
+                .items_center()
+                .gap_2()
                 .child(
                     div()
                         .id(gpui::ElementId::Name(
-                            format!("dev-pkg-path-{}", package.id).into(),
+                            format!("dev-pkg-name-{}", package.id).into(),
                         ))
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .tooltip(path_tooltip(&display_full_path))
-                        .child(format!("📁 {rel_dist_name}")),
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(TEXT))
+                        .child(package.display_name().to_string()),
                 )
-        });
+                .children(version.map(|v| {
+                    Badge::new(format!("v{v}"))
+                        .shape(BadgeShape::Pill)
+                        .size(BadgeSize::Compact)
+                        .border(rgba(OUTLINE_VAR, 0.4))
+                        .tone(BadgeTone::custom(SURF_HIGH, PRIMARY))
+                }))
+                .children(age_text.map(|age| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(OUTLINE))
+                        .child(format!("· {age}"))
+                })),
+        )
+        // 第二行：精炼差异目录名，鼠标悬停 Tooltip 显示完整绝对路径
+        .child(
+            div()
+                .id(gpui::ElementId::Name(
+                    format!("dev-pkg-path-{}", package.id).into(),
+                ))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .tooltip(path_tooltip(&display_full_path))
+                .child(format!("📁 {rel_dist_name}")),
+        );
+
+    let mut row = ListRow::new(gpui::ElementId::Name(
+        format!("row-pkg-{}", package.id).into(),
+    ))
+    .variant(RowVariant::Boxed)
+    .radius(RowRadius::Md)
+    .inset(RowInset::P2)
+    .leading(leading)
+    .content(text_col);
 
     if can_remove {
-        let id = gpui::ElementId::Name(format!("dev-pkg-remove-{}", package.id).into());
         let target = package.clone();
-        row = row.child(
-            div()
-                .id(id)
-                .child(small_button(
-                    tr_dev_btn_remove(lang).to_string(),
-                    SURF_HIGH,
-                    ERROR,
-                    !busy,
-                ))
-                .when(!busy, |d| {
-                    d.on_click(cx.listener(move |this, _, _, cx| {
-                        this.request_remove_dev_asset(target.clone(), cx);
-                    }))
-                }),
+        row = row.trailing(
+            Button::small(
+                gpui::ElementId::Name(format!("dev-pkg-remove-{}", package.id).into()),
+                tr_dev_btn_remove(lang),
+            )
+            .colors(SURF_HIGH, ERROR)
+            .disabled(busy)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.request_remove_dev_asset(target.clone(), cx);
+            })),
         );
     }
 
@@ -1307,126 +1239,73 @@ fn render_dev_bottom_bar(
     let (count, bytes) = dev.selection_summary();
     let enabled = count > 0 && !busy;
 
-    div()
+    let summary = div()
         .flex()
-        .items_center()
-        .justify_center()
+        .flex_col()
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap_4()
-                .px_4()
-                .py_2()
-                .rounded_full()
-                .bg(rgb(CARD))
-                .border_1()
-                .border_color(rgba(OUTLINE_VAR, 0.6))
-                .shadow_lg()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(OUTLINE))
-                                .child(tr_dev_batch_bar_selected(lang)),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(if count > 0 { rgb(TEXT) } else { rgb(MUTED) })
-                                .child(if count > 0 {
-                                    format!("{count} 项 · {}", fmt_size(bytes))
-                                } else {
-                                    "0 项".to_string()
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().w(px(1.)).h(px(20.)).bg(rgb(OUTLINE_VAR)))
-                        .child(
-                            div()
-                                .id("dev-sel-all")
-                                .child(small_button(
-                                    tr_dev_batch_select_all(lang).to_string(),
-                                    SURF_LOW,
-                                    TEXT,
-                                    !busy,
-                                ))
-                                .when(!busy, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| {
-                                        this.apps.dev.select_all();
-                                        cx.notify();
-                                    }))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .id("dev-sel-invert")
-                                .child(small_button(
-                                    tr_dev_batch_invert(lang).to_string(),
-                                    SURF_LOW,
-                                    TEXT,
-                                    !busy,
-                                ))
-                                .when(!busy, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| {
-                                        this.apps.dev.invert_selection();
-                                        cx.notify();
-                                    }))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .id("dev-sel-clear")
-                                .child(small_button(
-                                    tr_dev_batch_clear(lang).to_string(),
-                                    SURF_LOW,
-                                    TEXT,
-                                    !busy && count > 0,
-                                ))
-                                .when(!busy && count > 0, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| {
-                                        this.apps.dev.clear_selection();
-                                        cx.notify();
-                                    }))
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("dev-batch-remove-btn")
-                        .child(danger_button(
-                            tr_dev_batch_bar_remove_btn(lang, count),
-                            enabled,
-                        ))
-                        .when(enabled, |d| {
-                            d.on_click(cx.listener(|this, _, _, cx| {
-                                this.request_remove_selected_dev_assets(cx);
-                            }))
-                        }),
-                ),
+                .text_xs()
+                .text_color(rgb(OUTLINE))
+                .child(tr_dev_batch_bar_selected(lang)),
         )
-        .into_any_element()
-}
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(if count > 0 { rgb(TEXT) } else { rgb(MUTED) })
+                .child(if count > 0 {
+                    format!("{count} 项 · {}", fmt_size(bytes))
+                } else {
+                    "0 项".to_string()
+                }),
+        );
 
-fn badge_chip(text: impl Into<SharedString>, bg: u32, fg: u32) -> AnyElement {
-    div()
-        .px(px(6.))
-        .py(px(1.))
-        .rounded_full()
-        .bg(rgb(bg))
-        .text_xs()
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(rgb(fg))
-        .child(text.into())
+    let batch_tools = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().w(px(1.)).h(px(20.)).bg(rgb(OUTLINE_VAR)))
+        .child(
+            Button::small("dev-sel-all", tr_dev_batch_select_all(lang))
+                .colors(SURF_LOW, TEXT)
+                .disabled(busy)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apps.dev.select_all();
+                    cx.notify();
+                })),
+        )
+        .child(
+            Button::small("dev-sel-invert", tr_dev_batch_invert(lang))
+                .colors(SURF_LOW, TEXT)
+                .disabled(busy)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apps.dev.invert_selection();
+                    cx.notify();
+                })),
+        )
+        .child(
+            Button::small("dev-sel-clear", tr_dev_batch_clear(lang))
+                .colors(SURF_LOW, TEXT)
+                .disabled(busy || count == 0)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apps.dev.clear_selection();
+                    cx.notify();
+                })),
+        );
+
+    ActionBar::capsule("dev-bottom-bar", CapsulePreset::Inline)
+        .summary(summary)
+        .leading(batch_tools)
+        .actions(
+            Button::danger(
+                "dev-batch-remove-btn",
+                tr_dev_batch_bar_remove_btn(lang, count),
+            )
+            .disabled(!enabled)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.request_remove_selected_dev_assets(cx);
+            })),
+        )
         .into_any_element()
 }
 

@@ -2,11 +2,11 @@
 
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
-use crate::ui::components::buttons::primary_button;
+use crate::ui::components::button::Button;
 use crate::ui::components::cards::card;
 use crate::ui::components::icons::*;
-use crate::ui::components::sidebar::View;
 use crate::ui::i18n::*;
+use crate::ui::shell::View;
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{
@@ -381,15 +381,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             Language::Zh => String::from("查看详情并清理"),
             Language::En => String::from("Review & Clean Junk"),
         };
-        body = body.child(
-            div()
-                .id("goto-junk")
-                .child(primary_button(btn_text, true))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.view = View::Junk;
-                    cx.notify();
-                })),
-        );
+        body = body.child(Button::primary("goto-junk", btn_text).on_click(cx.listener(
+            |this, _, _, cx| {
+                this.view = View::Junk;
+                cx.notify();
+            },
+        )));
     }
 
     body = body.child(quick_cards);

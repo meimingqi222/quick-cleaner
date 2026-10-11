@@ -5,7 +5,7 @@ use crate::core::disk::VolumeId;
 use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;
 use crate::platform::scan_volume;
-use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use gpui::Context;
 use std::path::PathBuf;

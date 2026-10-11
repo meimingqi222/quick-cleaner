@@ -1,10 +1,11 @@
 //! 顶部应用操作栏 (CleanFlow 质感顶栏)
 
 use crate::core::model::{commas, fmt_size};
-use crate::ui::components::buttons::ghost_button;
+use crate::ui::components::button::Button;
 use crate::ui::components::icons::*;
-use crate::ui::components::sidebar::View;
+use crate::ui::components::segmented::{SegmentItem, SegmentedControl};
 use crate::ui::i18n::*;
+use crate::ui::shell::sidebar::View;
 use crate::ui::state::StatusTab;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -116,87 +117,25 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             .map(|s| s.process_count)
             .unwrap_or(0);
 
+        let mut processes =
+            SegmentItem::new(StatusTab::Processes, tr_status_tab_processes_title(lang));
+        if proc_count > 0 {
+            processes = processes.badge(commas(proc_count as u64));
+        }
+
         Some(
-            div()
-                .id("status-tab-switcher")
-                .flex()
-                .items_center()
-                .gap_1()
-                .p(px(2.))
-                .rounded_lg()
-                .bg(rgb(SURF_LOW))
-                .border_1()
-                .border_color(rgba(OUTLINE_VAR, 0.4))
-                .child(
-                    div()
-                        .id("status-tab-overview")
-                        .px_2p5()
-                        .py(px(3.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_xs()
-                        .font_weight(if cur_tab == StatusTab::Overview {
-                            gpui::FontWeight::BOLD
-                        } else {
-                            gpui::FontWeight::MEDIUM
-                        })
-                        .when(cur_tab == StatusTab::Overview, |d| {
-                            d.bg(rgb(CARD)).text_color(rgb(PRIMARY)).shadow_sm()
-                        })
-                        .when(cur_tab != StatusTab::Overview, |d| {
-                            d.text_color(rgb(MUTED))
-                                .hover(|h| h.bg(rgb(SURF_HIGH)).text_color(rgb(TEXT)))
-                        })
-                        .child(tr_status_tab_overview(lang))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_status_tab(StatusTab::Overview, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .id("status-tab-processes")
-                        .px_2p5()
-                        .py(px(3.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_xs()
-                        .font_weight(if cur_tab == StatusTab::Processes {
-                            gpui::FontWeight::BOLD
-                        } else {
-                            gpui::FontWeight::MEDIUM
-                        })
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .when(cur_tab == StatusTab::Processes, |d| {
-                            d.bg(rgb(CARD)).text_color(rgb(PRIMARY)).shadow_sm()
-                        })
-                        .when(cur_tab != StatusTab::Processes, |d| {
-                            d.text_color(rgb(MUTED))
-                                .hover(|h| h.bg(rgb(SURF_HIGH)).text_color(rgb(TEXT)))
-                        })
-                        .child(tr_status_tab_processes_title(lang))
-                        .when(proc_count > 0, |d| {
-                            d.child(
-                                div()
-                                    .px_1p5()
-                                    .py(px(0.5))
-                                    .rounded_full()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .when(cur_tab == StatusTab::Processes, |p| {
-                                        p.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
-                                    })
-                                    .when(cur_tab != StatusTab::Processes, |p| {
-                                        p.bg(rgb(SURF_HIGH)).text_color(rgb(MUTED))
-                                    })
-                                    .child(commas(proc_count as u64)),
-                            )
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_status_tab(StatusTab::Processes, cx);
-                        })),
-                ),
+            SegmentedControl::new(
+                "status-tab-switcher",
+                cur_tab,
+                cx.listener(|this, tab: &StatusTab, _, cx| {
+                    this.set_status_tab(*tab, cx);
+                }),
+            )
+            .item(SegmentItem::new(
+                StatusTab::Overview,
+                tr_status_tab_overview(lang),
+            ))
+            .item(processes),
         )
     } else {
         None
@@ -254,9 +193,8 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 )
             })
             .child(
-                div()
-                    .id("rescan")
-                    .child(ghost_button(label.to_string(), !busy))
+                Button::ghost("rescan", label.to_string())
+                    .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| match this.view {
                         View::Dashboard | View::Junk => {
                             if !this.junk.scanning && !this.clean.running {

@@ -2,7 +2,7 @@
 
 use crate::core::i18n::bilingual;
 use crate::core::status::{FanError, FanMode, StatusSampler};
-use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use crate::ui::state::{ProcSort, ProcSortKey, STATUS_HISTORY_LEN};
 use gpui::Context;
@@ -105,7 +105,7 @@ impl crate::ui::Root {
                             this.rebuild_proc_view();
                             cx.notify();
                         }
-                        this.view == crate::ui::components::View::Status
+                        this.view == crate::ui::shell::View::Status
                     })
                     .unwrap_or(false);
                 if !keep {

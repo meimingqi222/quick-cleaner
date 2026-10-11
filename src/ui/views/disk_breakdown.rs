@@ -4,11 +4,10 @@ use super::disk_components::BreakdownItem;
 use crate::core::disk::{Node, ScanResult, SizeTree};
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
+use crate::ui::components::meter::{ProportionBar, Segment};
 use crate::ui::i18n::*;
-use crate::ui::theme::*;
 use crate::ui::views::DiskTab;
 use crate::ui::Root;
-use gpui::{div, prelude::*, px, rgb};
 
 /// 按当前 Tab 算出占比清单，连带右上角那三行摘要文字。
 ///
@@ -248,27 +247,9 @@ fn breakdown_for_files(
 }
 
 /// 顶部那条按占比分段着色的横条。
-pub(super) fn render_proportion_bar(breakdown: &[BreakdownItem]) -> gpui::Div {
-    // 动态多彩占比条
-    let mut proportion_bar = div()
-        .w_full()
-        .h(px(10.))
-        .rounded_full()
-        .overflow_hidden()
-        .bg(rgb(SURF_HIGH))
-        .flex();
-
-    for item in breakdown {
-        let pct = (item.ratio * 100.0) as f32;
-        if pct > 0.5 {
-            proportion_bar = proportion_bar.child(
-                div()
-                    .h_full()
-                    .flex_none()
-                    .w(gpui::relative(item.ratio as f32))
-                    .bg(rgb(item.color)),
-            );
-        }
-    }
-    proportion_bar
+pub(super) fn render_proportion_bar(breakdown: &[BreakdownItem]) -> ProportionBar {
+    ProportionBar::new(breakdown.iter().map(|item| Segment {
+        ratio: item.ratio as f32,
+        color: item.color,
+    }))
 }

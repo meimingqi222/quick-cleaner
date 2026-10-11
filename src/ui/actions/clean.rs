@@ -7,7 +7,7 @@ use crate::core::cleaner::{
 use crate::core::i18n::{bilingual, Text};
 use crate::core::model::{fmt_size, is_virtual_path};
 use crate::core::safety::is_protected;
-use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use gpui::Context;
 use std::path::PathBuf;

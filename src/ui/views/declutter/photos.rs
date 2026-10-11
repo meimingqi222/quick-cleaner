@@ -6,6 +6,7 @@ use super::common::{
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
+use crate::ui::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_folder_large, icon_sparkle, icon_star};
 use crate::ui::i18n::*;
@@ -449,11 +450,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .items_center()
                                             .gap_2()
                                             .cursor_pointer()
-                                            .child(checkbox(if is_sel {
+                                            .child(checkbox((if is_sel {
                                                 crate::core::model::Check::On
                                             } else {
                                                 crate::core::model::Check::Off
-                                            }))
+                                            }).into()))
                                             .child(
                                                 div()
                                                     .text_xs()
@@ -563,18 +564,10 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .id(SharedString::from(format!("btn-pick-best-{g_idx}")))
-                                            .px_2()
-                                            .py(px(2.))
-                                            .rounded_md()
-                                            .bg(rgb(SURF_HIGH))
-                                            .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(PRIMARY))
-                                            .cursor_pointer()
-                                            .child(tr_declutter_photos_keep_best(lang))
+                                        Button::new(SharedString::from(format!("btn-pick-best-{g_idx}")), ButtonVariant::Mini)
+                                            .label(tr_declutter_photos_keep_best(lang))
+                                            .fg(PRIMARY)
+                                            .weight(gpui::FontWeight::BOLD)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
                                                     for p in &mut g.photos {
@@ -585,18 +578,9 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id(SharedString::from(format!("btn-keep-all-{g_idx}")))
-                                            .px_2()
-                                            .py(px(2.))
-                                            .rounded_md()
-                                            .bg(rgb(SURF_HIGH))
-                                            .hover(|h| h.bg(rgb(SURF_HIGH)).text_color(rgb(TEXT)))
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(rgb(MUTED))
-                                            .cursor_pointer()
-                                            .child(tr_declutter_photos_keep_all(lang))
+                                        Button::new(SharedString::from(format!("btn-keep-all-{g_idx}")), ButtonVariant::Mini)
+                                            .label(tr_declutter_photos_keep_all(lang))
+                                            .hover_style(Some(rgba(SURF_HIGH, 1.)), Some(TEXT))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
                                                     for p in &mut g.photos {
@@ -731,24 +715,10 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                         )
                         .child(
                             div().flex().items_center().gap_3().child(
-                                div()
-                                    .id("btn-smart-select-photos")
-                                    .px_5()
-                                    .py_2()
-                                    .rounded_full()
-                                    .bg(rgb(SURF_HIGH))
-                                    .border_1()
-                                    .border_color(rgba(OUTLINE_VAR, 0.4))
-                                    .hover(|h| h.bg(rgb(SURF_LOW)))
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(TEXT))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(icon_sparkle(PRIMARY, 16.))
-                                    .child(tr_declutter_photos_smart_select(lang))
+                                Button::new("btn-smart-select-photos", ButtonVariant::Tonal)
+                                    .label(tr_declutter_photos_smart_select(lang))
+                                    .size(ButtonSize::Pill)
+                                    .leading(icon_sparkle(PRIMARY, 16.))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.declutter.auto_pick_best_photos();
                                         cx.notify();

@@ -1,6 +1,8 @@
 //! 磁盘透镜页面的局部组件
 
 use crate::core::model::{fmt_size, truncate};
+use crate::ui::components::badge::{Badge, BadgeTone};
+use crate::ui::components::list_row::{ListRow, RowGap, RowInset, RowRadius};
 use crate::ui::theme::*;
 use crate::ui::Root;
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString};
@@ -27,17 +29,11 @@ pub(super) fn render_breakdown_row(
     let name = truncate(&item.name, 18);
     let size_str = fmt_size(item.size);
 
-    div()
-        .id(SharedString::from(format!("bd-row-{i}")))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .p_2()
-        .rounded_lg()
-        .hover(|h| h.bg(rgb(SURF_LOW)))
-        .when(is_dir && idx.is_some(), |d| d.cursor_pointer())
-        .child(
+    let mut row = ListRow::new(SharedString::from(format!("bd-row-{i}")))
+        .inset(RowInset::P2)
+        .gap(RowGap::Tight)
+        .radius(RowRadius::Lg)
+        .content(
             div()
                 .flex()
                 .items_center()
@@ -62,31 +58,34 @@ pub(super) fn render_breakdown_row(
                     ),
                 ),
         )
-        .child(
+        .trailing(
             div()
-                .px_2()
-                .py(px(1.))
-                .rounded_md()
-                .bg(rgb(SURF_HIGH))
-                .text_xs()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(color))
-                .child(pct_str),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_right()
-                .text_xs()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(TEXT))
-                .child(size_str),
-        )
-        .when(is_dir && idx.is_some(), |d| {
-            let target_idx = idx.unwrap();
-            d.on_click(cx.listener(move |this, _, _, cx| {
-                this.enter_disk_node(target_idx, cx);
-            }))
-        })
-        .into_any_element()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Badge::new(pct_str)
+                        .tone(BadgeTone::Custom {
+                            bg: rgb(SURF_HIGH).into(),
+                            fg: rgb(color).into(),
+                        })
+                        .padding(8., 1.)
+                        .weight(gpui::FontWeight::BOLD),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_right()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(TEXT))
+                        .child(size_str),
+                ),
+        );
+    if let (true, Some(target_idx)) = (is_dir, idx) {
+        row = row.on_click(cx.listener(move |this, _, _, cx| {
+            this.enter_disk_node(target_idx, cx);
+        }));
+    }
+    row.into_any_element()
 }

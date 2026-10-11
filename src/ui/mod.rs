@@ -1,13 +1,14 @@
 //! GPUI 界面根视图与状态管理
 
 mod actions;
+pub mod adapters;
 mod app_icons;
 pub mod components;
 pub mod i18n;
+pub mod shell;
 pub mod state;
 pub mod text_input;
 pub mod theme;
-pub mod updater_dialog;
 pub mod views;
 pub use state::*;
 
@@ -26,14 +27,14 @@ use crate::platform::{get_volume_space, is_elevated, list_volumes};
 // `render_donut`），glob 进来就看不出谁是谁，所以显式列出。
 // `i18n::*`（清一色 `tr_` 前缀）和 `theme::*`（清一色大写色值常量）保持
 // glob——那两个是「命名空间即词汇表」，逐个列反而更难读。
-use crate::ui::components::{
+use crate::ui::adapters::{
     render_confirm_dialog, render_fda_onboarding_modal, render_progress_bar, render_residual_modal,
-    render_scan_line, render_sidebar, render_top_bar, render_uninstall_progress, ConfirmRequest,
-    View,
+    render_uninstall_progress, render_update_dialog, ConfirmRequest,
 };
+use crate::ui::components::render_scan_line;
 use crate::ui::i18n::*;
+use crate::ui::shell::{render_sidebar, render_top_bar, View};
 use crate::ui::theme::*;
-use crate::ui::updater_dialog::render_update_dialog;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
     render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,

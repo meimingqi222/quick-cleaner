@@ -6,9 +6,14 @@ use crate::core::apps::{
 };
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::{fmt_size, truncate};
+use crate::ui::components::badge::Badge;
+#[cfg(target_os = "macos")]
+use crate::ui::components::button::Button;
 use crate::ui::components::cards::card;
-use crate::ui::components::controls::{loading_state_view, page_heading};
+use crate::ui::components::controls::page_heading;
+use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
 use crate::ui::components::icons::*;
+use crate::ui::components::segmented::{SegmentItem, SegmentStyle, SegmentedControl};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -47,19 +52,15 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             let busy = root.residual.scanning || root.clean.running;
             Some(
                 div()
-                    .id("orphan-leftover-scan")
                     .flex_none()
-                    .child(crate::ui::components::buttons::small_button(
-                        tr_btn_orphan_scan(lang).to_string(),
-                        SURF_HIGH,
-                        TEXT,
-                        !busy,
-                    ))
-                    .when(!busy, |d| {
-                        d.on_click(cx.listener(|this, _, _, cx| {
-                            this.start_orphan_leftover_scan(cx);
-                        }))
-                    })
+                    .child(
+                        Button::small("orphan-leftover-scan", tr_btn_orphan_scan(lang))
+                            .colors(SURF_HIGH, TEXT)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_orphan_leftover_scan(cx);
+                            })),
+                    )
                     .into_any_element(),
             )
         }
@@ -312,46 +313,20 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         );
 
     // 快速分类过滤预设标签
-    let preset_buttons: Vec<AnyElement> = AppFilterPreset::ALL
-        .iter()
-        .map(|&p| {
-            let active = root.apps.preset == p;
-            let p_label = p.label_lang(lang);
-            div()
-                .id(SharedString::from(format!(
-                    "preset-app-{}",
-                    p.label_lang(Language::En)
-                )))
-                .px_3()
-                .py(px(4.))
-                .rounded_full()
-                .text_xs()
-                .font_weight(if active {
-                    gpui::FontWeight::SEMIBOLD
-                } else {
-                    gpui::FontWeight::NORMAL
-                })
-                .cursor_pointer()
-                .border_1()
-                .when(active, |d| {
-                    d.bg(rgb(PRIMARY_FIXED))
-                        .border_color(rgb(PRIMARY))
-                        .text_color(rgb(PRIMARY))
-                })
-                .when(!active, |d| {
-                    d.bg(rgb(CARD))
-                        .border_color(rgba(OUTLINE_VAR, 0.8))
-                        .text_color(rgb(MUTED))
-                        .hover(|h| h.bg(rgb(SURF_LOW)))
-                })
-                .child(p_label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.apps.preset = p;
-                    cx.notify();
-                }))
-                .into_any_element()
-        })
-        .collect();
+    let preset_buttons = SegmentedControl::new(
+        "preset-app",
+        root.apps.preset,
+        cx.listener(|this, p: &AppFilterPreset, _, cx| {
+            this.apps.preset = *p;
+            cx.notify();
+        }),
+    )
+    .style(SegmentStyle::Chip)
+    .items(
+        AppFilterPreset::ALL
+            .iter()
+            .map(|&p| SegmentItem::new(p, p.label_lang(lang))),
+    );
 
     let search_focused = root.apps.input.focus_handle.is_focused(window);
     let search_text = root.apps.input.text.clone();
@@ -362,8 +337,8 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
 
-    let search_box = crate::ui::components::search_box::search_box(
-        crate::ui::components::search_box::SearchBoxSpec {
+    let search_box = crate::ui::adapters::search_box::search_box(
+        crate::ui::adapters::search_box::SearchBoxSpec {
             id: SharedString::from("apps-search-box"),
             focus_handle: &apps_focus_handle,
             text: &search_text,
@@ -402,15 +377,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         tr_apps_filter_matched(lang, display_apps.len(), total_apps)
     };
 
-    let filter_stats_tag = div()
-        .px_2()
-        .py(px(3.))
-        .rounded_md()
-        .bg(rgb(SURF_HIGH))
-        .text_xs()
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(rgb(MUTED))
-        .child(filter_stats_text);
+    let filter_stats_tag = Badge::new(filter_stats_text).padding(8., 3.);
 
     let controls_bar = card()
         .p_3()
@@ -434,7 +401,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                             "Presets:"
                         }),
                 )
-                .child(div().flex().items_center().gap_2().children(preset_buttons))
+                .child(preset_buttons)
                 .child(filter_stats_tag),
         )
         .child(search_box);
@@ -562,27 +529,15 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
     let empty_title = tr_apps_empty(lang);
 
     let body = if root.apps.scanning {
-        ListBody::Placeholder(loading_state_view(
-            loading_title,
-            loading_sub,
-            root.anim_phase,
-        ))
+        ListBody::Placeholder(
+            LoadingState::new(loading_title, root.anim_phase)
+                .description(loading_sub)
+                .into_any_element(),
+        )
     } else if display_apps.is_empty() {
         ListBody::Placeholder(
-            div()
-                .p_12()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(MUTED))
-                        .child(empty_title),
-                )
+            EmptyState::new(empty_title)
+                .style(EmptyStateStyle::Plain)
                 .into_any_element(),
         )
     } else {

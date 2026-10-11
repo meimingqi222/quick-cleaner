@@ -10,31 +10,30 @@
 //! 本模块和 `views` 不适用这条：`card` / `checkbox` / `small_button` 之间
 //! 没有共同前缀，glob 进来就分不清谁来自哪儿，所以调用方显式列出。
 
-pub mod buttons;
+use gpui::{App, ClickEvent, Window};
+use std::rc::Rc;
+
+pub(crate) type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+pub mod action_bar;
+pub mod badge;
+pub mod button;
 pub mod cards;
 pub mod controls;
-pub mod dialogs;
 pub mod donut;
+pub mod feedback;
 pub mod icons;
+pub mod list_row;
+pub mod meter;
 pub mod popover;
 pub mod progress;
 pub mod scroll;
-pub mod search_box;
-pub mod sidebar;
+pub mod segmented;
 pub mod tooltip;
-pub mod topbar;
 
-pub use buttons::{danger_button, ghost_button, primary_button, small_button};
 pub use cards::card;
-pub use controls::{badge, checkbox, page_heading};
-pub use dialogs::{
-    render_confirm_dialog, render_fda_onboarding_modal, render_residual_modal, ConfirmKind,
-    ConfirmRequest,
-};
+pub use controls::{checkbox, page_heading, CheckState};
 pub use icons::*;
-pub use progress::{render_progress_bar, render_scan_line, render_uninstall_progress};
+pub use progress::render_scan_line;
 pub use scroll::{drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W};
-pub use search_box::{search_box, SearchBoxSpec};
-pub use sidebar::{render_sidebar, View};
 pub use tooltip::{path_tooltip, text_tooltip};
-pub use topbar::render_top_bar;

@@ -3,10 +3,13 @@
 use crate::core::disk::{ScanResult, SizeTree};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
-use crate::ui::components::buttons::small_button;
+use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
+use crate::ui::components::badge::{Badge, BadgeShape, BadgeTone};
+use crate::ui::components::button::{Button, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::*;
+use crate::ui::components::list_row::{ListRow, RowInset};
 use crate::ui::components::path_tooltip;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -30,27 +33,21 @@ fn render_cross_folder_badge(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
         let badge_text =
             tr_disk_selected_badge(lang, total_selected_count, &fmt_size(total_selected_size));
         Some(
-            div()
-                .id("cross-folder-clear-btn")
-                .px_2()
-                .py(px(3.))
-                .rounded_full()
-                .bg(rgb(ERROR_CONTAINER))
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(ERROR))
-                .flex()
-                .items_center()
-                .gap_1()
-                .cursor_pointer()
-                .flex_none()
-                .hover(|h| h.bg(rgba(ERROR, 0.2)))
-                .child(badge_text)
-                .child(div().font_weight(gpui::FontWeight::BOLD).child("✕"))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.clear_disk_selection();
-                    cx.notify();
-                }))
+            Badge::new(badge_text)
+                .tone(BadgeTone::Error)
+                .shape(BadgeShape::Pill)
+                .padding(8., 3.)
+                .weight(gpui::FontWeight::SEMIBOLD)
+                .no_shrink()
+                .trailing(div().font_weight(gpui::FontWeight::BOLD).child("✕"))
+                .on_click(
+                    "cross-folder-clear-btn",
+                    rgba(ERROR, 0.2),
+                    cx.listener(|this, _, _, cx| {
+                        this.clear_disk_selection();
+                        cx.notify();
+                    }),
+                )
                 .into_any_element(),
         )
     } else {
@@ -97,21 +94,17 @@ pub(super) fn render_right_browser_pane(
                 .gap_2()
                 .overflow_hidden()
                 .child(
-                    div()
-                        .id("disk-up-btn")
-                        .flex_none()
-                        .child(small_button(
-                            btn_parent_text.to_string(),
-                            SURF_HIGH,
-                            TEXT,
-                            depth > 1,
-                        ))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.disk.path.len() > 1 {
-                                this.disk.path.pop();
-                                cx.notify();
-                            }
-                        })),
+                    div().flex_none().child(
+                        Button::small("disk-up-btn", btn_parent_text)
+                            .colors(SURF_HIGH, TEXT)
+                            .disabled(depth <= 1)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.disk.path.len() > 1 {
+                                    this.disk.path.pop();
+                                    cx.notify();
+                                }
+                            })),
+                    ),
                 )
                 .child(crumbs),
         )
@@ -180,7 +173,7 @@ pub(super) fn render_right_browser_pane(
                 .h(px(20.))
                 .flex_none()
                 .cursor_pointer()
-                .child(checkbox(header_check_state))
+                .child(checkbox(header_check_state.into()))
                 .on_click(cx.listener({
                     let items = selectable_items.clone();
                     let all_on = header_check_state == Check::On;
@@ -276,17 +269,17 @@ pub(super) fn render_right_browser_pane(
                     .tooltip(path_tooltip(&full_for_copy)),
             )
             .child(
-                div()
-                    .id("disk-copy-path-btn")
-                    .flex_none()
-                    .child(small_button(copy_label.to_string(), SURF_HIGH, TEXT, true))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                            full_for_copy.clone(),
-                        ));
-                        this.status = copied_status.clone();
-                        cx.notify();
-                    })),
+                div().flex_none().child(
+                    Button::small("disk-copy-path-btn", copy_label)
+                        .colors(SURF_HIGH, TEXT)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                full_for_copy.clone(),
+                            ));
+                            this.status = copied_status.clone();
+                            cx.notify();
+                        })),
+                ),
             )
     });
 
@@ -426,37 +419,29 @@ fn render_lens_row_actions(
         .justify_center()
         .when(drillable && is_dir, |d| {
             d.child(
-                div()
-                    .id(SharedString::from(format!("enter-dir-{idx}")))
-                    .px_2()
-                    .py(px(2.))
-                    .rounded_md()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(PRIMARY))
-                    .cursor_pointer()
-                    .hover(|h| h.bg(rgb(SURF_HIGH)))
-                    .child("›")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.enter_disk_node(idx, cx);
-                    })),
+                Button::new(
+                    SharedString::from(format!("enter-dir-{idx}")),
+                    ButtonVariant::Link,
+                )
+                .label("›")
+                .weight(gpui::FontWeight::BOLD)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.enter_disk_node(idx, cx);
+                })),
             )
         })
         .when(!is_dir && !protected, |d| {
             d.child(
-                div()
-                    .id(SharedString::from(format!("del-file-{idx}")))
-                    .px_2()
-                    .py(px(2.))
-                    .rounded_md()
-                    .text_xs()
-                    .text_color(rgb(ERROR))
-                    .cursor_pointer()
-                    .hover(|h| h.bg(rgb(ERROR_CONTAINER)))
-                    .child(delete_label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.request_clean_path(p_for_del.clone(), size, cx);
-                    })),
+                Button::new(
+                    SharedString::from(format!("del-file-{idx}")),
+                    ButtonVariant::Link,
+                )
+                .label(delete_label)
+                .fg(ERROR)
+                .hover_style(Some(rgba(ERROR_CONTAINER, 1.)), None)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.request_clean_path(p_for_del.clone(), size, cx);
+                })),
             )
         })
         .into_any_element()
@@ -477,25 +462,20 @@ fn render_lens_row(
     let p_for_cb = path.clone();
     let size = n.size;
 
-    div()
-        .id(SharedString::from(format!("lens-row-{idx}")))
-        .flex()
-        .items_center()
-        .gap_3()
-        .px_4()
-        .py_2()
-        .border_b_1()
-        .border_color(rgba(OUTLINE_VAR, 0.25))
-        .hover(|h| h.bg(rgb(SURF_LOW)))
+    ListRow::new(SharedString::from(format!("lens-row-{idx}")))
+        .inset(RowInset::X4Y2)
+        .divider(0.25)
         // 勾选框（受保护的系统核心文件禁用勾选）
-        .child(
+        .leading(
             div()
                 .id(SharedString::from(format!("cb-lens-{idx}")))
                 .w(px(20.))
                 .flex_none()
                 .cursor_pointer()
                 .when(protected, |d| d.opacity(0.3).cursor_not_allowed())
-                .child(checkbox(if is_selected { Check::On } else { Check::Off }))
+                .child(checkbox(
+                    (if is_selected { Check::On } else { Check::Off }).into(),
+                ))
                 .when(!protected, |d| {
                     d.on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_disk_item(&p_for_cb, size);
@@ -504,24 +484,30 @@ fn render_lens_row(
                 }),
         )
         // 图标与名称（点击目录可直接下钻）
-        .child(render_lens_row_name(root, tree, row, drillable, cx))
-        // 大小
-        .child(
+        .content(render_lens_row_name(root, tree, row, drillable, cx))
+        .trailing(
             div()
-                .w(px(90.))
-                .flex_none()
-                .text_right()
-                .text_sm()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(if size >= 1024 * 1024 * 1024 {
-                    rgb(PRIMARY)
-                } else {
-                    rgb(TEXT)
-                })
-                .child(fmt_size(size)),
+                .flex()
+                .items_center()
+                .gap_3()
+                // 大小
+                .child(
+                    div()
+                        .w(px(90.))
+                        .flex_none()
+                        .text_right()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(if size >= 1024 * 1024 * 1024 {
+                            rgb(PRIMARY)
+                        } else {
+                            rgb(TEXT)
+                        })
+                        .child(fmt_size(size)),
+                )
+                // 进入或删除按钮
+                .child(render_lens_row_actions(root, row, drillable, cx)),
         )
-        // 进入或删除按钮
-        .child(render_lens_row_actions(root, row, drillable, cx))
         .into_any_element()
 }
 
@@ -547,7 +533,9 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
         .items_center()
         .gap_2()
         .cursor_pointer()
-        .child(checkbox(if to_recycle { Check::On } else { Check::Off }))
+        .child(checkbox(
+            (if to_recycle { Check::On } else { Check::Off }).into(),
+        ))
         .child(
             div()
                 .text_xs()
@@ -559,112 +547,79 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
         }));
 
     Some(
-        div()
-            .flex_none()
-            .w_full()
-            .px_8()
-            .py_2()
-            .bg(rgb(BG))
-            .border_t_1()
-            .border_color(rgba(OUTLINE_VAR, 0.5))
-            .flex()
-            .justify_center()
-            .child(
+        ActionBar::capsule("disk-clean-bar", CapsulePreset::DockedRoomy)
+            .summary(
                 div()
+                    .w(px(36.))
+                    .h(px(36.))
+                    .rounded_full()
+                    .bg(rgb(ERROR_CONTAINER))
                     .flex()
                     .items_center()
-                    .gap_6()
-                    .pl_6()
-                    .pr(px(6.))
-                    .py(px(6.))
-                    .rounded_full()
-                    .bg(rgb(CARD))
-                    .border_1()
-                    .border_color(rgba(OUTLINE_VAR, 0.6))
-                    .shadow_xl()
+                    .justify_center()
+                    .child(icon_trash(ERROR, 16.)),
+            )
+            .summary(
+                div()
+                    .flex()
+                    .flex_col()
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(36.))
-                            .rounded_full()
-                            .bg(rgb(ERROR_CONTAINER))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon_trash(ERROR, 16.)),
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(rgb(OUTLINE))
+                            .child(if lang == Language::Zh {
+                                "已选择要清理的磁盘项目"
+                            } else {
+                                "Selected Disk Items"
+                            }),
                     )
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(OUTLINE))
-                                    .child(if lang == Language::Zh {
-                                        "已选择要清理的磁盘项目"
-                                    } else {
-                                        "Selected Disk Items"
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(rgb(TEXT))
-                                    .child(items_count_label),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(rgb(ERROR))
-                                    .child(fmt_size(size)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .child(if to_recycle {
-                                        tr_to_be_recycled(lang)
-                                    } else {
-                                        tr_to_be_freed(lang)
-                                    }),
-                            ),
-                    )
-                    .child(recycle_toggle)
-                    .child(
-                        div()
-                            .id("clear-disk-selection-btn")
-                            .child(small_button(
-                                tr_btn_clear_sel(lang).to_string(),
-                                SURF_HIGH,
-                                TEXT,
-                                true,
-                            ))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.clear_disk_selection();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("clean-disk-selected")
-                            .child(crate::ui::components::buttons::danger_button(
-                                tr_btn_confirm_delete(lang).to_string(),
-                                !root.clean.running,
-                            ))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_clean_disk_selected(cx);
-                            })),
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(TEXT))
+                            .child(items_count_label),
                     ),
+            )
+            .summary(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(ERROR))
+                            .child(fmt_size(size)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(OUTLINE))
+                            .child(if to_recycle {
+                                tr_to_be_recycled(lang)
+                            } else {
+                                tr_to_be_freed(lang)
+                            }),
+                    ),
+            )
+            .leading(recycle_toggle)
+            .leading(
+                Button::small("clear-disk-selection-btn", tr_btn_clear_sel(lang))
+                    .colors(SURF_HIGH, TEXT)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.clear_disk_selection();
+                        cx.notify();
+                    })),
+            )
+            .actions(
+                Button::danger("clean-disk-selected", tr_btn_confirm_delete(lang))
+                    .disabled(root.clean.running)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_clean_disk_selected(cx);
+                    })),
             )
             .into_any_element(),
     )

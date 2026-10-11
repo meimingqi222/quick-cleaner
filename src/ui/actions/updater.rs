@@ -303,8 +303,8 @@ impl crate::ui::Root {
             || self.disk.scanning
             || self.declutter.clean_task.is_some();
         if busy && !self.update.install_confirmed {
-            self.confirm = Some(crate::ui::components::ConfirmRequest {
-                kind: crate::ui::components::ConfirmKind::InstallUpdate,
+            self.confirm = Some(crate::ui::adapters::ConfirmRequest {
+                kind: crate::ui::adapters::ConfirmKind::InstallUpdate,
                 title: tr_update_install_title(self.language).to_string(),
                 body: tr_update_install_busy_body(self.language).to_string(),
                 detail: String::new(),

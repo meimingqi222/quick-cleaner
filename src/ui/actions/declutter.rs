@@ -3,7 +3,7 @@
 use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget, CleanProgress, Disposal};
 use crate::core::i18n::{bilingual, Language};
 use crate::core::model::fmt_size;
-use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use crate::ui::views::DeclutterTab;
 use gpui::Context;

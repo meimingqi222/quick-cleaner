@@ -4,6 +4,8 @@ QuickCleaner：Rust + GPUI 的 Windows / macOS 磁盘清理工具。分层是 `u
 
 更完整的现状和模块图见 [`docs/HANDOFF.md`](docs/HANDOFF.md)，需求见 [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)。
 
+`docs/` 默认不进库，需要长期维护的文档要在 `.gitignore` 里逐个放行。临时调查、审查和 spike 结论放进 `docs/temp/`，只保留在本地。
+
 ## 命令
 
 ```bash

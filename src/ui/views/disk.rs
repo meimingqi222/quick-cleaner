@@ -6,7 +6,9 @@ use super::disk_volume::format_volume_label;
 use crate::core::disk::ScanResult;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
-use crate::ui::components::controls::{loading_state_view, page_heading};
+use crate::ui::components::button::Button;
+use crate::ui::components::controls::page_heading;
+use crate::ui::components::feedback::LoadingState;
 use crate::ui::components::icons::*;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -44,7 +46,9 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     };
 
     let body = if root.disk.scanning {
-        loading_state_view(&loading_title, &loading_sub, root.anim_phase)
+        LoadingState::new(loading_title, root.anim_phase)
+            .description(loading_sub)
+            .into_any_element()
     } else if let Some(ref err) = root.disk.error {
         let err_hint = tr_disk_error_hint(lang);
         let err_prefix = tr_disk_error_prefix(lang);
@@ -183,18 +187,13 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     .max_w(px(720.))
                     .children(vol_cards),
             )
-            .child(
-                div()
-                    .id("start-mft-scan-btn")
-                    .pt_2()
-                    .child(crate::ui::components::buttons::primary_button(
-                        btn_scan_text,
-                        true,
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
+            .child(div().pt_2().child(
+                Button::primary("start-mft-scan-btn", btn_scan_text).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.start_mft_scan(cx);
-                    })),
-            )
+                    },
+                )),
+            ))
             .into_any_element()
     };
 

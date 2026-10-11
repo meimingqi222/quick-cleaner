@@ -10,15 +10,20 @@ use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_mem, fmt_size, truncate};
 use crate::core::status::{gpu_labels, FanMode, StatusSnapshot, STATUS_PROCESS_TABLE_H};
 use crate::ui::app_icons::try_get_icon;
+use crate::ui::components::badge::{Badge, BadgeShape, BadgeSize, BadgeTone};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::page_heading;
 use crate::ui::components::donut::{render_donut, DonutSegment};
 use crate::ui::components::icons::*;
+use crate::ui::components::meter::{Meter, MeterHeight};
 use crate::ui::components::popover::{
     popover_list, popover_overlay, popover_row, popover_surface, PopoverCandidate, PopoverSpec,
 };
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
+};
+use crate::ui::components::segmented::{
+    ChipLook, ChipPadX, ChipRadius, SegmentItem, SegmentStyle, SegmentedControl,
 };
 use crate::ui::components::text_tooltip;
 use crate::ui::i18n::*;
@@ -156,22 +161,10 @@ fn card_header(icon: AnyElement, title: &str, chip: Option<String>) -> Div {
 
 /// 卡片右上角的徽章。
 ///
-/// 卡片只有约 1/4 行宽，徽章是次要信息：位置不够时先缩它、缩不下就省略号，
-/// 绝不许把卡片撑破。`truncate` 里的 `overflow_hidden` 同时把自动最小尺寸
-/// 归零，否则文字的最小内容宽度会顶着徽章不缩。
-fn header_chip(text: String) -> Div {
-    div()
-        .flex_shrink()
-        .min_w(px(0.))
-        .truncate()
-        .px_2()
-        .py(px(2.))
-        .rounded_md()
-        .bg(rgb(SURF_LOW))
-        .text_xs()
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(rgb(MUTED))
-        .child(text)
+/// 卡片只有约 1/4 行宽，徽章是次要信息：位置不够时先缩它、缩不下就裁剪，
+/// 绝不许把卡片撑破（P3，`clip` 负责）。
+fn header_chip(text: String) -> Badge {
+    Badge::new(text).tone(BadgeTone::NeutralSoft).clip()
 }
 
 /// 大数字 + 单位（各卡片的主读数）。
@@ -193,29 +186,6 @@ fn big_number(value: String, unit: String) -> Div {
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(MUTED))
                 .child(unit),
-        )
-}
-
-/// 水平进度条（磁盘 / 内存卡片）。
-fn meter(ratio: f32) -> Div {
-    meter_colored(ratio, PRIMARY)
-}
-
-/// 同上，但可以指定填充色——电池要用状态色（低电量变红）表达紧迫程度。
-fn meter_colored(ratio: f32, color: u32) -> Div {
-    let ratio = ratio.clamp(0.0, 1.0);
-    div()
-        .w_full()
-        .h(px(6.))
-        .rounded_full()
-        .bg(rgb(SURF_HIGHEST))
-        .overflow_hidden()
-        .child(
-            div()
-                .h_full()
-                .rounded_full()
-                .bg(rgb(color))
-                .w(relative(ratio)),
         )
 }
 
@@ -343,19 +313,9 @@ fn cpu_cell(cpu: f32, width: f32) -> Div {
         .justify_end()
         .gap_1p5()
         .child(
-            div()
-                .w(px(24.))
-                .h(px(3.))
-                .rounded_full()
-                .bg(rgb(SURF_HIGHEST))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .h_full()
-                        .rounded_full()
-                        .bg(rgb(bar_color))
-                        .w(relative((cpu / 100.0).clamp(0.0, 1.0))),
-                ),
+            Meter::new(cpu / 100.0, bar_color)
+                .width(px(24.))
+                .height(MeterHeight::Hairline),
         )
         .child(
             div()
@@ -607,37 +567,19 @@ fn gpu_switch_buttons(
     selected: usize,
     cx: &mut Context<Root>,
 ) -> Div {
-    let mut row = div().mt_3().flex().gap_2();
-    for ((index, gpu), label) in gpus.iter().enumerate().zip(gpu_labels(gpus)) {
-        let is_active = index == selected;
-        let id = gpu.id.clone();
-        row = row.child(
-            div()
-                .id(SharedString::from(format!("gpu-{}", gpu.id)))
-                .flex_1()
-                .min_w(px(0.))
-                .truncate()
-                .py(px(6.))
-                .rounded_lg()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_center()
-                .cursor_pointer()
-                .when(is_active, |d| {
-                    d.bg(rgb(PRIMARY)).text_color(rgb(ON_PRIMARY))
-                })
-                .when(!is_active, |d| {
-                    d.bg(rgb(SURF_LOW))
-                        .text_color(rgb(MUTED))
-                        .hover(|h| h.bg(rgb(SURF_HIGH)))
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_gpu(id.clone(), cx);
-                })),
-        );
+    let current = gpus.get(selected).map(|g| g.id.clone()).unwrap_or_default();
+    let mut control = SegmentedControl::new(
+        "gpu-switch",
+        current,
+        cx.listener(|this, id: &String, _, cx| {
+            this.select_gpu(id.clone(), cx);
+        }),
+    )
+    .style(SegmentStyle::Solid);
+    for (gpu, label) in gpus.iter().zip(gpu_labels(gpus)) {
+        control = control.item(SegmentItem::new(gpu.id.clone(), label));
     }
-    row
+    div().mt_3().child(control)
 }
 
 /// 电池电量对应的强调色：低电量要显眼，充电中回到主色。
@@ -685,11 +627,7 @@ fn render_battery_card(bat: &crate::core::status::BatteryReading, root: &Root) -
             bat.temp_c.map(|t| format!("{t:.0} °C")),
         ))
         .child(big_number(format!("{:.0}", bat.percent), "%".to_string()))
-        .child(
-            div()
-                .mt_3()
-                .child(meter_colored(bat.percent / 100.0, accent)),
-        )
+        .child(div().mt_3().child(Meter::new(bat.percent / 100.0, accent)))
         .child(
             div()
                 .mt_2()
@@ -728,7 +666,7 @@ fn render_memory_card(snap: &StatusSnapshot, root: &Root) -> Div {
             fmt_mem(snap.mem_used),
             tr_status_used(lang).to_string(),
         ))
-        .child(div().mt_3().child(meter(ratio)))
+        .child(div().mt_3().child(Meter::new(ratio, PRIMARY)))
         .child(card_footer(footer))
 }
 
@@ -751,7 +689,7 @@ fn render_disk_card(root: &Root) -> Div {
             fmt_size(free),
             tr_status_available(lang).to_string(),
         ))
-        .child(div().mt_3().child(meter(ratio)))
+        .child(div().mt_3().child(Meter::new(ratio, PRIMARY)))
         .child(card_footer(vec![
             format!("{} {}", tr_status_used(lang), fmt_size(used)),
             format!("{:.0}%", ratio * 100.0),
@@ -829,43 +767,18 @@ fn fan_mode_buttons(root: &Root, has_temp: bool, cx: &mut Context<Root>) -> Div 
         modes.push((FanMode::Percent(60), tr_fan_mode_cool(lang)));
     }
     modes.push((FanMode::Percent(100), tr_fan_mode_full(lang)));
-    let mut row = div().mt_3().flex().gap_2();
+    let mut control = SegmentedControl::new(
+        "fan-mode",
+        active,
+        cx.listener(|this, mode: &FanMode, _, cx| {
+            this.apply_fan_mode(*mode, cx);
+        }),
+    )
+    .style(SegmentStyle::Solid);
     for (mode, label) in modes {
-        let is_active = active == mode;
-        row = row.child(
-            div()
-                .id(SharedString::from(format!(
-                    "fan-{}",
-                    match mode {
-                        FanMode::Auto => "auto".to_string(),
-                        FanMode::Percent(p) => p.to_string(),
-                    }
-                )))
-                .flex_1()
-                .py(px(6.))
-                .rounded_lg()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_center()
-                .cursor_pointer()
-                .when(is_active, |d| {
-                    d.bg(rgb(PRIMARY)).text_color(rgb(ON_PRIMARY))
-                })
-                .when(!is_active && !applying, |d| {
-                    d.bg(rgb(SURF_LOW))
-                        .text_color(rgb(MUTED))
-                        .hover(|h| h.bg(rgb(SURF_HIGH)))
-                })
-                .when(applying && !is_active, |d| {
-                    d.bg(rgb(SURF_LOW)).text_color(rgba(MUTED, 0.5))
-                })
-                .child(label.to_string())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.apply_fan_mode(mode, cx);
-                })),
-        );
+        control = control.item(SegmentItem::new(mode, label.to_string()).disabled(applying));
     }
-    row
+    div().mt_3().child(control)
 }
 
 fn render_fan_card(snap: &StatusSnapshot, root: &Root, cx: &mut Context<Root>) -> Div {
@@ -1095,27 +1008,23 @@ fn render_ports_badge(ports: &[u16]) -> Option<Div> {
     let mut badges = div().flex().items_center().gap_1();
     for &p in ports.iter().take(2) {
         badges = badges.child(
-            div()
-                .px(px(4.))
-                .py(px(0.5))
-                .rounded(px(3.))
-                .bg(rgba(PRIMARY, 0.12))
-                .text_color(rgb(PRIMARY))
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(format!(":{p}")),
+            Badge::new(format!(":{p}"))
+                .shape(BadgeShape::Tag)
+                .size(BadgeSize::Tiny)
+                .weight(gpui::FontWeight::SEMIBOLD)
+                .tone(BadgeTone::Custom {
+                    bg: rgba(PRIMARY, 0.12),
+                    fg: rgb(PRIMARY).into(),
+                }),
         );
     }
     if ports.len() > 2 {
         badges = badges.child(
-            div()
-                .px(px(3.))
-                .py(px(0.5))
-                .rounded(px(3.))
-                .bg(rgb(SURF_LOW))
-                .text_color(rgb(MUTED))
-                .text_xs()
-                .child(format!("+{}", ports.len() - 2)),
+            Badge::new(format!("+{}", ports.len() - 2))
+                .shape(BadgeShape::Tag)
+                .padding(3., 0.5)
+                .weight(gpui::FontWeight::NORMAL)
+                .tone(BadgeTone::NeutralSoft),
         );
     }
     Some(badges)
@@ -2515,8 +2424,8 @@ fn render_process_table(
     let search_marked = root.monitor.input.marked.clone();
     let sel = crate::ui::text_input::clamp_to_boundary(&search_text, search_sel);
 
-    let search_box_el = crate::ui::components::search_box::search_box(
-        crate::ui::components::search_box::SearchBoxSpec {
+    let search_box_el = crate::ui::adapters::search_box::search_box(
+        crate::ui::adapters::search_box::SearchBoxSpec {
             id: SharedString::from("status-proc-search-box"),
             focus_handle: &status_focus_handle,
             text: &search_text,
@@ -2568,42 +2477,29 @@ fn render_process_table(
             tr_status_tab_system(lang),
         ),
     ];
-    let tab_buttons: Vec<AnyElement> = filter_tabs
-        .into_iter()
-        .map(|(tab, label)| {
-            let is_active = current_tab == tab;
-            div()
-                .id(SharedString::from(format!("proc-tab-{tab:?}")))
-                .px_2p5()
-                .py(px(3.))
-                .rounded_md()
-                .cursor_pointer()
-                .text_xs()
-                .font_weight(if is_active {
-                    gpui::FontWeight::SEMIBOLD
-                } else {
-                    gpui::FontWeight::MEDIUM
-                })
-                .when(is_active, |d| {
-                    d.bg(rgb(PRIMARY_FIXED))
-                        .border_1()
-                        .border_color(rgb(PRIMARY))
-                        .text_color(rgb(PRIMARY))
-                })
-                .when(!is_active, |d| {
-                    d.bg(rgb(CARD))
-                        .border_1()
-                        .border_color(rgba(OUTLINE_VAR, 0.7))
-                        .text_color(rgb(MUTED))
-                        .hover(|h| h.bg(rgb(SURF_LOW)).text_color(rgb(TEXT)))
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.status_set_filter_tab(tab, cx);
-                }))
-                .into_any_element()
-        })
-        .collect();
+    let tab_buttons = SegmentedControl::new(
+        "proc-tab",
+        current_tab,
+        cx.listener(|this, tab: &crate::core::status::ProcFilterTab, _, cx| {
+            this.status_set_filter_tab(*tab, cx);
+        }),
+    )
+    .style(SegmentStyle::Chip)
+    .chip_look(ChipLook {
+        pad_x: ChipPadX::X2p5,
+        pad_y: 3.,
+        radius: ChipRadius::Md,
+        rest_border: Some(0.7),
+        weight_rest: gpui::FontWeight::MEDIUM,
+        hover_fg: Some(TEXT),
+        ..ChipLook::CHIP
+    })
+    .gap(4.)
+    .items(
+        filter_tabs
+            .into_iter()
+            .map(|(tab, label)| SegmentItem::new(tab, label)),
+    );
 
     let popover_el = root
         .monitor
@@ -2812,7 +2708,7 @@ fn render_process_table(
                         .items_center()
                         .gap_2()
                         .child(search_box_container)
-                        .child(div().flex().items_center().gap_1().children(tab_buttons)),
+                        .child(tab_buttons),
                 ),
         )
         .child(

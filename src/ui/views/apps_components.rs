@@ -3,8 +3,9 @@
 use crate::core::apps::InstalledApp;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::app_icons::try_get_icon;
-use crate::ui::components::buttons::small_button;
+use crate::ui::components::button::{Button, IconButton, IconButtonVariant};
 use crate::ui::components::cards::card;
+use crate::ui::components::list_row::{ListRow, RowInset};
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
@@ -65,72 +66,42 @@ pub(super) fn render_app_row(
     let is_busy = root.residual.scanning || root.clean.running;
     let uninst_enabled = can_uninstall && !is_busy;
 
-    div()
-        .id(SharedString::from(format!("app-row-{idx}")))
-        .w_full()
-        .h(px(APP_ROW_H))
+    let name_col = div()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(truncate(&app.name, 38)),
+        )
+        .when(app.discovery.is_some(), |d| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(crate::ui::i18n::tr_app_discovery_label(lang, can_uninstall)),
+            )
+        })
+        .when(app.discovery.is_none() && !app.version.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(OUTLINE))
+                    .child(format!("v{}", truncate(&app.version, 24))),
+            )
+        });
+
+    let columns = div()
+        .flex_none()
         .flex()
         .items_center()
         .gap_3()
-        .px_5()
-        .border_b_1()
-        .border_color(rgba(OUTLINE_VAR, 0.3))
-        .hover(|h| h.bg(rgb(SURF_LOW)))
-        .on_mouse_down(
-            gpui::MouseButton::Right,
-            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                let x: f32 = event.position.x.into();
-                let y: f32 = event.position.y.into();
-                this.open_app_context_menu(app_for_menu_rc.clone(), x, y);
-                cx.notify();
-            }),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(icon_element)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(TEXT))
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .child(truncate(&app.name, 38)),
-                        )
-                        .when(app.discovery.is_some(), |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .child(crate::ui::i18n::tr_app_discovery_label(
-                                        lang,
-                                        can_uninstall,
-                                    )),
-                            )
-                        })
-                        .when(app.discovery.is_none() && !app.version.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(OUTLINE))
-                                    .child(format!("v{}", truncate(&app.version, 24))),
-                            )
-                        }),
-                ),
-        )
         .child(
             div()
                 .w(px(130.))
@@ -192,68 +163,66 @@ pub(super) fn render_app_row(
                 .justify_end()
                 .gap_2()
                 .child(
-                    div()
-                        .id(SharedString::from(format!("uninst-{idx}")))
-                        .child(small_button(
-                            crate::ui::i18n::tr_btn_uninstall(lang).to_string(),
-                            CARD,
-                            TEXT,
-                            uninst_enabled,
-                        ))
-                        .when(uninst_enabled, |d| {
-                            d.on_click(cx.listener(move |this, _, _, cx| {
-                                this.request_uninstall_app(app_for_uninst.clone(), cx);
-                            }))
-                        }),
+                    Button::small(
+                        SharedString::from(format!("uninst-{idx}")),
+                        crate::ui::i18n::tr_btn_uninstall(lang),
+                    )
+                    .colors(CARD, TEXT)
+                    .disabled(!uninst_enabled)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.request_uninstall_app(app_for_uninst.clone(), cx);
+                    })),
                 )
                 // macOS 上卸载已经会扫 Library 残留；强力清理卸不掉 .app，单独入口没有意义。
                 .when(!cfg!(target_os = "macos"), |d| {
-                    let resid_enabled = !is_busy;
                     d.child(
-                        div()
-                            .id(SharedString::from(format!("clean-resid-{idx}")))
-                            .child(small_button(
-                                if app.discovery.is_some() {
-                                    crate::ui::i18n::tr_btn_remove_program(lang)
-                                } else {
-                                    crate::ui::i18n::tr_btn_force_clean(lang)
-                                }
-                                .to_string(),
-                                PRIMARY_FIXED,
-                                PRIMARY,
-                                resid_enabled,
-                            ))
-                            .when(resid_enabled, |el| {
-                                el.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.start_residual_scan(app_for_resid.clone(), cx);
-                                }))
-                            }),
+                        Button::small(
+                            SharedString::from(format!("clean-resid-{idx}")),
+                            if app.discovery.is_some() {
+                                crate::ui::i18n::tr_btn_remove_program(lang)
+                            } else {
+                                crate::ui::i18n::tr_btn_force_clean(lang)
+                            },
+                        )
+                        .colors(PRIMARY_FIXED, PRIMARY)
+                        .disabled(is_busy)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.start_residual_scan(app_for_resid.clone(), cx);
+                        })),
                     )
                 })
                 .child(
-                    div()
-                        .id(SharedString::from(format!("more-btn-{idx}")))
-                        .w(px(28.))
-                        .h(px(28.))
-                        .rounded_md()
-                        .bg(rgb(SURF_HIGH))
-                        .hover(|h| h.bg(rgb(SURF_HIGHEST)))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(MUTED))
-                        .child("···")
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    IconButton::new(
+                        SharedString::from(format!("more-btn-{idx}")),
+                        IconButtonVariant::Tile,
+                    )
+                    .child("···")
+                    .on_click(cx.listener(
+                        move |this, event: &gpui::ClickEvent, _, cx| {
                             let pos = event.position();
                             let x: f32 = pos.x.into();
                             let y: f32 = pos.y.into();
                             this.open_app_context_menu(app_for_menu_btn.clone(), x, y);
                             cx.notify();
-                        })),
+                        },
+                    )),
                 ),
+        );
+
+    ListRow::new(SharedString::from(format!("app-row-{idx}")))
+        .height(APP_ROW_H)
+        .inset(RowInset::X5)
+        .divider(0.3)
+        .leading(icon_element)
+        .content(name_col)
+        .trailing(columns)
+        .on_right_click(
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                let x: f32 = event.position.x.into();
+                let y: f32 = event.position.y.into();
+                this.open_app_context_menu(app_for_menu_rc.clone(), x, y);
+                cx.notify();
+            }),
         )
         .into_any_element()
 }

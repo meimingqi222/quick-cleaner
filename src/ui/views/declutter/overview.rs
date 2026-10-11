@@ -2,6 +2,7 @@
 
 use super::DeclutterTab;
 use crate::core::model::fmt_size;
+use crate::ui::components::badge::{Badge, BadgeShape, BadgeTone};
 use crate::ui::components::icons::{
     icon_badge, icon_downloads, icon_files_duplicate, icon_photos_similar, icon_rocket, icon_weight,
 };
@@ -50,53 +51,25 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .child(
                             // 扫描中 / 扫描完成显示耗时，未扫描时不显示徽章
                             if state.scanning {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .py(px(3.))
-                                    .rounded_full()
-                                    .bg(rgb(0xefdbff))
-                                    .child(
-                                        div()
-                                            .w(px(6.))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(rgb(0x7547ab)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(0x5c2d91))
-                                            .child(tr_declutter_scanning(lang)),
-                                    )
+                                Badge::new(tr_declutter_scanning(lang))
+                                    .shape(BadgeShape::Pill)
+                                    .padding(12., 3.)
+                                    .gap(8.)
+                                    .weight(gpui::FontWeight::BOLD)
+                                    .tone(BadgeTone::custom(0xefdbff, 0x5c2d91))
+                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(0x7547ab)))
+                                    .into_any_element()
                             } else if let Some(secs) = state.scan_elapsed_secs {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .py(px(3.))
-                                    .rounded_full()
-                                    .bg(rgb(0xefdbff))
-                                    .child(
-                                        div()
-                                            .w(px(6.))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(rgb(0x7547ab)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(0x5c2d91))
-                                            .child(tr_declutter_scan_elapsed(lang, secs)),
-                                    )
+                                Badge::new(tr_declutter_scan_elapsed(lang, secs))
+                                    .shape(BadgeShape::Pill)
+                                    .padding(12., 3.)
+                                    .gap(8.)
+                                    .weight(gpui::FontWeight::BOLD)
+                                    .tone(BadgeTone::custom(0xefdbff, 0x5c2d91))
+                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(0x7547ab)))
+                                    .into_any_element()
                             } else {
-                                div()
+                                div().into_any_element()
                             },
                         )
                         .child(
@@ -228,15 +201,10 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 ),
                                         )
                                         .child(
-                                            div()
-                                                .px_3()
-                                                .py(px(3.))
-                                                .rounded_full()
-                                                .bg(rgb(SURF_HIGH))
-                                                .text_xs()
-                                                .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(rgb(TEXT))
-                                                .child(tr_declutter_review(lang)),
+                                            Badge::new(tr_declutter_review(lang))
+                                                .shape(BadgeShape::Pill)
+                                                .padding(12., 3.)
+                                                .tone(BadgeTone::custom(SURF_HIGH, TEXT)),
                                         ),
                                 )
                                 .child(
@@ -509,15 +477,11 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 ),
                                         )
                                         .child(
-                                            div()
-                                                .px_3()
-                                                .py(px(3.))
-                                                .rounded_full()
-                                                .bg(rgb(0xefdbff))
-                                                .text_xs()
-                                                .font_weight(gpui::FontWeight::BOLD)
-                                                .text_color(rgb(0x5c2d91))
-                                                .child(tr_declutter_overview_select(lang)),
+                                            Badge::new(tr_declutter_overview_select(lang))
+                                                .shape(BadgeShape::Pill)
+                                                .padding(12., 3.)
+                                                .weight(gpui::FontWeight::BOLD)
+                                                .tone(BadgeTone::custom(0xefdbff, 0x5c2d91)),
                                         ),
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -578,16 +542,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 ),
                                         )
                                         .child(
-                                            div()
-                                                .px_2()
-                                                .py(px(2.))
-                                                .rounded_full()
-                                                .bg(rgb(SURF_HIGH))
-                                                .text_xs()
-                                                .text_color(rgb(MUTED))
-                                                .child(tr_declutter_overview_status_badge(
-                                                    lang, state.scanned,
-                                                )),
+                                            Badge::new(tr_declutter_overview_status_badge(lang, state.scanned))
+                                                .shape(BadgeShape::Pill)
+                                                .weight(gpui::FontWeight::NORMAL),
                                         ),
                                 )
                                 .child(

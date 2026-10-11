@@ -5,6 +5,8 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::model::fmt_size;
+use crate::ui::components::badge::{Badge, BadgeTone};
+use crate::ui::components::button::{Button, ButtonVariant};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_files_duplicate};
 use crate::ui::i18n::*;
@@ -90,11 +92,14 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .items_center()
                                 .gap_3()
                                 .cursor_pointer()
-                                .child(checkbox(if is_sel {
-                                    crate::core::model::Check::On
-                                } else {
-                                    crate::core::model::Check::Off
-                                }))
+                                .child(checkbox(
+                                    (if is_sel {
+                                        crate::core::model::Check::On
+                                    } else {
+                                        crate::core::model::Check::Off
+                                    })
+                                    .into(),
+                                ))
                                 .child(
                                     div()
                                         .flex_1()
@@ -138,83 +143,47 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .items_center()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .id(SharedString::from(format!(
+                                    Button::new(
+                                        SharedString::from(format!(
                                             "btn-reveal-dup-{g_idx}-{f_idx}"
-                                        )))
-                                        .px_2()
-                                        .py(px(2.))
-                                        .rounded_md()
-                                        .bg(rgb(SURF_HIGH))
-                                        .hover(|h| {
-                                            h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                        )),
+                                        ButtonVariant::Mini,
+                                    )
+                                    .label(tr_declutter_reveal(lang))
+                                    .on_click({
+                                        let p = file.path.clone();
+                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            crate::platform::reveal_in_explorer(&p);
                                         })
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(MUTED))
-                                        .cursor_pointer()
-                                        .child(tr_declutter_reveal(lang))
-                                        .on_click({
-                                            let p = file.path.clone();
-                                            cx.listener(
-                                                move |_, _event: &gpui::ClickEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    crate::platform::reveal_in_explorer(&p);
-                                                },
-                                            )
-                                        }),
+                                    }),
                                 )
                                 .child(
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "btn-open-dup-{g_idx}-{f_idx}"
-                                        )))
-                                        .px_2()
-                                        .py(px(2.))
-                                        .rounded_md()
-                                        .bg(rgb(SURF_HIGH))
-                                        .hover(|h| {
-                                            h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))
+                                    Button::new(
+                                        SharedString::from(format!("btn-open-dup-{g_idx}-{f_idx}")),
+                                        ButtonVariant::Mini,
+                                    )
+                                    .label(tr_declutter_open(lang))
+                                    .on_click({
+                                        let p = file.path.clone();
+                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            crate::platform::open_in_default_app(&p);
                                         })
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(MUTED))
-                                        .cursor_pointer()
-                                        .child(tr_declutter_open(lang))
-                                        .on_click({
-                                            let p = file.path.clone();
-                                            cx.listener(
-                                                move |_, _event: &gpui::ClickEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    crate::platform::open_in_default_app(&p);
-                                                },
-                                            )
-                                        }),
+                                    }),
                                 )
                                 .when(is_orig, |d| {
                                     d.child(
-                                        div()
-                                            .px_2()
-                                            .py(px(2.))
-                                            .rounded_md()
-                                            .bg(rgb(SURF_HIGH))
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(OUTLINE))
-                                            .child(tr_declutter_duplicates_original(lang)),
+                                        Badge::new(tr_declutter_duplicates_original(lang))
+                                            .tone(BadgeTone::custom(SURF_HIGH, OUTLINE))
+                                            .weight(gpui::FontWeight::BOLD),
                                     )
                                 })
                                 .when(!is_orig && is_sel, |d| {
                                     d.child(
-                                        div()
-                                            .px_2()
-                                            .py(px(2.))
-                                            .rounded_md()
-                                            .bg(rgb(ERROR_CONTAINER))
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(ERROR))
-                                            .child(tr_declutter_duplicates_copy(lang)),
+                                        Badge::new(tr_declutter_duplicates_copy(lang))
+                                            .tone(BadgeTone::Error)
+                                            .weight(gpui::FontWeight::BOLD),
                                     )
                                 }),
                         )
@@ -335,40 +304,16 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                 .items_center()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .id("btn-auto-mark-newest")
-                                        .px_4()
-                                        .py_2()
-                                        .rounded_lg()
-                                        .bg(rgb(SURF_HIGH))
-                                        .border_1()
-                                        .border_color(rgba(OUTLINE_VAR, 0.4))
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(TEXT))
-                                        .hover(|h| h.bg(rgb(SURF_LOW)))
-                                        .cursor_pointer()
-                                        .child(tr_declutter_duplicates_keep_newest(lang))
+                                    Button::new("btn-auto-mark-newest", ButtonVariant::Tonal)
+                                        .label(tr_declutter_duplicates_keep_newest(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.pick_duplicates_keep_newest();
                                             cx.notify();
                                         })),
                                 )
                                 .child(
-                                    div()
-                                        .id("btn-auto-mark-oldest")
-                                        .px_4()
-                                        .py_2()
-                                        .rounded_lg()
-                                        .bg(rgb(SURF_HIGH))
-                                        .border_1()
-                                        .border_color(rgba(OUTLINE_VAR, 0.4))
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(TEXT))
-                                        .hover(|h| h.bg(rgb(SURF_LOW)))
-                                        .cursor_pointer()
-                                        .child(tr_declutter_duplicates_keep_oldest(lang))
+                                    Button::new("btn-auto-mark-oldest", ButtonVariant::Tonal)
+                                        .label(tr_declutter_duplicates_keep_oldest(lang))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.declutter.pick_duplicates_keep_oldest();
                                             cx.notify();

@@ -1,0 +1,17 @@
+{
+ "components-no-root": {},
+ "views-no-key-handlers": {
+  "src/ui/views/status.rs": 1
+ },
+ "views-no-overlay-backdrop": {
+  "src/ui/views/apps.rs": 1,
+  "src/ui/views/declutter/context_menu.rs": 1,
+  "src/ui/views/disk_volume.rs": 1
+ },
+ "views-no-scroll-drag": {
+  "src/ui/views/apps_components.rs": 3,
+  "src/ui/views/junk.rs": 3,
+  "src/ui/views/search.rs": 3,
+  "src/ui/views/status.rs": 3
+ }
+}

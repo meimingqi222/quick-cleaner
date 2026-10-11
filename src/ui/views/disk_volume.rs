@@ -4,6 +4,7 @@ use crate::core::disk::VolumeId;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::icons::*;
+use crate::ui::components::list_row::{ListRow, RowHover, RowInset, RowVariant};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -85,7 +86,7 @@ pub(super) fn render_volume_selector_button(
 
 /// 磁盘切换下拉浮层菜单
 pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
-    if !root.disk.volume_menu_open || root.view != crate::ui::components::sidebar::View::Disk {
+    if !root.disk.volume_menu_open || root.view != crate::ui::shell::View::Disk {
         return None;
     }
     let lang = root.language;
@@ -110,19 +111,12 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
             let item_id = SharedString::from(format!("dropdown-vol-item-{}", v.display()));
             let v_clone = v.clone();
 
-            div()
-                .id(item_id)
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_3()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .cursor_pointer()
-                .when(active, |d| d.bg(rgb(PRIMARY_FIXED)))
-                .when(!active, |d| d.hover(|h| h.bg(rgb(SURF_HIGH))))
-                .child(
+            let row = ListRow::new(item_id)
+                .variant(RowVariant::Soft)
+                .hover(RowHover::High)
+                .inset(RowInset::X3Y2)
+                .selected(active)
+                .content(
                     div()
                         .flex()
                         .items_center()
@@ -158,20 +152,22 @@ pub fn render_disk_volume_dropdown(root: &Root, cx: &mut Context<Root>) -> Optio
                                 }),
                         ),
                 )
-                .when(active, |d| {
-                    d.child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(PRIMARY))
-                            .child("✓"),
-                    )
-                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.switch_disk_volume(v_clone.clone(), cx);
                     cx.notify();
-                }))
-                .into_any_element()
+                }));
+            let row = if active {
+                row.trailing(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(PRIMARY))
+                        .child("✓"),
+                )
+            } else {
+                row
+            };
+            row.into_any_element()
         })
         .collect();
 

@@ -1,7 +1,7 @@
 //! 应用更新对话框
 
 use crate::core::updater::UpdateStatus;
-use crate::ui::components::buttons::{ghost_button, primary_button, small_button};
+use crate::ui::components::button::Button;
 use crate::ui::components::cards::card;
 use crate::ui::components::icons::icon_app_logo;
 use crate::ui::i18n::*;
@@ -145,15 +145,8 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                                 .gap_2()
                                 .when(show_skip, |d| {
                                     d.child(
-                                        div()
-                                            .id("update-skip")
-                                            .cursor_pointer()
-                                            .child(small_button(
-                                                tr_update_skip_version(lang).to_string(),
-                                                SURF_HIGH,
-                                                TEXT,
-                                                true,
-                                            ))
+                                        Button::small("update-skip", tr_update_skip_version(lang))
+                                            .colors(SURF_HIGH, TEXT)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.skip_this_update_version(cx);
                                             })),
@@ -161,16 +154,13 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                                 })
                                 .when(release_url.is_some(), |d| {
                                     d.child(
-                                        div()
-                                            .id("update-open-release")
-                                            .cursor_pointer()
-                                            .child(small_button(
-                                                tr_update_open_release(lang).to_string(),
-                                                SURF_HIGH,
-                                                TEXT,
-                                                true,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, _cx| {
+                                        Button::small(
+                                            "update-open-release",
+                                            tr_update_open_release(lang),
+                                        )
+                                        .colors(SURF_HIGH, TEXT)
+                                        .on_click(
+                                            cx.listener(|this, _, _, _cx| {
                                                 if let Some(url) = match &this.update.status {
                                                     UpdateStatus::Available {
                                                         release_url, ..
@@ -183,27 +173,22 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                                                 } {
                                                     this.open_update_release_page(url);
                                                 }
-                                            })),
+                                            }),
+                                        ),
                                     )
                                 }),
                         )
-                        .child(
-                            div().flex().items_center().gap_2().child(
-                                div()
-                                    .id("update-later")
-                                    .cursor_pointer()
-                                    .child(ghost_button(tr_update_later(lang).to_string(), true))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.dismiss_update_dialog(cx);
-                                    })),
+                        .child(div().flex().items_center().gap_2().child(
+                            Button::ghost("update-later", tr_update_later(lang)).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.dismiss_update_dialog(cx);
+                                }),
                             ),
-                        ),
+                        )),
                 )
                 .child(
-                    div()
-                        .id("update-primary")
-                        .cursor_pointer()
-                        .child(primary_button(primary_label, primary_enabled))
+                    Button::primary("update-primary", primary_label)
+                        .disabled(!primary_enabled)
                         .on_click(
                             cx.listener(move |this, _, _, cx| match &this.update.status {
                                 UpdateStatus::Available { .. } => this.start_update_download(cx),

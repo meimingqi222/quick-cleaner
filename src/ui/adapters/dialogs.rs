@@ -3,10 +3,12 @@
 use crate::core::apps::{InstalledApp, ResidualKind, ResidualOccupancy, ResidualScope};
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
-use crate::ui::components::buttons::{danger_button, ghost_button, primary_button, small_button};
+use crate::ui::components::badge::{Badge, BadgeTone};
+use crate::ui::components::button::Button;
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::*;
+use crate::ui::components::list_row::{ListRow, RowInset, RowRadius};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -143,25 +145,22 @@ pub fn render_confirm_dialog(
                         .gap_2()
                         .pt_2()
                         .child(
-                            div()
-                                .id("confirm-cancel")
-                                .child(ghost_button(cancel_label.to_string(), true))
-                                .on_click(cx.listener(|this, _, _, cx| {
+                            Button::ghost("confirm-cancel", cancel_label).on_click(cx.listener(
+                                |this, _, _, cx| {
                                     this.confirm = None;
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            div()
-                                .id("confirm-accept")
-                                .child(if is_fan_install || is_update {
-                                    primary_button(confirm_label.to_string(), true)
-                                } else {
-                                    danger_button(confirm_label.to_string(), true)
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_accept(cx);
-                                })),
+                            if is_fan_install || is_update {
+                                Button::primary("confirm-accept", confirm_label)
+                            } else {
+                                Button::danger("confirm-accept", confirm_label)
+                            }
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.confirm_accept(cx);
+                            })),
                         ),
                 ),
         )
@@ -318,80 +317,51 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                 let is_checked = root.residual.selected.contains(&idx);
                 let check_state = if is_checked { Check::On } else { Check::Off };
 
-                div()
-                    .id(SharedString::from(format!("resid-item-{idx}")))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .cursor_pointer()
-                    .hover(|h| h.bg(rgb(SURF_LOW)))
-                    .child(checkbox(check_state))
-                    // 置信度标签
-                    .child(
+                let row = ListRow::new(SharedString::from(format!("resid-item-{idx}")))
+                    .inset(RowInset::X3Y2)
+                    .radius(RowRadius::Lg)
+                    .leading(
                         div()
-                            .flex_none()
-                            .px_2()
-                            .py(px(1.))
-                            .rounded_md()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .bg(rgb(if item.confidence.is_certain() {
-                                PRIMARY_FIXED
-                            } else {
-                                CAUTION_CONTAINER
-                            }))
-                            .text_color(rgb(if item.confidence.is_certain() {
-                                PRIMARY
-                            } else {
-                                CAUTION
-                            }))
-                            .child(item.confidence.label_lang(lang)),
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(checkbox(check_state.into()))
+                            // 置信度标签
+                            .child(
+                                Badge::new(item.confidence.label_lang(lang))
+                                    .tone(if item.confidence.is_certain() {
+                                        BadgeTone::Primary
+                                    } else {
+                                        BadgeTone::Caution
+                                    })
+                                    .padding(8., 1.)
+                                    .no_shrink(),
+                            )
+                            // 来源标签
+                            .child(
+                                Badge::new(item.source.label_lang(lang))
+                                    .padding(8., 1.)
+                                    .weight(gpui::FontWeight::NORMAL)
+                                    .no_shrink(),
+                            )
+                            // 类别标签 (文件/目录/注册表项/注册表值)
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .px_1()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(OUTLINE))
+                                    .child(item.kind.kind_label_lang(lang)),
+                            ),
                     )
-                    // 来源标签
-                    .child(
+                    .content(
                         div()
-                            .flex_none()
-                            .px_2()
-                            .py(px(1.))
-                            .rounded_md()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::NORMAL)
-                            .bg(rgb(SURF_HIGH))
-                            .text_color(rgb(MUTED))
-                            .child(item.source.label_lang(lang)),
-                    )
-                    // 类别标签 (文件/目录/注册表项/注册表值)
-                    .child(
-                        div()
-                            .flex_none()
-                            .px_1()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(OUTLINE))
-                            .child(item.kind.kind_label_lang(lang)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
                             .text_xs()
                             .text_color(rgb(TEXT))
                             // 来源已经在上面的徽章里显示过了，这里只要路径本身
                             .child(item.kind.display_label()),
                     )
-                    .when(item.size() > 0, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(OUTLINE))
-                                .child(fmt_size(item.size())),
-                        )
-                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.residual.selected.contains(&idx) {
                             this.residual.selected.remove(&idx);
@@ -399,8 +369,20 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                             this.residual.selected.insert(idx);
                         }
                         cx.notify();
-                    }))
-                    .into_any_element()
+                    }));
+                let row = if item.size() > 0 {
+                    row.trailing(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(OUTLINE))
+                            .child(fmt_size(item.size())),
+                    )
+                } else {
+                    row
+                };
+                row.into_any_element()
             })
             .collect()
     };
@@ -416,14 +398,13 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
             .border_t_1()
             .border_color(rgba(OUTLINE_VAR, 0.4))
             .child(
-                div()
-                    .id("resid-done-btn")
-                    .child(primary_button(done_label.to_string(), true))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                Button::primary("resid-done-btn", done_label).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.residual.result = None;
                         this.residual.selected.clear();
                         cx.notify();
-                    })),
+                    },
+                )),
             )
     } else {
         div()
@@ -440,18 +421,15 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .gap_2()
                     // 1. 推荐选中
                     .child(
-                        div()
-                            .id("resid-select-rec")
-                            .child(small_button(
-                                tr_batch_rec(lang).to_string(),
+                        Button::small("resid-select-rec", tr_batch_rec(lang))
+                            .colors(
                                 if is_recommended {
                                     PRIMARY_FIXED
                                 } else {
                                     SURF_HIGH
                                 },
                                 if is_recommended { PRIMARY } else { TEXT },
-                                true,
-                            ))
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(r) = &this.residual.result {
                                     this.residual.selected = r.default_selection();
@@ -461,18 +439,15 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     )
                     // 2. 全选所有
                     .child(
-                        div()
-                            .id("resid-select-all")
-                            .child(small_button(
-                                tr_batch_all(lang).to_string(),
+                        Button::small("resid-select-all", tr_batch_all(lang))
+                            .colors(
                                 if all_selected {
                                     PRIMARY_FIXED
                                 } else {
                                     SURF_HIGH
                                 },
                                 if all_selected { PRIMARY } else { TEXT },
-                                true,
-                            ))
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(r) = &this.residual.result {
                                     this.residual.selected = (0..r.items.len()).collect();
@@ -482,14 +457,9 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     )
                     // 3. 清空
                     .child(
-                        div()
-                            .id("resid-select-none")
-                            .child(small_button(
-                                tr_btn_clear_sel(lang).to_string(),
-                                SURF_HIGH,
-                                MUTED,
-                                selected_count > 0,
-                            ))
+                        Button::small("resid-select-none", tr_btn_clear_sel(lang))
+                            .colors(SURF_HIGH, MUTED)
+                            .disabled(selected_count == 0)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.residual.selected.clear();
                                 cx.notify();
@@ -501,20 +471,16 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     .flex()
                     .items_center()
                     .gap_3()
+                    .child(Button::ghost("resid-cancel", tr_btn_cancel(lang)).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.residual.result = None;
+                            this.residual.selected.clear();
+                            cx.notify();
+                        }),
+                    ))
                     .child(
-                        div()
-                            .id("resid-cancel")
-                            .child(ghost_button(tr_btn_cancel(lang).to_string(), true))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.residual.result = None;
-                                this.residual.selected.clear();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("resid-clean")
-                            .child(danger_button(clean_btn_text, selected_count > 0))
+                        Button::danger("resid-clean", clean_btn_text)
+                            .disabled(selected_count == 0)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clean_selected_residuals(cx);
                             })),
@@ -623,17 +589,16 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                 )
                                 .child(
                                     div().flex().justify_end().child(
-                                        div()
-                                            .id("resid-open-sysext-settings")
-                                            .child(small_button(
-                                                tr_residual_sysext_open(lang).to_string(),
-                                                PRIMARY_FIXED,
-                                                PRIMARY,
-                                                true,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::small(
+                                            "resid-open-sysext-settings",
+                                            tr_residual_sysext_open(lang),
+                                        )
+                                        .colors(PRIMARY_FIXED, PRIMARY)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.open_system_extension_settings(cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                                 ),
                         )
@@ -819,7 +784,7 @@ pub fn render_fda_onboarding_modal(
                                     .items_center()
                                     .gap_2()
                                     .cursor_pointer()
-                                    .child(checkbox(check_state))
+                                    .child(checkbox(check_state.into()))
                                     .child(
                                         div()
                                             .text_xs()
@@ -837,39 +802,28 @@ pub fn render_fda_onboarding_modal(
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .id("fda-later-btn")
-                                            .child(ghost_button(
-                                                tr_fda_btn_later(lang).to_string(),
-                                                true,
-                                            ))
+                                        Button::ghost("fda-later-btn", tr_fda_btn_later(lang))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.close_fda_guide(cx);
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("fda-check-btn")
-                                            .child(small_button(
-                                                tr_fda_btn_check(lang).to_string(),
-                                                SURF_HIGH,
-                                                TEXT,
-                                                true,
-                                            ))
+                                        Button::small("fda-check-btn", tr_fda_btn_check(lang))
+                                            .colors(SURF_HIGH, TEXT)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.check_fda_permission(cx);
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("fda-open-settings-btn")
-                                            .child(primary_button(
-                                                tr_fda_btn_open_settings(lang).to_string(),
-                                                true,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::primary(
+                                            "fda-open-settings-btn",
+                                            tr_fda_btn_open_settings(lang),
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.open_fda_settings(cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             ),
                     ),

@@ -5,10 +5,12 @@ use super::common::{
 };
 use super::DeclutterTab;
 use crate::core::model::fmt_size;
+use crate::ui::components::button::{Button, ButtonVariant};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{
     icon_badge, icon_folder_large, icon_photos_similar, icon_video, icon_zip,
 };
+use crate::ui::components::segmented::{ChipLook, ToggleChip};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -113,11 +115,14 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                             .items_center()
                             .gap_3()
                             .cursor_pointer()
-                            .child(checkbox(if is_sel {
-                                crate::core::model::Check::On
-                            } else {
-                                crate::core::model::Check::Off
-                            }))
+                            .child(checkbox(
+                                (if is_sel {
+                                    crate::core::model::Check::On
+                                } else {
+                                    crate::core::model::Check::Off
+                                })
+                                .into(),
+                            ))
                             .child(icon_el)
                             .child(
                                 div()
@@ -156,46 +161,32 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                             .items_center()
                             .gap_3()
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("btn-reveal-large-{idx}")))
-                                    .px_2()
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(rgb(SURF_HIGH))
-                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
-                                    .cursor_pointer()
-                                    .child(tr_declutter_reveal(lang))
-                                    .on_click({
-                                        let p = item.path.clone();
-                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            crate::platform::reveal_in_explorer(&p);
-                                        })
-                                    }),
+                                Button::new(
+                                    SharedString::from(format!("btn-reveal-large-{idx}")),
+                                    ButtonVariant::Mini,
+                                )
+                                .label(tr_declutter_reveal(lang))
+                                .on_click({
+                                    let p = item.path.clone();
+                                    cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        crate::platform::reveal_in_explorer(&p);
+                                    })
+                                }),
                             )
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("btn-open-large-{idx}")))
-                                    .px_2()
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(rgb(SURF_HIGH))
-                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
-                                    .cursor_pointer()
-                                    .child(tr_declutter_open(lang))
-                                    .on_click({
-                                        let p = item.path.clone();
-                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            crate::platform::open_in_default_app(&p);
-                                        })
-                                    }),
+                                Button::new(
+                                    SharedString::from(format!("btn-open-large-{idx}")),
+                                    ButtonVariant::Mini,
+                                )
+                                .label(tr_declutter_open(lang))
+                                .on_click({
+                                    let p = item.path.clone();
+                                    cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        crate::platform::open_in_default_app(&p);
+                                    })
+                                }),
                             )
                             .child(
                                 div()
@@ -301,28 +292,21 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                 .border_t_1()
                                 .border_color(rgba(OUTLINE_VAR, 0.2))
                                 .child(
-                                    div()
-                                        .id("chip-filter-size")
-                                        .px_3()
-                                        .py(px(4.))
-                                        .rounded_full()
-                                        .when(state.min_size_filter > 0, |d| {
-                                            d.bg(rgb(PRIMARY_FIXED))
-                                                .border_1()
-                                                .border_color(rgb(PRIMARY))
-                                                .text_color(rgb(PRIMARY))
-                                        })
-                                        .when(state.min_size_filter == 0, |d| {
-                                            d.bg(rgb(SURF_HIGH)).text_color(rgb(MUTED))
-                                        })
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .cursor_pointer()
-                                        .child(tr_declutter_large_size_filter(
-                                            lang,
-                                            state.min_size_filter,
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    ToggleChip::new(
+                                        "chip-filter-size",
+                                        tr_declutter_large_size_filter(lang, state.min_size_filter),
+                                        state.min_size_filter > 0,
+                                    )
+                                    .look(ChipLook {
+                                        rest_bg: SURF_HIGH,
+                                        rest_border: None,
+                                        weight_sel: gpui::FontWeight::MEDIUM,
+                                        weight_rest: gpui::FontWeight::MEDIUM,
+                                        hover_bg: None,
+                                        ..ChipLook::CHIP
+                                    })
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.declutter.min_size_filter =
                                                 match this.declutter.min_size_filter {
                                                     100_000_000 => 500_000_000,
@@ -331,30 +315,24 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                                     _ => 100_000_000,
                                                 };
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    div()
-                                        .id("chip-filter-kind")
-                                        .px_3()
-                                        .py(px(4.))
-                                        .rounded_full()
-                                        .when(state.kind_filter.is_some(), |d| {
-                                            d.bg(rgb(PRIMARY_FIXED))
-                                                .border_1()
-                                                .border_color(rgb(PRIMARY))
-                                                .text_color(rgb(PRIMARY))
-                                        })
-                                        .when(state.kind_filter.is_none(), |d| {
-                                            d.bg(rgb(SURF_HIGH)).text_color(rgb(MUTED))
-                                        })
-                                        .text_xs()
-                                        .cursor_pointer()
-                                        .child(tr_declutter_large_kind_filter(
-                                            lang,
-                                            state.kind_filter,
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    ToggleChip::new(
+                                        "chip-filter-kind",
+                                        tr_declutter_large_kind_filter(lang, state.kind_filter),
+                                        state.kind_filter.is_some(),
+                                    )
+                                    .look(ChipLook {
+                                        rest_bg: SURF_HIGH,
+                                        rest_border: None,
+                                        weight_sel: gpui::FontWeight::NORMAL,
+                                        hover_bg: None,
+                                        ..ChipLook::CHIP
+                                    })
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.declutter.kind_filter =
                                                 match this.declutter.kind_filter {
                                                     None => Some(0),
@@ -364,7 +342,8 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                                                     _ => None,
                                                 };
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
                                     div()

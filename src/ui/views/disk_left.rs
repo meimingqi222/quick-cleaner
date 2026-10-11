@@ -5,9 +5,11 @@ use super::disk_components::render_breakdown_row;
 use super::disk_volume::render_volume_selector_button;
 use crate::core::disk::{Node, ScanResult};
 use crate::core::model::{fmt_size, truncate};
+use crate::ui::components::button::{Button, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::donut::{render_donut, DonutSegment};
 use crate::ui::components::path_tooltip;
+use crate::ui::components::segmented::{SegmentItem, SegmentStyle, SegmentedControl};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::views::DiskTab;
@@ -263,17 +265,9 @@ pub(super) fn render_breadcrumbs(
         if pos == 1 && !expanded {
             crumbs = crumbs
                 .child(
-                    div()
-                        .id("crumb-expand")
-                        .px_2()
-                        .py(px(2.))
-                        .rounded_md()
-                        .text_xs()
+                    Button::new("crumb-expand", ButtonVariant::Link)
+                        .label("…")
                         .flex_none()
-                        .cursor_pointer()
-                        .text_color(rgb(PRIMARY))
-                        .hover(|h| h.bg(rgb(SURF_HIGH)))
-                        .child("…")
                         .tooltip(path_tooltip(&tooltip_text))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.disk.crumbs_expanded = true;
@@ -283,28 +277,25 @@ pub(super) fn render_breadcrumbs(
                 .child(div().text_xs().text_color(rgb(OUTLINE)).child("›"));
         }
 
-        crumbs = crumbs.child(
-            div()
-                .id(SharedString::from(format!("crumb-{i}-{idx}")))
-                .px_2()
-                .py(px(2.))
-                .rounded_md()
-                .text_xs()
-                .cursor_pointer()
-                .flex_none()
-                .when(last, |d| {
-                    d.text_color(rgb(TEXT)).font_weight(gpui::FontWeight::BOLD)
-                })
-                .when(!last, |d| {
-                    d.text_color(rgb(PRIMARY)).hover(|h| h.bg(rgb(SURF_HIGH)))
-                })
-                .child(crumb_name)
-                .tooltip(path_tooltip(&tooltip_text))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.disk.path.truncate(i + 1);
-                    cx.notify();
-                })),
-        );
+        let crumb = Button::new(
+            SharedString::from(format!("crumb-{i}-{idx}")),
+            ButtonVariant::Link,
+        )
+        .label(crumb_name)
+        .flex_none()
+        .tooltip(path_tooltip(&tooltip_text))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.disk.path.truncate(i + 1);
+            cx.notify();
+        }));
+        crumbs = crumbs.child(if last {
+            crumb
+                .fg(TEXT)
+                .weight(gpui::FontWeight::BOLD)
+                .hover_style(None, None)
+        } else {
+            crumb
+        });
         if !last {
             crumbs = crumbs.child(div().text_xs().text_color(rgb(OUTLINE)).child("›"));
         }
@@ -313,17 +304,10 @@ pub(super) fn render_breadcrumbs(
     // 展开态且层级确实很多时，末尾给个收起开关，别让长路径常驻挤占工具栏。
     if expanded && path_len > max_display_crumbs {
         crumbs = crumbs.child(
-            div()
-                .id("crumb-collapse")
-                .px_2()
-                .py(px(2.))
-                .rounded_md()
-                .text_xs()
+            Button::new("crumb-collapse", ButtonVariant::Link)
+                .label("‹ 收起")
+                .fg(OUTLINE)
                 .flex_none()
-                .cursor_pointer()
-                .text_color(rgb(OUTLINE))
-                .hover(|h| h.bg(rgb(SURF_HIGH)))
-                .child("‹ 收起")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.disk.crumbs_expanded = false;
                     cx.notify();
@@ -335,68 +319,19 @@ pub(super) fn render_breadcrumbs(
 }
 
 /// 「目录树 / 全盘大文件」两个视图之间的切换。
-pub(super) fn render_tab_switch(root: &Root, cx: &mut Context<Root>) -> gpui::Div {
+pub(super) fn render_tab_switch(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
     let lang = root.language;
 
-    // 视图切换（目录树 / 全盘大文件）
-    let tab_switch = div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .p(px(2.))
-        .rounded_lg()
-        .bg(rgb(SURF_LOW))
-        .flex_none()
-        .child(
-            div()
-                .id("tab-tree")
-                .px_2()
-                .py(px(3.))
-                .rounded_md()
-                .text_xs()
-                .font_weight(if root.disk.tab == DiskTab::Tree {
-                    gpui::FontWeight::BOLD
-                } else {
-                    gpui::FontWeight::NORMAL
-                })
-                .cursor_pointer()
-                .when(root.disk.tab == DiskTab::Tree, |d| {
-                    d.bg(rgb(CARD)).text_color(rgb(PRIMARY)).shadow_sm()
-                })
-                .when(root.disk.tab != DiskTab::Tree, |d| {
-                    d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
-                })
-                .child(tr_tab_tree(lang))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.disk.tab = DiskTab::Tree;
-                    cx.notify();
-                })),
-        )
-        .child(
-            div()
-                .id("tab-files")
-                .px_2()
-                .py(px(3.))
-                .rounded_md()
-                .text_xs()
-                .font_weight(if root.disk.tab == DiskTab::Files {
-                    gpui::FontWeight::BOLD
-                } else {
-                    gpui::FontWeight::NORMAL
-                })
-                .cursor_pointer()
-                .when(root.disk.tab == DiskTab::Files, |d| {
-                    d.bg(rgb(CARD)).text_color(rgb(PRIMARY)).shadow_sm()
-                })
-                .when(root.disk.tab != DiskTab::Files, |d| {
-                    d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
-                })
-                .child(tr_tab_files(lang))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.disk.tab = DiskTab::Files;
-                    cx.notify();
-                })),
-        );
-
-    tab_switch
+    SegmentedControl::new(
+        "disk-tab",
+        root.disk.tab,
+        cx.listener(|this, tab: &DiskTab, _, cx| {
+            this.disk.tab = *tab;
+            cx.notify();
+        }),
+    )
+    .style(SegmentStyle::Plain)
+    .flex_none()
+    .item(SegmentItem::new(DiskTab::Tree, tr_tab_tree(lang)))
+    .item(SegmentItem::new(DiskTab::Files, tr_tab_files(lang)))
 }

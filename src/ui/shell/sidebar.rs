@@ -2,6 +2,7 @@
 
 use crate::core::i18n::Language;
 use crate::ui::components::icons::*;
+use crate::ui::components::list_row::{ListRow, RowGap, RowInset, RowVariant};
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -76,57 +77,51 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
         let active = current == v;
         let fg_color = if active { PRIMARY } else { MUTED };
 
-        div()
-            .id(SharedString::from(format!(
-                "nav-{}",
-                v.title_lang(Language::En)
-            )))
-            .h(px(34.))
-            .flex()
-            .items_center()
-            .gap_2p5()
-            .px_2p5()
-            .rounded_lg()
-            .cursor_pointer()
-            .when(active, |d| d.bg(rgb(PRIMARY_FIXED)))
-            .when(!active, |d| d.hover(|h| h.bg(rgb(SURF_LOW))))
-            .child(
-                div()
-                    .w(px(20.))
-                    .h(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(v.render_icon(fg_color)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_xs()
-                    .font_weight(if active {
-                        gpui::FontWeight::SEMIBOLD
-                    } else {
-                        gpui::FontWeight::MEDIUM
-                    })
-                    .text_color(rgb(fg_color))
-                    .child(v.title_lang(lang)),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.view = v;
-                if v == View::Status {
-                    this.start_status_monitor(cx);
-                }
-                if v == View::Disk && this.disk.mft.is_none() && this.disk.error.is_none() {
-                    this.start_mft_scan(cx);
-                }
-                if v == View::Apps && !this.apps.scanned && !this.apps.scanning {
-                    this.start_apps_scan(cx);
-                }
-                if v == View::Search && !this.search.indexing {
-                    this.start_search_index(cx);
-                }
-                cx.notify();
-            }))
+        ListRow::new(SharedString::from(format!(
+            "nav-{}",
+            v.title_lang(Language::En)
+        )))
+        .variant(RowVariant::Soft)
+        .height(34.)
+        .inset(RowInset::X2p5)
+        .gap(RowGap::Snug)
+        .selected(active)
+        .leading(
+            div()
+                .w(px(20.))
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(v.render_icon(fg_color)),
+        )
+        .content(
+            div()
+                .text_xs()
+                .font_weight(if active {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::MEDIUM
+                })
+                .text_color(rgb(fg_color))
+                .child(v.title_lang(lang)),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.view = v;
+            if v == View::Status {
+                this.start_status_monitor(cx);
+            }
+            if v == View::Disk && this.disk.mft.is_none() && this.disk.error.is_none() {
+                this.start_mft_scan(cx);
+            }
+            if v == View::Apps && !this.apps.scanned && !this.apps.scanning {
+                this.start_apps_scan(cx);
+            }
+            if v == View::Search && !this.search.indexing {
+                this.start_search_index(cx);
+            }
+            cx.notify();
+        }))
     };
 
     let items: Vec<gpui::AnyElement> = View::ALL

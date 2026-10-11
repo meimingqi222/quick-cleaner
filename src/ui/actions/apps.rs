@@ -11,7 +11,7 @@ use crate::platform::{
     clean_residuals, detect_occupancy, list_installed_apps, run_uninstaller_reported,
     scan_residuals, verify_residuals,
 };
-use crate::ui::components::{ConfirmKind, ConfirmRequest};
+use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
 use crate::ui::{UninstallPhase, UninstallProgress};
 

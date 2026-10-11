@@ -6,6 +6,8 @@ use super::common::{
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
+use crate::ui::components::badge::Badge;
+use crate::ui::components::button::{Button, ButtonVariant};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_badge, icon_downloads};
 use crate::ui::i18n::*;
@@ -74,11 +76,14 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .items_center()
                             .gap_3()
                             .cursor_pointer()
-                            .child(checkbox(if is_sel {
-                                crate::core::model::Check::On
-                            } else {
-                                crate::core::model::Check::Off
-                            }))
+                            .child(checkbox(
+                                (if is_sel {
+                                    crate::core::model::Check::On
+                                } else {
+                                    crate::core::model::Check::Off
+                                })
+                                .into(),
+                            ))
                             .child(icon_badge(
                                 icon_downloads(0x0078d4, 14.),
                                 0xe0f2fe,
@@ -122,61 +127,41 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                             .items_center()
                             .gap_3()
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("btn-reveal-down-{idx}")))
-                                    .px_2()
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(rgb(SURF_HIGH))
-                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
-                                    .cursor_pointer()
-                                    .child(tr_declutter_reveal(lang))
-                                    .on_click({
-                                        let p = item.path.clone();
-                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            crate::platform::reveal_in_explorer(&p);
-                                        })
-                                    }),
+                                Button::new(
+                                    SharedString::from(format!("btn-reveal-down-{idx}")),
+                                    ButtonVariant::Mini,
+                                )
+                                .label(tr_declutter_reveal(lang))
+                                .on_click({
+                                    let p = item.path.clone();
+                                    cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        crate::platform::reveal_in_explorer(&p);
+                                    })
+                                }),
                             )
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("btn-open-down-{idx}")))
-                                    .px_2()
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(rgb(SURF_HIGH))
-                                    .hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
-                                    .cursor_pointer()
-                                    .child(tr_declutter_open(lang))
-                                    .on_click({
-                                        let p = item.path.clone();
-                                        cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            crate::platform::open_in_default_app(&p);
-                                        })
-                                    }),
+                                Button::new(
+                                    SharedString::from(format!("btn-open-down-{idx}")),
+                                    ButtonVariant::Mini,
+                                )
+                                .label(tr_declutter_open(lang))
+                                .on_click({
+                                    let p = item.path.clone();
+                                    cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        crate::platform::open_in_default_app(&p);
+                                    })
+                                }),
                             )
                             .child(
                                 div().w(px(60.)).flex().justify_center().child(
-                                    div()
-                                        .px_2()
-                                        .py(px(2.))
-                                        .rounded_md()
-                                        .bg(rgb(SURF_HIGH))
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(if lang == Language::Zh {
-                                            item.kind_zh
-                                        } else {
-                                            item.kind_en
-                                        }),
+                                    Badge::new(if lang == Language::Zh {
+                                        item.kind_zh
+                                    } else {
+                                        item.kind_en
+                                    })
+                                    .weight(gpui::FontWeight::NORMAL),
                                 ),
                             )
                             .child(

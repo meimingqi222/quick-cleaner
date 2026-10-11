@@ -3,10 +3,14 @@
 use crate::core::categories::{CategoryId, Safety};
 use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
-use crate::ui::components::buttons::{danger_button, small_button};
+use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
+use crate::ui::components::badge::{Badge, BadgeTone};
+use crate::ui::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::ui::components::cards::card;
-use crate::ui::components::controls::{badge, checkbox, loading_state_view, page_heading};
+use crate::ui::components::controls::{checkbox, page_heading};
+use crate::ui::components::feedback::LoadingState;
 use crate::ui::components::icons::*;
+use crate::ui::components::list_row::{ListRow, RowInset};
 use crate::ui::components::scroll::{
     drag_capture, drag_to_offset, scroll_metrics, scrollbar, SCROLLBAR_W,
 };
@@ -196,58 +200,37 @@ fn item_row(
     let toggle_path = path.clone();
     let exclude_target = path.clone();
 
-    div()
-        .id(SharedString::from(format!("item-{idx}")))
-        .w_full()
-        .h(px(ITEM_ROW_H))
+    let content = div()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT))
+                        .child(label),
+                )
+                // 占用徽标：应用级是橙色提示，纯系统占用偏阻断语义用红色
+                .children(busy.map(|(text, app_level)| {
+                    Badge::new(text).tone(if app_level {
+                        BadgeTone::Caution
+                    } else {
+                        BadgeTone::Error
+                    })
+                })),
+        )
+        .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text));
+
+    let trailing = div()
         .flex()
         .items_center()
         .gap_3()
-        .px_4()
-        .bg(rgb(CARD))
-        .hover(|h| h.bg(rgb(SURF_LOW)))
-        .cursor_pointer()
-        .border_b_1()
-        .border_color(rgba(OUTLINE_VAR, 0.25))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.toggle_item(&toggle_path);
-            cx.notify();
-        }))
-        .child(
-            div()
-                .id(SharedString::from(format!("cb-item-{idx}")))
-                .flex_none()
-                .child(checkbox(if checked { Check::On } else { Check::Off })),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(TEXT))
-                                .child(label),
-                        )
-                        // 占用徽标：应用级是橙色提示，纯系统占用偏阻断语义用红色
-                        .children(busy.map(|(text, app_level)| {
-                            if app_level {
-                                badge(text, CAUTION_CONTAINER, CAUTION)
-                            } else {
-                                badge(text, ERROR_CONTAINER, ERROR)
-                            }
-                        })),
-                )
-                .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text)),
-        )
+        .flex_none()
         .child(right_cell(
             85.,
             if file_count > 0 {
@@ -278,22 +261,40 @@ fn item_row(
         // 通道永远跳过。点击必须 stop_propagation——否则排除的同时会把
         // 这条目当成普通点击勾选上，与「永远别碰」的意图恰好相反。
         .child(
+            Button::new(
+                SharedString::from(format!("excl-{idx}")),
+                ButtonVariant::Link,
+            )
+            .label(tr_exclude(lang))
+            .size(ButtonSize::Slim)
+            .fg(MUTED)
+            .hover_style(Some(rgba(0xdc2626, 0.10)), Some(ERROR))
+            .flex_none()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.exclude_path(&exclude_target, cx);
+            })),
+        );
+
+    ListRow::new(SharedString::from(format!("item-{idx}")))
+        .height(ITEM_ROW_H)
+        .inset(RowInset::X4)
+        .rest_bg(CARD)
+        .divider(0.25)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_item(&toggle_path);
+            cx.notify();
+        }))
+        .leading(
             div()
-                .id(SharedString::from(format!("excl-{idx}")))
+                .id(SharedString::from(format!("cb-item-{idx}")))
                 .flex_none()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .cursor_pointer()
-                .hover(|h| h.text_color(rgb(ERROR)).bg(rgba(0xdc2626, 0.10)))
-                .child(tr_exclude(lang))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.exclude_path(&exclude_target, cx);
-                })),
+                .child(checkbox(
+                    (if checked { Check::On } else { Check::Off }).into(),
+                )),
         )
+        .content(content)
+        .trailing(trailing)
         .into_any_element()
 }
 
@@ -341,20 +342,16 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
     let buttons: Vec<_> = actions
         .into_iter()
         .map(|(label, id_key, active, action)| {
-            div()
-                .id(SharedString::from(format!("sel-{id_key}")))
-                .child(small_button(
-                    label.to_string(),
+            Button::small(SharedString::from(format!("sel-{id_key}")), label)
+                .colors(
                     if active { PRIMARY_FIXED } else { SURF_LOW },
                     if active { PRIMARY } else { MUTED },
-                    enabled,
-                ))
-                .when(enabled, |d| {
-                    d.on_click(cx.listener(move |this, _, _, cx| {
-                        action(this);
-                        cx.notify();
-                    }))
-                })
+                )
+                .disabled(!enabled)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    action(this);
+                    cx.notify();
+                }))
         })
         .collect();
 
@@ -437,20 +434,18 @@ fn render_exclusions_panel(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     // 移除只撤这一条（精确匹配）；被释放的路径要等下次扫描
                     // 才重新出现在列表里，状态栏会说明。
                     .child(
-                        div()
-                            .id(SharedString::from(format!("wl-remove-{idx}")))
-                            .flex_none()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .cursor_pointer()
-                            .hover(|h| h.text_color(rgb(ERROR)).bg(rgba(0xdc2626, 0.10)))
-                            .child(tr_exclusion_remove(lang))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.remove_exclusion(&target, cx);
-                            })),
+                        Button::new(
+                            SharedString::from(format!("wl-remove-{idx}")),
+                            ButtonVariant::Link,
+                        )
+                        .label(tr_exclusion_remove(lang))
+                        .size(ButtonSize::Slim)
+                        .fg(MUTED)
+                        .hover_style(Some(rgba(0xdc2626, 0.10)), Some(ERROR))
+                        .flex_none()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remove_exclusion(&target, cx);
+                        })),
                     ),
             );
         }
@@ -533,23 +528,24 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         )
         // 排除清单开关：保护表必须可查可撤，不然单向排除成了陷阱
         .child(
-            div()
-                .id("exclusions-toggle")
-                .flex_none()
-                .child(small_button(
+            div().flex_none().child(
+                Button::small(
+                    "exclusions-toggle",
                     tr_exclusions_toggle(lang, root.settings.whitelist.len()),
+                )
+                .colors(
                     if root.show_exclusions {
                         PRIMARY_FIXED
                     } else {
                         SURF_LOW
                     },
                     if root.show_exclusions { PRIMARY } else { MUTED },
-                    true,
-                ))
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.show_exclusions = !this.show_exclusions;
                     cx.notify();
                 })),
+            ),
         )
         .child(found);
 
@@ -576,7 +572,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     )))
                     .flex_none()
                     .cursor_pointer()
-                    .child(checkbox(state))
+                    .child(checkbox(state.into()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_category(id);
                         cx.notify();
@@ -621,19 +617,21 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     // 开发者类目默认不勾选，用徽标说明「要自己勾」，
                                     // 免得用户以为扫出来了却没被清掉是 bug
                                     .when(id.is_developer(), |d| {
-                                        d.child(badge(
-                                            tr_need_manual_select(lang).into(),
-                                            safety_container(safety),
-                                            safety_color(safety),
+                                        d.child(Badge::new(tr_need_manual_select(lang)).tone(
+                                            BadgeTone::custom(
+                                                safety_container(safety),
+                                                safety_color(safety),
+                                            ),
                                         ))
                                     })
                                     // 预算耗尽时如实说明这一类没数完，
                                     // 否则一个精确的数字会掩盖不精确的事实
                                     .when(summary.partial, |d| {
-                                        d.child(badge(
-                                            tr_partial_scan(lang).into(),
-                                            safety_container(Safety::Caution),
-                                            safety_color(Safety::Caution),
+                                        d.child(Badge::new(tr_partial_scan(lang)).tone(
+                                            BadgeTone::custom(
+                                                safety_container(Safety::Caution),
+                                                safety_color(Safety::Caution),
+                                            ),
                                         ))
                                     }),
                             )
@@ -777,7 +775,9 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
     };
 
     let body: AnyElement = if root.junk.scanning {
-        loading_state_view(loading_title, loading_sub, root.anim_phase)
+        LoadingState::new(loading_title, root.anim_phase)
+            .description(loading_sub)
+            .into_any_element()
     } else {
         div()
             .flex()
@@ -844,73 +844,49 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
         tr_clean_now(lang).to_string()
     };
 
-    div()
-        .flex_none()
-        .w_full()
-        .px_5()
-        .py_2p5()
-        .bg(rgb(BG))
-        .border_t_1()
-        .border_color(rgba(OUTLINE_VAR, 0.5))
+    let summary = div()
         .flex()
-        .justify_center()
+        .flex_col()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(OUTLINE))
+                .child(if lang == Language::Zh {
+                    "已选择清理"
+                } else {
+                    "Selected for Cleaning"
+                }),
+        )
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_5()
-                .pl_5()
-                .pr(px(5.))
-                .py(px(4.))
-                .rounded_full()
-                .bg(rgb(CARD))
-                .border_1()
-                .border_color(rgba(OUTLINE_VAR, 0.6))
-                .shadow_lg()
+                .items_baseline()
+                .gap_2()
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(OUTLINE))
-                                .child(if lang == Language::Zh {
-                                    "已选择清理"
-                                } else {
-                                    "Selected for Cleaning"
-                                }),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_baseline()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(TEXT))
-                                        .child(fmt_size(size)),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(OUTLINE))
-                                        .child(items_label),
-                                ),
-                        ),
+                        .text_base()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(TEXT))
+                        .child(fmt_size(size)),
                 )
-                .child(render_selection_toolbar(root, cx))
                 .child(
                     div()
-                        .id("clean-now")
-                        .child(danger_button(clean_btn_text, enabled))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_clean_selected(cx);
-                        })),
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(rgb(OUTLINE))
+                        .child(items_label),
                 ),
+        );
+
+    ActionBar::capsule("junk-bar", CapsulePreset::Docked)
+        .summary(summary)
+        .leading(render_selection_toolbar(root, cx))
+        .actions(
+            Button::danger("clean-now", clean_btn_text)
+                .disabled(!enabled)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.request_clean_selected(cx);
+                })),
         )
 }
