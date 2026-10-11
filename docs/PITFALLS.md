@@ -730,3 +730,10 @@ Note: `2026-10-11-search-threshold-completion.md`
 - **症状**：输入 mem 时接受候选直接变成 mem > 1 GB；紧凑比较符缺少建议，内存默认单位不明确。
 - **防护与测试**：补全字段和比较符，数值由用户填写；说明默认 MB，解析与回归见 Note。
 - **禁止回退**：不能把固定示例当作补全值，不能覆盖已填写的数值，不能移除无单位 MB 或把阈值解析复制到 UI。
+
+## P55 本机工具链落后于 CI 的 stable 时，clippy / fmt 会「本地绿、CI 红」
+
+- **症状**：`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 在本机全绿，推送后 CI 立刻挂在 Clippy / Check formatting。
+- **根因**：CI 用 `dtolnay/rust-toolchain@stable`，随上游前进；本机 rustup 可能停在旧版本。新 clippy 会新增 lint（0.0.10 这轮是 1.99 的 `question_mark`），旧 rustfmt 的换行决策也可能不同。
+- **防护**：提交前用与 CI 同版本的 toolchain 复核，例如 `rustup toolchain install 1.99.0 --component clippy,rustfmt` 后跑 `cargo +1.99.0 clippy --all-targets -- -D warnings`；CI 报错里的行号与 lint 名是唯一权威。
+- **禁止回退**：不能因为「本地过了」就断定 CI 会过；不能用 `#[allow]` 消掉新 lint，要按 lint 建议改写（这轮把比较符前缀拆成 `split_cmp_op`，行为不变）。

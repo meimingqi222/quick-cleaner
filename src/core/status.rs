@@ -456,36 +456,42 @@ fn match_proc_single_clause(proc: &ProcInfo, clause: &str) -> bool {
     false
 }
 
-fn parse_op_val(s: &str) -> Option<(&str, f32)> {
-    let s = s.trim();
-    let (op, num_str) = if let Some(r) = s.strip_prefix(">=") {
-        (">=", r)
-    } else if let Some(r) = s.strip_prefix("<=") {
-        ("<=", r)
-    } else if let Some(r) = s.strip_prefix('>') {
-        (">", r)
-    } else if let Some(r) = s.strip_prefix('<') {
-        ("<", r)
+/// 比较符前缀：`>=` / `<=` 必须先于 `>` / `<` 尝试，否则 `>=` 会被拆成
+/// `>` + `=…`。
+const CMP_OPS: [&str; 4] = [">=", "<=", ">", "<"];
+
+fn split_cmp_op(s: &str) -> Option<(&'static str, &str)> {
+    CMP_OPS
+        .into_iter()
+        .find_map(|op| s.strip_prefix(op).map(|rest| (op, rest)))
+}
+
+/// Windows 上 PID 4（SYSTEM）的账户名 sysinfo 读不到，手工补上；其余平台
+/// 没有这个特例。
+#[cfg(windows)]
+fn fallback_process_user(pid: u32) -> Option<String> {
+    if pid == 4 {
+        Some("SYSTEM".to_string())
     } else {
-        return None;
-    };
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn fallback_process_user(_pid: u32) -> Option<String> {
+    None
+}
+
+fn parse_op_val(s: &str) -> Option<(&'static str, f32)> {
+    let s = s.trim();
+    let (op, num_str) = split_cmp_op(s)?;
     let val: f32 = num_str.trim().trim_end_matches('%').trim().parse().ok()?;
     (val.is_finite() && val >= 0.).then_some((op, val))
 }
 
 fn parse_mem_op_val(s: &str) -> Option<(String, u64)> {
     let s = s.trim();
-    let (op, num_str) = if let Some(r) = s.strip_prefix(">=") {
-        (">=", r)
-    } else if let Some(r) = s.strip_prefix("<=") {
-        ("<=", r)
-    } else if let Some(r) = s.strip_prefix('>') {
-        (">", r)
-    } else if let Some(r) = s.strip_prefix('<') {
-        ("<", r)
-    } else {
-        return None;
-    };
+    let (op, num_str) = split_cmp_op(s)?;
     let num_str = num_str.trim().to_ascii_uppercase();
     let (number, multiplier) = [
         ("GIB", 1024_u64.pow(3)),
@@ -651,16 +657,7 @@ impl StatusSampler {
                     .user_id()
                     .and_then(|uid| self.users.get_user_by_id(uid))
                     .map(|u| u.name().to_string())
-                    .or_else(|| {
-                        #[cfg(windows)]
-                        if pid == 4 {
-                            Some("SYSTEM".to_string())
-                        } else {
-                            None
-                        }
-                        #[cfg(not(windows))]
-                        None
-                    });
+                    .or_else(|| fallback_process_user(pid));
                 let exe_path = exe.map(|e| e.to_string_lossy().to_string());
                 let du = p.disk_usage();
                 let disk_read_bytes = du.total_read_bytes;

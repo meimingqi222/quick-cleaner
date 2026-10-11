@@ -987,64 +987,35 @@ fn fmt_proc_start_time(start_time: u64, lang: Language) -> String {
         .map_or(0, |d| d.as_secs());
     let ago_secs = now.saturating_sub(start_time);
     let ago_str = if ago_secs < 60 {
-        match lang {
-            Language::Zh => "刚刚".into(),
-            Language::En => "just now".into(),
-        }
+        tr_status_proc_started_just_now(lang).to_string()
     } else if ago_secs < 3600 {
-        match lang {
-            Language::Zh => format!("{}分钟前", ago_secs / 60),
-            Language::En => format!("{}m ago", ago_secs / 60),
-        }
+        tr_status_proc_started_minutes_ago(lang, ago_secs / 60)
     } else if ago_secs < 86400 {
-        match lang {
-            Language::Zh => format!("{}小时前", ago_secs / 3600),
-            Language::En => format!("{}h ago", ago_secs / 3600),
-        }
+        tr_status_proc_started_hours_ago(lang, ago_secs / 3600)
     } else {
-        match lang {
-            Language::Zh => format!("{}天前", ago_secs / 86400),
-            Language::En => format!("{}d ago", ago_secs / 86400),
-        }
+        tr_status_proc_started_days_ago(lang, ago_secs / 86400)
     };
-    if let Some(dt) = chrono::DateTime::from_timestamp(start_time as i64, 0) {
-        let local = dt.with_timezone(&chrono::Local);
-        match lang {
-            Language::Zh => format!("{} · {}", local.format("%m月%d日 %H:%M"), ago_str),
-            Language::En => format!("{} · {}", local.format("%b %d, %H:%M"), ago_str),
+    match chrono::DateTime::from_timestamp(start_time as i64, 0) {
+        Some(dt) => {
+            let local = dt.with_timezone(&chrono::Local);
+            let stamp = local
+                .format(tr_status_proc_start_stamp_format(lang))
+                .to_string();
+            tr_status_proc_started_at(lang, &stamp, &ago_str)
         }
-    } else {
-        ago_str
+        None => ago_str,
     }
 }
 
 /// 本地化进程状态文本
 fn localize_proc_status(status_text: &str, lang: Language) -> &'static str {
     match status_text {
-        "Run" | "Running" => match lang {
-            Language::Zh => "运行中",
-            Language::En => "Running",
-        },
-        "Sleep" | "Sleeping" => match lang {
-            Language::Zh => "休眠",
-            Language::En => "Sleeping",
-        },
-        "Idle" => match lang {
-            Language::Zh => "空闲",
-            Language::En => "Idle",
-        },
-        "Stop" | "Stopped" => match lang {
-            Language::Zh => "已暂停",
-            Language::En => "Stopped",
-        },
-        "Zombie" => match lang {
-            Language::Zh => "僵尸",
-            Language::En => "Zombie",
-        },
-        _ => match lang {
-            Language::Zh => "正常",
-            Language::En => "Normal",
-        },
+        "Run" | "Running" => tr_status_proc_state_running(lang),
+        "Sleep" | "Sleeping" => tr_status_proc_state_sleeping(lang),
+        "Idle" => tr_status_proc_state_idle(lang),
+        "Stop" | "Stopped" => tr_status_proc_state_stopped(lang),
+        "Zombie" => tr_status_proc_state_zombie(lang),
+        _ => tr_status_proc_state_normal(lang),
     }
 }
 

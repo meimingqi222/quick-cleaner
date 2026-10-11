@@ -2885,3 +2885,88 @@ pub fn tr_status_proc_instances(lang: Language, count: usize) -> String {
         Language::En => format!("{count} instances"),
     }
 }
+
+pub fn tr_status_proc_state_running(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "运行中",
+        Language::En => "Running",
+    }
+}
+
+pub fn tr_status_proc_state_sleeping(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "休眠",
+        Language::En => "Sleeping",
+    }
+}
+
+pub fn tr_status_proc_state_idle(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "空闲",
+        Language::En => "Idle",
+    }
+}
+
+pub fn tr_status_proc_state_stopped(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已暂停",
+        Language::En => "Stopped",
+    }
+}
+
+pub fn tr_status_proc_state_zombie(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "僵尸",
+        Language::En => "Zombie",
+    }
+}
+
+pub fn tr_status_proc_state_normal(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正常",
+        Language::En => "Normal",
+    }
+}
+
+pub fn tr_status_proc_started_just_now(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "刚刚",
+        Language::En => "just now",
+    }
+}
+
+pub fn tr_status_proc_started_minutes_ago(lang: Language, minutes: u64) -> String {
+    match lang {
+        Language::Zh => format!("{minutes}分钟前"),
+        Language::En => format!("{minutes}m ago"),
+    }
+}
+
+pub fn tr_status_proc_started_hours_ago(lang: Language, hours: u64) -> String {
+    match lang {
+        Language::Zh => format!("{hours}小时前"),
+        Language::En => format!("{hours}h ago"),
+    }
+}
+
+pub fn tr_status_proc_started_days_ago(lang: Language, days: u64) -> String {
+    match lang {
+        Language::Zh => format!("{days}天前"),
+        Language::En => format!("{days}d ago"),
+    }
+}
+
+/// 启动时间戳的排版串，交给 chrono 格式化：`月日 时:分` / `Mon DD, HH:MM`。
+pub fn tr_status_proc_start_stamp_format(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "%m月%d日 %H:%M",
+        Language::En => "%b %d, %H:%M",
+    }
+}
+
+/// 启动时间最终排版 `<时间戳> · <相对时长>`；分隔符与排版同属用户可见文案。
+pub fn tr_status_proc_started_at(lang: Language, stamp: &str, ago: &str) -> String {
+    match lang {
+        Language::Zh | Language::En => format!("{stamp} · {ago}"),
+    }
+}
