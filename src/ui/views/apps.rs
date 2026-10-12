@@ -57,7 +57,6 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                     .flex_none()
                     .child(
                         Button::small("orphan-leftover-scan", tr_btn_orphan_scan(lang))
-                            .colors(SURF_HIGH, TEXT)
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.start_orphan_leftover_scan(cx);

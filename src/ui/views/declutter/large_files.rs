@@ -79,10 +79,25 @@ pub fn render_large_files_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement
                 let l_name = item.filename.clone();
 
                 let icon_el = match item.icon_type {
-                    0 => icon_badge(icon_video(0x0078d4, 14.), 0xe0f2fe, 0x0078d4, 28.),
-                    1 => icon_badge(icon_zip(0x7547ab, 14.), 0xefdbff, 0x7547ab, 28.),
-                    2 => icon_badge(icon_folder_large(0x059669, 14.), 0xd1fae5, 0x059669, 28.),
-                    _ => icon_badge(icon_photos_similar(0x974700, 14.), 0xffdbc8, 0x974700, 28.),
+                    0 => icon_badge(
+                        icon_video(PRIMARY_BRIGHT, 14.),
+                        INFO_CONTAINER,
+                        PRIMARY_BRIGHT,
+                        28.,
+                    ),
+                    1 => icon_badge(icon_zip(ACCENT, 14.), ACCENT_CONTAINER, ACCENT, 28.),
+                    2 => icon_badge(
+                        icon_folder_large(SUCCESS, 14.),
+                        SUCCESS_CONTAINER,
+                        SUCCESS,
+                        28.,
+                    ),
+                    _ => icon_badge(
+                        icon_photos_similar(CAUTION, 14.),
+                        CAUTION_CONTAINER,
+                        CAUTION,
+                        28.,
+                    ),
                 };
 
                 div()

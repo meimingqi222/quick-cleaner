@@ -145,12 +145,12 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                 .flex_col()
                                                 .items_center()
                                                 .gap_1()
-                                                .child(icon_folder_large(0xffffff, 24.))
+                                                .child(icon_folder_large(ON_SCRIM, 24.))
                                                 .child(
                                                     div()
                                                         .text_xs()
                                                         .font_weight(gpui::FontWeight::BOLD)
-                                                        .text_color(rgb(0xffffff))
+                                                        .text_color(rgb(ON_SCRIM))
                                                         .child(ext.to_uppercase()),
                                                 ),
                                         )
@@ -171,7 +171,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                         .flex()
                                         .items_center()
                                         .gap_1()
-                                        .child(icon_star(0xffffff, 11.))
+                                        .child(icon_star(ON_SCRIM, 11.))
                                         .child(tr_declutter_photos_best_quality(lang)),
                                 )
                                 .child(
@@ -189,11 +189,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                 .px_2()
                                                 .py(px(2.))
                                                 .rounded_md()
-                                                .bg(rgba(0x000000, 0.75))
-                                                .hover(|h| h.bg(rgba(0x000000, 0.95)))
+                                                .bg(rgba(SCRIM, 0.75))
+                                                .hover(|h| h.bg(rgba(SCRIM, 0.95)))
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(rgb(0xffffff))
+                                                .text_color(rgb(ON_SCRIM))
                                                 .cursor_pointer()
                                                 .child("定位")
                                                 .on_click({
@@ -210,11 +210,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                 .px_2()
                                                 .py(px(2.))
                                                 .rounded_md()
-                                                .bg(rgba(0x000000, 0.75))
-                                                .hover(|h| h.bg(rgba(0x000000, 0.95)))
+                                                .bg(rgba(SCRIM, 0.75))
+                                                .hover(|h| h.bg(rgba(SCRIM, 0.95)))
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(rgb(0xffffff))
+                                                .text_color(rgb(ON_SCRIM))
                                                 .cursor_pointer()
                                                 .child("看图")
                                                 .on_click({
@@ -345,12 +345,12 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                     .flex_col()
                                                     .items_center()
                                                     .gap_1()
-                                                    .child(icon_folder_large(0xffffff, 20.))
+                                                    .child(icon_folder_large(ON_SCRIM, 20.))
                                                     .child(
                                                         div()
                                                             .text_xs()
                                                             .font_weight(gpui::FontWeight::BOLD)
-                                                            .text_color(rgb(0xffffff))
+                                                            .text_color(rgb(ON_SCRIM))
                                                             .child(ext.to_uppercase()),
                                                     ),
                                             )
@@ -367,11 +367,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                             .bg(if is_sel {
                                                 rgba(ERROR, 0.9)
                                             } else {
-                                                rgba(0x000000, 0.6)
+                                                rgba(SCRIM, 0.6)
                                             })
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(rgb(0xffffff))
+                                            .text_color(rgb(ON_SCRIM))
                                             .child(if is_sel {
                                                 tr_declutter_photos_to_clean(lang)
                                             } else {
@@ -392,11 +392,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                     .px_2()
                                                     .py(px(2.))
                                                     .rounded_md()
-                                                    .bg(rgba(0x000000, 0.75))
-                                                    .hover(|h| h.bg(rgba(0x000000, 0.95)))
+                                                    .bg(rgba(SCRIM, 0.75))
+                                                    .hover(|h| h.bg(rgba(SCRIM, 0.95)))
                                                     .text_xs()
                                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(rgb(0xffffff))
+                                                    .text_color(rgb(ON_SCRIM))
                                                     .cursor_pointer()
                                                     .child("定位")
                                                     .on_click({
@@ -413,11 +413,11 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                     .px_2()
                                                     .py(px(2.))
                                                     .rounded_md()
-                                                    .bg(rgba(0x000000, 0.75))
-                                                    .hover(|h| h.bg(rgba(0x000000, 0.95)))
+                                                    .bg(rgba(SCRIM, 0.75))
+                                                    .hover(|h| h.bg(rgba(SCRIM, 0.95)))
                                                     .text_xs()
                                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(rgb(0xffffff))
+                                                    .text_color(rgb(ON_SCRIM))
                                                     .cursor_pointer()
                                                     .child("看图")
                                                     .on_click({

@@ -5,7 +5,7 @@ use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeTone};
-use crate::ui::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonSize, ButtonTone, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{checkbox, page_heading};
 use crate::ui::components::feedback::LoadingState;
@@ -245,7 +245,7 @@ fn item_row(
             .label(tr_exclude(lang))
             .size(ButtonSize::Slim)
             .fg(MUTED)
-            .hover_style(Some(rgba(0xdc2626, 0.10)), Some(ERROR))
+            .hover_style(Some(rgba(ERROR_BRIGHT, 0.10)), Some(ERROR))
             .flex_none()
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -320,10 +320,11 @@ fn render_selection_toolbar(root: &Root, cx: &mut Context<Root>) -> Div {
         .into_iter()
         .map(|(label, id_key, active, action)| {
             Button::small(SharedString::from(format!("sel-{id_key}")), label)
-                .colors(
-                    if active { PRIMARY_FIXED } else { SURF_LOW },
-                    if active { PRIMARY } else { MUTED },
-                )
+                .tone(if active {
+                    ButtonTone::Accent
+                } else {
+                    ButtonTone::Quiet
+                })
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     action(this);
@@ -418,7 +419,7 @@ fn render_exclusions_panel(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         .label(tr_exclusion_remove(lang))
                         .size(ButtonSize::Slim)
                         .fg(MUTED)
-                        .hover_style(Some(rgba(0xdc2626, 0.10)), Some(ERROR))
+                        .hover_style(Some(rgba(ERROR_BRIGHT, 0.10)), Some(ERROR))
                         .flex_none()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.remove_exclusion(&target, cx);
@@ -510,14 +511,11 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     "exclusions-toggle",
                     tr_exclusions_toggle(lang, root.settings.whitelist.len()),
                 )
-                .colors(
-                    if root.show_exclusions {
-                        PRIMARY_FIXED
-                    } else {
-                        SURF_LOW
-                    },
-                    if root.show_exclusions { PRIMARY } else { MUTED },
-                )
+                .tone(if root.show_exclusions {
+                    ButtonTone::Accent
+                } else {
+                    ButtonTone::Quiet
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.show_exclusions = !this.show_exclusions;
                     cx.notify();

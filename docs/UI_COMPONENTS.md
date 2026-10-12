@@ -23,6 +23,11 @@ in Root's existing child states.
 | Table slots | table_shell | Apps, Search |
 | Ordinary variable-height scrolling | ScrollView | disk browser, development environment package list |
 
+Colors in views, adapters and shell come from `theme.rs` tokens; the guard rejects
+hex literals there. `Button::small` picks a closed `ButtonTone` and `Badge` a
+`BadgeTone`; add a tone instead of passing raw colors. `BadgeTone::custom` remains
+only for data-driven colors (safety level, status value).
+
 Preserve domain rows and query parsers in their current layers. Do not add a new
 business enum to a component to distinguish pages. Extract behavior only when
 real callers need it; do not manufacture a second domain consumer for a one-off.

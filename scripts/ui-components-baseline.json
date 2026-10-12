@@ -1,5 +1,6 @@
 {
   "components-no-business": {},
+  "ui-no-hex-colors": {},
   "views-no-key-handlers": {},
   "views-no-overlay": {},
   "views-no-scroll-drag": {}

@@ -27,14 +27,14 @@ pub(super) fn render_left_lens_pane(
     // 这里直接借用；以前每帧都要为每一行重新解析路径并跑一遍保护规则。
     let children: Vec<&Node> = root.disk.rows.iter().map(|r| &r.node).collect();
 
-    // 调色盘（预设优雅高质感色彩）
+    // 下标 4 固定是「可用空间」，disk_breakdown 也按这个下标取色。
     let colors = [
-        0x0078d4, // 0: Primary Blue
-        0x7547ab, // 1: Purple
-        0x059669, // 2: Emerald Green
-        0xd97706, // 3: Amber Orange
-        0x10b981, // 4: Emerald Green (Free / Available Space)
-        0x64748b, // 5: Slate Gray (Others)
+        PRIMARY_BRIGHT,
+        ACCENT,
+        SUCCESS,
+        AMBER,
+        SUCCESS_BRIGHT,
+        SLATE,
     ];
 
     let lang = root.language;

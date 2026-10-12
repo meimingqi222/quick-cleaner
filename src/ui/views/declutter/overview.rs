@@ -56,8 +56,8 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .padding(12., 3.)
                                     .gap(8.)
                                     .weight(gpui::FontWeight::BOLD)
-                                    .tone(BadgeTone::custom(0xefdbff, 0x5c2d91))
-                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(0x7547ab)))
+                                    .tone(BadgeTone::Accent)
+                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(ACCENT)))
                                     .into_any_element()
                             } else if let Some(secs) = state.scan_elapsed_secs {
                                 Badge::new(tr_declutter_scan_elapsed(lang, secs))
@@ -65,8 +65,8 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                     .padding(12., 3.)
                                     .gap(8.)
                                     .weight(gpui::FontWeight::BOLD)
-                                    .tone(BadgeTone::custom(0xefdbff, 0x5c2d91))
-                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(0x7547ab)))
+                                    .tone(BadgeTone::Accent)
+                                    .leading(div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(ACCENT)))
                                     .into_any_element()
                             } else {
                                 div().into_any_element()
@@ -108,7 +108,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .text_color(rgb(ON_PRIMARY))
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_sm()
-                                .child(icon_rocket(0xffffff, 18.))
+                                .child(icon_rocket(ON_PRIMARY, 18.))
                                 .child(if state.scanning {
                                     tr_declutter_overview_scanning_btn(lang)
                                 } else {
@@ -175,9 +175,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(icon_badge(
-                                                    icon_downloads(0x0078d4, 16.),
-                                                    0xe0f2fe,
-                                                    0x0078d4,
+                                                    icon_downloads(PRIMARY_BRIGHT, 16.),
+                                                    INFO_CONTAINER,
+                                                    PRIMARY_BRIGHT,
                                                     30.,
                                                 ))
                                                 .child(
@@ -227,7 +227,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                     div()
                                                         .text_lg()
                                                         .font_weight(gpui::FontWeight::BOLD)
-                                                        .text_color(rgb(0x0078d4))
+                                                        .text_color(rgb(PRIMARY_BRIGHT))
                                                         .child(if state.scanned {
                                                             fmt_size(downloads_size)
                                                         } else {
@@ -247,7 +247,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .flex_col()
                                                         .items_center()
                                                         .gap_1()
-                                                        .child(div().w(px(8.)).h(px(36.)).rounded_t_sm().bg(rgb(0x0078d4)))
+                                                        .child(div().w(px(8.)).h(px(36.)).rounded_t_sm().bg(rgb(PRIMARY_BRIGHT)))
                                                         .child(div().text_xs().text_color(rgb(OUTLINE)).child(".DMG")),
                                                 )
                                                 .child(
@@ -256,7 +256,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .flex_col()
                                                         .items_center()
                                                         .gap_1()
-                                                        .child(div().w(px(8.)).h(px(22.)).rounded_t_sm().bg(rgb(0x7547ab)))
+                                                        .child(div().w(px(8.)).h(px(22.)).rounded_t_sm().bg(rgb(ACCENT)))
                                                         .child(div().text_xs().text_color(rgb(OUTLINE)).child(".ZIP")),
                                                 )
                                                 .child(
@@ -265,7 +265,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .flex_col()
                                                         .items_center()
                                                         .gap_1()
-                                                        .child(div().w(px(8.)).h(px(14.)).rounded_t_sm().bg(rgb(0x974700)))
+                                                        .child(div().w(px(8.)).h(px(14.)).rounded_t_sm().bg(rgb(CAUTION)))
                                                         .child(div().text_xs().text_color(rgb(OUTLINE)).child(".PKG")),
                                                 ),
                                         ),
@@ -299,9 +299,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                         .items_center()
                                         .gap_3()
                                         .child(icon_badge(
-                                            icon_weight(0xba1a1a, 16.),
-                                            0xffdad6,
-                                            0xba1a1a,
+                                            icon_weight(ERROR, 16.),
+                                            ERROR_CONTAINER,
+                                            ERROR,
                                             30.,
                                         ))
                                         .child(
@@ -410,7 +410,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .border_1()
                                 .border_color(rgba(OUTLINE_VAR, 0.45))
                                 .shadow_sm()
-                                .hover(|h| h.bg(rgb(SURF_LOW)).border_color(rgba(0x7547ab, 0.5)))
+                                .hover(|h| h.bg(rgb(SURF_LOW)).border_color(rgba(ACCENT, 0.5)))
                                 .cursor_pointer()
                                 .flex()
                                 .flex_col()
@@ -427,9 +427,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(icon_badge(
-                                                    icon_files_duplicate(0x7547ab, 16.),
-                                                    0xefdbff,
-                                                    0x7547ab,
+                                                    icon_files_duplicate(ACCENT, 16.),
+                                                    ACCENT_CONTAINER,
+                                                    ACCENT,
                                                     30.,
                                                 ))
                                                 .child(
@@ -481,7 +481,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .shape(BadgeShape::Pill)
                                                 .padding(12., 3.)
                                                 .weight(gpui::FontWeight::BOLD)
-                                                .tone(BadgeTone::custom(0xefdbff, 0x5c2d91)),
+                                                .tone(BadgeTone::Accent),
                                         ),
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -500,7 +500,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .border_1()
                                 .border_color(rgba(OUTLINE_VAR, 0.45))
                                 .shadow_sm()
-                                .hover(|h| h.bg(rgb(SURF_LOW)).border_color(rgba(0x974700, 0.5)))
+                                .hover(|h| h.bg(rgb(SURF_LOW)).border_color(rgba(CAUTION, 0.5)))
                                 .cursor_pointer()
                                 .flex()
                                 .flex_col()
@@ -517,9 +517,9 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(icon_badge(
-                                                    icon_photos_similar(0x974700, 16.),
-                                                    0xffdbc8,
-                                                    0x974700,
+                                                    icon_photos_similar(CAUTION, 16.),
+                                                    CAUTION_CONTAINER,
+                                                    CAUTION,
                                                     30.,
                                                 ))
                                                 .child(
@@ -582,7 +582,7 @@ pub fn render_overview_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                                         .w(px(80.))
                                                         .h_full()
                                                         .rounded_full()
-                                                        .bg(rgb(0x974700)),
+                                                        .bg(rgb(CAUTION)),
                                                 ),
                                         ),
                                 )

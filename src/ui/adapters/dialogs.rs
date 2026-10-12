@@ -4,7 +4,7 @@ use crate::core::apps::{InstalledApp, ResidualKind, ResidualOccupancy, ResidualS
 use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::badge::{Badge, BadgeTone};
-use crate::ui::components::button::Button;
+use crate::ui::components::button::{Button, ButtonTone};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::dialog::DialogFrame;
 use crate::ui::components::icons::*;
@@ -398,14 +398,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     // 1. 推荐选中
                     .child(
                         Button::small("resid-select-rec", tr_batch_rec(lang))
-                            .colors(
-                                if is_recommended {
-                                    PRIMARY_FIXED
-                                } else {
-                                    SURF_HIGH
-                                },
-                                if is_recommended { PRIMARY } else { TEXT },
-                            )
+                            .tone(if is_recommended {
+                                ButtonTone::Accent
+                            } else {
+                                ButtonTone::Neutral
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(r) = &this.residual.result {
                                     this.residual.selected = r.default_selection();
@@ -416,14 +413,11 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     // 2. 全选所有
                     .child(
                         Button::small("resid-select-all", tr_batch_all(lang))
-                            .colors(
-                                if all_selected {
-                                    PRIMARY_FIXED
-                                } else {
-                                    SURF_HIGH
-                                },
-                                if all_selected { PRIMARY } else { TEXT },
-                            )
+                            .tone(if all_selected {
+                                ButtonTone::Accent
+                            } else {
+                                ButtonTone::Neutral
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(r) = &this.residual.result {
                                     this.residual.selected = (0..r.items.len()).collect();
@@ -434,7 +428,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                     // 3. 清空
                     .child(
                         Button::small("resid-select-none", tr_btn_clear_sel(lang))
-                            .colors(SURF_HIGH, MUTED)
+                            .tone(ButtonTone::Muted)
                             .disabled(selected_count == 0)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.residual.selected.clear();
@@ -558,7 +552,7 @@ pub fn render_residual_modal(root: &Root, cx: &mut Context<Root>) -> Option<impl
                                     "resid-open-sysext-settings",
                                     tr_residual_sysext_open(lang),
                                 )
-                                .colors(PRIMARY_FIXED, PRIMARY)
+                                .tone(ButtonTone::Accent)
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
                                         this.open_system_extension_settings(cx);
@@ -758,11 +752,11 @@ pub fn render_fda_onboarding_modal(
                                 ),
                             )
                             .child(
-                                Button::small("fda-check-btn", tr_fda_btn_check(lang))
-                                    .colors(SURF_HIGH, TEXT)
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                Button::small("fda-check-btn", tr_fda_btn_check(lang)).on_click(
+                                    cx.listener(|this, _, _, cx| {
                                         this.check_fda_permission(cx);
-                                    })),
+                                    }),
+                                ),
                             )
                             .child(
                                 Button::primary(

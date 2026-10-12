@@ -21,6 +21,18 @@ pub const CAUTION: u32 = 0x974700;
 pub const CAUTION_CONTAINER: u32 = 0xffdbc8;
 pub const ERROR: u32 = 0xba1a1a;
 pub const ERROR_CONTAINER: u32 = 0xffdad6;
+pub const ERROR_BRIGHT: u32 = 0xdc2626; // 危险操作 hover 的淡红底
+pub const INFO_CONTAINER: u32 = 0xe0f2fe; // 配 PRIMARY_BRIGHT 的浅蓝底板
+pub const ACCENT: u32 = 0x7547ab; // 紫色辅助色：重复文件、图表第二序列
+pub const ACCENT_CONTAINER: u32 = 0xefdbff;
+pub const ON_ACCENT_CONTAINER: u32 = 0x5c2d91;
+pub const SUCCESS: u32 = 0x059669;
+pub const SUCCESS_BRIGHT: u32 = 0x10b981; // 可用空间、内存走势
+pub const SUCCESS_CONTAINER: u32 = 0xd1fae5;
+pub const AMBER: u32 = 0xd97706;
+pub const SLATE: u32 = 0x64748b; // 图表里的「其他」
+pub const SCRIM: u32 = 0x000000; // 叠在图片上的半透明遮罩，配 ON_SCRIM
+pub const ON_SCRIM: u32 = 0xffffff;
 
 /// 生成带透明度的 Hsla 颜色
 pub fn rgba(hex: u32, alpha: f32) -> Hsla {

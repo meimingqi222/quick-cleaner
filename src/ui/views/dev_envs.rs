@@ -11,7 +11,7 @@ use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, Check};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeShape, BadgeSize, BadgeTone};
-use crate::ui::components::button::Button;
+use crate::ui::components::button::{Button, ButtonTone};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::feedback::{EmptyState, EmptyStateStyle, LoadingState};
 use crate::ui::components::list_row::{ListRow, RowGap, RowInset, RowRadius, RowVariant};
@@ -147,7 +147,6 @@ pub fn render_dev_environments_view(
                 .child(
                     div().flex_none().child(
                         Button::small("dev-rescan-btn", tr_dev_btn_rescan(lang))
-                            .colors(SURF_HIGH, TEXT)
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.start_dev_env_scan(cx);
@@ -736,7 +735,7 @@ fn render_detail_panel(
                             ),
                             tr_dev_btn_remove(lang),
                         )
-                        .colors(CARD, ERROR)
+                        .tone(ButtonTone::DangerSurface)
                         .disabled(busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.request_remove_dev_asset(target.clone(), cx);
@@ -834,7 +833,7 @@ fn render_detail_panel(
                                         ),
                                         tr_dev_site_select_all(lang),
                                     )
-                                    .colors(SURF_LOW, TEXT)
+                                    .tone(ButtonTone::Subtle)
                                     .disabled(busy)
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
@@ -850,7 +849,7 @@ fn render_detail_panel(
                                         ),
                                         tr_dev_batch_invert(lang),
                                     )
-                                    .colors(SURF_LOW, TEXT)
+                                    .tone(ButtonTone::Subtle)
                                     .disabled(busy)
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
@@ -1221,7 +1220,7 @@ fn render_package_row(
                 gpui::ElementId::Name(format!("dev-pkg-remove-{}", package.id).into()),
                 tr_dev_btn_remove(lang),
             )
-            .colors(SURF_HIGH, ERROR)
+            .tone(ButtonTone::Danger)
             .disabled(busy)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.request_remove_dev_asset(target.clone(), cx);
@@ -1270,7 +1269,7 @@ fn render_dev_bottom_bar(
         .child(div().w(px(1.)).h(px(20.)).bg(rgb(OUTLINE_VAR)))
         .child(
             Button::small("dev-sel-all", tr_dev_batch_select_all(lang))
-                .colors(SURF_LOW, TEXT)
+                .tone(ButtonTone::Subtle)
                 .disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apps.dev.select_all();
@@ -1279,7 +1278,7 @@ fn render_dev_bottom_bar(
         )
         .child(
             Button::small("dev-sel-invert", tr_dev_batch_invert(lang))
-                .colors(SURF_LOW, TEXT)
+                .tone(ButtonTone::Subtle)
                 .disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apps.dev.invert_selection();
@@ -1288,7 +1287,7 @@ fn render_dev_bottom_bar(
         )
         .child(
             Button::small("dev-sel-clear", tr_dev_batch_clear(lang))
-                .colors(SURF_LOW, TEXT)
+                .tone(ButtonTone::Subtle)
                 .disabled(busy || count == 0)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apps.dev.clear_selection();

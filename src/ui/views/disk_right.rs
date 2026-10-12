@@ -96,7 +96,6 @@ pub(super) fn render_right_browser_pane(
                 .child(
                     div().flex_none().child(
                         Button::small("disk-up-btn", btn_parent_text)
-                            .colors(SURF_HIGH, TEXT)
                             .disabled(depth <= 1)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.disk.path.len() > 1 {
@@ -268,19 +267,17 @@ pub(super) fn render_right_browser_pane(
                     .child(full)
                     .tooltip(path_tooltip(&full_for_copy)),
             )
-            .child(
-                div().flex_none().child(
-                    Button::small("disk-copy-path-btn", copy_label)
-                        .colors(SURF_HIGH, TEXT)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                full_for_copy.clone(),
-                            ));
-                            this.status = copied_status.clone();
-                            cx.notify();
-                        })),
-                ),
-            )
+            .child(div().flex_none().child(
+                Button::small("disk-copy-path-btn", copy_label).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            full_for_copy.clone(),
+                        ));
+                        this.status = copied_status.clone();
+                        cx.notify();
+                    },
+                )),
+            ))
     });
 
     card()
@@ -602,12 +599,12 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
             )
             .leading(recycle_toggle)
             .leading(
-                Button::small("clear-disk-selection-btn", tr_btn_clear_sel(lang))
-                    .colors(SURF_HIGH, TEXT)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                Button::small("clear-disk-selection-btn", tr_btn_clear_sel(lang)).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.clear_disk_selection();
                         cx.notify();
-                    })),
+                    }),
+                ),
             )
             .actions(
                 Button::danger("clean-disk-selected", tr_btn_confirm_delete(lang))

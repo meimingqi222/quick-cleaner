@@ -83,7 +83,7 @@ pub fn render_declutter_context_menu(root: &Root, cx: &mut Context<Root>) -> Opt
     .child(
         MenuItem::new("ctx-declutter-reveal", ctx_reveal)
             .tone(MenuTone::Accent)
-            .icon(icon_folder_large(0x0078d4, 14.))
+            .icon(icon_folder_large(PRIMARY_BRIGHT, 14.))
             .on_click(cx.listener(move |this, _, _, cx| {
                 crate::platform::reveal_in_explorer(&p_reveal);
                 this.close_declutter_context_menu();
@@ -93,7 +93,7 @@ pub fn render_declutter_context_menu(root: &Root, cx: &mut Context<Root>) -> Opt
     .child(
         MenuItem::new("ctx-declutter-open", ctx_open)
             .tone(MenuTone::Accent)
-            .icon(icon_search(0x7547ab, 14.))
+            .icon(icon_search(ACCENT, 14.))
             .on_click(cx.listener(move |this, _, _, cx| {
                 crate::platform::open_in_default_app(&p_open);
                 this.close_declutter_context_menu();
@@ -103,7 +103,7 @@ pub fn render_declutter_context_menu(root: &Root, cx: &mut Context<Root>) -> Opt
     .child(
         MenuItem::new("ctx-declutter-copy", ctx_copy)
             .tone(MenuTone::Accent)
-            .icon(icon_zip(0x059669, 14.))
+            .icon(icon_zip(SUCCESS, 14.))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(p_copy.clone()));
                 this.status = crate::core::i18n::Text::new(

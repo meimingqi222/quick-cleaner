@@ -824,9 +824,9 @@ fn render_proc_detail_drawer(
                 .child(
                     div()
                         .rounded_lg()
-                        .bg(rgba(0x10B981, 0.08))
+                        .bg(rgba(SUCCESS_BRIGHT, 0.08))
                         .border_1()
-                        .border_color(rgba(0x10B981, 0.2))
+                        .border_color(rgba(SUCCESS_BRIGHT, 0.2))
                         .p_2p5()
                         .flex()
                         .flex_col()
@@ -840,7 +840,7 @@ fn render_proc_detail_drawer(
                                     div()
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(0x059669))
+                                        .text_color(rgb(SUCCESS))
                                         .child(tr_status_card_memory(lang)),
                                 )
                                 .child(
@@ -853,7 +853,7 @@ fn render_proc_detail_drawer(
                         )
                         .child(render_mini_mem_sparkline(
                             &root.monitor.selected_proc_mem_history,
-                            0x10B981,
+                            SUCCESS_BRIGHT,
                             24.,
                         )),
                 )

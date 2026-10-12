@@ -135,7 +135,6 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                         .when(show_skip, |d| {
                             d.child(
                                 Button::small("update-skip", tr_update_skip_version(lang))
-                                    .colors(SURF_HIGH, TEXT)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.skip_this_update_version(cx);
                                     })),
@@ -144,7 +143,6 @@ pub fn render_update_dialog(root: &Root, cx: &mut Context<Root>) -> impl IntoEle
                         .when(release_url.is_some(), |d| {
                             d.child(
                                 Button::small("update-open-release", tr_update_open_release(lang))
-                                    .colors(SURF_HIGH, TEXT)
                                     .on_click(cx.listener(|this, _, _, _cx| {
                                         if let Some(url) = match &this.update.status {
                                             UpdateStatus::Available { release_url, .. }

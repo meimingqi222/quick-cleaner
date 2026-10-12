@@ -3,7 +3,7 @@
 use crate::core::apps::InstalledApp;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::app_icons::try_get_icon;
-use crate::ui::components::button::{Button, IconButton, IconButtonVariant};
+use crate::ui::components::button::{Button, ButtonTone, IconButton, IconButtonVariant};
 use crate::ui::components::list_row::{ListRow, RowInset};
 use crate::ui::components::scroll_area::{table_shell, virtual_list, ScrollArea};
 use crate::ui::theme::*;
@@ -164,7 +164,7 @@ pub(super) fn render_app_row(
                         SharedString::from(format!("uninst-{idx}")),
                         crate::ui::i18n::tr_btn_uninstall(lang),
                     )
-                    .colors(CARD, TEXT)
+                    .tone(ButtonTone::Surface)
                     .disabled(!uninst_enabled)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.request_uninstall_app(app_for_uninst.clone(), cx);
@@ -181,7 +181,7 @@ pub(super) fn render_app_row(
                                 crate::ui::i18n::tr_btn_force_clean(lang)
                             },
                         )
-                        .colors(PRIMARY_FIXED, PRIMARY)
+                        .tone(ButtonTone::Accent)
                         .disabled(is_busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_residual_scan(app_for_resid.clone(), cx);

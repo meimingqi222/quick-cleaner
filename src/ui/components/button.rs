@@ -35,7 +35,7 @@ pub enum ButtonVariant {
     Danger,
     /// 描边透明底，hover 浅灰底 + 主色字。
     Ghost,
-    /// 小型操作钮；底色与字色由 `.colors()` 给出，默认 `SURF_HIGH` / `TEXT`。
+    /// 小型操作钮；配色由 `.tone()` 选，默认 [`ButtonTone::Neutral`]。
     Small,
     /// 浅灰底描边的矩形次要钮，hover 变浅。
     Tonal,
@@ -43,6 +43,44 @@ pub enum ButtonVariant {
     Mini,
     /// 无底板的文字链接，默认主色字，hover 浅灰底；字色与悬停用 `.fg()` / `.hover_style()` 调。
     Link,
+}
+
+/// `Small` 的配色。封闭集合：新配色先加到这里，不要让页面直接传色值。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ButtonTone {
+    /// SURF_HIGH / TEXT
+    #[default]
+    Neutral,
+    /// SURF_LOW / TEXT
+    Subtle,
+    /// CARD / TEXT，放在灰底区域上
+    Surface,
+    /// SURF_HIGH / MUTED
+    Muted,
+    /// SURF_LOW / MUTED，开关的未选中态
+    Quiet,
+    /// PRIMARY_FIXED / PRIMARY，开关的选中态或推荐操作
+    Accent,
+    /// SURF_HIGH / ERROR
+    Danger,
+    /// CARD / ERROR
+    DangerSurface,
+}
+
+impl ButtonTone {
+    /// (底色, 字色)
+    pub fn colors(self) -> (u32, u32) {
+        match self {
+            Self::Neutral => (SURF_HIGH, TEXT),
+            Self::Subtle => (SURF_LOW, TEXT),
+            Self::Surface => (CARD, TEXT),
+            Self::Muted => (SURF_HIGH, MUTED),
+            Self::Quiet => (SURF_LOW, MUTED),
+            Self::Accent => (PRIMARY_FIXED, PRIMARY),
+            Self::Danger => (SURF_HIGH, ERROR),
+            Self::DangerSurface => (CARD, ERROR),
+        }
+    }
 }
 
 /// 只管几何（内边距、圆角、字号）；配色与字重由变体决定。
@@ -86,7 +124,7 @@ pub struct Button {
     size: Option<ButtonSize>,
     label: Option<SharedString>,
     busy_label: Option<SharedString>,
-    colors: Option<(u32, u32)>,
+    tone: ButtonTone,
     fg: Option<u32>,
     weight: Option<FontWeight>,
     hover: Option<(Option<Hsla>, Option<u32>)>,
@@ -110,7 +148,7 @@ impl Button {
             size: None,
             label: None,
             busy_label: None,
-            colors: None,
+            tone: ButtonTone::default(),
             fg: None,
             weight: None,
             hover: None,
@@ -159,9 +197,9 @@ impl Button {
         self
     }
 
-    /// 仅 `Small` 使用：底色与字色（`theme` 里的十六进制色）。其他变体忽略。
-    pub fn colors(mut self, bg: u32, fg: u32) -> Self {
-        self.colors = Some((bg, fg));
+    /// 仅 `Small` 使用，其他变体忽略。
+    pub fn tone(mut self, tone: ButtonTone) -> Self {
+        self.tone = tone;
         self
     }
 
@@ -259,7 +297,7 @@ fn apply_size(el: Stateful<gpui::Div>, size: ButtonSize) -> Stateful<gpui::Div> 
 fn apply_variant(
     el: Stateful<gpui::Div>,
     variant: ButtonVariant,
-    colors: Option<(u32, u32)>,
+    tone: ButtonTone,
     active: bool,
 ) -> Stateful<gpui::Div> {
     match variant {
@@ -281,7 +319,7 @@ fn apply_variant(
                 d.hover(|h| h.bg(rgb(SURF_LOW)).text_color(rgb(PRIMARY)))
             }),
         ButtonVariant::Small => {
-            let (bg, fg) = colors.unwrap_or((SURF_HIGH, TEXT));
+            let (bg, fg) = tone.colors();
             el.bg(rgb(bg))
                 .border_1()
                 .border_color(rgba(OUTLINE_VAR, 0.6))
@@ -332,7 +370,7 @@ impl RenderOnce for Button {
         let el = apply_variant(
             apply_size(base, size),
             self.variant,
-            self.colors,
+            self.tone,
             active && hover_override.is_none(),
         )
         .when_some(self.fg, |d, c| d.text_color(rgb(c)))

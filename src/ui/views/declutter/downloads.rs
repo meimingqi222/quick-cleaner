@@ -85,9 +85,9 @@ pub fn render_downloads_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 .into(),
                             ))
                             .child(icon_badge(
-                                icon_downloads(0x0078d4, 14.),
-                                0xe0f2fe,
-                                0x0078d4,
+                                icon_downloads(PRIMARY_BRIGHT, 14.),
+                                INFO_CONTAINER,
+                                PRIMARY_BRIGHT,
                                 28.,
                             ))
                             .child(

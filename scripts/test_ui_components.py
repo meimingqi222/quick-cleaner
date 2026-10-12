@@ -31,6 +31,13 @@ class BoundaryTests(unittest.TestCase):
         self.assertTrue(guard.violations('drag_capture(owner, move_cb, up_cb);', 'views'))
         self.assertTrue(guard.violations('div().on_key_down(listener);', 'views'))
 
+    def test_hex_colors_only_outside_page_layers(self):
+        source = 'div().bg(rgb(0x7547ab)); // 0xffffff in a comment'
+        for layer in ('views', 'adapters', 'shell'):
+            self.assertEqual(guard.violations(source, layer), {'ui-no-hex-colors': 1}, layer)
+        self.assertFalse(guard.violations(source, 'components'))
+        self.assertFalse(guard.violations('div().bg(rgb(ACCENT)); let n = 0x10;', 'views'))
+
     def test_baselines_can_shrink_but_cannot_grow_or_transfer(self):
         old = {'rule': {'a.rs': 2}}
         self.assertFalse(guard.growth({'rule': {'a.rs': 1}}, old))

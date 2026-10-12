@@ -30,6 +30,8 @@ pub enum BadgeTone {
     Caution,
     /// ERROR_CONTAINER / ERROR
     Error,
+    /// ACCENT_CONTAINER / ON_ACCENT_CONTAINER
+    Accent,
     Custom {
         bg: Hsla,
         fg: Hsla,
@@ -54,6 +56,7 @@ impl BadgeTone {
             Self::Primary => hex(PRIMARY_FIXED, PRIMARY),
             Self::Caution => hex(CAUTION_CONTAINER, CAUTION),
             Self::Error => hex(ERROR_CONTAINER, ERROR),
+            Self::Accent => hex(ACCENT_CONTAINER, ON_ACCENT_CONTAINER),
             Self::Custom { bg, fg } => (bg, fg),
         }
     }

@@ -217,9 +217,9 @@ pub fn render_duplicates_tab(root: &Root, cx: &mut Context<Root>) -> AnyElement 
                                     .items_center()
                                     .gap_3()
                                     .child(icon_badge(
-                                        icon_files_duplicate(0x7547ab, 18.),
-                                        0xefdbff,
-                                        0x7547ab,
+                                        icon_files_duplicate(ACCENT, 18.),
+                                        ACCENT_CONTAINER,
+                                        ACCENT,
                                         32.,
                                     ))
                                     .child(

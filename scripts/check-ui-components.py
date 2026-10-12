@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / 'scripts/ui-components-baseline.json'
-RULES = ('components-no-business', 'views-no-key-handlers', 'views-no-overlay', 'views-no-scroll-drag')
+RULES = ('components-no-business', 'views-no-key-handlers', 'views-no-overlay', 'views-no-scroll-drag', 'ui-no-hex-colors')
 
 
 def code_only(source: str) -> str:
@@ -73,12 +73,15 @@ def violations(source: str, layer: str) -> dict[str, int]:
                 result['views-no-overlay'] += 1
         result['views-no-scroll-drag'] = len(re.findall(r'\b(?:drag_capture|drag_to_offset|scroll_metrics|scrollbar)\s*\(', code))
         result['views-no-scroll-drag'] += len(re.findall(r'\bgpui\s*::\s*uniform_list\s*\(', code))
+    if layer in ('views', 'adapters', 'shell'):
+        # Colors come from theme tokens; components keep their own palettes (icons, donut).
+        result['ui-no-hex-colors'] = len(re.findall(r'\b0x[0-9a-fA-F]{6}\b', code))
     return {rule: count for rule, count in result.items() if count}
 
 
 def scan(root: Path = ROOT) -> dict[str, dict[str, int]]:
     found = {rule: {} for rule in RULES}
-    for layer in ('components', 'views'):
+    for layer in ('components', 'views', 'adapters', 'shell'):
         for path in sorted((root / 'src/ui' / layer).rglob('*.rs')):
             for rule, count in violations(path.read_text(encoding='utf-8'), layer).items():
                 found[rule][path.relative_to(root).as_posix()] = count

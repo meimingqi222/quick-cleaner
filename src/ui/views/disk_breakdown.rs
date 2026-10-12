@@ -108,7 +108,7 @@ fn breakdown_for_tree(
                 name: free_label,
                 size: fre,
                 ratio: free_ratio,
-                color: colors[4], // 0x10b981 Emerald Green
+                color: colors[4], // SUCCESS_BRIGHT
                 is_dir: false,
                 idx: None,
             });
