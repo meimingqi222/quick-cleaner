@@ -74,12 +74,6 @@ pub fn render_dev_environments_view(
             cx.notify();
         },
         |this, cx| {
-            let input = &mut this.apps.input;
-            input.sel = crate::ui::text_input::delete_forward(&mut input.text, input.sel.clone());
-            input.marked = None;
-            cx.notify();
-        },
-        |this, cx| {
             this.apps.input.text.clear();
             this.apps.input.sel = 0..0;
             cx.notify();

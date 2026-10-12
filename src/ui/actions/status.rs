@@ -312,17 +312,6 @@ impl crate::ui::Root {
         cx.notify();
     }
 
-    /// 进程搜索框退格
-    pub fn status_search_backspace(&mut self, cx: &mut Context<Self>) {
-        let input = &mut self.monitor.input;
-        input.sel = crate::ui::text_input::delete_backward(&mut input.text, input.sel.clone());
-        input.marked = None;
-        self.monitor.search_popover.reopen();
-        self.reset_status_search_selection();
-        self.rebuild_proc_view();
-        cx.notify();
-    }
-
     /// 进程搜索框按 Esc 处理：
     /// 若 Popover 浮层当前正在显示，优先收起浮层；
     /// 若浮层已收起或未满足显示条件，且搜索框有内容，则清空搜索框。

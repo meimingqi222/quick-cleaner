@@ -1,0 +1,7 @@
+# manufactured red: search_box backspace wired to delete_forward (the dev_envs bug since 2f01f3e)
+test ui::components::search_input::tests::backspace_removes_before_caret_and_delete_after ... FAILED
+thread 'ui::components::search_input::tests::backspace_removes_before_caret_and_delete_after' (3873317) panicked at src/ui/components/search_input.rs:482:9:
+assertion `left == right` failed
+  left: ("wadaw", 1)
+ right: ("wada", 1)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 821 filtered out; finished in 0.00s

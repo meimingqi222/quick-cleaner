@@ -47,12 +47,12 @@ pub struct SearchBoxSpec<'a, T: 'static> {
 
 /// 渲染一个搜索框。
 ///
-/// `on_clear` / `on_backspace` / `on_escape` 是三个编辑动作的回调，
+/// `on_clear` / `on_escape` 由调用方决定（清空可能连带收起浮层等）；退格、删除、
+/// 光标移动等纯编辑由组件统一处理，改完文本走 `binding.changed`。
 /// `on_bounds` 在 IME canvas paint 时被调用，用来存储搜索框位置给输入法候选窗口。
 pub fn search_box<T: gpui::EntityInputHandler>(
     spec: SearchBoxSpec<'_, T>,
     on_clear: impl Fn(&mut T, &mut Context<T>) + 'static,
-    on_backspace: impl Fn(&mut T, &mut Context<T>) + 'static,
     on_escape: impl Fn(&mut T, &mut Context<T>) + 'static,
     on_bounds: impl Fn(&mut T, Bounds<Pixels>) + 'static,
     cx: &mut Context<T>,
@@ -194,13 +194,19 @@ pub fn search_box<T: gpui::EntityInputHandler>(
             let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
             let shift = event.keystroke.modifiers.shift;
             match event.keystroke.key.as_str() {
-                "backspace" => on_backspace(this, cx),
-                "delete" => {
+                "backspace" | "delete" => {
                     let input = binding.input_mut(this);
-                    input.sel =
-                        crate::ui::text_input::delete_forward(&mut input.text, input.sel.clone());
+                    let sel = input.sel.clone();
+                    input.sel = if event.keystroke.key == "backspace" {
+                        crate::ui::text_input::delete_backward(&mut input.text, sel)
+                    } else {
+                        crate::ui::text_input::delete_forward(&mut input.text, sel)
+                    };
                     input.marked = None;
                     binding.changed(this, cx);
+                    binding.activity(this, cx);
+                    // on_change 不保证重绘（文件搜索在索引未就绪时直接返回）。
+                    cx.notify();
                 }
                 "escape" => on_escape(this, cx),
                 // 光标移动不改文本，两个框都只要重绘
@@ -344,4 +350,138 @@ pub fn search_box<T: gpui::EntityInputHandler>(
             .absolute()
             .size_full(),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::components::input::TextInputState;
+    use gpui::{Render, TestAppContext, UTF16Selection, Window};
+    use std::ops::Range;
+
+    struct Field {
+        input: TextInputState,
+        changes: usize,
+    }
+
+    const BINDING: InputBinding<Field> = InputBinding {
+        read: |this| &this.input,
+        write: |this| &mut this.input,
+        on_change: |this, _| this.changes += 1,
+        on_activity: |_, _| {},
+        on_key: |_, _, _, _| false,
+        register: |_, _, _| {},
+        font_size: 12.,
+    };
+
+    impl gpui::EntityInputHandler for Field {
+        fn text_for_range(
+            &mut self,
+            _: Range<usize>,
+            _: &mut Option<Range<usize>>,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) -> Option<String> {
+            None
+        }
+        fn selected_text_range(
+            &mut self,
+            _: bool,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) -> Option<UTF16Selection> {
+            None
+        }
+        fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+            None
+        }
+        fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {}
+        fn replace_text_in_range(
+            &mut self,
+            _: Option<Range<usize>>,
+            _: &str,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) {
+        }
+        fn replace_and_mark_text_in_range(
+            &mut self,
+            _: Option<Range<usize>>,
+            _: &str,
+            _: Option<Range<usize>>,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) {
+        }
+        fn bounds_for_range(
+            &mut self,
+            _: Range<usize>,
+            _: Bounds<Pixels>,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) -> Option<Bounds<Pixels>> {
+            None
+        }
+        fn character_index_for_point(
+            &mut self,
+            _: gpui::Point<Pixels>,
+            _: &mut Window,
+            _: &mut Context<Self>,
+        ) -> Option<usize> {
+            None
+        }
+    }
+
+    impl Render for Field {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let focus_handle = self.input.focus_handle.clone();
+            search_box(
+                SearchBoxSpec {
+                    id: "field".into(),
+                    focus_handle: &focus_handle,
+                    text: &self.input.text,
+                    placeholder: SharedString::default(),
+                    selection: self.input.sel.clone(),
+                    marked: None,
+                    width: 200.,
+                    height: 32.,
+                    font_size: 12.,
+                    cursor_h: 13.,
+                    focused: focus_handle.is_focused(window),
+                    cursor_visible: true,
+                    binding: BINDING,
+                },
+                |_, _| {},
+                |_, _| {},
+                |_, _| {},
+                cx,
+            )
+        }
+    }
+
+    fn edit(cx: &mut TestAppContext, text: &str, caret: usize, key: &str) -> (String, usize) {
+        let (view, cx) = cx.add_window_view(|_, cx| Field {
+            input: TextInputState::new(cx.focus_handle()),
+            changes: 0,
+        });
+        view.update_in(cx, |this, window, cx| {
+            this.input.set_text(text);
+            this.input.sel = caret..caret;
+            this.input.focus_handle.focus(window);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(key);
+        view.read_with(cx, |this, _| (this.input.text.clone(), this.changes))
+    }
+
+    /// 开发环境搜索框曾把退格接到向前删除上：光标在末尾时按退格没反应。
+    /// 退格与删除现在由组件统一实现，调用方不再各写一份。
+    #[gpui::test]
+    fn backspace_removes_before_caret_and_delete_after(cx: &mut TestAppContext) {
+        assert_eq!(edit(cx, "wadaw", 5, "backspace"), ("wada".into(), 1));
+        assert_eq!(edit(cx, "abc", 1, "backspace"), ("bc".into(), 1));
+        assert_eq!(edit(cx, "abc", 1, "delete"), ("ac".into(), 1));
+        assert_eq!(edit(cx, "中文", "中".len(), "backspace"), ("文".into(), 1));
+    }
 }

@@ -272,10 +272,6 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             cx.notify();
         },
         |this, cx| {
-            this.search_backspace();
-            cx.notify();
-        },
-        |this, cx| {
             this.search_clear();
             cx.notify();
         },

@@ -54,11 +54,6 @@ pub const STATUS_INPUT: InputBinding<Root> = InputBinding {
     font_size: 12.,
 };
 impl Root {
-    pub fn search_backspace(&mut self) {
-        let input = &mut self.apps.input;
-        input.sel = crate::ui::text_input::delete_backward(&mut input.text, input.sel.clone());
-        input.marked = None;
-    }
     pub fn search_clear(&mut self) {
         self.apps.input.clear();
     }

@@ -6,7 +6,6 @@ use crate::core::i18n::bilingual;
 #[cfg(windows)]
 use crate::platform::is_elevated;
 use crate::ui::i18n::*;
-use crate::ui::text_input::clamp_to_boundary;
 use crate::ui::SearchSortCol;
 use gpui::Context;
 use std::time::Duration;
@@ -344,25 +343,6 @@ impl crate::ui::Root {
         }
         self.apply_search_sort();
         cx.notify();
-    }
-
-    /// 搜索框退格键
-    pub fn file_search_backspace(&mut self, cx: &mut Context<Self>) {
-        let sel = clamp_to_boundary(&self.search.input.text, self.search.input.sel.clone());
-        if sel.start != sel.end {
-            self.search.input.text.replace_range(sel.clone(), "");
-            self.search.input.sel = sel.start..sel.start;
-        } else if sel.start > 0 {
-            let prev = self.search.input.text[..sel.start]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.search.input.text.replace_range(prev..sel.start, "");
-            self.search.input.sel = prev..prev;
-        }
-        self.search.input.marked = None;
-        self.search_input_changed(cx);
     }
 
     /// 清空搜索框

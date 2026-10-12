@@ -781,3 +781,16 @@ Note: `2026-10-12-ui-inline-cjk-guard.md`
   - 不要把「剔除诊断调用」扩到状态栏、弹窗用的 `bilingual` / `Text::new`，它们是界面文案。
   - 不要为了让守卫变绿往基线里记例外；基线必须保持为空。
   - `core` / `platform` 的错误 payload 保持语言中立，中文外壳放在 `tr_scan_error` 一类的 `tr_*` 里。
+
+## P59 搜索框的退格 / 删除只能由 `search_box` 组件实现，不能交回调用方
+
+Note: `2026-10-12-search-box-backspace.md`
+
+- **症状**：开发环境搜索框按 Backspace 删不掉文字（光标在末尾时无反应，在中间时删掉右边的字）。
+- **根因**：`search_box` 曾让每个调用方传 `on_backspace`，四个搜索框四种写法；开发环境页把退格接到了实现 Delete 键的 `text_input_delete`（它的布尔参数选的是哪个输入框，不是删除方向）。
+- **防护**：
+  - [`search_box`](../src/ui/components/search_input.rs) 不再接受退格回调，Backspace / Delete 在组件内统一走 `delete_backward` / `delete_forward` → `binding.changed`。
+  - 测试：`backspace_removes_before_caret_and_delete_after`（末尾、中间、多字节字符）。
+- **改搜索框或新增输入框时**：
+  - 不要重新加 `on_backspace` / `on_delete` 之类的编辑回调；页面差异放进 binding 的 `on_change`。
+  - 接编辑回调时按函数实现判断删除方向，不要按函数名或布尔参数猜。
