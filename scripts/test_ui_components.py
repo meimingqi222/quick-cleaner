@@ -38,6 +38,14 @@ class BoundaryTests(unittest.TestCase):
         self.assertFalse(guard.violations(source, 'components'))
         self.assertFalse(guard.violations('div().bg(rgb(ACCENT)); let n = 0x10;', 'views'))
 
+    def test_theme_is_held_to_the_component_rule(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'src/ui').mkdir(parents=True)
+            (root / 'src/ui/theme.rs').write_text('use crate::core::categories::Safety;', encoding='utf-8')
+            found = guard.scan(root)
+            self.assertEqual(found['components-no-business'], {'src/ui/theme.rs': 1})
+
     def test_baselines_can_shrink_but_cannot_grow_or_transfer(self):
         old = {'rule': {'a.rs': 2}}
         self.assertFalse(guard.growth({'rule': {'a.rs': 1}}, old))

@@ -1,6 +1,5 @@
 //! Material 3 浅色设计系统调色板与基础样式常量
 
-use crate::core::categories::Safety;
 use gpui::{rgb, Hsla};
 
 pub const BG: u32 = 0xf9f9f9; // surface / background：侧边栏、底栏
@@ -39,24 +38,4 @@ pub fn rgba(hex: u32, alpha: f32) -> Hsla {
     let mut c = Hsla::from(rgb(hex));
     c.a = alpha;
     c
-}
-
-/// 安全等级 -> 强调色（用在大小数字、进度条、状态点上）。
-///
-/// 配色只属于 UI 层：领域层的 `Safety` 只表达风险等级，不该知道十六进制色值。
-pub fn safety_color(s: Safety) -> u32 {
-    match s {
-        Safety::Safe => PRIMARY,
-        Safety::Caution => CAUTION,
-        Safety::Danger => ERROR,
-    }
-}
-
-/// 安全等级 -> 容器色（图标底板这类大色块用）。
-pub fn safety_container(s: Safety) -> u32 {
-    match s {
-        Safety::Safe => PRIMARY_FIXED,
-        Safety::Caution => CAUTION_CONTAINER,
-        Safety::Danger => ERROR_CONTAINER,
-    }
 }

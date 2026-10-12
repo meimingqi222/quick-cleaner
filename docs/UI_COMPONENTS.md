@@ -35,6 +35,19 @@ business enum to a component to distinguish pages. Extract behavior only when
 real callers need it; do not manufacture a second domain consumer for a one-off.
 Popover's occlusion and regression contract remains in [UI_POPOVER.md](UI_POPOVER.md).
 
+## Theme and sharing across projects
+
+`theme.rs` holds compile-time color tokens and, like `components/`, must not import
+`core` or `platform` (the guard scans it with the component rule); domain-to-color
+mapping such as `safety_color` lives in `adapters/`. A runtime `Theme` global is
+deliberately not built yet: QuickCleaner has a single light palette, and a theme
+that only components read would leave views on constants and create two sources
+of truth. Introduce it together with extracting a shared GPUI component crate,
+when a second application (e.g. a dark-themed one) actually consumes these
+components; at that point components and views move to the theme in one change.
+Theme-free pieces (text-edit helpers, OverlayStack, virtual_list/ScrollArea,
+InputHost) can be extracted first.
+
 ## Input ownership
 
 The Entity spike was not accepted: native Windows and macOS IME evidence is missing.

@@ -3,6 +3,7 @@
 use crate::core::categories::{CategoryId, Safety};
 use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
+use crate::ui::adapters::{safety_color, safety_container};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeTone};
 use crate::ui::components::button::{Button, ButtonIntent, ButtonSize, ButtonTone, ButtonVariant};

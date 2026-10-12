@@ -81,10 +81,15 @@ def violations(source: str, layer: str) -> dict[str, int]:
 
 def scan(root: Path = ROOT) -> dict[str, dict[str, int]]:
     found = {rule: {} for rule in RULES}
+    # theme.rs is glob-imported by every component, so it obeys the component rule.
+    targets = [(root / 'src/ui/theme.rs', 'components')]
     for layer in ('components', 'views', 'adapters', 'shell'):
-        for path in sorted((root / 'src/ui' / layer).rglob('*.rs')):
-            for rule, count in violations(path.read_text(encoding='utf-8'), layer).items():
-                found[rule][path.relative_to(root).as_posix()] = count
+        targets += [(path, layer) for path in sorted((root / 'src/ui' / layer).rglob('*.rs'))]
+    for path, layer in targets:
+        if not path.is_file():
+            continue
+        for rule, count in violations(path.read_text(encoding='utf-8'), layer).items():
+            found[rule][path.relative_to(root).as_posix()] = count
     return found
 
 

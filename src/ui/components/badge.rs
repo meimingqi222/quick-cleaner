@@ -1,7 +1,7 @@
 //! 徽章 / 胶囊 / 标签
 //!
 //! 只认中性色调，不认识领域类型：安全等级由调用方用
-//! `theme::safety_color` / `safety_container` 或 `Safe→Primary / Caution→Caution /
+//! `adapters::safety_color` / `safety_container` 或 `Safe→Primary / Caution→Caution /
 //! Danger→Error` 转成 [`BadgeTone`]。
 //!
 //! 布局约束（PITFALLS P3）：徽章不能指望文字自己省略。徽章放在窄容器里时调
