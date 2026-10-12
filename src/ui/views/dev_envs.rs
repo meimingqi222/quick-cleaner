@@ -19,6 +19,7 @@ use crate::ui::components::search_input::{search_box, SearchBoxSpec};
 use crate::ui::components::segmented::{
     ChipLook, ChipPadX, ChipRadius, SegmentItem, SegmentStyle, SegmentedControl,
 };
+use crate::ui::components::stat_tile::{StatTile, StatTileStyle};
 use crate::ui::components::{path_tooltip, text_tooltip};
 use crate::ui::i18n::*;
 use crate::ui::state::{DevEnvFilterTab, DevEnvState};
@@ -748,21 +749,26 @@ fn render_detail_panel(
             div()
                 .flex()
                 .gap_4()
-                .child(detail_metric_box(
-                    tr_dev_col_exclusive(lang),
-                    fmt_size(active_item.size.exclusive_reclaimable_bytes),
-                    PRIMARY,
-                ))
-                .child(detail_metric_box(
-                    tr_dev_col_size(lang),
-                    fmt_size(active_item.size.logical_bytes),
-                    TEXT,
-                ))
-                .child(detail_metric_box(
-                    tr_dev_col_last_change(lang),
-                    age_text,
-                    MUTED,
-                )),
+                .child(
+                    StatTile::new(
+                        tr_dev_col_exclusive(lang),
+                        fmt_size(active_item.size.exclusive_reclaimable_bytes),
+                    )
+                    .value_color(PRIMARY)
+                    .style(StatTileStyle::Inset),
+                )
+                .child(
+                    StatTile::new(
+                        tr_dev_col_size(lang),
+                        fmt_size(active_item.size.logical_bytes),
+                    )
+                    .style(StatTileStyle::Inset),
+                )
+                .child(
+                    StatTile::new(tr_dev_col_last_change(lang), age_text)
+                        .value_color(MUTED)
+                        .style(StatTileStyle::Inset),
+                ),
         );
 
     // 内容区：判断是否支持包列表（即 Python 用户包目录或虚拟环境）
@@ -921,29 +927,6 @@ fn render_detail_panel(
         .overflow_hidden()
         .child(header_card)
         .child(content_area)
-        .into_any_element()
-}
-
-/// 头部指标小方格
-fn detail_metric_box(label: &'static str, value: String, val_color: u32) -> AnyElement {
-    div()
-        .flex_1()
-        .p_2()
-        .rounded_md()
-        .bg(rgb(CARD))
-        .border_1()
-        .border_color(rgba(OUTLINE_VAR, 0.3))
-        .flex()
-        .flex_col()
-        .gap(px(1.))
-        .child(div().text_xs().text_color(rgb(OUTLINE)).child(label))
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(val_color))
-                .child(value),
-        )
         .into_any_element()
 }
 

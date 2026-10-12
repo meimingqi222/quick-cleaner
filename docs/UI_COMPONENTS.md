@@ -15,6 +15,7 @@ in Root's existing child states.
 | Row layout and interaction slots | ListRow | Apps, Junk, Search, process rows |
 | Selection controls | SegmentedControl / ToggleChip | shell tabs, Apps filters, status filters |
 | Determinate progress | Meter / ProportionBar | status, disk, cleanup progress |
+| Label + value metrics | StatTile (Card / Inset) | Apps header stats, dev environment detail |
 | Menus and edge placement | Menu / MenuItem | Apps, Declutter, disk volumes |
 | Modal shell | DialogFrame | confirmation, residuals, FDA, update |
 | Single-line edit and IME state | InputHost / InputBinding / search_box | Apps/dev environments, file search, status |
@@ -24,8 +25,9 @@ in Root's existing child states.
 | Ordinary variable-height scrolling | ScrollView | disk browser, development environment package list |
 
 Colors in views, adapters and shell come from `theme.rs` tokens; the guard rejects
-hex literals there. `Button::small` picks a closed `ButtonTone` and `Badge` a
-`BadgeTone`; add a tone instead of passing raw colors. `BadgeTone::custom` remains
+hex literals there. `Button::small` picks a closed `ButtonTone`, Link/Mini/Ghost a
+`ButtonIntent`, and `Badge` a `BadgeTone`; add a tone or intent instead of passing
+raw colors. Buttons have no per-call text color, hover or disabled-opacity override. `BadgeTone::custom` remains
 only for data-driven colors (safety level, status value).
 
 Preserve domain rows and query parsers in their current layers. Do not add a new

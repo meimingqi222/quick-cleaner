@@ -5,7 +5,7 @@ use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeTone};
-use crate::ui::components::button::{Button, ButtonSize, ButtonTone, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonIntent, ButtonSize, ButtonTone, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{checkbox, page_heading};
 use crate::ui::components::feedback::LoadingState;
@@ -244,8 +244,7 @@ fn item_row(
             )
             .label(tr_exclude(lang))
             .size(ButtonSize::Slim)
-            .fg(MUTED)
-            .hover_style(Some(rgba(ERROR_BRIGHT, 0.10)), Some(ERROR))
+            .intent(ButtonIntent::DangerOnHover)
             .flex_none()
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -418,8 +417,7 @@ fn render_exclusions_panel(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                         )
                         .label(tr_exclusion_remove(lang))
                         .size(ButtonSize::Slim)
-                        .fg(MUTED)
-                        .hover_style(Some(rgba(ERROR_BRIGHT, 0.10)), Some(ERROR))
+                        .intent(ButtonIntent::DangerOnHover)
                         .flex_none()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.remove_exclusion(&target, cx);

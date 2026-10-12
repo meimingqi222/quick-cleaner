@@ -5,7 +5,7 @@ use super::disk_components::render_breakdown_row;
 use super::disk_volume::render_volume_selector_button;
 use crate::core::disk::{Node, ScanResult};
 use crate::core::model::{fmt_size, truncate};
-use crate::ui::components::button::{Button, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonIntent, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::donut::{render_donut, DonutSegment};
 use crate::ui::components::path_tooltip;
@@ -290,9 +290,8 @@ pub(super) fn render_breadcrumbs(
         }));
         crumbs = crumbs.child(if last {
             crumb
-                .fg(TEXT)
+                .intent(ButtonIntent::Static)
                 .weight(gpui::FontWeight::BOLD)
-                .hover_style(None, None)
         } else {
             crumb
         });
@@ -306,7 +305,7 @@ pub(super) fn render_breadcrumbs(
         crumbs = crumbs.child(
             Button::new("crumb-collapse", ButtonVariant::Link)
                 .label("‹ 收起")
-                .fg(OUTLINE)
+                .intent(ButtonIntent::Muted)
                 .flex_none()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.disk.crumbs_expanded = false;

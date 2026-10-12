@@ -5,7 +5,7 @@ use crate::core::i18n::Language;
 use crate::core::model::{fmt_size, truncate, Check};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
 use crate::ui::components::badge::{Badge, BadgeShape, BadgeTone};
-use crate::ui::components::button::{Button, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonIntent, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::*;
@@ -429,8 +429,7 @@ fn render_lens_row_actions(
                     ButtonVariant::Link,
                 )
                 .label(delete_label)
-                .fg(ERROR)
-                .hover_style(Some(rgba(ERROR_CONTAINER, 1.)), None)
+                .intent(ButtonIntent::Danger)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.request_clean_path(p_for_del.clone(), size, cx);
                 })),

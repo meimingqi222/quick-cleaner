@@ -6,7 +6,7 @@ use super::common::{
 use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
-use crate::ui::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonIntent, ButtonSize, ButtonVariant};
 use crate::ui::components::controls::checkbox;
 use crate::ui::components::icons::{icon_folder_large, icon_sparkle, icon_star};
 use crate::ui::i18n::*;
@@ -566,7 +566,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                     .child(
                                         Button::new(SharedString::from(format!("btn-pick-best-{g_idx}")), ButtonVariant::Mini)
                                             .label(tr_declutter_photos_keep_best(lang))
-                                            .fg(PRIMARY)
+                                            .intent(ButtonIntent::Accent)
                                             .weight(gpui::FontWeight::BOLD)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
@@ -580,7 +580,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                     .child(
                                         Button::new(SharedString::from(format!("btn-keep-all-{g_idx}")), ButtonVariant::Mini)
                                             .label(tr_declutter_photos_keep_all(lang))
-                                            .hover_style(Some(rgba(SURF_HIGH, 1.)), Some(TEXT))
+                                            .intent(ButtonIntent::Muted)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(g) = this.declutter.photo_groups.get_mut(g_idx) {
                                                     for p in &mut g.photos {

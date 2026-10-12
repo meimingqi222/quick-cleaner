@@ -35,6 +35,7 @@ pub mod scroll;
 pub mod scroll_area;
 pub mod search_input;
 pub mod segmented;
+pub mod stat_tile;
 pub mod tooltip;
 
 pub use cards::card;

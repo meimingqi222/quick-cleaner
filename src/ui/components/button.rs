@@ -17,7 +17,7 @@ use crate::ui::components::ClickHandler;
 use crate::ui::theme::*;
 use gpui::{
     div, prelude::*, px, rgb, AnyElement, AnyView, App, ClickEvent, ElementId, FocusHandle,
-    FontWeight, Hsla, ParentElement, SharedString, Stateful, Window,
+    FontWeight, ParentElement, SharedString, Stateful, Window,
 };
 use std::rc::Rc;
 
@@ -41,7 +41,7 @@ pub enum ButtonVariant {
     Tonal,
     /// 行内无边框小钮，hover 变主色容器底。
     Mini,
-    /// 无底板的文字链接，默认主色字，hover 浅灰底；字色与悬停用 `.fg()` / `.hover_style()` 调。
+    /// 无底板的文字链接，默认主色字，hover 浅灰底；其他语义用 `.intent()`。
     Link,
 }
 
@@ -81,6 +81,26 @@ impl ButtonTone {
             Self::DangerSurface => (CARD, ERROR),
         }
     }
+}
+
+/// `Link` / `Mini` / `Ghost` 的语义配色。其他变体忽略。
+///
+/// 和 [`ButtonTone`] 一样是封闭集合：页面不能直接传字色或悬停色。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ButtonIntent {
+    /// 变体的默认配色。
+    #[default]
+    Default,
+    /// 次要：Link 用 OUTLINE 字；Mini / Ghost 悬停只换底色、不变主色字。
+    Muted,
+    /// 强调：字色固定 PRIMARY。
+    Accent,
+    /// 危险：ERROR 字，悬停 ERROR_CONTAINER 底。
+    Danger,
+    /// 平时 MUTED 字，悬停才露出 ERROR（行内的排除、移除）。
+    DangerOnHover,
+    /// 当前项：TEXT 字，无悬停反馈（面包屑末项）。
+    Static,
 }
 
 /// 只管几何（内边距、圆角、字号）；配色与字重由变体决定。
@@ -125,10 +145,8 @@ pub struct Button {
     label: Option<SharedString>,
     busy_label: Option<SharedString>,
     tone: ButtonTone,
-    fg: Option<u32>,
+    intent: ButtonIntent,
     weight: Option<FontWeight>,
-    hover: Option<(Option<Hsla>, Option<u32>)>,
-    inactive_opacity: Option<f32>,
     flex_none: bool,
     tooltip: Option<TooltipBuilder>,
     disabled: bool,
@@ -149,10 +167,8 @@ impl Button {
             label: None,
             busy_label: None,
             tone: ButtonTone::default(),
-            fg: None,
+            intent: ButtonIntent::Default,
             weight: None,
-            hover: None,
-            inactive_opacity: None,
             flex_none: false,
             tooltip: None,
             disabled: false,
@@ -203,28 +219,15 @@ impl Button {
         self
     }
 
-    /// 覆盖字色，任何变体都生效；不影响 `.hover_style()` 给的悬停字色。
-    pub fn fg(mut self, color: u32) -> Self {
-        self.fg = Some(color);
+    /// 仅 `Link` / `Mini` / `Ghost` 使用，其他变体忽略。
+    pub fn intent(mut self, intent: ButtonIntent) -> Self {
+        self.intent = intent;
         self
     }
 
     /// 覆盖字重，任何变体都生效。
     pub fn weight(mut self, weight: FontWeight) -> Self {
         self.weight = Some(weight);
-        self
-    }
-
-    /// 整体替换变体的悬停样式：`bg` / `fg` 为 `None` 表示该项悬停时不变。
-    /// 两者都是 `None` 即无悬停反馈，指针手型仍保留。
-    pub fn hover_style(mut self, bg: Option<Hsla>, fg: Option<u32>) -> Self {
-        self.hover = Some((bg, fg));
-        self
-    }
-
-    /// 禁用 / 忙碌时的整体透明度，默认 0.38。
-    pub fn inactive_opacity(mut self, opacity: f32) -> Self {
-        self.inactive_opacity = Some(opacity);
         self
     }
 
@@ -298,8 +301,10 @@ fn apply_variant(
     el: Stateful<gpui::Div>,
     variant: ButtonVariant,
     tone: ButtonTone,
+    intent: ButtonIntent,
     active: bool,
 ) -> Stateful<gpui::Div> {
+    use ButtonIntent as I;
     match variant {
         ButtonVariant::Primary => el
             .bg(rgb(PRIMARY))
@@ -315,8 +320,9 @@ fn apply_variant(
             .border_1()
             .border_color(rgb(OUTLINE_VAR))
             .text_color(rgb(MUTED))
-            .when(active, |d| {
-                d.hover(|h| h.bg(rgb(SURF_LOW)).text_color(rgb(PRIMARY)))
+            .when(active, |d| match intent {
+                I::Muted => d.hover(|h| h.bg(rgb(SURF_LOW))),
+                _ => d.hover(|h| h.bg(rgb(SURF_LOW)).text_color(rgb(PRIMARY))),
             }),
         ButtonVariant::Small => {
             let (bg, fg) = tone.colors();
@@ -339,13 +345,28 @@ fn apply_variant(
         ButtonVariant::Mini => el
             .bg(rgb(SURF_HIGH))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(MUTED))
-            .when(active, |d| {
-                d.hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY)))
+            .text_color(rgb(if intent == I::Accent { PRIMARY } else { MUTED }))
+            .when(active, |d| match intent {
+                I::Muted => d.hover(|h| h.bg(rgb(SURF_HIGH)).text_color(rgb(TEXT))),
+                _ => d.hover(|h| h.bg(rgb(PRIMARY_FIXED)).text_color(rgb(PRIMARY))),
             }),
-        ButtonVariant::Link => el
-            .text_color(rgb(PRIMARY))
-            .when(active, |d| d.hover(|h| h.bg(rgb(SURF_HIGH)))),
+        ButtonVariant::Link => {
+            let fg = match intent {
+                I::Default | I::Accent => PRIMARY,
+                I::Muted => OUTLINE,
+                I::Danger => ERROR,
+                I::DangerOnHover => MUTED,
+                I::Static => TEXT,
+            };
+            el.text_color(rgb(fg)).when(active, |d| match intent {
+                I::Danger => d.hover(|h| h.bg(rgb(ERROR_CONTAINER))),
+                I::DangerOnHover => {
+                    d.hover(|h| h.bg(rgba(ERROR_BRIGHT, 0.10)).text_color(rgb(ERROR)))
+                }
+                I::Static => d,
+                _ => d.hover(|h| h.bg(rgb(SURF_HIGH))),
+            })
+        }
     }
 }
 
@@ -366,29 +387,15 @@ impl RenderOnce for Button {
             .items_center()
             .justify_center()
             .when(has_side, |d| d.gap_2());
-        let hover_override = self.hover;
         let el = apply_variant(
             apply_size(base, size),
             self.variant,
             self.tone,
-            active && hover_override.is_none(),
+            self.intent,
+            active,
         )
-        .when_some(self.fg, |d, c| d.text_color(rgb(c)))
         .when_some(self.weight, |d, w| d.font_weight(w))
         .when(self.flex_none, |d| d.flex_none());
-        let el = match hover_override {
-            Some((bg, fg)) if active && (bg.is_some() || fg.is_some()) => el.hover(move |h| {
-                let h = match bg {
-                    Some(c) => h.bg(c),
-                    None => h,
-                };
-                match fg {
-                    Some(c) => h.text_color(rgb(c)),
-                    None => h,
-                }
-            }),
-            _ => el,
-        };
 
         // 禁用 / 忙碌时不挂 on_click：鼠标与键盘激活走同一批监听器，一并失效。
         let el = match (active, self.on_click) {
@@ -396,7 +403,7 @@ impl RenderOnce for Button {
                 .cursor_pointer()
                 .on_click(move |event, window, cx| handler(event, window, cx)),
             (true, None) => el.cursor_pointer(),
-            (false, _) => el.opacity(self.inactive_opacity.unwrap_or(INACTIVE_OPACITY)),
+            (false, _) => el.opacity(INACTIVE_OPACITY),
         };
 
         el.when_some(self.focus_handle, |d, fh| d.track_focus(&fh))
@@ -587,9 +594,8 @@ mod tests {
             div().size_full().child(
                 Button::new("link-fixture", ButtonVariant::Link)
                     .label("Link fixture label")
-                    .fg(OUTLINE)
+                    .intent(ButtonIntent::DangerOnHover)
                     .weight(FontWeight::BOLD)
-                    .hover_style(Some(rgba(ERROR_CONTAINER, 1.)), Some(ERROR))
                     .size(ButtonSize::Slim)
                     .flex_none()
                     .disabled(self.disabled)
@@ -599,7 +605,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn link_with_style_overrides_clicks_unless_disabled(cx: &mut TestAppContext) {
+    fn link_with_intent_clicks_unless_disabled(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| LinkFixture {
             clicks: 0,
             disabled: false,

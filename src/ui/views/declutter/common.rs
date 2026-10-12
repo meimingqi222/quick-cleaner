@@ -4,7 +4,7 @@ use super::DeclutterTab;
 use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::action_bar::ActionBar;
-use crate::ui::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::ui::components::button::{Button, ButtonIntent, ButtonSize, ButtonVariant};
 use crate::ui::components::feedback::EmptyState;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
@@ -151,7 +151,7 @@ pub fn render_declutter_action_bar(
         )
         .label(tr_declutter_cancel_selection(lang))
         .size(ButtonSize::Block)
-        .hover_style(Some(rgba(SURF_LOW, 1.)), None)
+        .intent(ButtonIntent::Muted)
         .on_click(cx.listener(move |this, _, _, cx| {
             this.clear_declutter_selection(tab, cx);
         }))
@@ -164,7 +164,6 @@ pub fn render_declutter_action_bar(
     .label(tr_declutter_remove_selected(lang))
     .size(ButtonSize::BlockWide)
     .weight(gpui::FontWeight::BOLD)
-    .inactive_opacity(0.4)
     .disabled(selected_count == 0)
     .on_click(cx.listener(move |this, _, _, cx| {
         this.clean_declutter_selected(tab, cx);

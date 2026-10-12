@@ -16,6 +16,7 @@ use crate::ui::components::icons::*;
 use crate::ui::components::menu::{Menu, MenuBorder, MenuItem, MenuTone};
 use crate::ui::components::overlay::OverlayPolicy;
 use crate::ui::components::segmented::{SegmentItem, SegmentStyle, SegmentedControl};
+use crate::ui::components::stat_tile::StatTile;
 use crate::ui::i18n::*;
 use crate::ui::theme::*;
 use crate::ui::Root;
@@ -202,115 +203,30 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
         .gap_4()
         .w_full()
         .child(
-            card()
-                .flex_1()
-                .min_w(px(140.))
-                .px_4()
-                .py_3()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(icon_badge(
-                    icon_disk(PRIMARY, 18.),
-                    PRIMARY_FIXED,
-                    PRIMARY,
-                    36.,
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .justify_center()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(OUTLINE))
-                                .child(label_storage),
-                        )
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(fmt_size(total_app_size)),
-                        ),
-                ),
+            StatTile::new(label_storage, fmt_size(total_app_size)).icon(icon_badge(
+                icon_disk(PRIMARY, 18.),
+                PRIMARY_FIXED,
+                PRIMARY,
+                36.,
+            )),
         )
         .child(
-            card()
-                .flex_1()
-                .min_w(px(140.))
-                .px_4()
-                .py_3()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(icon_badge(
-                    icon_apps(PRIMARY, 18.),
-                    PRIMARY_FIXED,
-                    PRIMARY,
-                    36.,
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .justify_center()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(OUTLINE))
-                                .child(label_total_count),
-                        )
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(total_apps_display),
-                        ),
-                ),
+            StatTile::new(label_total_count, total_apps_display).icon(icon_badge(
+                icon_apps(PRIMARY, 18.),
+                PRIMARY_FIXED,
+                PRIMARY,
+                36.,
+            )),
         )
         .child(
-            card()
-                .flex_1()
-                .min_w(px(140.))
-                .px_4()
-                .py_3()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(icon_badge(
+            StatTile::new(label_stale_count, stale_apps_display)
+                .value_color(CAUTION)
+                .icon(icon_badge(
                     icon_clock(CAUTION, 18.),
                     CAUTION_CONTAINER,
                     CAUTION,
                     36.,
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .justify_center()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(OUTLINE))
-                                .child(label_stale_count),
-                        )
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(rgb(CAUTION))
-                                .child(stale_apps_display),
-                        ),
-                ),
+                )),
         );
 
     // 快速分类过滤预设标签
