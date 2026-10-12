@@ -2,8 +2,7 @@
 
 This is the current migration record. Component APIs and real callers are listed in
 [UI_COMPONENTS.md](UI_COMPONENTS.md); manual evidence is tracked in
-[ui-baselines/README.md](ui-baselines/README.md). The detailed original inventory
-is preserved locally in docs/temp/UI_MIGRATION_INVENTORY_2026-10-11.md.
+[ui-baselines/README.md](ui-baselines/README.md).
 
 ## Batch gates
 

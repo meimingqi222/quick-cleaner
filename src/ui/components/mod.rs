@@ -7,7 +7,7 @@
 //! `tr_btn_*`、`icon_*`——名字本身就说明了出处，逐个列出来只会让每个视图
 //! 顶着几十行 import。
 //!
-//! 本模块和 `views` 不适用这条：`card` / `checkbox` / `small_button` 之间
+//! 本模块和 `views` 不适用这条：`card` / `checkbox` / `Button` 之间
 //! 没有共同前缀，glob 进来就分不清谁来自哪儿，所以调用方显式列出。
 
 use gpui::{App, ClickEvent, Window};

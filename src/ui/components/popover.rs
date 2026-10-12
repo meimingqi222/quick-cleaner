@@ -223,7 +223,9 @@ pub fn popover_row<T: 'static>(
 }
 
 pub fn popover_overlay(content: impl IntoElement) -> AnyElement {
-    gpui::deferred(content).priority(100).into_any_element()
+    gpui::deferred(content)
+        .priority(super::overlay::PRIORITY_POPUP)
+        .into_any_element()
 }
 
 #[cfg(test)]
