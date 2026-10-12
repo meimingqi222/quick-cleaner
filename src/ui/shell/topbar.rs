@@ -1,7 +1,7 @@
 //! 顶部应用操作栏 (CleanFlow 质感顶栏)
 
 use crate::core::model::{commas, fmt_size};
-use crate::ui::components::button::Button;
+use crate::ui::components::button::{Button, ButtonSize};
 use crate::ui::components::icons::*;
 use crate::ui::components::segmented::{SegmentItem, SegmentedControl};
 use crate::ui::i18n::*;
@@ -194,6 +194,7 @@ pub fn render_top_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
             })
             .child(
                 Button::ghost("rescan", label.to_string())
+                    .size(ButtonSize::PillCompact)
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| match this.view {
                         View::Dashboard | View::Junk => {

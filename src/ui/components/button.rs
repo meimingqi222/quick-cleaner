@@ -111,6 +111,8 @@ pub enum ButtonSize {
     Pill,
     /// px_4 / py_2 / 全圆角 / text_sm
     PillSlim,
+    /// px_3 / py 4px / 全圆角 / text_xs，约 26px 高，用在 44px 顶栏这类紧凑条里
+    PillCompact,
     /// px_3 / py 4px / rounded_md / text_xs
     Compact,
     /// px_4 / py_2 / rounded_lg / text_xs
@@ -288,6 +290,7 @@ fn apply_size(el: Stateful<gpui::Div>, size: ButtonSize) -> Stateful<gpui::Div> 
     match size {
         ButtonSize::Pill => el.px_5().py_2().rounded_full().text_sm(),
         ButtonSize::PillSlim => el.px_4().py_2().rounded_full().text_sm(),
+        ButtonSize::PillCompact => el.px_3().py(px(4.)).rounded_full().text_xs(),
         ButtonSize::Compact => el.px_3().py(px(4.)).rounded_md().text_xs(),
         ButtonSize::Rect => el.px_4().py_2().rounded_lg().text_xs(),
         ButtonSize::Mini => el.px_2().py(px(2.)).rounded_md().text_xs(),
@@ -626,6 +629,7 @@ mod tests {
         let all = [
             ButtonSize::Pill,
             ButtonSize::PillSlim,
+            ButtonSize::PillCompact,
             ButtonSize::Compact,
             ButtonSize::Rect,
             ButtonSize::Mini,
