@@ -14,10 +14,16 @@ Usage:
     python tools/regression-notes/verify-notes.py --notes-dir docs/agent-notes --dump-anchors > anchors.txt
     python scripts/check-anchors-vs-tests.py anchors.txt testlist-windows.txt testlist-macos.txt
 
+Anchors in Python test files (`scripts/test_*.py::name`) are not in any cargo
+list; they must instead name a `def` in that file, which CI runs via unittest.
+
 Exit 1 when any bound anchor is missing from every list.
 """
+import re
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def main(argv=None):
@@ -28,10 +34,19 @@ def main(argv=None):
     anchors_file, list_files = Path(argv[0]), argv[1:]
 
     anchors = []
+    python_missing = []
     for line in anchors_file.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
-        if line and "::" in line:
-            anchors.append(line.rsplit("::", 1)[-1].strip())
+        if not line or "::" not in line:
+            continue
+        path, name = (part.strip() for part in line.rsplit("::", 1))
+        if path.endswith(".py"):
+            source = ROOT / path
+            text = source.read_text(encoding="utf-8") if source.is_file() else ""
+            if not re.search(rf"^\s*def {re.escape(name)}\(", text, flags=re.M):
+                python_missing.append(f"{path}::{name}")
+            continue
+        anchors.append(name)
 
     tests = set()
     for f in list_files:
@@ -43,9 +58,11 @@ def main(argv=None):
     missing = [a for a in anchors if a not in tests]
     for a in missing:
         print(f"ERROR: bound anchor `{a}` is not a test in any listed binary")
+    for a in python_missing:
+        print(f"ERROR: bound anchor `{a}` names no test function in that file")
     print(f"{len(anchors)} anchor(s) checked against {len(tests)} listed tests, "
-          f"{len(missing)} missing")
-    return 1 if missing else 0
+          f"{len(missing) + len(python_missing)} missing")
+    return 1 if missing or python_missing else 0
 
 
 if __name__ == "__main__":
