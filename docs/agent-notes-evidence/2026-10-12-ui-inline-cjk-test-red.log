@@ -1,0 +1,4 @@
+# manufactured red: English refused-count branch of tr_dev_batch_remove_done removed
+test ui::i18n::views::tests::english_copy_has_no_cjk_and_keeps_every_count ... FAILED
+thread 'ui::i18n::views::tests::english_copy_has_no_cjk_and_keeps_every_count' (3743092) panicked at src/ui/i18n/views.rs:707:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 820 filtered out; finished in 0.00s

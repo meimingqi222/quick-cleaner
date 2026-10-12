@@ -46,23 +46,9 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
     } else if !ready {
         (tr_search_no_index(lang).to_string(), CAUTION)
     } else if root.search.is_searching {
-        (
-            if lang == Language::Zh {
-                "正在后台高速检索…".to_string()
-            } else {
-                "Searching…".to_string()
-            },
-            PRIMARY,
-        )
+        (tr_search_searching(lang).to_string(), PRIMARY)
     } else if query.trim().is_empty() {
-        (
-            if lang == Language::Zh {
-                format!("全盘最大的 {} 项 · 输入关键字精确检索", results_len)
-            } else {
-                format!("Top {} largest items · type to filter", results_len)
-            },
-            MUTED,
-        )
+        (tr_search_footer_top(lang, results_len), MUTED)
     } else if results_empty {
         (tr_search_no_results(lang).to_string(), OUTLINE)
     } else {
@@ -235,11 +221,7 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(MUTED))
-                .child(if lang == Language::Zh {
-                    "操作"
-                } else {
-                    "Action"
-                }),
+                .child(tr_col_action(lang)),
         );
 
     // 列表底部信息条
@@ -271,20 +253,16 @@ pub fn render_search_view(root: &Root, window: &mut Window, cx: &mut Context<Roo
                 .flex()
                 .items_center()
                 .gap_4()
-                .child(div().text_color(rgb(MUTED)).child(if lang == Language::Zh {
-                    "双击条目直接打开 · 点击表头自定义排序"
-                } else {
-                    "Double-click to open · Click header to sort"
-                }))
+                .child(
+                    div()
+                        .text_color(rgb(MUTED))
+                        .child(tr_search_footer_hint(lang)),
+                )
                 .child(
                     div()
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(OUTLINE))
-                        .child(if lang == Language::Zh {
-                            "单次最多展示 500 项"
-                        } else {
-                            "Max 500 items"
-                        }),
+                        .child(tr_search_footer_limit(lang)),
                 ),
         );
 
@@ -540,11 +518,7 @@ fn render_result_row(
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(rgb(PRIMARY))
                                 .cursor_pointer()
-                                .child(if lang == Language::Zh {
-                                    "打开"
-                                } else {
-                                    "Open"
-                                })
+                                .child(tr_common_open(lang))
                                 .on_click(cx.listener({
                                     let path = path_for_click.clone();
                                     move |_this, _, _, cx| {
@@ -577,11 +551,7 @@ fn render_result_row(
                                 .items_center()
                                 .gap_1()
                                 .child(icon_locate(PRIMARY, 9.))
-                                .child(if lang == Language::Zh {
-                                    "定位"
-                                } else {
-                                    "Reveal"
-                                })
+                                .child(tr_common_reveal(lang))
                                 .on_click(cx.listener({
                                     let path = path_for_click.clone();
                                     move |_this, _, _, cx| {

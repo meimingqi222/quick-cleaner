@@ -1,6 +1,5 @@
 //! 概览视图（Smart Scan 环形扫描中心）
 
-use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::button::Button;
 use crate::ui::components::cards::card;
@@ -27,18 +26,12 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let (big, sub) = if root.junk.scanning {
         (
             tr_scanning(lang).to_string(),
-            match lang {
-                Language::Zh => String::from("正在检查系统缓存与开发环境残留"),
-                Language::En => String::from("Checking system caches and dev leftovers"),
-            },
+            tr_dashboard_scanning_sub(lang).to_string(),
         )
     } else if root.clean.running {
         (
             tr_cleaning(lang).to_string(),
-            match lang {
-                Language::Zh => String::from("正在彻底移除选中垃圾"),
-                Language::En => String::from("Permanently removing selected items"),
-            },
+            tr_dashboard_cleaning_sub(lang).to_string(),
         )
     } else if scanned && total > 0 {
         (fmt_size(total), tr_found_cleanable(lang).to_string())
@@ -149,12 +142,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
     let ring = ring.child(inner);
 
     let blurb = if root.junk.scanning {
-        match lang {
-            Language::Zh => String::from("正在扫描系统缓存、应用日志、开发依赖产物与临时文件…"),
-            Language::En => String::from(
-                "Scanning system caches, application logs, build artifacts, and temp files…",
-            ),
-        }
+        tr_dashboard_scanning_blurb(lang).to_string()
     } else if scanned && total > 0 {
         tr_dashboard_junk_found(
             lang,
@@ -166,17 +154,9 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
             &fmt_size(total),
         )
     } else if scanned {
-        match lang {
-            Language::Zh => String::from("未发现可清理的冗余缓存，系统状态良好。"),
-            Language::En => String::from("No redundant caches found. System is running cleanly."),
-        }
+        tr_dashboard_clean_blurb(lang).to_string()
     } else {
-        match lang {
-            Language::Zh => String::from("快速扫描系统缓存、开发依赖产物与磁盘占用。"),
-            Language::En => {
-                String::from("Quickly scan system caches, developer dependencies, and disk usage.")
-            }
-        }
+        tr_dashboard_idle_blurb(lang).to_string()
     };
 
     // 底部 4 块快速入口卡片
@@ -377,10 +357,7 @@ pub fn render_dashboard_view(root: &Root, cx: &mut Context<Root>) -> AnyElement 
         );
 
     if scanned && total > 0 && !root.clean.running {
-        let btn_text = match lang {
-            Language::Zh => String::from("查看详情并清理"),
-            Language::En => String::from("Review & Clean Junk"),
-        };
+        let btn_text = tr_dashboard_review_junk(lang);
         body = body.child(Button::primary("goto-junk", btn_text).on_click(cx.listener(
             |this, _, _, cx| {
                 this.view = View::Junk;

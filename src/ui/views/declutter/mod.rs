@@ -19,6 +19,7 @@ pub use photos::render_similar_photos_tab;
 
 use crate::core::declutter::{DownloadItem, DuplicateGroup, LargeFileItem, PhotoGroup};
 use crate::core::i18n::Language;
+use crate::ui::i18n::*;
 use crate::ui::Root;
 use gpui::{AnyElement, Context, Task};
 
@@ -34,17 +35,12 @@ pub enum DeclutterTab {
 
 impl DeclutterTab {
     pub fn title_lang(&self, lang: Language) -> &'static str {
-        match (self, lang) {
-            (DeclutterTab::Overview, Language::Zh) => "概览",
-            (DeclutterTab::Overview, Language::En) => "Overview",
-            (DeclutterTab::SimilarPhotos, Language::Zh) => "相似图片",
-            (DeclutterTab::SimilarPhotos, Language::En) => "Similar Photos",
-            (DeclutterTab::Duplicates, Language::Zh) => "重复文件",
-            (DeclutterTab::Duplicates, Language::En) => "Duplicates",
-            (DeclutterTab::LargeFiles, Language::Zh) => "大型与旧文件",
-            (DeclutterTab::LargeFiles, Language::En) => "Large & Old Files",
-            (DeclutterTab::Downloads, Language::Zh) => "下载项",
-            (DeclutterTab::Downloads, Language::En) => "Downloads",
+        match self {
+            DeclutterTab::Overview => tr_declutter_tab_overview(lang),
+            DeclutterTab::SimilarPhotos => tr_declutter_tab_photos(lang),
+            DeclutterTab::Duplicates => tr_declutter_tab_duplicates(lang),
+            DeclutterTab::LargeFiles => tr_declutter_tab_large_files(lang),
+            DeclutterTab::Downloads => tr_declutter_tab_downloads(lang),
         }
     }
 }

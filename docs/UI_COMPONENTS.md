@@ -75,7 +75,7 @@ normal product startup tasks. Root construction reads settings/platform metadata
 then visible volume capacities and exclusions are cleared in memory.
 
 Run `python -X utf8 scripts/check-ui-components.py` and
-`python -X utf8 -m unittest discover -s scripts -p test_ui_components.py`.
+`python -X utf8 -m unittest discover -s scripts -p 'test_ui_*.py'`.
 CI and the local pre-commit hook run both. The legacy baseline is empty and cannot
 grow. Comments/literals are masked; aliases, nested imports and interactive masks
 are checked. Keep the manual platform matrix in `ui-baselines/README.md` honest:

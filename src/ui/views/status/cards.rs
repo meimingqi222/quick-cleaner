@@ -197,29 +197,7 @@ fn health_word(score: u32, lang: Language) -> &'static str {
 }
 
 fn uptime_label(secs: u64, lang: Language) -> String {
-    let d = secs / 86_400;
-    let h = (secs % 86_400) / 3_600;
-    let m = (secs % 3_600) / 60;
-    match lang {
-        Language::Zh => {
-            if d > 0 {
-                format!("{d} 天 {h} 小时")
-            } else if h > 0 {
-                format!("{h} 小时 {m} 分")
-            } else {
-                format!("{m} 分钟")
-            }
-        }
-        Language::En => {
-            if d > 0 {
-                format!("{d}d {h}h")
-            } else if h > 0 {
-                format!("{h}h {m}m")
-            } else {
-                format!("{m}m")
-            }
-        }
-    }
+    tr_status_uptime(lang, secs / 86_400, (secs % 86_400) / 3_600, (secs % 3_600) / 60)
 }
 
 /// CPU 占用柱状历史（右侧最新的一根是实心主色，样本不足补空槽占位）。

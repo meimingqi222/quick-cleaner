@@ -886,6 +886,14 @@ pub fn tr_residual_launchd_group(lang: Language) -> &'static str {
     }
 }
 
+pub fn tr_residual_launchd_evidence(lang: Language, labels: &str) -> String {
+    let group = tr_residual_launchd_group(lang);
+    match lang {
+        Language::Zh => format!("{group}：{labels}"),
+        Language::En => format!("{group}: {labels}"),
+    }
+}
+
 /// 残留里含系统扩展时的引导标题：程序删不掉，只能用户自己去关。
 pub fn tr_residual_sysext_title(lang: Language) -> &'static str {
     match lang {
@@ -3013,5 +3021,40 @@ pub fn tr_status_proc_start_stamp_format(lang: Language) -> &'static str {
 pub fn tr_status_proc_started_at(lang: Language, stamp: &str, ago: &str) -> String {
     match lang {
         Language::Zh | Language::En => format!("{stamp} · {ago}"),
+    }
+}
+
+pub fn tr_uninstall_confirm_title(lang: Language, app: &str) -> String {
+    match lang {
+        Language::Zh => format!("确认卸载「{app}」？"),
+        Language::En => format!("Uninstall \"{app}\"?"),
+    }
+}
+
+/// `size` 为空或形如 ` (1.2 GB)`，直接拼在应用名后面。
+pub fn tr_uninstall_confirm_body(lang: Language, app: &str, size: &str) -> String {
+    let macos = cfg!(target_os = "macos");
+    match lang {
+        Language::Zh if macos => format!(
+            "将把「{app}」{size} 移入废纸篓或调用自带卸载程序，完成后扫描卸载残留并由你确认清理。"
+        ),
+        Language::Zh => {
+            format!("将启动「{app}」{size} 官方卸载程序，完成后扫描卸载残留并由你确认清理。")
+        }
+        Language::En if macos => format!(
+            "This will move \"{app}\"{size} to Trash or run its uninstaller, then scan leftovers for your review."
+        ),
+        Language::En => format!(
+            "This will launch the official uninstaller for \"{app}\"{size}, then scan leftovers for your review."
+        ),
+    }
+}
+
+pub fn tr_uninstall_confirm_detail(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "卸载成功后会列出关联配置与缓存，仅清理你确认的项目。",
+        Language::En => {
+            "After a successful uninstall, only the leftover items you confirm will be cleaned."
+        }
     }
 }

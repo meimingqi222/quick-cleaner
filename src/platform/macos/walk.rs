@@ -678,7 +678,10 @@ fn scan_root_inner(
 
     // 检查根目录是否可访问
     if !root.exists() {
-        return Err(ScanError::Io(format!("根目录不存在: {}", root.display())));
+        return Err(ScanError::Io(format!(
+            "root does not exist: {}",
+            root.display()
+        )));
     }
 
     // 顺手回收死进程留下的溢写文件（上次扫描被杀时没走到 finish）。

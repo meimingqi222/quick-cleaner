@@ -38,21 +38,14 @@ impl View {
     }
 
     pub fn title_lang(&self, lang: Language) -> &'static str {
-        match (self, lang) {
-            (View::Dashboard, Language::Zh) => "概览扫描",
-            (View::Dashboard, Language::En) => "Overview",
-            (View::Status, Language::Zh) => "状态监控",
-            (View::Status, Language::En) => "Status",
-            (View::Junk, Language::Zh) => "智能清理",
-            (View::Junk, Language::En) => "Smart Clean",
-            (View::Apps, Language::Zh) => "软件管理",
-            (View::Apps, Language::En) => "Apps",
-            (View::Disk, Language::Zh) => "磁盘透镜",
-            (View::Disk, Language::En) => "Disk Lens",
-            (View::Declutter, Language::Zh) => "冗余整理",
-            (View::Declutter, Language::En) => "Declutter",
-            (View::Search, Language::Zh) => "文件搜索",
-            (View::Search, Language::En) => "File Search",
+        match self {
+            View::Dashboard => tr_view_dashboard(lang),
+            View::Status => tr_view_status(lang),
+            View::Junk => tr_view_junk(lang),
+            View::Apps => tr_view_apps(lang),
+            View::Disk => tr_view_disk(lang),
+            View::Declutter => tr_view_declutter(lang),
+            View::Search => tr_view_search(lang),
         }
     }
 
@@ -253,13 +246,12 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                         .items_center()
                         .justify_between()
                         .px_1()
-                        .child(div().text_xs().text_color(rgb(MUTED)).child(
-                            if lang == Language::Zh {
-                                "界面语言"
-                            } else {
-                                "Language"
-                            },
-                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(tr_language_label(lang)),
+                        )
                         .child(
                             div()
                                 .id("lang-switch-container")
@@ -290,7 +282,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .when(lang != Language::Zh, |d| {
                                             d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                                         })
-                                        .child("中文")
+                                        .child(tr_language_name(Language::Zh))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.set_language(Language::Zh, cx);
                                         })),
@@ -314,7 +306,7 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                                         .when(lang != Language::En, |d| {
                                             d.text_color(rgb(MUTED)).hover(|h| h.bg(rgb(SURF_HIGH)))
                                         })
-                                        .child("English")
+                                        .child(tr_language_name(Language::En))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.set_language(Language::En, cx);
                                         })),

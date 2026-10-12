@@ -73,7 +73,7 @@ impl crate::ui::Root {
                                     Ok(scan)
                                 }
                                 None => Err(crate::core::disk::ScanError::Io(
-                                    "无法加载或构建整盘索引".into(),
+                                    "root index unavailable".into(),
                                 )),
                             };
                         result

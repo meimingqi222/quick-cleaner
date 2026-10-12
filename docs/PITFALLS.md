@@ -767,3 +767,17 @@ Note: `2026-10-12-macos-force-terminate-sigkill.md`
   - 禁止把 `force_kill_process` 改回 `terminate_process` 或任何「复用同一条信号」的写法。
   - 新增平台实现时 Windows 侧委托 `terminate_process` 是允许的（无信号语义差异），macOS/Unix 侧必须发 `SIGKILL`。
   - 强杀前的 uniqueid 双复核不能省（macOS 无 pidfd，TOCTOU 只能靠它收窄）。
+
+## P58 本地化守卫不能按某一种写法匹配，基线为 0 不代表没有内联文案
+
+Note: `2026-10-12-ui-inline-cjk-guard.md`
+
+- **症状**：守卫一直报 `remaining baseline: 0`，英文界面却在开发环境批量移除、相似照片、磁盘面包屑、残留弹窗等处显示中文。
+- **根因**：旧守卫只匹配 `Language::Zh => "`。`if lang == Language::Zh`、元组 `match`、`(View, Language::Zh) =>`、带花括号的 `bilingual` 分支，以及完全没有英文分支的硬编码全部漏网，一共 89 处。
+- **防护**：
+  - [`check-ui-localization.py`](../scripts/check-ui-localization.py) 统计 i18n 之外 UI 代码里含中文或全角标点的字符串字面量；注释、测试模块、日志 / 断言宏和 `.expect` 的参数不算。
+  - 测试：`scripts/test_ui_localization.py`（每种已知写法各一例）、`english_copy_has_no_cjk_and_keeps_every_count`。
+- **改 UI 文案或这个守卫时**：
+  - 不要把「剔除诊断调用」扩到状态栏、弹窗用的 `bilingual` / `Text::new`，它们是界面文案。
+  - 不要为了让守卫变绿往基线里记例外；基线必须保持为空。
+  - `core` / `platform` 的错误 payload 保持语言中立，中文外壳放在 `tr_scan_error` 一类的 `tr_*` 里。

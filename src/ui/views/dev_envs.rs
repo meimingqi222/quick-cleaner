@@ -1238,11 +1238,7 @@ fn render_dev_bottom_bar(
                 .text_sm()
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(if count > 0 { rgb(TEXT) } else { rgb(MUTED) })
-                .child(if count > 0 {
-                    format!("{count} 项 · {}", fmt_size(bytes))
-                } else {
-                    "0 项".to_string()
-                }),
+                .child(tr_dev_batch_selection(lang, count, &fmt_size(bytes))),
         );
 
     let batch_tools = div()

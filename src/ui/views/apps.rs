@@ -4,7 +4,7 @@ use super::apps_components::{render_apps_list_card, ListBody, APP_ACTIONS_COL_W}
 use crate::core::apps::{
     is_rarely_used, now_unix_secs, AppFilterPreset, AppSortColumn, InstalledApp,
 };
-use crate::core::i18n::{bilingual, Language};
+use crate::core::i18n::bilingual;
 use crate::core::model::{fmt_size, truncate};
 use crate::ui::components::badge::Badge;
 #[cfg(target_os = "macos")]
@@ -185,14 +185,11 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             .into_any_element();
     }
 
-    let (label_storage, label_total_count, label_stale_count) = match lang {
-        Language::Zh => ("估算总占用空间", "已安装应用总数", "长期未用软件 (>90天)"),
-        Language::En => (
-            "Total Estimated Size",
-            "Installed Applications",
-            "Rarely Used (>90 days)",
-        ),
-    };
+    let (label_storage, label_total_count, label_stale_count) = (
+        tr_apps_stat_storage(lang),
+        tr_apps_stat_installed(lang),
+        tr_apps_stat_stale(lang),
+    );
 
     let total_apps_display = tr_apps_count(lang, total_apps);
     let stale_apps_display = tr_apps_count(lang, stale_apps_count);
@@ -312,11 +309,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(OUTLINE))
-                        .child(if lang == Language::Zh {
-                            "快速分类:"
-                        } else {
-                            "Presets:"
-                        }),
+                        .child(tr_apps_quick_filter(lang)),
                 )
                 .child(preset_buttons)
                 .child(filter_stats_tag),
@@ -432,16 +425,7 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
 
     // 软件列表行
     // 行内容按需渲染，这里只决定「是占位提示还是 N 行列表」
-    let (loading_title, loading_sub) = match lang {
-        Language::Zh => (
-            "正在智能检索已安装软件与空间占用",
-            "深度测算软件安装目录、真实体积与最后使用时间",
-        ),
-        Language::En => (
-            "Scanning installed applications…",
-            "Calculating installed size, directories and last usage date",
-        ),
-    };
+    let (loading_title, loading_sub) = (tr_apps_loading_title(lang), tr_apps_loading_sub(lang));
 
     let empty_title = tr_apps_empty(lang);
 

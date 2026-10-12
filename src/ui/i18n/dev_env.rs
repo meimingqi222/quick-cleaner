@@ -650,3 +650,78 @@ pub fn tr_dev_detail_sub_packages(lang: Language, count: usize) -> String {
         Language::En => format!("Installed packages ({count} total)"),
     }
 }
+
+/// 批量操作栏的已选摘要；没选中时不带体积。
+pub fn tr_dev_batch_selection(lang: Language, count: usize, size: &str) -> String {
+    match (lang, count) {
+        (Language::Zh, 0) => "0 项".to_string(),
+        (Language::En, 0) => "0 items".to_string(),
+        (Language::Zh, _) => format!("{count} 项 · {size}"),
+        (Language::En, _) => format!("{count} items · {size}"),
+    }
+}
+
+pub fn tr_dev_batch_preview_more(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("...等共 {count} 项"),
+        Language::En => format!("...{count} items in total"),
+    }
+}
+
+pub fn tr_dev_batch_confirm_detail(lang: Language, size: &str, list: &str) -> String {
+    match lang {
+        Language::Zh => format!("预计可释放：{size}\n\n待移除清单：\n{list}"),
+        Language::En => format!("Estimated reclaimable: {size}\n\nTo be removed:\n{list}"),
+    }
+}
+
+pub fn tr_dev_batch_count(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("{count} 项"),
+        Language::En => format!("{count} items"),
+    }
+}
+
+pub fn tr_dev_batch_removing(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("正在批量移除 {count} 项…"),
+        Language::En => format!("Removing {count} items…"),
+    }
+}
+
+pub fn tr_dev_batch_removing_item(
+    lang: Language,
+    index: usize,
+    total: usize,
+    name: &str,
+) -> String {
+    match lang {
+        Language::Zh => format!("正在移除 ({index}/{total}): {name}"),
+        Language::En => format!("Removing ({index}/{total}): {name}"),
+    }
+}
+
+pub fn tr_dev_batch_remove_done(
+    lang: Language,
+    removed: usize,
+    freed: &str,
+    failed: usize,
+    refused: usize,
+) -> String {
+    match lang {
+        Language::Zh if failed > 0 => {
+            format!("批量移除完成：已移除 {removed} 项，释放 {freed}，失败 {failed} 项")
+        }
+        Language::Zh if refused > 0 => {
+            format!("批量移除完成：已移除 {removed} 项，释放 {freed}，跳过 {refused} 项")
+        }
+        Language::Zh => format!("批量移除完成：已成功移除 {removed} 项，释放 {freed}"),
+        Language::En if failed > 0 => {
+            format!("Batch remove finished: {removed} removed ({freed}), {failed} failed")
+        }
+        Language::En if refused > 0 => {
+            format!("Batch remove finished: {removed} removed ({freed}), {refused} skipped")
+        }
+        Language::En => format!("Batch remove finished: {removed} removed ({freed})"),
+    }
+}

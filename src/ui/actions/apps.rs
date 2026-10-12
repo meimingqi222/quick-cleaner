@@ -241,12 +241,9 @@ impl crate::ui::Root {
             .map(|t| format!("· {}", t.display_name()))
             .collect();
         if count > 6 {
-            preview_lines.push(format!("...等共 {count} 项"));
+            preview_lines.push(tr_dev_batch_preview_more(lang, count));
         }
-        let detail = format!(
-            "预计可释放：{size_str}\n\n待移除清单：\n{}",
-            preview_lines.join("\n")
-        );
+        let detail = tr_dev_batch_confirm_detail(lang, &size_str, &preview_lines.join("\n"));
 
         self.confirm = Some(ConfirmRequest {
             title: tr_dev_batch_confirm_title(lang, count),
@@ -268,9 +265,8 @@ impl crate::ui::Root {
             return;
         }
         let total_count = items.len();
-        self.apps.dev.removing = Some(format!("{total_count} 项"));
-        self.status =
-            crate::core::i18n::bilingual(move |_| format!("正在批量移除 {total_count} 项…"));
+        self.apps.dev.removing = Some(tr_dev_batch_count(self.language, total_count));
+        self.status = crate::core::i18n::bilingual(move |l| tr_dev_batch_removing(l, total_count));
         cx.notify();
 
         self.apps.dev.removal_task = Some(cx.spawn(async move |this, cx| {
@@ -284,8 +280,8 @@ impl crate::ui::Root {
                 let status_name = name.clone();
                 let current_idx = idx + 1;
                 let _ = this.update(cx, |this, cx| {
-                    this.status = crate::core::i18n::bilingual(move |_| {
-                        format!("正在移除 ({current_idx}/{total_count}): {status_name}")
+                    this.status = crate::core::i18n::bilingual(move |l| {
+                        tr_dev_batch_removing_item(l, current_idx, total_count, &status_name)
                     });
                     cx.notify();
                 });
@@ -305,8 +301,8 @@ impl crate::ui::Root {
                 match &outcome {
                     crate::core::dev_env::remove::RemovalOutcome::Removed => {
                         removed_count += 1;
-                        freed_bytes = freed_bytes
-                            .saturating_add(item.size.exclusive_reclaimable_bytes);
+                        freed_bytes =
+                            freed_bytes.saturating_add(item.size.exclusive_reclaimable_bytes);
                         crate::core::history::record(
                             "dev_asset_remove",
                             std::slice::from_ref(&item.path),
@@ -355,24 +351,13 @@ impl crate::ui::Root {
                 this.apps.dev.removing = None;
                 let freed_str = fmt_size(freed_bytes);
                 this.status = crate::core::i18n::bilingual(move |l| {
-                    match l {
-                        Language::Zh => {
-                            if failed_count > 0 {
-                                format!("批量移除完成：已移除 {removed_count} 项，释放 {freed_str}，失败 {failed_count} 项")
-                            } else if refused_count > 0 {
-                                format!("批量移除完成：已移除 {removed_count} 项，释放 {freed_str}，跳过 {refused_count} 项")
-                            } else {
-                                format!("批量移除完成：已成功移除 {removed_count} 项，释放 {freed_str}")
-                            }
-                        }
-                        Language::En => {
-                            if failed_count > 0 {
-                                format!("Batch remove finished: {removed_count} removed ({freed_str}), {failed_count} failed")
-                            } else {
-                                format!("Batch remove finished: {removed_count} removed ({freed_str})")
-                            }
-                        }
-                    }
+                    tr_dev_batch_remove_done(
+                        l,
+                        removed_count,
+                        &freed_str,
+                        failed_count,
+                        refused_count,
+                    )
                 });
                 cx.notify();
                 if failed_count > 0 && !this.apps.dev.scanning {
@@ -635,26 +620,11 @@ impl crate::ui::Root {
             String::new()
         };
 
-        let (title, body, mut detail) = match lang {
-            Language::Zh => (
-                format!("确认卸载「{app_name}」？"),
-                if cfg!(target_os = "macos") {
-                    format!("将把「{app_name}」{size_str} 移入废纸篓或调用自带卸载程序，完成后扫描卸载残留并由你确认清理。")
-                } else {
-                    format!("将启动「{app_name}」{size_str} 官方卸载程序，完成后扫描卸载残留并由你确认清理。")
-                },
-                "卸载成功后会列出关联配置与缓存，仅清理你确认的项目。".to_string(),
-            ),
-            Language::En => (
-                format!("Uninstall \"{app_name}\"?"),
-                if cfg!(target_os = "macos") {
-                    format!("This will move \"{app_name}\"{size_str} to Trash or run its uninstaller, then scan leftovers for your review.")
-                } else {
-                    format!("This will launch the official uninstaller for \"{app_name}\"{size_str}, then scan leftovers for your review.")
-                },
-                "After a successful uninstall, only the leftover items you confirm will be cleaned.".to_string(),
-            ),
-        };
+        let (title, body, mut detail) = (
+            tr_uninstall_confirm_title(lang, &app_name),
+            tr_uninstall_confirm_body(lang, &app_name, &size_str),
+            tr_uninstall_confirm_detail(lang).to_string(),
+        );
         if app.discovery.is_some() {
             detail = tr_discovered_uninstall_detail(lang).to_owned();
         }

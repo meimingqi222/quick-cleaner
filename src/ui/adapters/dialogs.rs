@@ -177,7 +177,7 @@ fn render_occupancy_banner(occ: &ResidualOccupancy, lang: Language) -> gpui::Any
         .map(|p| format!("· {}", truncate(p, 78)))
         .collect();
     if !occ.launchd_labels.is_empty() {
-        let sep = if lang == Language::Zh { "、" } else { ", " };
+        let sep = tr_list_separator(lang);
         let labels = occ
             .launchd_labels
             .iter()
@@ -185,7 +185,7 @@ fn render_occupancy_banner(occ: &ResidualOccupancy, lang: Language) -> gpui::Any
             .cloned()
             .collect::<Vec<_>>()
             .join(sep);
-        evidence.push(format!("· {}：{}", tr_residual_launchd_group(lang), labels));
+        evidence.push(format!("· {}", tr_residual_launchd_evidence(lang, &labels)));
     }
     let hidden = occ.processes.len().saturating_sub(3) + occ.launchd_labels.len().saturating_sub(3);
     if hidden > 0 {

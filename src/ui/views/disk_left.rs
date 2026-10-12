@@ -304,7 +304,7 @@ pub(super) fn render_breadcrumbs(
     if expanded && path_len > max_display_crumbs {
         crumbs = crumbs.child(
             Button::new("crumb-collapse", ButtonVariant::Link)
-                .label("‹ 收起")
+                .label(tr_disk_crumbs_collapse(lang))
                 .intent(ButtonIntent::Muted)
                 .flex_none()
                 .on_click(cx.listener(|this, _, _, cx| {

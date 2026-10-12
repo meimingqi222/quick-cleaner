@@ -2,7 +2,6 @@
 
 use super::disk_components::BreakdownItem;
 use crate::core::disk::{Node, ScanResult, SizeTree};
-use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::meter::{ProportionBar, Segment};
 use crate::ui::i18n::*;
@@ -205,22 +204,13 @@ fn breakdown_for_files(
         }
     }
 
-    let cat_data = match lang {
-        Language::Zh => [
-            ("媒体视频 (Media)", media_sz, colors[0]),
-            ("程序/动态库 (Bin)", bin_sz, colors[1]),
-            ("压缩镜像 (Archive)", arch_sz, colors[2]),
-            ("文档数据 (Data)", doc_sz, colors[3]),
-            ("其他文件 (Others)", other_sz, colors[5]),
-        ],
-        Language::En => [
-            ("Media & Video", media_sz, colors[0]),
-            ("Binaries & DLLs", bin_sz, colors[1]),
-            ("Archives & Images", arch_sz, colors[2]),
-            ("Documents & Data", doc_sz, colors[3]),
-            ("Other Files", other_sz, colors[5]),
-        ],
-    };
+    let cat_data = [
+        (tr_disk_kind_media(lang), media_sz, colors[0]),
+        (tr_disk_kind_binaries(lang), bin_sz, colors[1]),
+        (tr_disk_kind_archives(lang), arch_sz, colors[2]),
+        (tr_disk_kind_documents(lang), doc_sz, colors[3]),
+        (tr_disk_kind_other(lang), other_sz, colors[5]),
+    ];
 
     let items: Vec<BreakdownItem> = cat_data
         .into_iter()

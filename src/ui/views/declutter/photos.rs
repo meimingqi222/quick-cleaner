@@ -195,7 +195,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                 .font_weight(gpui::FontWeight::MEDIUM)
                                                 .text_color(rgb(ON_SCRIM))
                                                 .cursor_pointer()
-                                                .child("定位")
+                                                .child(tr_declutter_reveal(lang))
                                                 .on_click({
                                                     let p = photo_path.clone();
                                                     cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -216,7 +216,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                 .font_weight(gpui::FontWeight::MEDIUM)
                                                 .text_color(rgb(ON_SCRIM))
                                                 .cursor_pointer()
-                                                .child("看图")
+                                                .child(tr_declutter_preview(lang))
                                                 .on_click({
                                                     let p = photo_path.clone();
                                                     cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -398,7 +398,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .text_color(rgb(ON_SCRIM))
                                                     .cursor_pointer()
-                                                    .child("定位")
+                                                    .child(tr_declutter_reveal(lang))
                                                     .on_click({
                                                         let p = photo_path.clone();
                                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {
@@ -419,7 +419,7 @@ pub fn render_similar_photos_tab(root: &Root, cx: &mut Context<Root>) -> AnyElem
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .text_color(rgb(ON_SCRIM))
                                                     .cursor_pointer()
-                                                    .child("看图")
+                                                    .child(tr_declutter_preview(lang))
                                                     .on_click({
                                                         let p = photo_path.clone();
                                                         cx.listener(move |_, _event: &gpui::ClickEvent, _, cx| {

@@ -1,0 +1,25 @@
+# check-ui-localization.py against HEAD (pre-migration code), old vs new rule
+## old rule (Language::Zh => " only), as shipped at HEAD:
+OK: no new inline UI strings (remaining baseline: 0)
+## new rule (CJK literal scan) applied to HEAD sources:
+  src/ui/actions/apps.rs: 12
+  src/ui/actions/declutter.rs: 8
+  src/ui/actions/disk.rs: 1
+  src/ui/adapters/dialogs.rs: 2
+  src/ui/shell/sidebar.rs: 9
+  src/ui/views/apps.rs: 6
+  src/ui/views/dashboard.rs: 6
+  src/ui/views/declutter/context_menu.rs: 1
+  src/ui/views/declutter/mod.rs: 5
+  src/ui/views/declutter/photos.rs: 4
+  src/ui/views/dev_envs.rs: 2
+  src/ui/views/disk.rs: 3
+  src/ui/views/disk_breakdown.rs: 5
+  src/ui/views/disk_left.rs: 1
+  src/ui/views/disk_right.rs: 9
+  src/ui/views/junk.rs: 5
+  src/ui/views/search.rs: 7
+  src/ui/views/status/cards.rs: 3
+total inline UI strings: 89
+## new rule on migrated tree:
+OK: no new inline UI strings (remaining baseline: 0)

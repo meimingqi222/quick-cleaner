@@ -1,7 +1,7 @@
 //! 文件整理的扫描与清理动作
 
 use crate::core::cleaner::{clean_arbitrary_items, ArbitraryTarget, CleanProgress, Disposal};
-use crate::core::i18n::{bilingual, Language};
+use crate::core::i18n::bilingual;
 use crate::core::model::fmt_size;
 use crate::ui::adapters::{ConfirmKind, ConfirmRequest};
 use crate::ui::i18n::*;
@@ -111,12 +111,7 @@ impl crate::ui::Root {
                     scan_data.4,
                     fmt_size(savings)
                 );
-                this.status = bilingual(move |l| match l {
-                    Language::Zh => {
-                        format!("文件整理扫描完成，发现可优化空间 {}", fmt_size(savings))
-                    }
-                    Language::En => format!("Declutter scan complete, found {}", fmt_size(savings)),
-                });
+                this.status = bilingual(move |l| tr_declutter_scan_done(l, &fmt_size(savings)));
                 cx.notify();
             })
             .ok();
@@ -199,24 +194,9 @@ impl crate::ui::Root {
                 // 只摘掉真正移走的条目：失败的留在列表里，用户还能看见和重试。
                 this.prune_cleaned_declutter_items(tab, &failed);
 
-                let (zh_noun, en_noun) = declutter_item_noun(tab);
                 let n_failed = failed.len();
-                this.status = bilingual(move |l| match l {
-                    Language::Zh => {
-                        let mut msg = format!("已把 {moved} 个{zh_noun}移入废纸篓");
-                        if n_failed > 0 {
-                            msg.push_str(&format!("；{n_failed} 个失败"));
-                        }
-                        msg
-                    }
-                    Language::En => {
-                        let mut msg = format!("Moved {moved} {en_noun} to Trash");
-                        if n_failed > 0 {
-                            msg.push_str(&format!("; {n_failed} failed"));
-                        }
-                        msg
-                    }
-                });
+                this.status =
+                    bilingual(move |l| tr_declutter_moved_to_trash(l, tab, moved, n_failed));
                 cx.notify();
             })
             .ok();
@@ -324,17 +304,6 @@ impl crate::ui::Root {
 /// 独立成纯函数以便单测——只看报告会把「返回成功但文件还在」的条目从界面抹掉。
 fn declutter_item_is_gone(path: &std::path::Path, selected: bool, failed: &[PathBuf]) -> bool {
     selected && !failed.iter().any(|failed| failed == path) && !path.exists()
-}
-
-/// 状态栏里对这批条目的称呼。
-fn declutter_item_noun(tab: DeclutterTab) -> (&'static str, &'static str) {
-    match tab {
-        DeclutterTab::Downloads => ("下载项", "downloads"),
-        DeclutterTab::LargeFiles => ("大文件", "large files"),
-        DeclutterTab::SimilarPhotos => ("相似照片", "similar photos"),
-        DeclutterTab::Duplicates => ("重复文件", "duplicate files"),
-        DeclutterTab::Overview => ("项目", "items"),
-    }
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@ use super::disk_left::render_left_lens_pane;
 use super::disk_right::render_right_browser_pane;
 use super::disk_volume::format_volume_label;
 use crate::core::disk::ScanResult;
-use crate::core::i18n::Language;
 use crate::core::model::fmt_size;
 use crate::ui::components::button::Button;
 use crate::ui::components::controls::page_heading;
@@ -30,20 +29,10 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         )),
     );
 
-    let (loading_title, loading_sub) = match lang {
-        Language::Zh => (
-            format!("正在深度分析磁盘 {} 空间占用", root.disk.volume),
-            "快速索引全盘文件结构与体积分布，请稍候".to_string(),
-        ),
-        Language::En => (
-            format!("Analyzing storage for drive {}…", root.disk.volume),
-            if cfg!(target_os = "macos") {
-                "Scanning file hierarchy and sizes, please wait".to_string()
-            } else {
-                "Indexing NTFS file hierarchy and sizes, please wait".to_string()
-            },
-        ),
-    };
+    let (loading_title, loading_sub) = (
+        tr_disk_loading_title(lang, &root.disk.volume.to_string()),
+        tr_disk_loading_sub(lang),
+    );
 
     let body = if root.disk.scanning {
         LoadingState::new(loading_title, root.anim_phase)
@@ -92,14 +81,7 @@ pub fn render_disk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 let space_info = root.disk.volume_space(v);
                 let space_str = if let Some((tot, fre)) = space_info {
                     let used = tot.saturating_sub(fre);
-                    match lang {
-                        Language::Zh => {
-                            format!("已用 {} / 共 {}", fmt_size(used), fmt_size(tot))
-                        }
-                        Language::En => {
-                            format!("Used {} / Total {}", fmt_size(used), fmt_size(tot))
-                        }
-                    }
+                    tr_disk_volume_usage(lang, &fmt_size(used), &fmt_size(tot))
                 } else {
                     String::new()
                 };

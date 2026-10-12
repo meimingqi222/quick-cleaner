@@ -106,10 +106,8 @@ pub fn render_declutter_context_menu(root: &Root, cx: &mut Context<Root>) -> Opt
             .icon(icon_zip(SUCCESS, 14.))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(p_copy.clone()));
-                this.status = crate::core::i18n::Text::new(
-                    format!("已复制路径: {}", p_copy),
-                    format!("Copied path: {}", p_copy),
-                );
+                this.status =
+                    crate::core::i18n::bilingual(|l| tr_declutter_path_copied(l, &p_copy));
                 this.close_declutter_context_menu();
                 cx.notify();
             })),

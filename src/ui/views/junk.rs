@@ -480,16 +480,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 .child(icon_trash(if total > 0 { ERROR } else { PRIMARY }, 13.)),
         );
 
-    let (heading_title, heading_sub) = match lang {
-        Language::Zh => (
-            "智能清理",
-            "可重建的应用、浏览器、包管理与应用更新包缓存默认已勾选；临时数据与开发产物需手动勾选",
-        ),
-        Language::En => (
-            "Smart Clean",
-            "Rebuildable app, browser, package-manager and update-package caches are selected; temp data and dev builds require manual selection",
-        ),
-    };
+    let (heading_title, heading_sub) = (tr_view_junk(lang), tr_junk_heading_sub(lang));
 
     let header = div()
         .flex()
@@ -736,16 +727,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
         );
     }
 
-    let (loading_title, loading_sub) = match lang {
-        Language::Zh => (
-            "正在全面扫描系统冗余垃圾",
-            "安全检索系统临时缓存、应用日志与回收站，准备释放空间",
-        ),
-        Language::En => (
-            "Scanning system junk files…",
-            "Safely checking system temp, caches, logs and Recycle Bin",
-        ),
-    };
+    let (loading_title, loading_sub) = (tr_junk_loading_title(lang), tr_junk_loading_sub(lang));
 
     let body: AnyElement = if root.junk.scanning {
         LoadingState::new(loading_title, root.anim_phase)
@@ -802,11 +784,7 @@ pub fn render_clean_bar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement
                 .text_xs()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(OUTLINE))
-                .child(if lang == Language::Zh {
-                    "已选择清理"
-                } else {
-                    "Selected for Cleaning"
-                }),
+                .child(tr_junk_selected_title(lang)),
         )
         .child(
             div()

@@ -123,11 +123,10 @@ pub(super) fn render_right_browser_pane(
     let selectable_items: Vec<(std::path::PathBuf, u64)> = root.disk_selectable();
     let drillable = root.disk.tab == DiskTab::Tree;
     let rows: Vec<AnyElement> = if root.disk.rows.is_empty() {
-        let hint = match (drillable, lang) {
-            (true, Language::Zh) => "此目录为空",
-            (true, Language::En) => "Directory is empty",
-            (false, Language::Zh) => "未找到大文件",
-            (false, Language::En) => "No large files found",
+        let hint = if drillable {
+            tr_disk_dir_empty(lang)
+        } else {
+            tr_disk_no_large_files(lang)
         };
         vec![div()
             .p_6()
@@ -191,11 +190,7 @@ pub(super) fn render_right_browser_pane(
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(OUTLINE))
-                .child(if lang == Language::Zh {
-                    "名称"
-                } else {
-                    "Name"
-                }),
+                .child(tr_col_name(lang)),
         )
         .child(
             div()
@@ -205,11 +200,7 @@ pub(super) fn render_right_browser_pane(
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(OUTLINE))
-                .child(if lang == Language::Zh {
-                    "大小"
-                } else {
-                    "Size"
-                }),
+                .child(tr_col_size(lang)),
         )
         .child(
             div()
@@ -219,11 +210,7 @@ pub(super) fn render_right_browser_pane(
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(OUTLINE))
-                .child(if lang == Language::Zh {
-                    "操作"
-                } else {
-                    "Action"
-                }),
+                .child(tr_col_action(lang)),
         );
 
     // 当前位置完整路径：面包屑折叠时它是唯一可靠的「我在哪」线索。
@@ -234,16 +221,13 @@ pub(super) fn render_right_browser_pane(
             .current_disk_full_path()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let (copy_label, copied_status) = match lang {
-            Language::Zh => (
-                "复制路径",
-                crate::core::i18n::Text::new("路径已复制", "Path copied"),
+        let (copy_label, copied_status) = (
+            tr_disk_copy_path(lang),
+            crate::core::i18n::Text::new(
+                tr_disk_path_copied(Language::Zh),
+                tr_disk_path_copied(Language::En),
             ),
-            Language::En => (
-                "Copy path",
-                crate::core::i18n::Text::new("路径已复制", "Path copied"),
-            ),
-        };
+        );
         let full_for_copy = full.clone();
         div()
             .id("disk-full-path-bar")
@@ -559,11 +543,7 @@ pub fn render_disk_clean_bar(root: &Root, cx: &mut Context<Root>) -> Option<AnyE
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(rgb(OUTLINE))
-                            .child(if lang == Language::Zh {
-                                "已选择要清理的磁盘项目"
-                            } else {
-                                "Selected Disk Items"
-                            }),
+                            .child(tr_disk_selected_title(lang)),
                     )
                     .child(
                         div()

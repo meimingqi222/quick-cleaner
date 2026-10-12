@@ -679,6 +679,85 @@ pub fn tr_status_declutter_moving(lang: Language, count: usize) -> String {
     }
 }
 
+pub fn tr_declutter_preview(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "看图",
+        Language::En => "Preview",
+    }
+}
+
+pub fn tr_declutter_path_copied(lang: Language, path: &str) -> String {
+    match lang {
+        Language::Zh => format!("已复制路径: {path}"),
+        Language::En => format!("Copied path: {path}"),
+    }
+}
+
+pub fn tr_declutter_tab_overview(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "概览",
+        Language::En => "Overview",
+    }
+}
+
+pub fn tr_declutter_tab_photos(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "相似图片",
+        Language::En => "Similar Photos",
+    }
+}
+
+pub fn tr_declutter_tab_duplicates(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "重复文件",
+        Language::En => "Duplicates",
+    }
+}
+
+pub fn tr_declutter_tab_large_files(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "大型与旧文件",
+        Language::En => "Large & Old Files",
+    }
+}
+
+pub fn tr_declutter_tab_downloads(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "下载项",
+        Language::En => "Downloads",
+    }
+}
+
+pub fn tr_declutter_scan_done(lang: Language, savings: &str) -> String {
+    match lang {
+        Language::Zh => format!("文件整理扫描完成，发现可优化空间 {savings}"),
+        Language::En => format!("Declutter scan complete, found {savings}"),
+    }
+}
+
+/// 状态栏：这批条目移入废纸篓的结果。
+pub fn tr_declutter_moved_to_trash(
+    lang: Language,
+    tab: crate::ui::views::DeclutterTab,
+    moved: usize,
+    failed: usize,
+) -> String {
+    use crate::ui::views::DeclutterTab as T;
+    let (zh_noun, en_noun) = match tab {
+        T::Downloads => ("下载项", "downloads"),
+        T::LargeFiles => ("大文件", "large files"),
+        T::SimilarPhotos => ("相似照片", "similar photos"),
+        T::Duplicates => ("重复文件", "duplicate files"),
+        T::Overview => ("项目", "items"),
+    };
+    match (lang, failed) {
+        (Language::Zh, 0) => format!("已把 {moved} 个{zh_noun}移入废纸篓"),
+        (Language::Zh, _) => format!("已把 {moved} 个{zh_noun}移入废纸篓；{failed} 个失败"),
+        (Language::En, 0) => format!("Moved {moved} {en_noun} to Trash"),
+        (Language::En, _) => format!("Moved {moved} {en_noun} to Trash; {failed} failed"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

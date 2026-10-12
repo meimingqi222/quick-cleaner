@@ -26,6 +26,7 @@ if [ -f "$VN" ]; then
     fi
 fi
 if command -v python3 >/dev/null 2>&1; then PY="python3"; else PY="py -3"; fi
+$PY -X utf8 scripts/check-ui-localization.py || exit 1
 $PY -X utf8 scripts/check-ui-components.py || exit 1
-$PY -X utf8 -m unittest discover -s scripts -p test_ui_components.py || exit 1
+$PY -X utf8 -m unittest discover -s scripts -p 'test_ui_*.py' || exit 1
 exit 0
