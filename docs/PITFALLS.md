@@ -737,3 +737,33 @@ Note: `2026-10-11-search-threshold-completion.md`
 - **根因**：CI 用 `dtolnay/rust-toolchain@stable`，随上游前进；本机 rustup 可能停在旧版本。新 clippy 会新增 lint（0.0.10 这轮是 1.99 的 `question_mark`），旧 rustfmt 的换行决策也可能不同。
 - **防护**：提交前用与 CI 同版本的 toolchain 复核，例如 `rustup toolchain install 1.99.0 --component clippy,rustfmt` 后跑 `cargo +1.99.0 clippy --all-targets -- -D warnings`；CI 报错里的行号与 lint 名是唯一权威。
 - **禁止回退**：不能因为「本地过了」就断定 CI 会过；不能用 `#[allow]` 消掉新 lint，要按 lint 建议改写（这轮把比较符前缀拆成 `split_cmp_op`，行为不变）。
+
+## P56 macOS 端口/线程枚举必须走 libproc，空表 stub 让 `:port` 搜索静默失效
+
+Note: `2026-10-12-macos-process-ports-map.md`
+
+- **症状**：状态监控页进程搜索输入 `:3000` 在 macOS 上永远检索不到占用端口的进程，线程数列恒为 1；Windows 同一语法正常。没有任何报错，看起来像「没有进程占用」。
+- **根因**：`process_ports_map` / `process_threads_map` 的平台契约是「返回 HashMap」，旧 macOS 实现是返回空表的占位 stub——类型满足契约，UI 层无从分辨「没权限/没数据」和「根本没实现」。
+- **防护**：
+  - [`process_ports_map`](../src/platform/macos/status.rs) 用 libproc 枚举：`proc_listallpids` → `proc_pidinfo(PROC_PIDLISTFDS)` → `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` 取 `insi_lport`；`process_threads_map` 用 `proc_pidinfo(PROC_PIDTASKINFO)`。
+  - `socket_fdinfo` 的手工镜像结构由 `const` 断言钉死尺寸与关键偏移（SDK 实测 792B、`insi_lport`@268），ABI 变动会编不过。
+  - 测试：`process_ports_map_lists_own_listener`、`process_threads_map_counts_own_threads`（本进程自证，不需要外部进程配合）。
+- **改这两处或 `ProcInfo.ports`/`threads` 的消费方时**：
+  - 禁止退回「返回空 HashMap」的写法——任何「不支持」也要靠空字段语义区分，不能拿类型满足当实现完成。
+  - `insi_lport` 是网络序 int，截 16 位后必须 `u16::from_be`，直接 `as u16` 会得到字节序反掉的端口。
+  - 非本用户进程 `proc_pidfdinfo` 返回 EPERM 是常态（同 lsof 无特权口径），跳过即可，不要当成「枚举失败」整体返回空。
+
+## P57 「强制退出」不能复用发 SIGTERM 的通道，SIGTERM 可被目标忽略
+
+Note: `2026-10-12-macos-force-terminate-sigkill.md`
+
+- **症状**：进程详情里「退出」和「强制退出」对同一个 python 服务都点了没反应，两个按钮表现完全一致。
+- **根因**：`force_kill_process` 与 `kill_process` 共用 `terminate_process`，macOS 侧只发 `SIGTERM`。SIGTERM 是协作信号，目标注册 handler 或直接 `trap '' TERM` 就免疫；「强制退出」语义上必须是 SIGKILL，但契约里根本没有强杀入口，UI 层无从选择。
+- **防护**：
+  - 平台契约新增 [`force_terminate_process`](../src/platform/macos/status.rs)：`ensure_same_process` 共享 uniqueid 身份闸门后发 `SIGKILL`；Windows 侧委托 `TerminateProcess`（本来即强杀）。
+  - `ui/actions/status.rs` 的 `force_kill_process` 走 `force_terminate_process`，「退出」仍走 `SIGTERM`。
+  - 测试：`force_terminate_kills_process_that_ignores_sigterm`（`trap '' TERM` 的子进程，SIGTERM 投递后仍存活，SIGKILL 后 `status.signal()==9`）。
+- **改结束进程链路时**：
+  - 禁止把 `force_kill_process` 改回 `terminate_process` 或任何「复用同一条信号」的写法。
+  - 新增平台实现时 Windows 侧委托 `terminate_process` 是允许的（无信号语义差异），macOS/Unix 侧必须发 `SIGKILL`。
+  - 强杀前的 uniqueid 双复核不能省（macOS 无 pidfd，TOCTOU 只能靠它收窄）。

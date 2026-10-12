@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.55s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-fbf26b5d348d5bf8)
+
+running 11 tests
+test platform::macos::status::tests::a_hostile_low_duty_still_ramps_up_with_temperature ... ok
+test platform::macos::status::tests::cooling_curve_has_hysteresis_and_limits_only_downward_changes ... ok
+test platform::macos::status::tests::boost_stays_at_the_user_floor_across_normal_p_core_temperatures ... ok
+test platform::macos::status::tests::full_speed_needs_no_temperature_but_intermediate_does ... ok
+test platform::macos::status::tests::fair_thermal_pressure_raises_the_floor ... ok
+test platform::macos::status::tests::process_unique_id_is_stable_and_required_to_kill ... ok
+test platform::macos::status::tests::serious_thermal_pressure_refuses_manual_cooling ... ok
+test platform::macos::status::tests::foundation_exposes_system_thermal_state ... ok
+test platform::macos::status::tests::process_threads_map_counts_own_threads ... ok
+test platform::macos::status::tests::process_ports_map_lists_own_listener ... ok
+test platform::macos::status::tests::force_terminate_kills_process_that_ignores_sigterm ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.61s
+

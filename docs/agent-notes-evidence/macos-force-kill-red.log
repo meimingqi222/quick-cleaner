@@ -1,0 +1,10 @@
+ right: Some(9)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::status::tests::force_terminate_kills_process_that_ignores_sigterm
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 756 filtered out; finished in 60.01s
+
+error: test failed, to rerun pass `--lib`

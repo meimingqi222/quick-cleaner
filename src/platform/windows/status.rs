@@ -129,6 +129,17 @@ fn terminate_same_process(
     }
 }
 
+/// 「强制退出」。`TerminateProcess` 本身就是不可拦截的强杀（Windows 没有
+/// 可忽略的信号语义），与 `terminate_process` 同一实现，契约两边都要求
+/// 这个入口存在。
+pub fn force_terminate_process(
+    pid: u32,
+    expected_start_time: u64,
+    unique_id: Option<u64>,
+) -> Result<(), String> {
+    terminate_process(pid, expected_start_time, unique_id)
+}
+
 /// 句柄对应进程的创建时间，Unix 纪元秒。
 ///
 /// 换算公式与 sysinfo 的 `start_time()` 完全一致（FILETIME 100ns 计数

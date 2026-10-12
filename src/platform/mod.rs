@@ -107,6 +107,10 @@ macro_rules! platform_contract {
             let _: fn() -> Option<crate::core::status::BatteryReading> = read_battery;
             let _: fn() -> u64 = system_uptime_secs;
             let _: fn(u32, u64, Option<u64>) -> Result<(), String> = terminate_process;
+            // 「强制退出」必须与「退出」走不同强度的信号：macOS 上 SIGTERM
+            // 能被目标进程忽略，强退只有 SIGKILL 才有效。Windows 的
+            // TerminateProcess 本身即强杀，委托实现即可。
+            let _: fn(u32, u64, Option<u64>) -> Result<(), String> = force_terminate_process;
             let _: fn(u32) -> Option<u64> = process_unique_id;
             let _: fn() -> HashMap<u32, Vec<u16>> = process_ports_map;
             let _: fn() -> HashMap<u32, u32> = process_threads_map;
@@ -181,13 +185,14 @@ pub use windows::{
     app_icon_from_bundle, app_icon_png, apply_update_and_restart, clean_residuals,
     cleanup_previous_update_leftovers, detect_inuse, detect_occupancy, detect_system_language,
     elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
-    force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
-    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    open_url, process_ports_map, process_threads_map, process_unique_id, read_battery, read_gpus,
-    read_thermal, relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
-    system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
-    user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,
+    force_delete_access, force_terminate_process, get_volume_space, install_fan_helper,
+    is_elevated, is_packaged_install, is_system_trash, list_installed_apps, list_volumes,
+    move_to_trash, open_in_default_app, open_url, process_ports_map, process_threads_map,
+    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
+    resolve_tool_program, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
+    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
+    tool_command, uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(windows)]
 platform_contract!();
@@ -199,13 +204,14 @@ pub use macos::{
     app_icon_from_bundle, app_icon_png, apply_update_and_restart, clean_residuals,
     cleanup_previous_update_leftovers, detect_inuse, detect_occupancy, detect_system_language,
     elevated_fan_control, empty_trash, fan_control_supported, fan_helper_installed,
-    force_delete_access, get_volume_space, install_fan_helper, is_elevated, is_packaged_install,
-    is_system_trash, list_installed_apps, list_volumes, move_to_trash, open_in_default_app,
-    open_url, process_ports_map, process_threads_map, process_unique_id, read_battery, read_gpus,
-    read_thermal, relaunch_as_admin_if_needed, resolve_tool_program, reveal_in_explorer,
-    run_uninstaller_and_wait, scan_residuals, scan_volume, set_fan_mode, spot_check_inuse,
-    system_uptime_secs, terminate_process, tool_command, uninstall_fan_helper, update_cache_dir,
-    user_cache_dir, user_data_dir, user_home, user_temp_dir, verify_residuals,
+    force_delete_access, force_terminate_process, get_volume_space, install_fan_helper,
+    is_elevated, is_packaged_install, is_system_trash, list_installed_apps, list_volumes,
+    move_to_trash, open_in_default_app, open_url, process_ports_map, process_threads_map,
+    process_unique_id, read_battery, read_gpus, read_thermal, relaunch_as_admin_if_needed,
+    resolve_tool_program, reveal_in_explorer, run_uninstaller_and_wait, scan_residuals,
+    scan_volume, set_fan_mode, spot_check_inuse, system_uptime_secs, terminate_process,
+    tool_command, uninstall_fan_helper, update_cache_dir, user_cache_dir, user_data_dir, user_home,
+    user_temp_dir, verify_residuals,
 };
 #[cfg(target_os = "macos")]
 platform_contract!();

@@ -1,0 +1,8 @@
+
+
+failures:
+    platform::macos::status::tests::process_ports_map_lists_own_listener
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 755 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

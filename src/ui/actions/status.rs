@@ -729,7 +729,8 @@ impl crate::ui::Root {
         cx.notify();
     }
 
-    /// 强制退出进程（立即强制终止）
+    /// 强制退出进程（立即强制终止）。macOS 上 SIGTERM 能被目标忽略，
+    /// 这里必须走 SIGKILL 通道，不能和「退出」共用同一条。
     pub fn force_kill_process(
         &mut self,
         pid: u32,
@@ -738,7 +739,7 @@ impl crate::ui::Root {
         name: String,
         cx: &mut Context<Self>,
     ) {
-        let result = crate::platform::terminate_process(pid, start_time, unique_id);
+        let result = crate::platform::force_terminate_process(pid, start_time, unique_id);
         self.status = bilingual(|l| match &result {
             Ok(()) => tr_status_kill_ok(l, &name).to_string(),
             Err(err) => tr_status_kill_failed(l, &name, err).to_string(),

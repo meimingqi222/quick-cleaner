@@ -1,0 +1,8 @@
+
+running 3 tests
+test platform::macos::status::tests::process_unique_id_is_stable_and_required_to_kill ... ok
+test platform::macos::status::tests::process_threads_map_counts_own_threads ... ok
+test platform::macos::status::tests::process_ports_map_lists_own_listener ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 753 filtered out; finished in 0.00s
+

@@ -382,11 +382,9 @@ pub fn process_unique_id(pid: u32) -> Option<u64> {
     (n == size && info.p_uniqueid != 0).then_some(info.p_uniqueid)
 }
 
-pub fn terminate_process(
-    pid: u32,
-    _expected_start_time: u64,
-    expected_unique_id: Option<u64>,
-) -> Result<(), String> {
+/// 发信号前按 Darwin uniqueid 复核目标进程身份：macOS 没有 pidfd/句柄，
+/// `kill(2)` 按 PID 投递，核对窗口只能缩到两次系统调用之间。
+fn ensure_same_process(pid: u32, expected_unique_id: Option<u64>) -> Result<(), String> {
     let Some(expected_unique_id) = expected_unique_id else {
         return Err(format!("PID {pid} 缺少 Darwin 进程标识，拒绝结束"));
     };
@@ -396,15 +394,39 @@ pub fn terminate_process(
     if actual_unique_id != expected_unique_id {
         return Err(format!("PID {pid} 已退出或已被其他进程复用"));
     }
-    // 残余限制：kill(2) 仍按 PID 投递。uniqueid 在发出信号前再读一次，
-    // 把窗口缩到两次 syscalls 之间；无法做到 Windows 那种句柄绑定。
+    // uniqueid 在发出信号前再读一次，把窗口缩到两次 syscalls 之间。
     let Some(again) = process_unique_id(pid) else {
         return Err(format!("PID {pid} 已退出或已被其他进程复用"));
     };
     if again != expected_unique_id {
         return Err(format!("PID {pid} 已退出或已被其他进程复用"));
     }
+    Ok(())
+}
+
+pub fn terminate_process(
+    pid: u32,
+    _expected_start_time: u64,
+    expected_unique_id: Option<u64>,
+) -> Result<(), String> {
+    ensure_same_process(pid, expected_unique_id)?;
     let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+/// 「强制退出」：SIGTERM 是可被忽略/缓处理的协作信号，只有 SIGKILL 无条件
+/// 结束进程。身份核对与 [`terminate_process`] 共用同一条 uniqueid 闸门。
+pub fn force_terminate_process(
+    pid: u32,
+    _expected_start_time: u64,
+    expected_unique_id: Option<u64>,
+) -> Result<(), String> {
+    ensure_same_process(pid, expected_unique_id)?;
+    let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     if rc == 0 {
         Ok(())
     } else {
@@ -912,12 +934,158 @@ fn unlock_fan_control(conn: u32) -> Result<(), FanError> {
     ))
 }
 
-pub fn process_ports_map() -> std::collections::HashMap<u32, Vec<u16>> {
-    std::collections::HashMap::new()
+// ---- libproc 端口/线程枚举 ----
+//
+// `socket_fdinfo` 不在 libc 0.2 的导出里，按 SDK `<sys/proc_info.h>` 手工镜像：
+// 只需要读到 `insi_lport` 为止，后面的联合体成员用 `_rest` 把内核要写的
+// 792B 缓冲补齐。尺寸与关键偏移是 SDK 实测值，由 const 断言钉死——内核 ABI
+// 变了会编不过，而不是默默读到错位的端口号。
+#[repr(C)]
+struct SocketFdinfo {
+    _pfi: [u8; 24], // proc_fileinfo
+    _soi_stat: libc::vinfo_stat,
+    _soi_so: u64,
+    _soi_pcb: u64,
+    _soi_type: i32,
+    _soi_protocol: i32,
+    soi_family: i32,
+    _soi_options: i16,
+    _soi_linger: i16,
+    _soi_state: i16,
+    _soi_qlen: i16,
+    _soi_incqlen: i16,
+    _soi_qlimit: i16,
+    _soi_timeo: i16,
+    _soi_error: u16,
+    _soi_oobmark: u32,
+    _soi_rcv: [u8; 24], // sockbuf_info
+    _soi_snd: [u8; 24], // sockbuf_info
+    soi_kind: i32,
+    _rfu_1: u32,
+    // soi_proto 联合体：SOCKINFO_IN / SOCKINFO_TCP 的首成员都是 in_sockinfo，
+    // 两者的 insi_lport 偏移一致，共用同一段前缀。
+    _insi_fport: i32,
+    insi_lport: i32,
+    _rest: [u8; 528 - 8],
 }
 
+const _: () = assert!(std::mem::size_of::<SocketFdinfo>() == 792);
+const _: () = assert!(std::mem::size_of::<libc::vinfo_stat>() == 136);
+const _: () = assert!(std::mem::offset_of!(SocketFdinfo, soi_family) == 184);
+const _: () = assert!(std::mem::offset_of!(SocketFdinfo, soi_kind) == 256);
+const _: () = assert!(std::mem::offset_of!(SocketFdinfo, insi_lport) == 268);
+
+const PROC_PIDFDSOCKETINFO: i32 = 3;
+const SOCKINFO_IN: i32 = 1;
+const SOCKINFO_TCP: i32 = 2;
+
+fn all_pids() -> Vec<i32> {
+    // 返回值是写出的 pid 数；写满缓冲只说明可能截断，翻倍重试到不满为止。
+    let mut pids = vec![0i32; 4096];
+    loop {
+        let n = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<i32>()) as i32,
+            )
+        };
+        if n <= 0 {
+            return Vec::new();
+        }
+        if (n as usize) < pids.len() {
+            pids.truncate(n as usize);
+            return pids;
+        }
+        pids.resize(pids.len() * 2, 0);
+    }
+}
+
+/// 枚举所有进程打开的本地网络端口（TCP + UDP, IPv4 + IPv6）。
+/// 与 lsof 同一条通道：proc_pidinfo(PROC_PIDLISTFDS) 拿 fd 列表，再对每个
+/// socket fd 调 proc_pidfdinfo(PROC_PIDFDSOCKETINFO) 读 in_sockinfo。
+/// 非本用户的进程返回 EPERM 直接跳过——和无特权的 lsof 口径一致。
+pub fn process_ports_map() -> std::collections::HashMap<u32, Vec<u16>> {
+    let mut map: std::collections::HashMap<u32, Vec<u16>> = std::collections::HashMap::new();
+    for pid in all_pids() {
+        let needed =
+            unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+        if needed <= 0 {
+            continue;
+        }
+        let count = needed as usize / libc::PROC_PIDLISTFD_SIZE as usize;
+        // SAFETY: proc_fdinfo 是纯 POD，零初始化合法。
+        let mut fds: Vec<libc::proc_fdinfo> = vec![unsafe { std::mem::zeroed() }; count];
+        let got = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDLISTFDS,
+                0,
+                fds.as_mut_ptr().cast(),
+                needed,
+            )
+        };
+        if got <= 0 {
+            continue;
+        }
+        fds.truncate(got as usize / libc::PROC_PIDLISTFD_SIZE as usize);
+        for fd in fds {
+            if fd.proc_fdtype != libc::PROX_FDTYPE_SOCKET as u32 {
+                continue;
+            }
+            // SAFETY: 出参是本帧栈上的结构体，内核最多写 sizeof 字节。
+            let mut info: SocketFdinfo = unsafe { std::mem::zeroed() };
+            let n = unsafe {
+                libc::proc_pidfdinfo(
+                    pid,
+                    fd.proc_fd,
+                    PROC_PIDFDSOCKETINFO,
+                    (&mut info as *mut SocketFdinfo).cast(),
+                    std::mem::size_of::<SocketFdinfo>() as i32,
+                )
+            };
+            if n < std::mem::size_of::<SocketFdinfo>() as i32 {
+                continue;
+            }
+            if (info.soi_kind != SOCKINFO_IN && info.soi_kind != SOCKINFO_TCP)
+                || (info.soi_family != libc::AF_INET && info.soi_family != libc::AF_INET6)
+            {
+                continue;
+            }
+            // insi_lport 是网络序 int：截到 16 位再按大端还原，与 Windows 侧
+            // u16::from_be(dwLocalPort) 同口径。
+            let port = u16::from_be(info.insi_lport as u16);
+            if port > 0 {
+                map.entry(pid as u32).or_default().push(port);
+            }
+        }
+    }
+    for ports in map.values_mut() {
+        ports.sort_unstable();
+        ports.dedup();
+    }
+    map
+}
+
+/// 批量获取各进程的活动线程数。
 pub fn process_threads_map() -> std::collections::HashMap<u32, u32> {
-    std::collections::HashMap::new()
+    let mut map = std::collections::HashMap::new();
+    for pid in all_pids() {
+        // SAFETY: 出参是本帧栈上的结构体。
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut info as *mut libc::proc_taskinfo).cast(),
+                std::mem::size_of::<libc::proc_taskinfo>() as i32,
+            )
+        };
+        if n == std::mem::size_of::<libc::proc_taskinfo>() as i32 && info.pti_threadnum > 0 {
+            map.insert(pid as u32, info.pti_threadnum as u32);
+        }
+    }
+    map
 }
 
 #[cfg(test)]
@@ -1032,6 +1200,55 @@ mod tests {
             system_thermal_state().is_some(),
             "当前支持的 macOS 应提供 NSProcessInfo.thermalState"
         );
+    }
+
+    #[test]
+    fn process_ports_map_lists_own_listener() {
+        // 回归：旧实现是返回空表的 stub，状态页 `:port` 搜索永远匹配不到进程。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        let pid = std::process::id();
+        let map = super::process_ports_map();
+        assert!(
+            map.get(&pid).is_some_and(|ports| ports.contains(&port)),
+            "libproc 应能看到本进程监听的 {port} 端口"
+        );
+    }
+
+    #[test]
+    fn process_threads_map_counts_own_threads() {
+        // 回归：旧实现是返回空表的 stub，进程线程数列恒为默认 1。
+        let map = super::process_threads_map();
+        assert!(
+            map.get(&std::process::id()).copied().unwrap_or(0) > 0,
+            "当前进程至少有一条线程"
+        );
+    }
+
+    #[test]
+    fn force_terminate_kills_process_that_ignores_sigterm() {
+        // 回归：旧实现把「强制退出」委托给发 SIGTERM 的 terminate_process，
+        // 目标忽略 TERM 时强制退出和普通退出一样无效。
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; exec sleep 60"])
+            .spawn()
+            .expect("spawn");
+        let pid = child.id();
+        // 等 sh exec 成 sleep 且 TERM 屏蔽就位。
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let unique_id = super::process_unique_id(pid).expect("子进程应有 uniqueid");
+
+        super::terminate_process(pid, 0, Some(unique_id)).expect("SIGTERM 应能投递（忽略≠失败）");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "忽略 TERM 的进程被普通退出杀掉了——测试前提不成立"
+        );
+
+        super::force_terminate_process(pid, 0, Some(unique_id)).expect("SIGKILL 应投递");
+        let status = child.wait().expect("wait");
+        assert_eq!(status.signal(), Some(libc::SIGKILL), "强退必须用 SIGKILL");
     }
 
     #[test]
