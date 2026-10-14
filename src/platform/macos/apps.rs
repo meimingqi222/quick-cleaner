@@ -703,12 +703,10 @@ const MDLS_BATCH: usize = 256;
 /// - `mdfind` / `mdls` 起不来、超时、非零退出，或 `mdfind` 的 stderr 有内容
 /// - `mdfind` 一个真应用包都没查到——任何一台 macOS 都必然有一堆，空结果
 ///   只能是索引不可用（和哨兵查询同一个判据）
-/// - `mdls` 的返回值个数与请求的包数对不上，或者某个包读成了空 / `(null)`
+/// - `mdls` 的返回值个数与请求的包数对不上，或者某个包的 Spotlight 和 Info.plist 都读不出 ID
 ///
-/// 最后一条是这里唯一不显然的规矩：漏读一个包 = 它的 ID 不在集合里 = 它
-/// 的活数据会被下游判成「孤儿」。加上前面的过滤后，本机 566 个真应用包
-/// 一个都没漏读；真的碰上读不出 ID 的 bundle（权限/损坏），宁可整轮扫描
-/// 不工作，也不能让漏读变成放行删除。
+/// 漏读一个包会让它的活数据被下游误判成孤儿。Spotlight 缺失 ID 时
+/// 精确读取对应包的 Info.plist；仍读不出身份则整轮失败，不能返回部分集合。
 pub fn installed_bundle_ids() -> Option<std::collections::HashSet<String>> {
     let run = crate::core::proc::run_with_timeout(
         "/usr/bin/mdfind",
@@ -745,21 +743,7 @@ pub fn installed_bundle_ids() -> Option<std::collections::HashSet<String>> {
         if !run.ok {
             return None;
         }
-        let mut values: Vec<&[u8]> = run.stdout.split(|byte| *byte == 0).collect();
-        // `mdls -raw` 用 NUL 分隔，末尾有没有 NUL 都见过，两种都要认。
-        if values.last().is_some_and(|value| value.is_empty()) {
-            values.pop();
-        }
-        if values.len() != chunk.len() {
-            return None;
-        }
-        for value in values {
-            let id = String::from_utf8_lossy(value).trim().to_string();
-            if id.is_empty() || id == "(null)" {
-                return None;
-            }
-            ids.insert(id);
-        }
+        ids.extend(bundle_ids_from_metadata(chunk, &run.stdout)?);
     }
     // Spotlight 可以正常返回几百个应用，却单独漏掉被隐私设置排除的安装
     // 位置。常见安装目录再直接读一遍 Info.plist；读不全则不能用部分集合
@@ -770,6 +754,35 @@ pub fn installed_bundle_ids() -> Option<std::collections::HashSet<String>> {
         .filter(|path| !path.as_os_str().is_empty())
         .collect();
     ids.extend(bundle_ids_in_app_roots(&roots)?);
+    Some(ids)
+}
+
+fn bundle_ids_from_metadata(
+    paths: &[PathBuf],
+    stdout: &[u8],
+) -> Option<std::collections::HashSet<String>> {
+    let mut ids = std::collections::HashSet::new();
+    let mut values: Vec<&[u8]> = stdout.split(|byte| *byte == 0).collect();
+    // `mdls -raw` 用 NUL 分隔，末尾有没有 NUL 都见过，两种都要认。
+    if values.last().is_some_and(|value| value.is_empty()) {
+        values.pop();
+    }
+    if values.len() != paths.len() {
+        return None;
+    }
+    for (path, value) in paths.iter().zip(values) {
+        let id = String::from_utf8_lossy(value).trim().to_string();
+        let id = if id.is_empty() || id == "(null)" {
+            let id = plist_string(&path.join("Contents/Info.plist"), "CFBundleIdentifier")?;
+            if id == "(null)" {
+                return None;
+            }
+            id
+        } else {
+            id
+        };
+        ids.insert(id);
+    }
     Some(ids)
 }
 
@@ -917,6 +930,46 @@ mod tests {
             "批量读回的 {} 个 ID 里连 Safari 都没有，说明 mdls 那一段没跑对",
             ids.len()
         );
+    }
+
+    #[test]
+    fn missing_spotlight_id_uses_exact_bundle_plist() {
+        let root = crate::core::testing::fixture("qc_missing_spotlight_id");
+        let app = root.join("PrivateApp.app/Contents");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("Info.plist"),
+            "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>com.example.PrivateApp</string></dict></plist>").unwrap();
+        let paths = [root.join("PrivateApp.app"), root.join("Indexed.app")];
+        let ids = bundle_ids_from_metadata(&paths, b"(null)\0com.example.Indexed\0")
+            .expect("a readable bundle identity must recover missing Spotlight metadata");
+        assert!(ids.contains("com.example.PrivateApp"));
+        assert!(ids.contains("com.example.Indexed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_spotlight_identity_stays_fail_closed() {
+        let root = crate::core::testing::fixture("qc_unreadable_spotlight_id");
+        let contents = root.join("Unknown.app/Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        let paths = [root.join("Indexed.app"), root.join("Unknown.app")];
+        for plist in ["invalid plist", "<plist version=\"1.0\"><dict/></plist>",
+            "<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string> </string></dict></plist>",
+            "<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>(null)</string></dict></plist>"] {
+            std::fs::write(contents.join("Info.plist"), plist).unwrap();
+            assert!(bundle_ids_from_metadata(&paths, b"com.example.Indexed\0(null)").is_none());
+        }
+        std::fs::remove_file(contents.join("Info.plist")).unwrap();
+        assert!(bundle_ids_from_metadata(&paths, b"com.example.Indexed\0").is_none());
+        assert!(bundle_ids_from_metadata(&paths, b"com.example.Indexed\0 \0").is_none());
+        let ids =
+            bundle_ids_from_metadata(&paths, b"com.example.Indexed\0com.example.Unknown").unwrap();
+        assert_eq!(
+            ids.len(),
+            2,
+            "valid metadata does not require a fallback plist"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

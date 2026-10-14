@@ -88,7 +88,7 @@ pub struct SearchTextHit {
 ///各自漂移。现在两边共用这一个结构体，分支只剩「拿哪一个」。
 pub struct TextInputState {
     pub text: String,
-    /// 光标/选区的**字节**范围
+    /// 有向字节端点 anchor..caret，允许 start > end；切片/绘制用 selection()。
     pub sel: std::ops::Range<usize>,
     /// 输入法正在组合中的那段文本的字节范围（拼音串，尚未确认）
     pub marked: Option<std::ops::Range<usize>>,
@@ -117,6 +117,13 @@ impl TextInputState {
     /// 光标（或选区）的字节范围，已钳到合法的字符边界。
     pub fn selection(&self) -> std::ops::Range<usize> {
         crate::ui::text_input::clamp_to_boundary(&self.text, self.sel.clone())
+    }
+
+    pub fn utf16_selection(&self) -> gpui::UTF16Selection {
+        gpui::UTF16Selection {
+            range: crate::ui::text_input::range_to_utf16(&self.text, &self.selection()),
+            reversed: self.sel.start > self.sel.end,
+        }
     }
 
     /// 把光标收到末尾。内容被外部改动（清空按钮、切换筛选）后要调一次，
@@ -203,6 +210,33 @@ mod tests {
                 .child(div().track_focus(&self.a.focus_handle))
                 .child(div().track_focus(&self.b.focus_handle))
         }
+    }
+
+    #[gpui::test]
+    fn directed_selection_reports_utf16_and_replaces_exact_text(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Host {
+            a: TextInputState::new(cx.focus_handle()),
+            b: TextInputState::new(cx.focus_handle()),
+            changes: 0,
+        });
+        view.update(cx, |h, cx| {
+            h.a.set_text("a中😀b");
+            h.a.sel = std::ops::Range { start: 8, end: 1 };
+            assert_eq!(h.a.selection(), 1..8);
+            let selected = h.a.utf16_selection();
+            assert_eq!(selected.range, 1..4);
+            assert!(selected.reversed);
+            A.compose(h, None, "zhong", Some(&(5..5)), cx);
+            assert_eq!(h.a.text, "azhongb");
+            assert_eq!(h.a.marked, Some(1..6));
+            A.commit(h, None, "中", cx);
+            assert_eq!(h.a.text, "a中b");
+            assert_eq!(h.a.sel, 4..4);
+            assert!(!h.a.utf16_selection().reversed);
+            assert!(h.a.marked.is_none());
+            h.a.clear();
+            assert_eq!(h.a.sel, 0..0);
+        });
     }
 
     #[gpui::test]

@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.44s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-10d050f139694bd3)
+
+running 1 test
+test platform::macos::apps::tests::missing_spotlight_id_uses_exact_bundle_plist ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 823 filtered out; finished in 0.02s
+

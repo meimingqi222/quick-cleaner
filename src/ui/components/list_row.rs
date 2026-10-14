@@ -375,7 +375,16 @@ impl RenderOnce for ListRow {
         }
 
         row.children(leading)
-            .children(content.map(|c| div().flex_1().min_w(px(0.)).child(c)))
+            .children(content.map(|c| {
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .child(c)
+            }))
             .children(trailing)
     }
 }

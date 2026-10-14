@@ -38,10 +38,7 @@ impl EntityInputHandler for Root {
     ) -> Option<UTF16Selection> {
         let binding = self.focused_input(window)?;
         let input = binding.input(self);
-        Some(UTF16Selection {
-            range: range_to_utf16(&input.text, &input.selection()),
-            reversed: false,
-        })
+        Some(input.utf16_selection())
     }
 
     fn marked_text_range(

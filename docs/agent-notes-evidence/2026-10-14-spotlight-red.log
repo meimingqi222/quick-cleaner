@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-10d050f139694bd3)
+
+running 1 test
+test platform::macos::apps::tests::missing_spotlight_id_uses_exact_bundle_plist ... FAILED
+
+failures:
+
+---- platform::macos::apps::tests::missing_spotlight_id_uses_exact_bundle_plist stdout ----
+
+thread 'platform::macos::apps::tests::missing_spotlight_id_uses_exact_bundle_plist' (7422817) panicked at src/platform/macos/apps.rs:940:14:
+a readable bundle identity must recover missing Spotlight metadata
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::apps::tests::missing_spotlight_id_uses_exact_bundle_plist
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 823 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

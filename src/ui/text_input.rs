@@ -326,76 +326,55 @@ pub fn clamp_to_boundary(s: &str, r: Range<usize>) -> Range<usize> {
     start.min(end)..start.max(end)
 }
 
-/// 光标向左移动。
-/// - 没有 shift 且有选区：光标跳到选区起点
-/// - 没有 shift 且无选区：向左退一个字符
-/// - 有 shift：选区向左扩展
+/// 输入选区保留 anchor..caret 方向；用于切片的范围另行规范化。
+fn selection_endpoints(text: &str, sel: Range<usize>) -> Range<usize> {
+    let anchor = clamp_to_boundary(text, sel.start..sel.start).start;
+    let caret = clamp_to_boundary(text, sel.end..sel.end).start;
+    anchor..caret
+}
+
+/// 光标向左移动；Shift 保留锚点，无 Shift 时收至选区左端。
 pub fn move_left(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
-    let sel = clamp_to_boundary(text, sel);
-    if !shift {
-        if sel.start != sel.end {
-            sel.start..sel.start
-        } else if sel.start > 0 {
-            let prev = text[..sel.start]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            prev..prev
-        } else {
-            0..0
-        }
+    let sel = selection_endpoints(text, sel);
+    if !shift && sel.start != sel.end {
+        let left = sel.start.min(sel.end);
+        return left..left;
+    }
+    let prev = text[..sel.end]
+        .char_indices()
+        .next_back()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    if shift {
+        sel.start..prev
     } else {
-        let prev = if sel.start > 0 {
-            text[..sel.start]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        prev..sel.end
+        prev..prev
     }
 }
 
-/// 光标向右移动。
-/// - 没有 shift 且有选区：光标跳到选区终点
-/// - 没有 shift 且无选区：向右进一个字符
-/// - 有 shift：选区向右扩展
+/// 光标向右移动；Shift 保留锚点，无 Shift 时收至选区右端。
 pub fn move_right(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
-    let sel = clamp_to_boundary(text, sel);
-    if !shift {
-        if sel.start != sel.end {
-            sel.end..sel.end
-        } else if sel.end < text.len() {
-            let next = text[sel.end..]
-                .char_indices()
-                .nth(1)
-                .map(|(i, _)| sel.end + i)
-                .unwrap_or(text.len());
-            next..next
-        } else {
-            text.len()..text.len()
-        }
-    } else {
-        let next = if sel.end < text.len() {
-            text[sel.end..]
-                .char_indices()
-                .nth(1)
-                .map(|(i, _)| sel.end + i)
-                .unwrap_or(text.len())
-        } else {
-            text.len()
-        };
+    let sel = selection_endpoints(text, sel);
+    if !shift && sel.start != sel.end {
+        let right = sel.start.max(sel.end);
+        return right..right;
+    }
+    let next = text[sel.end..]
+        .char_indices()
+        .nth(1)
+        .map(|(i, _)| sel.end + i)
+        .unwrap_or(text.len());
+    if shift {
         sel.start..next
+    } else {
+        next..next
     }
 }
 
 /// 移动到开头。
-pub fn move_home(_text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
+pub fn move_home(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
     if shift {
-        0..sel.end
+        selection_endpoints(text, sel).start..0
     } else {
         0..0
     }
@@ -404,7 +383,7 @@ pub fn move_home(_text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
 /// 移动到末尾。
 pub fn move_end(text: &str, sel: Range<usize>, shift: bool) -> Range<usize> {
     if shift {
-        sel.start..text.len()
+        selection_endpoints(text, sel).start..text.len()
     } else {
         text.len()..text.len()
     }
@@ -664,7 +643,7 @@ mod tests {
         assert_eq!(move_end(s, 0..0, false), len..len);
 
         // Shift 选区扩展
-        assert_eq!(move_home(s, 5..5, true), 0..5);
+        assert_eq!(move_home(s, 3..3, true), Range { start: 3, end: 0 });
         assert_eq!(move_end(s, 2..2, true), 2..len);
     }
 

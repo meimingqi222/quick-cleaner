@@ -5,7 +5,7 @@ use crate::core::i18n::Language;
 use crate::core::model::{commas, fmt_size, truncate, Check};
 use crate::ui::adapters::{safety_color, safety_container};
 use crate::ui::components::action_bar::{ActionBar, CapsulePreset};
-use crate::ui::components::badge::{Badge, BadgeTone};
+use crate::ui::components::badge::{Badge, BadgeSize, BadgeTone};
 use crate::ui::components::button::{Button, ButtonIntent, ButtonSize, ButtonTone, ButtonVariant};
 use crate::ui::components::cards::card;
 use crate::ui::components::controls::{checkbox, page_heading};
@@ -23,6 +23,8 @@ fn right_cell(width: f32, text: String, color: u32, bold: bool) -> Div {
         .w(px(width))
         .flex_none()
         .text_right()
+        .text_xs()
+        .whitespace_nowrap()
         .text_color(rgb(color))
         .when(bold, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
         .child(text)
@@ -50,8 +52,8 @@ fn category_icon(cat: CategoryId, fg: u32, size: f32) -> AnyElement {
     }
 }
 
-/// 单行条目的高度。uniform_list 要求行高一致，紧凑排布。
-const ITEM_ROW_H: f32 = 36.0;
+/// 单行条目的高度。uniform_list 要求行高一致，给两行文字与徽标留出合理垂直空间。
+const ITEM_ROW_H: f32 = 50.0;
 /// 展开区最多占多高，超出部分自己滚。
 const LIST_MAX_H: f32 = 380.0;
 
@@ -181,6 +183,8 @@ fn item_row(
     let content = div()
         .flex()
         .flex_col()
+        .justify_center()
+        .gap(px(2.))
         .child(
             div()
                 .flex()
@@ -195,14 +199,20 @@ fn item_row(
                 )
                 // 占用徽标：应用级是橙色提示，纯系统占用偏阻断语义用红色
                 .children(busy.map(|(text, app_level)| {
-                    Badge::new(text).tone(if app_level {
+                    Badge::new(text).size(BadgeSize::Tiny).tone(if app_level {
                         BadgeTone::Caution
                     } else {
                         BadgeTone::Error
                     })
                 })),
         )
-        .child(div().text_xs().text_color(rgb(OUTLINE)).child(path_text));
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(OUTLINE))
+                .overflow_hidden()
+                .child(path_text),
+        );
 
     let trailing = div()
         .flex()
@@ -210,7 +220,7 @@ fn item_row(
         .gap_3()
         .flex_none()
         .child(right_cell(
-            85.,
+            96.,
             if file_count > 0 {
                 tr_file_count(lang, &commas(file_count))
             } else {
@@ -220,7 +230,7 @@ fn item_row(
             false,
         ))
         .child(right_cell(
-            95.,
+            80.,
             if size > 0 {
                 fmt_size(size)
             } else {
@@ -255,7 +265,7 @@ fn item_row(
 
     ListRow::new(SharedString::from(format!("item-{idx}")))
         .height(ITEM_ROW_H)
-        .inset(RowInset::X4)
+        .inset(RowInset::X4Y2)
         .rest_bg(CARD)
         .divider(0.25)
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -609,7 +619,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_sm()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(if dim { OUTLINE } else { safety_color(safety) }))
                             // 构建产物走第二阶段异步检索，没跑完之前显示「检索中」

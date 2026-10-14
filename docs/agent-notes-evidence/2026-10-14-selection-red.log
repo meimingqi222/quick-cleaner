@@ -1,0 +1,24 @@
+   Compiling quick-cleaner v0.0.12 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.95s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-10d050f139694bd3)
+
+running 1 test
+test ui::components::search_input::tests::shift_selection_shrinks_on_reverse ... FAILED
+
+failures:
+
+---- ui::components::search_input::tests::shift_selection_shrinks_on_reverse stdout ----
+
+thread 'ui::components::search_input::tests::shift_selection_shrinks_on_reverse' (7422375) panicked at src/ui/components/search_input.rs:492:38:
+assertion `left == right` failed: reversing Shift-arrow must return to original caret
+  left: 0..2
+ right: 1..1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::components::search_input::tests::shift_selection_shrinks_on_reverse
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 823 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

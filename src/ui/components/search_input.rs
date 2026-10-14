@@ -325,7 +325,7 @@ pub fn search_box<T: gpui::EntityInputHandler>(
                                 fsize,
                                 window,
                             );
-                            binding.input_mut(this).sel = cur.min(anchor)..cur.max(anchor);
+                            binding.input_mut(this).sel = anchor..cur;
                             binding.activity(this, cx);
                         });
                     });
@@ -473,6 +473,97 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes(key);
         view.read_with(cx, |this, _| (this.input.text.clone(), this.changes))
+    }
+
+    #[gpui::test]
+    fn shift_selection_shrinks_on_reverse(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Field {
+            input: TextInputState::new(cx.focus_handle()),
+            changes: 0,
+        });
+        view.update_in(cx, |this, window, cx| {
+            this.input.set_text("abc");
+            this.input.sel = 1..1;
+            this.input.focus_handle.focus(window);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-right shift-left");
+        view.read_with(cx, |this, _| {
+            assert_eq!(
+                this.input.sel,
+                1..1,
+                "reversing Shift-arrow must return to original caret"
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn shift_selection_preserves_anchor_across_unicode_and_home_end(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Field {
+            input: TextInputState::new(cx.focus_handle()),
+            changes: 0,
+        });
+        for (keys, expected) in [
+            ("shift-left shift-right", 1..1),
+            (
+                "shift-right shift-left shift-left",
+                Range { start: 1, end: 0 },
+            ),
+            ("shift-left shift-right shift-right", 1..4),
+            ("shift-home shift-end", 1..9),
+            ("shift-end shift-home", Range { start: 1, end: 0 }),
+            ("shift-left right", 1..1),
+            ("shift-right left", 1..1),
+        ] {
+            view.update_in(cx, |this, window, cx| {
+                this.input.set_text("a中😀b");
+                this.input.sel = 1..1;
+                this.input.focus_handle.focus(window);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.simulate_keystrokes(keys);
+            view.read_with(cx, |this, _| assert_eq!(this.input.sel, expected, "{keys}"));
+        }
+        cx.simulate_keystrokes("shift-right backspace");
+        view.read_with(cx, |this, _| {
+            assert_eq!(this.input.text, "a😀b");
+            assert_eq!(this.input.sel, 1..1);
+        });
+    }
+
+    #[gpui::test]
+    fn reverse_mouse_selection_keeps_anchor_for_shift_arrow(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Field {
+            input: TextInputState::new(cx.focus_handle()),
+            changes: 0,
+        });
+        view.update_in(cx, |this, _, cx| {
+            this.input.set_text("abc");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (anchor, caret) = view.read_with(cx, |this, _| {
+            let hit = this
+                .input
+                .text_hit
+                .as_ref()
+                .expect("rendered text geometry");
+            let y = hit.bounds.center().y;
+            (
+                gpui::point(hit.bounds.left() + hit.line.x_for_index(2), y),
+                gpui::point(hit.bounds.left() + hit.line.x_for_index(1), y),
+            )
+        });
+        cx.simulate_mouse_down(anchor, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_move(caret, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(caret, MouseButton::Left, gpui::Modifiers::default());
+        view.read_with(cx, |this, _| {
+            assert_eq!(this.input.sel, Range { start: 2, end: 1 })
+        });
+        cx.simulate_keystrokes("shift-right");
+        view.read_with(cx, |this, _| assert_eq!(this.input.sel, 2..2));
     }
 
     /// 开发环境搜索框曾把退格接到向前删除上：光标在末尾时按退格没反应。
