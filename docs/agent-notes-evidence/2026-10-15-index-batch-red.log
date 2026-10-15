@@ -1,0 +1,22 @@
+   Compiling quick-cleaner v0.0.13 (/Users/yuqiang/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.57s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-99b37516beec0b75)
+
+running 1 test
+test platform::macos::disk_tree::resolve_path_tests::batch_file_changes_reuse_directory_lookups ... FAILED
+
+failures:
+
+---- platform::macos::disk_tree::resolve_path_tests::batch_file_changes_reuse_directory_lookups stdout ----
+
+thread 'platform::macos::disk_tree::resolve_path_tests::batch_file_changes_reuse_directory_lookups' (8578624) panicked at src/platform/macos/disk_tree.rs:2471:13:
+single-file removals must retain warmed directory lookups
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::disk_tree::resolve_path_tests::batch_file_changes_reuse_directory_lookups
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 829 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

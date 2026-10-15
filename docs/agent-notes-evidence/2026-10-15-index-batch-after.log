@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.89s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-99b37516beec0b75)
+
+running 1 test
+20,000 sibling files; 4,000 updates + 4,000 removals: 21.575916ms
+test platform::macos::disk_tree::resolve_path_tests::batch_file_changes_timing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 830 filtered out; finished in 0.04s
+

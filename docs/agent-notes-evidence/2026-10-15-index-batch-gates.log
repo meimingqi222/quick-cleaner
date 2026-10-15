@@ -1,0 +1,9 @@
+cargo test --lib (native, outside sandbox)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.78s
+test result: ok. 819 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 30.58s
+
+cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 40.58s
+
+cargo clippy --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.80s

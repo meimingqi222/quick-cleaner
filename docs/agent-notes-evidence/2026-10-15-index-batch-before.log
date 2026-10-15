@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-99b37516beec0b75)
+
+running 1 test
+20,000 sibling files; 4,000 updates + 4,000 removals: 15.977594542s
+test platform::macos::disk_tree::resolve_path_tests::batch_file_changes_timing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 829 filtered out; finished in 15.99s
+

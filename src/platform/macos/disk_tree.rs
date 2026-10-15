@@ -59,8 +59,9 @@ pub struct SizeTree {
     ///
     /// `find_path` 原先每层线性扫子节点；`refresh_macos_index` 对上万条
     /// 变更路径反复查 `Library` 这类大目录时，光名字比较就能吃掉几十秒。
-    /// 结构一变（增删子树 / 重建 CSR / 应用 delta）整表作废——增量刷新里
-    /// 结构变更次数远小于路径查找次数。
+    /// 墓碑在命中时检查，追加只维护父目录；不能每改一个文件就清空全表，
+    /// 否则大批 FSEvents 会反复重建祖先目录的索引。整体重建 CSR / 应用
+    /// delta 时才清空全表。
     ///
     /// 用 `Mutex` 而不是 `RefCell`：`ScanResult` 经 `Arc` 跨线程共享，
     /// 必须 `Sync`。
@@ -1746,17 +1747,43 @@ impl SizeTree {
     /// mmap 主体的子列表不可原地插入。第一次给某个父节点加 overlay
     /// 孩子时，把原 CSR 复制出来再追加。
     fn overlay_link_child(&mut self, parent: u32, child: u32) {
-        self.invalidate_child_name_cache();
         if self.mapped.is_none() {
+            // 堆树的新增条目在重建 CSR 后才可见。
+            self.child_name_cache
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&parent);
             return;
         }
         if let Some(kids) = self.extra_child.get_mut(&parent) {
             kids.push(child);
-            return;
+        } else {
+            let mut kids = self.child_slice(parent).to_vec();
+            kids.push(child);
+            self.extra_child.insert(parent, kids);
         }
-        let mut kids = self.child_slice(parent).to_vec();
-        kids.push(child);
-        self.extra_child.insert(parent, kids);
+        let name = self.entry_name_str(child);
+        let mut cache = self
+            .child_name_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(names) = cache.get_mut(&parent) {
+            let key = ascii_lower(name);
+            // 同名取 CSR 中首个仍存活的节点，不能让新节点抢走大小写别名。
+            let first = match names.get(&key).copied() {
+                Some(existing) if self.valid(existing) => existing,
+                Some(_) => self
+                    .child_slice(parent)
+                    .iter()
+                    .copied()
+                    .find(|&idx| {
+                        self.valid(idx) && self.entry_name_str(idx).eq_ignore_ascii_case(name)
+                    })
+                    .unwrap_or(child),
+                None => child,
+            };
+            names.insert(key, first);
+        }
     }
 
     fn own_size(&self, idx: u32) -> u64 {
@@ -1891,10 +1918,25 @@ impl SizeTree {
             }
             m
         });
-        map.get(&ascii_lower(name)).copied()
+        let key = ascii_lower(name);
+        let hit = map.get(&key).copied()?;
+        if self.valid(hit) {
+            return Some(hit);
+        }
+        // 删除只留下墓碑；仅在重查这个名字时寻找下一个大小写别名。
+        let replacement =
+            self.child_slice(parent).iter().copied().find(|&idx| {
+                self.valid(idx) && self.entry_name_str(idx).eq_ignore_ascii_case(name)
+            });
+        if let Some(idx) = replacement {
+            map.insert(key, idx);
+        } else {
+            map.remove(&key);
+        }
+        replacement
     }
 
-    /// 子列表或 `used` 标志变了就整表作废。
+    /// 整体重建 CSR 或应用 delta 后，旧的子名映射不可继续使用。
     fn invalidate_child_name_cache(&self) {
         self.child_name_cache
             .lock()
@@ -2082,10 +2124,13 @@ impl SizeTree {
         if !self.valid(idx) {
             return;
         }
-        self.invalidate_child_name_cache();
         let (size, files) = self.subtree_totals(idx);
         let children: Vec<u32> = self.child_slice(idx).to_vec();
         self.update_slot(idx as usize, |e| e.set_used(false));
+        self.child_name_cache
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&idx);
         for child in children {
             self.mark_unused_recursive(child);
         }
@@ -2132,14 +2177,33 @@ impl SizeTree {
         if !self.is_dir(parent) {
             return false;
         }
-        if let Some(existing) = self.find_node_by_path(path) {
-            self.remove_subtree_inplace(existing);
-        }
-        self.invalidate_child_name_cache();
         let Some(name) = path.file_name() else {
             return false;
         };
         let name_str = name.to_string_lossy();
+        if let Some(existing) = self.find_node_by_path(path) {
+            // mmap 主体的名字仍来自只读名字池；改名须走替换节点。
+            if !self.is_dir(existing) && self.entry_name_str(existing) == name_str {
+                let old_size = self.size_of(existing);
+                self.update_slot(existing as usize, |e| {
+                    e.size = size;
+                    e.mtime = mtime.min(u32::MAX as u64) as u32;
+                });
+                let mut cur = parent;
+                loop {
+                    let i = cur as usize;
+                    self.update_slot(i, |e| {
+                        e.size = e.size.saturating_sub(old_size).saturating_add(size);
+                    });
+                    if cur == ROOT_NODE {
+                        break;
+                    }
+                    cur = self.slot(i).parent();
+                }
+                return true;
+            }
+            self.remove_subtree_inplace(existing);
+        }
         let name_off = self.pool_push(&name_str);
 
         self.entries
@@ -2163,12 +2227,15 @@ impl SizeTree {
     }
 
     fn mark_unused_recursive(&mut self, idx: u32) {
-        self.invalidate_child_name_cache();
         if !self.valid(idx) {
             return;
         }
         let children: Vec<u32> = self.child_slice(idx).to_vec();
         self.update_slot(idx as usize, |e| e.set_used(false));
+        self.child_name_cache
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&idx);
         for child in children {
             self.mark_unused_recursive(child);
         }
@@ -2195,7 +2262,6 @@ impl SizeTree {
     /// 调用后需调用 `rebuild_child_arrays` 重建 CSR 索引（堆上主体）；
     /// mmap 主体走 `extra_child` overlay，不重建整棵 CSR。
     pub fn append_subtree(&mut self, parent_idx: u32, subtree: &SizeTree, root_name: &str) {
-        self.invalidate_child_name_cache();
         if !self.valid(parent_idx) || !self.slot(parent_idx as usize).is_dir() {
             return;
         }
@@ -2415,6 +2481,190 @@ mod resolve_path_tests {
         assert_eq!(t.path_of(600), "");
         // 深度以内的仍然正常解析
         assert!(t.path_of(10).ends_with("/d10"));
+    }
+
+    fn mapped_batch_tree(label: &str, files: u32) -> SizeTree {
+        let mut entries = vec![
+            entry(0, "/", true),
+            entry(0, "Users", true),
+            entry(1, "Me", true),
+            entry(2, "wide", true),
+        ];
+        for i in 0..files {
+            entries.push(entry(3, &format!("file{i}"), false));
+        }
+        mapped_tree(label, tree(entries))
+    }
+
+    fn mapped_tree(label: &str, t: SizeTree) -> SizeTree {
+        let dir = crate::core::testing::fixture(label);
+        let path = dir.join("index.bin");
+        t.write_v7(
+            &path,
+            IndexMeta {
+                mount: "/".into(),
+                label: "/".into(),
+                file_count: t.count_used_files(),
+                dir_count: t.count_used_dirs(),
+                total_size: t.size_of(0),
+                last_event_id: 0,
+                scanned_at: 0,
+            },
+        )
+        .unwrap();
+        let mapped = SizeTree::from_mapped(t.volume.clone(), &path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        mapped
+    }
+
+    #[test]
+    fn batch_file_changes_reuse_directory_lookups() {
+        let mut t = mapped_batch_tree("qc_batch_lookup", 256);
+        let baseline = t.clone();
+        assert_eq!(
+            t.find_node_by_path(Path::new("/Users/Me/wide/file0")),
+            Some(4)
+        );
+        for i in 0..128 {
+            let path = PathBuf::from(format!("/Users/Me/wide/file{i}"));
+            assert!(t.upsert_file_with_mtime(&path, 10, 100));
+            let cache = t.child_name_cache.lock().unwrap();
+            assert!(
+                [0, 1, 2, 3].iter().all(|dir| cache.contains_key(dir)),
+                "single-file updates must retain warmed directory lookups"
+            );
+            drop(cache);
+            assert_eq!(t.find_node_by_path(&path), Some(i + 4));
+            assert_eq!(t.size_of(i + 4), 10);
+            assert_eq!(t.slot((i + 4) as usize).mtime, 100);
+        }
+        assert_eq!(t.n(), 260, "metadata updates must not append tombstones");
+        for i in 128..256 {
+            let path = PathBuf::from(format!("/Users/Me/wide/file{i}"));
+            let node = t.find_node_by_path(&path).unwrap();
+            t.remove_subtree_inplace(node);
+            let cache = t.child_name_cache.lock().unwrap();
+            assert!(
+                [0, 1, 2, 3].iter().all(|dir| cache.contains_key(dir)),
+                "single-file removals must retain warmed directory lookups"
+            );
+            drop(cache);
+            assert_eq!(t.find_node_by_path(&path), None);
+        }
+        for i in 128..256 {
+            let path = PathBuf::from(format!("/Users/Me/wide/file{i}"));
+            assert!(t.upsert_file_with_mtime(&path, 20, 200));
+            let cache = t.child_name_cache.lock().unwrap();
+            assert!(
+                [0, 1, 2, 3].iter().all(|dir| cache.contains_key(dir)),
+                "appending files must retain warmed directory lookups"
+            );
+            drop(cache);
+            let node = t.find_node_by_path(&path).unwrap();
+            assert_eq!(t.size_of(node), 20);
+        }
+        assert_eq!(t.size_of(0), 128 * 30);
+        assert_eq!(t.file_count_of(0), 256);
+        assert!(t.upsert_file_with_mtime(Path::new("/Users/Me/wide/FILE0"), 3, u64::MAX));
+        let renamed = t
+            .find_node_by_path(Path::new("/Users/Me/wide/FILE0"))
+            .unwrap();
+        assert_eq!(t.path_of(renamed), "/Users/Me/wide/FILE0");
+        assert_eq!(t.size_of(0), 128 * 30 - 7);
+        assert_eq!(t.slot(renamed as usize).mtime, u32::MAX);
+        assert_eq!(
+            baseline.size_of(4),
+            0,
+            "shared mmap base must remain immutable"
+        );
+        assert_eq!(baseline.path_of(4), "/Users/Me/wide/file0");
+        let persisted = mapped_tree("qc_batch_roundtrip", t);
+        let node = persisted
+            .find_node_by_path(Path::new("/Users/Me/wide/FILE0"))
+            .unwrap();
+        assert_eq!(persisted.size_of(node), 3);
+        assert_eq!(persisted.slot(node as usize).mtime, u32::MAX);
+        assert_eq!(persisted.file_count_of(0), 256);
+        assert_eq!(persisted.size_of(0), 128 * 30 - 7);
+    }
+
+    #[test]
+    fn cached_tombstones_keep_alias_order_and_subtree_replacements_correct() {
+        let original = tree(vec![
+            entry(0, "/", true),
+            entry(0, "Users", true),
+            entry(1, "Me", true),
+            entry(2, "Notes", true),
+            entry(3, "old.txt", false),
+            entry(2, "notes", false),
+        ]);
+        let mapped = mapped_tree("qc_lookup_alias", original.clone());
+        for mut t in [original, mapped] {
+            assert_eq!(t.find_node_by_path(Path::new("/users/me/NOTES")), Some(3));
+            assert_eq!(
+                t.find_node_by_path(Path::new("/Users/Me/Notes/old.txt")),
+                Some(4)
+            );
+            t.remove_subtree_inplace(3);
+            assert_eq!(t.find_node_by_path(Path::new("/users/me/NOTES")), Some(5));
+            assert_eq!(
+                t.find_node_by_path(Path::new("/Users/Me/Notes/old.txt")),
+                None
+            );
+            t.remove_subtree_inplace(5);
+            let replacement = tree(vec![entry(0, "/", true), entry(0, "new.txt", false)]);
+            t.append_subtree(2, &replacement, "Notes");
+            if t.mapped.is_none() {
+                t.rebuild_child_arrays();
+            }
+            assert_eq!(
+                t.find_node_by_path(Path::new("/Users/Me/Notes/new.txt")),
+                Some(7)
+            );
+            assert_eq!(
+                t.find_node_by_path(Path::new("/Users/Me/Notes/old.txt")),
+                None
+            );
+            assert!(t.upsert_file_with_mtime(Path::new("/Users/Me/Notes"), 50, 123));
+            if t.mapped.is_none() {
+                t.rebuild_child_arrays();
+            }
+            let node = t.find_node_by_path(Path::new("/Users/Me/Notes")).unwrap();
+            assert!(!t.is_dir(node));
+            assert_eq!(t.size_of(node), 50);
+            assert_eq!(t.size_of(0), 50);
+            assert_eq!(t.file_count_of(0), 1);
+            assert_eq!(
+                t.find_node_by_path(Path::new("/Users/Me/Notes/new.txt")),
+                None
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual before/after batch-index performance probe"]
+    fn batch_file_changes_timing() {
+        let mut t = mapped_batch_tree("qc_batch_timing", 20_000);
+        let start = std::time::Instant::now();
+        for i in 0..4_000 {
+            assert!(t.upsert_file_with_mtime(
+                Path::new(&format!("/Users/Me/wide/file{i}")),
+                10,
+                100
+            ));
+        }
+        for i in 4_000..8_000 {
+            let node = t
+                .find_node_by_path(Path::new(&format!("/Users/Me/wide/file{i}")))
+                .unwrap();
+            t.remove_subtree_inplace(node);
+        }
+        println!(
+            "20,000 sibling files; 4,000 updates + 4,000 removals: {:?}",
+            start.elapsed()
+        );
+        assert_eq!(t.size_of(0), 40_000);
+        assert_eq!(t.file_count_of(0), 16_000);
     }
 
     /// 路径查找旁路缓存必须与原先线性扫描语义一致：ASCII 大小写不敏感，

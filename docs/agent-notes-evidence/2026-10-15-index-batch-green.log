@@ -1,0 +1,17 @@
+   Compiling quick-cleaner v0.0.13 (/Users/yuqiang/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.70s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-99b37516beec0b75)
+
+running 9 tests
+test platform::macos::disk_tree::resolve_path_tests::batch_file_changes_timing ... ignored, manual before/after batch-index performance probe
+test platform::macos::disk_tree::resolve_path_tests::self_referencing_parent_yields_empty ... ok
+test platform::macos::disk_tree::resolve_path_tests::resolves_normal_chain ... ok
+test platform::macos::disk_tree::resolve_path_tests::over_deep_chain_yields_empty ... ok
+test platform::macos::disk_tree::resolve_path_tests::child_name_cache_matches_lookup_and_invalidates_on_mutation ... ok
+test platform::macos::disk_tree::resolve_path_tests::cached_tombstones_keep_alias_order_and_subtree_replacements_correct ... ok
+test platform::macos::disk_tree::v7_header_validation_tests::inplace_and_streaming_writers_agree ... ok
+test platform::macos::disk_tree::v7_header_validation_tests::misaligned_csr_offsets_are_rejected ... ok
+test platform::macos::disk_tree::resolve_path_tests::batch_file_changes_reuse_directory_lookups ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 822 filtered out; finished in 0.02s
+
