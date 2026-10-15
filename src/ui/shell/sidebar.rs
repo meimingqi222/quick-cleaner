@@ -105,7 +105,6 @@ pub fn render_sidebar(root: &Root, cx: &mut Context<Root>) -> impl IntoElement {
                 this.close_declutter_context_menu();
                 this.close_disk_volume_menu();
                 this.monitor.search_popover.dismiss();
-                this.active_input = None;
                 this.search.input.marked = None;
                 this.apps.input.marked = None;
                 this.monitor.input.marked = None;

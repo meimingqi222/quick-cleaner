@@ -77,7 +77,7 @@ fn main() {
     });
     application.run(move |cx: &mut App| {
         #[cfg(target_os = "macos")]
-        quick_cleaner::platform::macos::set_dock_icon();
+        quick_cleaner::platform::macos::set_dock_icon(cx);
 
         let tray = TrayHost::new(340., 430.);
         let tray_available = Arc::new(AtomicBool::new(false));

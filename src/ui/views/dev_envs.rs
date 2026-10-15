@@ -78,9 +78,6 @@ pub fn render_dev_environments_view(
             this.apps.input.sel = 0..0;
             cx.notify();
         },
-        |this, bounds| {
-            this.apps.input.bounds = Some(bounds);
-        },
         cx,
     );
 

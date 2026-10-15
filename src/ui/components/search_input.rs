@@ -1,18 +1,16 @@
 //! 通用搜索输入框组件
 //!
-//! Apps 搜索和文件搜索共用此组件，差异通过 `SearchBoxSpec` 回调桥接。
-//! IME（输入法）处理由 `EntityInputHandler`（`ui::text_input`）统一接管，
-//! 采用 GPUI 底层平台字体引擎（DirectWrite / CoreText）进行真实排版与精确命中测试。
+//! Apps 搜索和文件搜索共用此组件，差异通过 `SearchBoxSpec` 与 binding 回调桥接。
+//! 排版、命中、拖选、编辑键和 IME 转发由 `gpui_app_widgets::input` 统一实现；
+//! 这里只决定外观、清空与 Esc 的产品动作。
 
 use crate::ui::components::icons::icon_search;
-use crate::ui::components::input::{InputBinding, InputHost};
-use crate::ui::text_input::{
-    clamp_to_boundary, index_for_mouse_x, paint_search_text, SearchTextPaint,
-};
+use crate::ui::components::input::{InputBinding, InputHost, InputPaintState};
+use crate::ui::text_input::{clamp_to_boundary, search_paint_style};
 use crate::ui::theme::*;
 use gpui::{
-    div, prelude::*, px, rgb, Bounds, Context, DispatchPhase, Div, FocusHandle, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Stateful,
+    div, prelude::*, px, rgb, Context, Div, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
+    SharedString, Stateful,
 };
 
 /// 搜索框外观规格
@@ -48,13 +46,11 @@ pub struct SearchBoxSpec<'a, T: 'static> {
 /// 渲染一个搜索框。
 ///
 /// `on_clear` / `on_escape` 由调用方决定（清空可能连带收起浮层等）；退格、删除、
-/// 光标移动等纯编辑由组件统一处理，改完文本走 `binding.changed`。
-/// `on_bounds` 在 IME canvas paint 时被调用，用来存储搜索框位置给输入法候选窗口。
-pub fn search_box<T: gpui::EntityInputHandler>(
+/// 光标移动等纯编辑由共享 binding 统一处理，改完文本走 `binding.changed`。
+pub fn search_box<T: 'static>(
     spec: SearchBoxSpec<'_, T>,
     on_clear: impl Fn(&mut T, &mut Context<T>) + 'static,
     on_escape: impl Fn(&mut T, &mut Context<T>) + 'static,
-    on_bounds: impl Fn(&mut T, Bounds<Pixels>) + 'static,
     cx: &mut Context<T>,
 ) -> Stateful<Div> {
     let SearchBoxSpec {
@@ -73,52 +69,29 @@ pub fn search_box<T: gpui::EntityInputHandler>(
         binding,
     } = spec;
 
-    let sel = clamp_to_boundary(text, selection);
-
-    // 文字、光标、选区全部由同一份 ShapedLine 画出来，点击命中也用这份排版。
+    // 文字、光标、选区全部由同一份排版画出来，点击命中也用这份排版。
     // 绝不能再用「整框 bounds + 33px」去猜文本起点——padding/图标/字号一变就偏一格。
-    let paint_text = text.to_string();
-    let paint_placeholder = placeholder.clone();
-    let paint_sel = sel.clone();
-    let paint_marked = marked.clone();
-    let text_entity = cx.entity();
+    let paint = InputPaintState {
+        text: text.to_string().into(),
+        placeholder,
+        sel: clamp_to_boundary(text, selection),
+        marked,
+        cursor_height: cursor_h,
+        focused,
+        cursor_visible,
+    };
     let text_content = div()
         .relative()
         .flex_1()
         .min_w(px(0.))
         .h_full()
         .overflow_hidden()
-        .child(
-            gpui::canvas(
-                |_, _, _| (),
-                move |bounds, _, window, cx| {
-                    let hit = paint_search_text(
-                        window,
-                        cx,
-                        bounds,
-                        SearchTextPaint {
-                            text: &paint_text,
-                            placeholder: paint_placeholder.as_ref(),
-                            sel: &paint_sel,
-                            marked: paint_marked.as_ref(),
-                            font_size,
-                            cursor_h,
-                            focused,
-                            cursor_visible,
-                        },
-                    );
-                    text_entity.update(cx, |this, _| {
-                        binding.input_mut(this).text_hit = Some(hit);
-                    });
-                },
-            )
-            .size_full(),
-        );
+        .child(binding.text_element(cx.entity(), search_paint_style(), paint));
 
     div()
         .id(id)
         .track_focus(focus_handle)
-        // IME canvas 是绝对定位的，需要这个定位上下文
+        // 平台输入画布是绝对定位的，需要这个定位上下文
         .relative()
         .w(px(width))
         .h(px(height))
@@ -158,205 +131,33 @@ pub fn search_box<T: gpui::EntityInputHandler>(
             )
         })
         // 鼠标按下：聚焦 + 基于真实字体引擎精准定位光标 + 双击全选 + 开始拖拽选区
-        .on_mouse_down(MouseButton::Left, {
-            let fh = focus_handle.clone();
+        .on_mouse_down(
+            MouseButton::Left,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                fh.focus(window);
-                if event.click_count >= 2 {
-                    let input = binding.input_mut(this);
-                    input.sel = 0..input.text.len();
-                    input.text_drag = None;
-                    input.marked = None;
-                    binding.activity(this, cx);
-                    return;
-                }
-                let mouse_x: f32 = event.position.x.into();
-                let input = binding.input_mut(this);
-                let idx = index_for_mouse_x(
-                    &input.text,
-                    mouse_x,
-                    input.text_hit.as_ref(),
-                    font_size,
-                    window,
-                );
-                let input = binding.input_mut(this);
-                input.sel = idx..idx;
-                input.text_drag = Some(idx);
-                input.marked = None;
-                binding.activity(this, cx);
-            })
-        })
+                binding.mouse_down(this, event, window, cx);
+            }),
+        )
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if (binding.on_key)(this, event, window, cx) {
                 cx.stop_propagation();
                 return;
             }
-            let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
-            let shift = event.keystroke.modifiers.shift;
-            match event.keystroke.key.as_str() {
-                "backspace" | "delete" => {
-                    let input = binding.input_mut(this);
-                    let sel = input.sel.clone();
-                    input.sel = if event.keystroke.key == "backspace" {
-                        crate::ui::text_input::delete_backward(&mut input.text, sel)
-                    } else {
-                        crate::ui::text_input::delete_forward(&mut input.text, sel)
-                    };
-                    input.marked = None;
-                    binding.changed(this, cx);
-                    binding.activity(this, cx);
-                    // on_change 不保证重绘（文件搜索在索引未就绪时直接返回）。
-                    cx.notify();
-                }
-                "escape" => on_escape(this, cx),
-                // 光标移动不改文本，两个框都只要重绘
-                "left" => {
-                    let input = binding.input_mut(this);
-                    input.sel =
-                        crate::ui::text_input::move_left(&input.text, input.sel.clone(), shift);
-                    input.marked = None;
-                    cx.notify();
-                }
-                "right" => {
-                    let input = binding.input_mut(this);
-                    input.sel =
-                        crate::ui::text_input::move_right(&input.text, input.sel.clone(), shift);
-                    input.marked = None;
-                    cx.notify();
-                }
-                "home" => {
-                    let input = binding.input_mut(this);
-                    input.sel =
-                        crate::ui::text_input::move_home(&input.text, input.sel.clone(), shift);
-                    input.marked = None;
-                    cx.notify();
-                }
-                "end" => {
-                    let input = binding.input_mut(this);
-                    input.sel =
-                        crate::ui::text_input::move_end(&input.text, input.sel.clone(), shift);
-                    input.marked = None;
-                    cx.notify();
-                }
-                // Ctrl+A：全选
-                "a" if ctrl => {
-                    let input = binding.input_mut(this);
-                    input.sel = 0..input.text.len();
-                    cx.notify();
-                }
-                // Ctrl+C：复制选中文本
-                "c" if ctrl => {
-                    let input = binding.input(this);
-                    let text = input.text[input.selection()].to_string();
-                    if !text.is_empty() {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                    }
-                }
-                // Ctrl+X：剪切选中文本
-                "x" if ctrl => {
-                    let input = binding.input_mut(this);
-                    let sel = input.selection();
-                    let cut = input.text[sel.clone()].to_string();
-                    if !cut.is_empty() {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(cut));
-                        let input = binding.input_mut(this);
-                        input.text.replace_range(sel.clone(), "");
-                        input.sel = sel.start..sel.start;
-                        input.marked = None;
-                        binding.changed(this, cx);
-                    }
-                }
-                // Ctrl+V：粘贴
-                "v" if ctrl => {
-                    if let Some(item) = cx.read_from_clipboard() {
-                        if let Some(pasted) = item.text() {
-                            // 粘贴替换的是选区，不是 IME 组合中的那段
-                            let input = binding.input_mut(this);
-                            let sel = input.selection();
-                            input.text.replace_range(sel.clone(), &pasted);
-                            let caret = sel.start + pasted.len();
-                            input.sel = caret..caret;
-                            input.marked = None;
-                            binding.changed(this, cx);
-                        }
-                    }
-                }
-                _ => {}
+            if event.keystroke.key == "escape" {
+                on_escape(this, cx);
+            } else {
+                binding.edit_key(this, &event.keystroke, cx);
             }
             binding.activity(this, cx);
         }))
-        // IME canvas：把 EntityInputHandler 挂到焦点上，同时注册
-        // 窗口级鼠标拖拽/抬起事件来实现文本选区拖拽
-        .child(
-            gpui::canvas(move |bounds, _window, _cx| bounds, {
-                let handle = focus_handle.clone();
-                let entity = cx.entity();
-                let fsize = font_size;
-                move |_, bounds: Bounds<Pixels>, window, cx| {
-                    entity.update(cx, |this, _| {
-                        on_bounds(this, bounds);
-                        (binding.register)(this, binding, window);
-                    });
-                    window.handle_input(
-                        &handle,
-                        gpui::ElementInputHandler::new(bounds, entity.clone()),
-                        cx,
-                    );
-
-                    // 鼠标拖拽：更新选区
-                    let ent = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble {
-                            return;
-                        }
-                        if event.pressed_button != Some(MouseButton::Left) {
-                            return;
-                        }
-                        let mouse_x: f32 = event.position.x.into();
-                        ent.update(cx, |this, cx| {
-                            let input = binding.input(this);
-                            let Some(anchor) = input.text_drag else {
-                                return;
-                            };
-                            let cur = index_for_mouse_x(
-                                &input.text,
-                                mouse_x,
-                                input.text_hit.as_ref(),
-                                fsize,
-                                window,
-                            );
-                            binding.input_mut(this).sel = anchor..cur;
-                            binding.activity(this, cx);
-                        });
-                    });
-
-                    // 鼠标抬起：结束拖拽
-                    let ent2 = entity.clone();
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
-                        if phase != DispatchPhase::Bubble {
-                            return;
-                        }
-                        if event.button != MouseButton::Left {
-                            return;
-                        }
-                        ent2.update(cx, |this, cx| {
-                            if binding.input_mut(this).text_drag.take().is_some() {
-                                cx.notify();
-                            }
-                        });
-                    });
-                }
-            })
-            .absolute()
-            .size_full(),
-        )
+        // 平台输入画布：把 IME 处理器挂到焦点上，并在窗口级跟随拖拽选区
+        .child(binding.platform_element(cx.entity()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::components::input::TextInputState;
-    use gpui::{Render, TestAppContext, UTF16Selection, Window};
+    use gpui::{Render, TestAppContext, Window};
     use std::ops::Range;
 
     struct Field {
@@ -370,67 +171,9 @@ mod tests {
         on_change: |this, _| this.changes += 1,
         on_activity: |_, _| {},
         on_key: |_, _, _, _| false,
-        register: |_, _, _| {},
         font_size: 12.,
+        font_weight: crate::ui::text_input::SEARCH_FONT_WEIGHT,
     };
-
-    impl gpui::EntityInputHandler for Field {
-        fn text_for_range(
-            &mut self,
-            _: Range<usize>,
-            _: &mut Option<Range<usize>>,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) -> Option<String> {
-            None
-        }
-        fn selected_text_range(
-            &mut self,
-            _: bool,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) -> Option<UTF16Selection> {
-            None
-        }
-        fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-            None
-        }
-        fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {}
-        fn replace_text_in_range(
-            &mut self,
-            _: Option<Range<usize>>,
-            _: &str,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) {
-        }
-        fn replace_and_mark_text_in_range(
-            &mut self,
-            _: Option<Range<usize>>,
-            _: &str,
-            _: Option<Range<usize>>,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) {
-        }
-        fn bounds_for_range(
-            &mut self,
-            _: Range<usize>,
-            _: Bounds<Pixels>,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) -> Option<Bounds<Pixels>> {
-            None
-        }
-        fn character_index_for_point(
-            &mut self,
-            _: gpui::Point<Pixels>,
-            _: &mut Window,
-            _: &mut Context<Self>,
-        ) -> Option<usize> {
-            None
-        }
-    }
 
     impl Render for Field {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -451,7 +194,6 @@ mod tests {
                     cursor_visible: true,
                     binding: BINDING,
                 },
-                |_, _| {},
                 |_, _| {},
                 |_, _| {},
                 cx,

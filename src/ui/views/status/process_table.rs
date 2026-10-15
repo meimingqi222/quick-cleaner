@@ -80,9 +80,6 @@ fn render_process_table(
         },
         |this, cx| this.status_search_clear(cx),
         |this, cx| this.status_search_escape(cx),
-        |this, bounds| {
-            this.monitor.input.bounds = Some(bounds);
-        },
         cx,
     );
 

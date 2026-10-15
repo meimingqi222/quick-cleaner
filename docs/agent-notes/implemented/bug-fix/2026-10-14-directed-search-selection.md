@@ -15,7 +15,8 @@ start > end。`src/ui/text_input.rs` 的移动函数独立钳住端点，Shift �
 Home/End 保留 anchor；非 Shift 按规范化选区收至对应侧。
 `src/ui/components/search_input.rs` 的鼠标拖选保存 anchor..cur。
 切片和绘制仍使用 selection()/clamp_to_boundary 得到规范化范围。
-utf16_selection 同时提供规范化 UTF-16 范围和方向，由 `src/ui/shell/input.rs` 转发。
+utf16_selection 同时提供规范化 UTF-16 范围和方向，由共享输入库的平台处理器转发
+（原 `src/ui/shell/input.rs` 已并入 `gpui_app_widgets::input`）。
 编辑、组合输入和清空沿用现有范围规范化及光标重置。
 
 ## Alternatives considered

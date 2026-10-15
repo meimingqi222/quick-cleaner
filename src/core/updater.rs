@@ -1,6 +1,7 @@
 //! 应用自动更新：版本检测、下载校验、安装交接
 //!
-//! 分层约束：本模块只做与 OS 无关的解析/比较/文件校验与解压；
+//! 分层约束：本模块只做与 OS 无关的解析/比较/文件校验与解压，纯逻辑来自
+//! `gpui-app-update-core`，这里保留资产名、ureq 2 请求、sidecar 发现策略与文案；
 //! 「替换正在运行的二进制并重启」走 `platform` 门面
 //! [`crate::platform::apply_update_and_restart`]。
 //!
@@ -8,10 +9,8 @@
 //! 更新服务器**。正式通道只认 `releases/latest` 里非 draft / 非 prerelease
 //! 的那一条。
 
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub const GITHUB_OWNER: &str = "meimingqi222";
 pub const GITHUB_REPO: &str = "quick-cleaner";
@@ -142,77 +141,23 @@ impl UpdateStatus {
     }
 }
 
-/// 轻量 semver：去掉可选 `v` 前缀，比较三段数字，缺省按 0。
-pub fn is_version_newer(candidate: &str, current: &str) -> bool {
-    let next = version_parts(candidate);
-    let base = version_parts(current);
-    let (Some(next), Some(base)) = (next, base) else {
-        return normalize_version(candidate) != normalize_version(current);
-    };
-    for i in 0..next.len().max(base.len()) {
-        let l = next.get(i).copied().unwrap_or(0);
-        let r = base.get(i).copied().unwrap_or(0);
-        if l > r {
-            return true;
-        }
-        if l < r {
-            return false;
-        }
-    }
-    false
-}
-
-pub fn normalize_version(version: &str) -> String {
-    version.trim().trim_start_matches(['v', 'V']).to_string()
-}
-
-fn version_parts(version: &str) -> Option<[u64; 3]> {
-    let norm = normalize_version(version);
-    let mut it = norm.split('.');
-    let major = it.next()?.parse().ok()?;
-    let minor = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let patch = it
-        .next()
-        .map(|s| s.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("0"))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    Some([major, minor, patch])
-}
-
-/// GitHub Releases API 的 `releases/latest` 子集。
-#[derive(Debug, Deserialize)]
-pub struct GithubRelease {
-    pub tag_name: String,
-    pub html_url: String,
-    pub name: Option<String>,
-    pub body: Option<String>,
-    pub prerelease: bool,
-    pub draft: bool,
-    pub assets: Vec<GithubAsset>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct GithubAsset {
-    pub name: String,
-    pub browser_download_url: String,
-    pub size: u64,
-}
+pub use gpui_app_update_core::{
+    is_skipped, is_version_newer, looks_like_dev_build, normalize_version, parse_checksum_sidecar,
+    select_asset_by_candidates, sha256_file, GithubAsset, GithubRelease,
+};
 
 /// 从 latest release 里选出本平台发行包。
 ///
 /// 名称与 `.github/workflows/release.yml` 的 artifact 命名钉死；
 /// 改 CI 产物名必须同步改这里和单测。
 pub fn select_asset(release: &GithubRelease, target: UpdateTarget) -> Option<&GithubAsset> {
-    if release.draft || release.prerelease {
-        return None;
-    }
     let wanted = match target {
         UpdateTarget::WindowsX64 => "quick-cleaner-windows-x86_64.zip",
         UpdateTarget::MacosUniversal => "quick-cleaner-macos-universal.zip",
         UpdateTarget::MacosAarch64 => "quick-cleaner-macos-aarch64.zip",
         UpdateTarget::MacosX86_64 => "quick-cleaner-macos-x86_64.zip",
     };
-    release.assets.iter().find(|a| a.name == wanted)
+    select_asset_by_candidates(release, &[wanted])
 }
 
 /// 当前构建应订阅的发行包目标。
@@ -264,173 +209,52 @@ pub fn candidate_asset_names(target: UpdateTarget) -> &'static [&'static str] {
     }
 }
 
-pub fn select_asset_by_candidates<'a>(
-    release: &'a GithubRelease,
-    candidates: &[&str],
-) -> Option<&'a GithubAsset> {
-    if release.draft || release.prerelease {
-        return None;
-    }
-    for name in candidates {
-        if let Some(asset) = release.assets.iter().find(|a| a.name == *name) {
-            return Some(asset);
-        }
-    }
-    None
-}
-
-/// 解析 `<hex>  <filename>` 形式的 sidecar，返回十六进制摘要（小写）。
+/// 校验下载包与 sidecar；消息沿用原有英文文案。
 ///
-/// 容忍 UTF-8 BOM：Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写 BOM，
-/// 而长度/十六进制校验会把它算进第一行。
-pub fn parse_checksum_sidecar(text: &str) -> Option<String> {
-    let text = text.trim_start_matches('\u{feff}');
-    let line = text.lines().find(|l| !l.trim().is_empty())?;
-    let hex = line.split_whitespace().next()?;
-    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(hex.to_ascii_lowercase())
+/// SHA-256 sidecar 与安装包来自同一发布源，只能发现损坏或截断，不是发布者认证。
+pub fn verify_checksum(zip_path: &Path, sidecar: &str) -> Result<(), String> {
+    gpui_app_update_core::verify_sha256_sidecar(zip_path, sidecar).map_err(|e| e.to_string())
 }
 
-/// 计算文件 SHA-256（小写 hex）。
-pub fn sha256_file(path: &Path) -> std::io::Result<String> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex_encode(&hasher.finalize()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// 解压 zip 到 `dest_dir`，拒绝 zip-slip（任一条目逃出目标根）。
+/// 在 `cache_dir` 下新建独占 staging 目录并解压，返回「主载荷」路径：
+/// - Windows：`quick-cleaner.exe`（根目录或多一层目录）
+/// - macOS：`QuickCleaner.app` bundle
 ///
-/// 返回解压出的「主载荷」路径：
-/// - Windows：找到 `quick-cleaner.exe`
-/// - macOS：找到 `QuickCleaner.app` 目录（zip 内是 bundle 树）
-pub fn extract_update_zip(zip_path: &Path, dest_dir: &Path) -> Result<PathBuf, String> {
-    if dest_dir.exists() {
-        let _ = std::fs::remove_dir_all(dest_dir);
+/// 整个归档先校验（逃逸、绝对路径、重复项、符号链接、数量和体积上限）再写入；
+/// 只清理本产品缓存里旧的 staging 与旧版固定的 `extracted` 目录。
+pub fn extract_update_zip(zip_path: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
+    let _ = std::fs::remove_dir_all(cache_dir.join("extracted"));
+    let staging = gpui_app_update_core::create_staging_dir(cache_dir)
+        .map_err(|e| format!("create extract dir: {e}"))?;
+    gpui_app_update_core::extract_zip(
+        zip_path,
+        &staging,
+        gpui_app_update_core::ExtractLimits::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    match payload_spec() {
+        Some(spec) => gpui_app_update_core::find_payload(&staging, spec).map_err(|e| e.to_string()),
+        None => Err("unsupported platform for app update".into()),
     }
-    std::fs::create_dir_all(dest_dir).map_err(|e| format!("create extract dir: {e}"))?;
-
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {e}"))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {e}"))?;
-
-    let dest_real = dest_dir
-        .canonicalize()
-        .unwrap_or_else(|_| dest_dir.to_path_buf());
-
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("zip entry: {e}"))?;
-        let Some(rel) = entry.enclosed_name() else {
-            return Err(format!("zip entry escapes destination: {:?}", entry.name()));
-        };
-        // enclosed_name 已做规范化；再拦一层绝对路径/盘符。
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
-        {
-            return Err(format!("zip entry has absolute path: {:?}", entry.name()));
-        }
-        let out = dest_dir.join(&rel);
-        // 最终路径仍须落在 dest 内（符号链接式怪名防护）。
-        if let Ok(out_real) = out.canonicalize() {
-            if !out_real.starts_with(&dest_real) {
-                return Err(format!("zip entry escapes destination: {:?}", entry.name()));
-            }
-        }
-
-        if entry.is_dir() || entry.name().ends_with('/') {
-            std::fs::create_dir_all(&out).map_err(|e| format!("mkdir {}: {e}", out.display()))?;
-            continue;
-        }
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
-        }
-        let mut outfile =
-            std::fs::File::create(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
-        std::io::copy(&mut entry, &mut outfile)
-            .map_err(|e| format!("write {}: {e}", out.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(mode) = entry.unix_mode() {
-                let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode));
-            }
-        }
-    }
-
-    find_payload(dest_dir)
 }
 
-fn find_payload(root: &Path) -> Result<PathBuf, String> {
+fn payload_spec() -> Option<gpui_app_update_core::PayloadSpec<'static>> {
     #[cfg(windows)]
     {
-        let exe = root.join("quick-cleaner.exe");
-        if exe.is_file() {
-            return Ok(exe);
-        }
-        // 有的 zip 可能多一层目录
-        if let Ok(rd) = std::fs::read_dir(root) {
-            for ent in rd.flatten() {
-                let p = ent.path().join("quick-cleaner.exe");
-                if p.is_file() {
-                    return Ok(p);
-                }
-            }
-        }
-        Err("extracted zip does not contain quick-cleaner.exe".into())
+        Some(gpui_app_update_core::PayloadSpec::WindowsExe(
+            "quick-cleaner.exe",
+        ))
     }
     #[cfg(target_os = "macos")]
     {
-        let app = root.join("QuickCleaner.app");
-        if app.is_dir() {
-            return Ok(app);
-        }
-        if let Ok(rd) = std::fs::read_dir(root) {
-            for ent in rd.flatten() {
-                let p = ent.path();
-                if p.is_dir()
-                    && p.extension().and_then(|e| e.to_str()) == Some("app")
-                    && p.file_name().and_then(|n| n.to_str()) == Some("QuickCleaner.app")
-                {
-                    return Ok(p);
-                }
-            }
-        }
-        Err("extracted zip does not contain QuickCleaner.app".into())
+        Some(gpui_app_update_core::PayloadSpec::MacApp(
+            "QuickCleaner.app",
+        ))
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = root;
-        Err("unsupported platform for app update".into())
+        None
     }
-}
-
-/// 是否运行在 cargo 构建目录里（开发态，不检查更新）。
-pub fn looks_like_dev_build(exe: &Path) -> bool {
-    let s = exe.to_string_lossy().to_ascii_lowercase();
-    s.contains("target\\debug")
-        || s.contains("target/debug")
-        || s.contains("target\\release")
-        || s.contains("target/release")
-}
-
-/// 用户跳过了这个版本则不提示。
-pub fn is_skipped(latest: &str, skipped: Option<&str>) -> bool {
-    skipped.is_some_and(|s| normalize_version(s) == normalize_version(latest))
 }
 
 /// 阻塞拉取 latest release JSON。
@@ -493,32 +317,33 @@ pub fn fetch_text(url: &str, timeout_ms: u64) -> Result<String, String> {
 }
 
 /// 完整的「检查 → 有新版本则产出 Available」纯逻辑；网络由调用方注入。
+///
+/// sidecar 按「资产 URL + `.sha256`」拼接，检查阶段不要求它出现在资产列表里。
 pub fn evaluate_release(
     current_version: &str,
     release: &GithubRelease,
     candidates: &[&str],
 ) -> Result<UpdateStatus, String> {
-    if release.draft || release.prerelease {
-        return Ok(UpdateStatus::NotAvailable {
+    let candidate = gpui_app_update_core::evaluate_release(
+        current_version,
+        release,
+        candidates,
+        gpui_app_update_core::ChecksumSource::UrlSuffix,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(match candidate {
+        None => UpdateStatus::NotAvailable {
             current_version: current_version.to_string(),
-        });
-    }
-    let latest = normalize_version(&release.tag_name);
-    if !is_version_newer(&latest, current_version) {
-        return Ok(UpdateStatus::NotAvailable {
+        },
+        Some(c) => UpdateStatus::Available {
             current_version: current_version.to_string(),
-        });
-    }
-    let asset = select_asset_by_candidates(release, candidates)
-        .ok_or_else(|| format!("no matching asset for this platform among {candidates:?}"))?;
-    Ok(UpdateStatus::Available {
-        current_version: current_version.to_string(),
-        latest_version: latest,
-        release_url: release.html_url.clone(),
-        notes: release.body.clone().unwrap_or_default(),
-        asset_name: asset.name.clone(),
-        asset_url: asset.browser_download_url.clone(),
-        checksum_url: format!("{}.sha256", asset.browser_download_url),
+            latest_version: c.latest_version,
+            release_url: c.release_url,
+            notes: c.notes,
+            asset_name: c.asset_name,
+            asset_url: c.asset_url,
+            checksum_url: c.checksum_url,
+        },
     })
 }
 
@@ -729,8 +554,6 @@ mod tests {
     #[test]
     fn extract_rejects_zip_slip() {
         let dir = crate::core::testing::fixture("qc_updater_zip_slip");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         let zip_path = dir.join("evil.zip");
         {
             use std::io::Write;
@@ -741,40 +564,67 @@ mod tests {
             zip.write_all(b"nope").unwrap();
             zip.finish().unwrap();
         }
-        let dest = dir.join("out");
-        let err = extract_update_zip(&zip_path, &dest).unwrap_err();
+        let cache = dir.join("cache");
+        let err = extract_update_zip(&zip_path, &cache).unwrap_err();
         assert!(err.contains("escape") || err.contains("absolute"), "{err}");
+        assert!(!dir.join("escape.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 发行包布局与 `.github/workflows/release.yml` 一致：Windows 根目录 exe + 说明文件，
+    /// macOS 为 `zip -r -y` 打出的 `QuickCleaner.app` bundle。
     #[test]
     fn extract_roundtrip_and_find_exe_or_app() {
         let dir = crate::core::testing::fixture("qc_updater_extract_ok");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         let zip_path = dir.join("pack.zip");
         {
             use std::io::Write;
             let file = std::fs::File::create(&zip_path).unwrap();
             let mut zip = zip::ZipWriter::new(file);
             let opts = zip::write::SimpleFileOptions::default();
-            #[cfg(windows)]
-            let payload_name = "quick-cleaner.exe";
-            #[cfg(target_os = "macos")]
-            let payload_name = "QuickCleaner.app/Contents/MacOS/quick-cleaner";
-            #[cfg(not(any(windows, target_os = "macos")))]
-            let payload_name = "quick-cleaner.exe";
-            zip.start_file(payload_name, opts).unwrap();
-            zip.write_all(b"binary").unwrap();
+            for name in [
+                "quick-cleaner.exe",
+                "README.md",
+                "QuickCleaner.app/Contents/Info.plist",
+                "QuickCleaner.app/Contents/MacOS/quick-cleaner",
+            ] {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(b"binary").unwrap();
+            }
             zip.finish().unwrap();
         }
-        let dest = dir.join("extracted");
-        let payload = extract_update_zip(&zip_path, &dest).unwrap();
-        assert!(payload.exists(), "payload at {}", payload.display());
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(cache.join("extracted")).unwrap();
+        let result = extract_update_zip(&zip_path, &cache);
         #[cfg(windows)]
-        assert!(payload.ends_with("quick-cleaner.exe"));
+        assert!(result.unwrap().ends_with("quick-cleaner.exe"));
         #[cfg(target_os = "macos")]
-        assert!(payload.ends_with("QuickCleaner.app"));
+        assert!(result.unwrap().ends_with("QuickCleaner.app"));
+        #[cfg(not(any(windows, target_os = "macos")))]
+        assert_eq!(result.unwrap_err(), "unsupported platform for app update");
+        assert!(
+            !cache.join("extracted").exists(),
+            "legacy fixed dir is retired"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checksum_verification_keeps_messages() {
+        let dir = crate::core::testing::fixture("qc_updater_checksum");
+        let file = dir.join("a.zip");
+        std::fs::write(&file, b"abc").unwrap();
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify_checksum(&file, &format!("{abc}  a.zip\n")).unwrap();
+        assert_eq!(
+            verify_checksum(&file, "junk").unwrap_err(),
+            "checksum sidecar is malformed"
+        );
+        let zero = "0".repeat(64);
+        assert_eq!(
+            verify_checksum(&file, &zero).unwrap_err(),
+            format!("checksum mismatch: expected {zero}, got {abc}")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

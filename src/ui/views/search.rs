@@ -351,9 +351,6 @@ fn render_search_box(root: &Root, window: &mut Window, cx: &mut Context<Root>) -
         },
         |this, cx| this.file_search_clear(cx),
         |this, cx| this.file_search_clear(cx),
-        |this, bounds| {
-            this.search.input.bounds = Some(bounds);
-        },
         cx,
     )
 }

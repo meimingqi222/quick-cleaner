@@ -275,9 +275,6 @@ pub fn render_apps_view(root: &Root, window: &mut Window, cx: &mut Context<Root>
             this.search_clear();
             cx.notify();
         },
-        |this, bounds| {
-            this.apps.input.bounds = Some(bounds);
-        },
         cx,
     );
 

@@ -5,8 +5,8 @@ edition = "2021"
 default-run = "quick-cleaner"
 
 [dependencies]
-gpui-app-host = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
-gpui-app-widgets = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
+gpui-app-host = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "ebb73e0e98701f405ef0bb85e95008a052013031" }
+gpui-app-widgets = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "ebb73e0e98701f405ef0bb85e95008a052013031" }
 # `default-features = false` 关掉 Linux 的 wayland/x11 和 Windows 的 manifest，
 # 但必须保留 `font-kit`——否则 macOS 上会用 NoopTextSystem，文字全部不可见
 # （光栅化返回空像素，布局占位但渲染透明）。
@@ -32,6 +32,8 @@ ureq = { version = "2.12", features = ["json"] }
 # 解压发行 zip；sha2 做 sidecar 校验
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+gpui-app-update-core = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "ebb73e0e98701f405ef0bb85e95008a052013031" }
+gpui-app-update-installer = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "ebb73e0e98701f405ef0bb85e95008a052013031" }
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 展开里带着 `#[cfg(feature = "cargo-clippy")]`——那是
@@ -138,7 +140,7 @@ required-features = ["authprobe"]
 # 可复现）。../gpui-app-kit/vendor/gpui 是 0.2.2 原样拷贝，只打上游同款补丁（先
 # drop(lock) 再 resignKeyWindow）。升级到官方带修复的版本后删掉本节。
 [patch.crates-io]
-gpui = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
+gpui = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "ebb73e0e98701f405ef0bb85e95008a052013031" }
 
 [dev-dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["test-support"] }

@@ -1,5 +1,6 @@
 //! Business input bindings; adding a field does not add a target enum.
 use crate::ui::components::input::InputBinding;
+use crate::ui::text_input::SEARCH_FONT_WEIGHT;
 use crate::ui::Root;
 use gpui::{Context, KeyDownEvent, Window};
 fn key(this: &mut Root, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Root>) -> bool {
@@ -28,7 +29,7 @@ pub const APPS_INPUT: InputBinding<Root> = InputBinding {
     on_change: |_, cx| cx.notify(),
     on_activity: Root::poke_cursor_blink,
     on_key: key,
-    register: Root::register_input,
+    font_weight: SEARCH_FONT_WEIGHT,
     font_size: 12.,
 };
 pub const FILE_INPUT: InputBinding<Root> = InputBinding {
@@ -37,7 +38,7 @@ pub const FILE_INPUT: InputBinding<Root> = InputBinding {
     on_change: Root::search_input_changed,
     on_activity: Root::poke_cursor_blink,
     on_key: key,
-    register: Root::register_input,
+    font_weight: SEARCH_FONT_WEIGHT,
     font_size: 13.,
 };
 pub const STATUS_INPUT: InputBinding<Root> = InputBinding {
@@ -50,7 +51,7 @@ pub const STATUS_INPUT: InputBinding<Root> = InputBinding {
     },
     on_activity: Root::poke_cursor_blink,
     on_key: status_key,
-    register: Root::register_input,
+    font_weight: SEARCH_FONT_WEIGHT,
     font_size: 12.,
 };
 impl Root {

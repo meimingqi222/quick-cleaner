@@ -52,14 +52,17 @@ InputHost) can be extracted first.
 
 The Entity spike was not accepted: native Windows and macOS IME evidence is missing.
 Production therefore uses the planned InputHost fallback. Adapters bind independent
-text state, edit callbacks and geometry. The shell only forwards platform input to
-the registered binding whose focus handle is focused. No focused binding means no
-edit. Composition updates redraw without filtering; committing calls the adapter
-once. Programmatic assignment does not dispatch an edit event.
+text state, edit callbacks, font size/weight and colors. Each search box paints the
+shared `gpui-app-widgets` input elements, which register a platform handler for that
+binding; GPUI only accepts it while the field is focused and the handler re-checks
+focus, so an unfocused or removed field receives no edit. Composition updates redraw
+without filtering; committing calls the adapter once. Programmatic assignment does
+not dispatch an edit event.
 
-InputTarget and the former adapter renderer were removed. There is no alternate
-production Entity implementation. The low-level Unicode layout/edit helpers remain
-in `text_input.rs`; platform routing is in `shell/input.rs`.
+InputTarget, the former adapter renderer and the Root-level routing (`shell/input.rs`)
+were removed. Shaping, hit testing, drag selection, edit keys and IME forwarding live
+in `gpui_app_widgets::input`; `text_input.rs` only keeps the search font weight and
+paint colors and re-exports the shared Unicode helpers.
 
 ## Overlays and scrolling
 

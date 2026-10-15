@@ -1,6 +1,6 @@
-//! macOS 自替换：spawn shell helper，等退出后替换 `.app` 再 `open`。
+//! macOS 自替换：预检后交给共享安装器的 shell helper，等退出后替换 `.app` 再 `open`。
 
-use std::io::Write;
+use gpui_app_update_installer::enclosing_app_bundle;
 use std::path::{Path, PathBuf};
 
 pub fn is_packaged_install() -> bool {
@@ -12,15 +12,6 @@ pub fn is_packaged_install() -> bool {
         }
         Err(_) => false,
     }
-}
-
-fn enclosing_app_bundle(exe: &Path) -> Option<PathBuf> {
-    for ancestor in exe.ancestors() {
-        if ancestor.extension().and_then(|e| e.to_str()) == Some("app") {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-    None
 }
 
 pub fn update_cache_dir() -> Option<PathBuf> {
@@ -39,19 +30,16 @@ pub fn cleanup_previous_update_leftovers() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let Some(bundle) = enclosing_app_bundle(&exe) else {
-        return;
-    };
-    let old = bundle.with_extension("app.old");
-    if old.exists() {
-        let _ = std::fs::remove_dir_all(&old);
+    if let Some(bundle) = enclosing_app_bundle(&exe) {
+        gpui_app_update_installer::remove_bundle_backup(&bundle);
     }
 }
 
 /// `payload` 为解压出的 `QuickCleaner.app`。
 ///
-/// rename-first + 失败回滚：copy 失败时把 `.old` 挪回原名再 open，保证用户
-/// 至少能启动旧版。
+/// 预检留在本产品；共享安装器的 helper rename-first + 失败回滚：copy 失败时把
+/// `.old` 挪回原名再 open，保证用户至少能启动旧版。helper 以 `setsid` +
+/// `trap '' HUP` 脱离父进程会话（PITFALLS P9）。
 pub fn apply_update_and_restart(payload: &Path) -> Result<(), String> {
     if !payload.is_dir() {
         return Err(format!("update payload missing: {}", payload.display()));
@@ -78,75 +66,6 @@ pub fn apply_update_and_restart(payload: &Path) -> Result<(), String> {
 
     let cache = update_cache_dir().ok_or_else(|| "user data dir unavailable".to_string())?;
     std::fs::create_dir_all(&cache).map_err(|e| format!("create cache: {e}"))?;
-    let script_path = cache.join("apply-update.sh");
-    let log_path = cache.join("apply-update.log");
-
-    let shell_quote = |p: &Path| -> String {
-        let s = p.to_string_lossy().replace('\'', "'\\''");
-        format!("'{s}'")
-    };
-    let parent_pid = std::process::id();
-    let script = format!(
-        r#"#!/bin/bash
-set -euo pipefail
-trap '' HUP
-CUR={cur}
-NEW={new}
-OLD="${{CUR}}.old"
-LOG={log}
-log() {{ echo "$(date -Iseconds) $*" >> "$LOG"; }}
-log "waiting for pid {pid}"
-while kill -0 {pid} 2>/dev/null; do sleep 0.2; done
-sleep 0.3
-rm -rf "$OLD"
-mv "$CUR" "$OLD"
-if cp -R "$NEW" "$CUR"; then
-  log "replaced app bundle"
-  open "$CUR"
-  log "relaunched"
-else
-  log "COPY FAILED, restoring previous bundle"
-  rm -rf "$CUR"
-  mv "$OLD" "$CUR"
-  open "$CUR"
-  log "restored and relaunched previous bundle"
-  exit 1
-fi
-"#,
-        cur = shell_quote(&current_bundle),
-        new = shell_quote(payload),
-        log = shell_quote(&log_path),
-        pid = parent_pid,
-    );
-    let mut f = std::fs::File::create(&script_path).map_err(|e| format!("write helper: {e}"))?;
-    f.write_all(script.as_bytes())
-        .map_err(|e| format!("write helper: {e}"))?;
-    drop(f);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
-    }
-
-    let mut cmd = std::process::Command::new("/bin/bash");
-    cmd.arg(&script_path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: 子进程里只 setsid，让 helper 离开父进程会话，避免 quit 时
-        // SIGHUP 把替换脚本带走（mv 之后、cp 之前死掉会只剩 .app.old）。
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    cmd.spawn()
-        .map_err(|e| format!("spawn update helper: {e}"))?;
-    Ok(())
+    gpui_app_update_installer::spawn_macos_bundle_replacement(&current_bundle, payload, &cache)
+        .map_err(|e| e.to_string())
 }

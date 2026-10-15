@@ -261,6 +261,8 @@ Note: `2026-10-05-updater-arch-fallback-and-detach.md`
   - macOS helper：`setsid` + `trap '' HUP` + stdio 接到 `/dev/null`。
   - Windows helper：`CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB`，
     job 不允许 breakaway 时去掉该标志再 spawn。
+  - 两个 helper 的脚本与 spawn 现由 `../gpui-app-kit/crates/update-installer`
+    单点维护，`src/platform/*/updater.rs` 只做预检和缓存路径；改 kit 时同样受本条约束。
 - **改更新安装交接时**：
   - 禁止把「另一个 CPU 的 zip」放进候选列表当 fallback。
   - 禁止再改回「裸 spawn bash/powershell、不脱离父进程」。

@@ -21,12 +21,9 @@ runs:
         import os, re, tomllib
         from pathlib import Path
         manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
-        specs = [manifest["dependencies"][name] for name in ("gpui-app-host", "gpui-app-widgets")]
-        specs.append(manifest["patch"]["crates-io"]["gpui"])
-        url = "https://github.com/meimingqi222/gpui-app-kit.git"
-        rev = specs[0].get("rev", "")
-        if not re.fullmatch(r"[0-9a-f]{40}", rev) or any(spec.get("git") != url or spec.get("rev") != rev for spec in specs):
-            raise SystemExit("Both kit crates and the root GPUI patch must use one full Git commit")
+        rev = manifest["dependencies"]["gpui-app-host"].get("rev", "")
+        if not re.fullmatch(r"[0-9a-f]{40}", rev):
+            raise SystemExit("gpui-app-host must use a full Git commit")
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
             out.write(f"ref={rev}\n")
         PYTHON
@@ -43,6 +40,7 @@ runs:
         KIT_TOKEN: ${{ inputs.token }}
       run: |
         mv .gpui-app-kit ../gpui-app-kit
+        python ../gpui-app-kit/tools/check_revision.py Cargo.toml
         encoded=$(printf 'x-access-token:%s' "$KIT_TOKEN" | base64 | tr -d '\r\n')
         echo "::add-mask::$encoded"
         header="AUTHORIZATION: basic $encoded"

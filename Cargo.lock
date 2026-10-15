@@ -2402,7 +2402,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56#3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56"
+source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=ebb73e0e98701f405ef0bb85e95008a052013031#ebb73e0e98701f405ef0bb85e95008a052013031"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -2498,7 +2498,7 @@ dependencies = [
 [[package]]
 name = "gpui-app-host"
 version = "0.1.0"
-source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56#3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56"
+source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=ebb73e0e98701f405ef0bb85e95008a052013031#ebb73e0e98701f405ef0bb85e95008a052013031"
 dependencies = [
  "cocoa 0.26.0",
  "gpui",
@@ -2509,9 +2509,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-app-update-core"
+version = "0.1.0"
+source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=ebb73e0e98701f405ef0bb85e95008a052013031#ebb73e0e98701f405ef0bb85e95008a052013031"
+dependencies = [
+ "serde",
+ "sha2 0.10.9",
+ "zip",
+]
+
+[[package]]
+name = "gpui-app-update-installer"
+version = "0.1.0"
+source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=ebb73e0e98701f405ef0bb85e95008a052013031#ebb73e0e98701f405ef0bb85e95008a052013031"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "gpui-app-widgets"
 version = "0.1.0"
-source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56#3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56"
+source = "git+https://github.com/meimingqi222/gpui-app-kit.git?rev=ebb73e0e98701f405ef0bb85e95008a052013031#ebb73e0e98701f405ef0bb85e95008a052013031"
 dependencies = [
  "gpui",
 ]
@@ -4572,6 +4590,8 @@ dependencies = [
  "fsevent-sys",
  "gpui",
  "gpui-app-host",
+ "gpui-app-update-core",
+ "gpui-app-update-installer",
  "gpui-app-widgets",
  "image",
  "libc",

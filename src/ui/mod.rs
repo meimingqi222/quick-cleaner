@@ -103,7 +103,6 @@ pub struct Root {
     pub update: crate::ui::state::UpdateState,
     /// 当前打开的浮层及顺序，每帧由 `sync_overlays` 从各浮层状态推导。
     pub overlays: OverlayStack,
-    pub active_input: Option<crate::ui::components::input::InputBinding<Root>>,
     /// 根节点自己的焦点句柄：按键只沿焦点链派发，窗口无焦点时 Esc 到不了根 div，
     /// 所以有浮层打开且无焦点时把焦点放在这里。永远不抢已有焦点。
     pub root_focus: gpui::FocusHandle,
@@ -264,7 +263,6 @@ impl Root {
 
             update: crate::ui::state::UpdateState::default(),
             overlays: OverlayStack::default(),
-            active_input: None,
             root_focus: cx.focus_handle(),
 
             #[cfg(not(windows))]
