@@ -1,0 +1,8 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.63s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+test platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 845 filtered out; finished in 0.00s

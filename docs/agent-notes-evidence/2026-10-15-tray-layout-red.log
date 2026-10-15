@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+warning: unused import: `StatefulInteractiveElement`
+  --> src/ui/views/tray_popover.rs:17:28
+   |
+17 |     ParentElement, Render, StatefulInteractiveElement, Styled, Window,
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `quick-cleaner` (lib test) generated 1 warning (run `cargo fix --lib -p quick-cleaner --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.95s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+
+thread 'ui::views::tray_popover::tests::tray_footer_stays_inside_small_window' (10396469) panicked at src/ui/views/tray_popover.rs:719:9:
+footer extends past viewport: Bounds { origin: Point { x: 1px, y: 443.5px }, size: Size { 338px × 124.5px } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ui::views::tray_popover::tests::tray_footer_stays_inside_small_window ... FAILED
+
+failures:
+
+failures:
+    ui::views::tray_popover::tests::tray_footer_stays_inside_small_window
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 838 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

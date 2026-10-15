@@ -650,6 +650,172 @@ pub fn tr_disk_crumbs_collapse(lang: Language) -> &'static str {
     }
 }
 
+// ---- 托盘 Popover 面板 ----
+
+pub fn tr_tray_title(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "QuickCleaner 空间透镜",
+        Language::En => "QuickCleaner Space Lens",
+    }
+}
+
+pub fn tr_tray_disk_usage(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "磁盘空间占用",
+        Language::En => "Disk Space Usage",
+    }
+}
+
+pub fn tr_tray_hardware_status(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "硬件核心状态",
+        Language::En => "Hardware Status",
+    }
+}
+
+pub fn tr_tray_user_accounts(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "本地账户与目录",
+        Language::En => "Local Accounts",
+    }
+}
+
+pub fn tr_tray_current_user_tag(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "当前",
+        Language::En => "Current",
+    }
+}
+
+pub fn tr_tray_purge_memory(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "释放内存",
+        Language::En => "Purge RAM",
+    }
+}
+
+pub fn tr_tray_memory_purged(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "已释放",
+        Language::En => "Purged",
+    }
+}
+
+pub fn tr_tray_quick_scan(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "扫描垃圾",
+        Language::En => "Scan Junk",
+    }
+}
+
+pub fn tr_tray_open_main(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "打开主界面",
+        Language::En => "Open QuickCleaner",
+    }
+}
+
+pub fn tr_tray_quit(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "退出程序",
+        Language::En => "Quit QuickCleaner",
+    }
+}
+
+pub fn tr_tray_disk_free(lang: Language, free: &str) -> String {
+    match lang {
+        Language::Zh => format!("剩余 {free}"),
+        Language::En => format!("Free {free}"),
+    }
+}
+
+pub fn tr_tray_mem_info(lang: Language, used: &str, total: &str, pct: u32) -> String {
+    match lang {
+        Language::Zh => format!("内存: {used} / {total} ({pct}%)"),
+        Language::En => format!("RAM: {used} / {total} ({pct}%)"),
+    }
+}
+
+pub fn tr_tray_cpu_info(lang: Language, cpu_pct: u32, temp: Option<f32>) -> String {
+    match (lang, temp) {
+        (Language::Zh, Some(t)) => format!("CPU: {cpu_pct}% | 温度: {t:.0}°C"),
+        (Language::Zh, None) => format!("CPU: {cpu_pct}%"),
+        (Language::En, Some(t)) => format!("CPU: {cpu_pct}% | Temp: {t:.0}°C"),
+        (Language::En, None) => format!("CPU: {cpu_pct}%"),
+    }
+}
+
+pub fn tr_desktop_hide(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "隐藏 QuickCleaner",
+        Language::En => "Hide QuickCleaner",
+    }
+}
+
+pub fn tr_desktop_hide_others(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "隐藏其他应用",
+        Language::En => "Hide Others",
+    }
+}
+
+pub fn tr_desktop_window(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "窗口",
+        Language::En => "Window",
+    }
+}
+
+pub fn tr_desktop_close(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "关闭窗口",
+        Language::En => "Close Window",
+    }
+}
+
+pub fn tr_tray_loading(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在读取…",
+        Language::En => "Loading…",
+    }
+}
+pub fn tr_tray_refresh_interval(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "CPU / 内存每 2 秒更新 · 磁盘 / 温度每 10 秒更新",
+        Language::En => "CPU / RAM: 2s · Disk / temperature: 10s",
+    }
+}
+pub fn tr_tray_memory_label(lang: Language, pct: u32) -> String {
+    match lang {
+        Language::Zh => format!("内存 {pct}%"),
+        Language::En => format!("RAM {pct}%"),
+    }
+}
+pub fn tr_tray_swap(lang: Language, used: &str) -> String {
+    match lang {
+        Language::Zh => format!("交换空间 {used}"),
+        Language::En => format!("Swap {used}"),
+    }
+}
+pub fn tr_tray_unavailable(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "温度不可用",
+        Language::En => "Temperature unavailable",
+    }
+}
+pub fn tr_tray_purging(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "正在释放…",
+        Language::En => "Releasing…",
+    }
+}
+pub fn tr_tray_purge_failed(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "释放失败，重试",
+        Language::En => "Failed, retry",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,6 +865,19 @@ mod tests {
             tr_residual_launchd_evidence(en, "com.example.agent"),
             tr_status_uptime(en, 1, 2, 3),
             tr_list_separator(en).to_string(),
+            tr_tray_title(en).to_string(),
+            tr_tray_disk_usage(en).to_string(),
+            tr_tray_hardware_status(en).to_string(),
+            tr_tray_user_accounts(en).to_string(),
+            tr_tray_current_user_tag(en).to_string(),
+            tr_tray_purge_memory(en).to_string(),
+            tr_tray_memory_purged(en).to_string(),
+            tr_tray_quick_scan(en).to_string(),
+            tr_tray_open_main(en).to_string(),
+            tr_tray_quit(en).to_string(),
+            tr_tray_disk_free(en, "100 GB"),
+            tr_tray_mem_info(en, "16 GB", "32 GB", 50),
+            tr_tray_cpu_info(en, 15, Some(45.0)),
         ];
         for text in &samples {
             assert!(!has_cjk(text), "{text}");

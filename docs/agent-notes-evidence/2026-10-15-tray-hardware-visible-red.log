@@ -1,0 +1,22 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.93s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+test ui::views::tray_popover::tests::tray_hardware_stays_visible_with_many_volumes ... FAILED
+
+failures:
+
+---- ui::views::tray_popover::tests::tray_hardware_stays_visible_with_many_volumes stdout ----
+
+thread 'ui::views::tray_popover::tests::tray_hardware_stays_visible_with_many_volumes' (10879301) panicked at src/ui/views/tray_popover.rs:901:17:
+tray-hardware is hidden behind disk overflow: Bounds { origin: Point { x: 13px, y: 463px }, size: Size { 314px × 123px } }; footer: Bounds { origin: Point { x: 1px, y: 304.5px }, size: Size { 338px × 124.5px } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::views::tray_popover::tests::tray_hardware_stays_visible_with_many_volumes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 846 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

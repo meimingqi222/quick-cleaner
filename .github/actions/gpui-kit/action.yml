@@ -1,0 +1,56 @@
+name: Checkout shared GPUI kit
+description: Resolve the pinned manifest revision, stage guards, and authenticate Cargo Git fetching.
+inputs:
+  token:
+    required: true
+    description: Dedicated read-only token with access to the private library
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Resolve shared dependency revision
+      id: kit
+      shell: bash
+      env:
+        KIT_TOKEN: ${{ inputs.token }}
+      run: |
+        test -n "$KIT_TOKEN" || { echo 'Configure GPUI_APP_KIT_TOKEN with read access to gpui-app-kit'; exit 1; }
+        python - <<'PYTHON'
+        import os, re, tomllib
+        from pathlib import Path
+        manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+        specs = [manifest["dependencies"][name] for name in ("gpui-app-host", "gpui-app-widgets")]
+        specs.append(manifest["patch"]["crates-io"]["gpui"])
+        url = "https://github.com/meimingqi222/gpui-app-kit.git"
+        rev = specs[0].get("rev", "")
+        if not re.fullmatch(r"[0-9a-f]{40}", rev) or any(spec.get("git") != url or spec.get("rev") != rev for spec in specs):
+            raise SystemExit("Both kit crates and the root GPUI patch must use one full Git commit")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+            out.write(f"ref={rev}\n")
+        PYTHON
+    - uses: actions/checkout@v4
+      with:
+        repository: meimingqi222/gpui-app-kit
+        ref: ${{ steps.kit.outputs.ref }}
+        token: ${{ inputs.token }}
+        persist-credentials: false
+        path: .gpui-app-kit
+    - name: Stage guards and configure scoped Cargo authentication
+      shell: bash
+      env:
+        KIT_TOKEN: ${{ inputs.token }}
+      run: |
+        mv .gpui-app-kit ../gpui-app-kit
+        encoded=$(printf 'x-access-token:%s' "$KIT_TOKEN" | base64 | tr -d '\r\n')
+        echo "::add-mask::$encoded"
+        header="AUTHORIZATION: basic $encoded"
+        echo "::add-mask::$header"
+        index=${GIT_CONFIG_COUNT:-0}
+        {
+          echo 'CARGO_NET_GIT_FETCH_WITH_CLI=true'
+          echo "GIT_CONFIG_COUNT=$((index + 1))"
+          echo "GIT_CONFIG_KEY_${index}=http.https://github.com/meimingqi222/gpui-app-kit.git.extraheader"
+          echo "GIT_CONFIG_VALUE_${index}=$header"
+        } >> "$GITHUB_ENV"

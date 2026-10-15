@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / 'scripts/ui-components-baseline.json'
-RULES = ('components-no-business', 'views-no-key-handlers', 'views-no-overlay', 'views-no-scroll-drag', 'ui-no-hex-colors')
+RULES = ('components-no-business', 'views-no-key-handlers', 'views-no-overlay', 'views-no-scroll-drag', 'ui-no-hex-colors', 'tray-content-no-lifecycle')
 
 
 def code_only(source: str) -> str:
@@ -58,6 +58,19 @@ def code_only(source: str) -> str:
 def violations(source: str, layer: str) -> dict[str, int]:
     code = code_only(source)
     result = {}
+    if layer == 'tray-content':
+        # Test fixtures mount real windows; production content only renders and emits.
+        code = re.split(r'#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*mod\s+tests\b', code, maxsplit=1)[0]
+        pattern = (
+            r'\b(?:WindowHandle|AnyWindowHandle|TrayHost|HostedPopover|Command)\b'
+            r'|\.\s*(?:open_window|remove_window|window_handle|observe_window_activation|'
+            r'on_window_should_close|activate_window|defer|spawn|quit|update)\s*\('
+            r'|\b(?:init_tray|remove_tray)\s*\('
+            r'|\bcrate\s*::\s*platform\b'
+            r'|\buse\s+crate\s*::\s*\{[^;]*\bplatform\b'
+            r'|\buse\s+crate\s+as\b'
+        )
+        result['tray-content-no-lifecycle'] = len(re.findall(pattern, code))
     if layer == 'components':
         aliases = re.findall(r'\buse\s+crate\s+as\s+(\w+)\s*;', code)
         for alias in aliases:
@@ -85,6 +98,8 @@ def scan(root: Path = ROOT) -> dict[str, dict[str, int]]:
     targets = [(root / 'src/ui/theme.rs', 'components')]
     for layer in ('components', 'views', 'adapters', 'shell'):
         targets += [(path, layer) for path in sorted((root / 'src/ui' / layer).rglob('*.rs'))]
+    targets += [(root / 'src/ui/views/tray_popover.rs', 'tray-content')]
+    targets += [(path, 'tray-content') for path in sorted((root / 'src/ui/views/tray_popover').rglob('*.rs'))]
     for path, layer in targets:
         if not path.is_file():
             continue

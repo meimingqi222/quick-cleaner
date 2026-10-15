@@ -1,0 +1,22 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.37s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+
+thread 'ui::desktop::tests::close_shortcut_removes_window_without_quitting' (10574546) panicked at src/ui/desktop.rs:138:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ui::desktop::tests::close_shortcut_removes_window_without_quitting ... FAILED
+
+failures:
+
+failures:
+    ui::desktop::tests::close_shortcut_removes_window_without_quitting
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 840 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

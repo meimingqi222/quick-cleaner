@@ -1,0 +1,31 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.05s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 8 tests
+test platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container ... ok
+test ui::views::tray_popover::tests::tray_scan_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_close_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_footer_stays_inside_small_window ... ok
+test ui::views::tray_popover::tests::tray_refresh_updates_repeatedly_and_stops_on_close ... FAILED
+test ui::views::tray_popover::tests::tray_escape_closes_window ... ok
+test ui::views::tray_popover::tests::tray_main_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_deactivation_closes_window ... ok
+
+failures:
+
+---- ui::views::tray_popover::tests::tray_refresh_updates_repeatedly_and_stops_on_close stdout ----
+
+thread 'ui::views::tray_popover::tests::tray_refresh_updates_repeatedly_and_stops_on_close' (10792719) panicked at src/ui/views/tray_popover.rs:819:9:
+assertion `left == right` failed: closed popover must stop sampling
+  left: 4
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::views::tray_popover::tests::tray_refresh_updates_repeatedly_and_stops_on_close
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 836 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--lib`

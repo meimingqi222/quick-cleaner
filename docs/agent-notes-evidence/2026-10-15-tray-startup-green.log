@@ -1,0 +1,8 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.65s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+test ui::tray_host::tests::tray_host_programmatic_open_needs_no_window_event ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 851 filtered out; finished in 0.00s

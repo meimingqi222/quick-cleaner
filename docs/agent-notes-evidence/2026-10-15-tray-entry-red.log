@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.96s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+test ui::tray_entry_tests::dismissing_permission_guide_does_not_start_a_scan ... FAILED
+
+failures:
+
+---- ui::tray_entry_tests::dismissing_permission_guide_does_not_start_a_scan stdout ----
+
+thread 'ui::tray_entry_tests::dismissing_permission_guide_does_not_start_a_scan' (10795720) panicked at src/ui/mod.rs:1027:13:
+dismissing a window is not scan authorization
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::tray_entry_tests::dismissing_permission_guide_does_not_start_a_scan
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 844 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

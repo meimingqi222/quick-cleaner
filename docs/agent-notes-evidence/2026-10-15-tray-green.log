@@ -1,0 +1,13 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.77s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 6 tests
+test ui::views::tray_popover::tests::tray_main_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_close_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_footer_stays_inside_small_window ... ok
+test ui::views::tray_popover::tests::tray_escape_closes_window ... ok
+test ui::views::tray_popover::tests::tray_scan_button_removes_its_window ... ok
+test ui::views::tray_popover::tests::tray_deactivation_closes_window ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 833 filtered out; finished in 0.01s

@@ -30,7 +30,9 @@ pub mod scanner;
 pub mod settings;
 pub mod status;
 pub(crate) mod testing;
+pub mod tray_status;
 pub mod updater;
+pub mod user_accounts;
 pub mod whitelist;
 pub mod worktrees;
 

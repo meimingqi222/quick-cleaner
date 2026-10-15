@@ -38,6 +38,7 @@ fn main() {
         println!("cargo:rerun-if-changed=assets/icon.icns");
         println!("cargo:rerun-if-changed=assets/icon-512.png");
         println!("cargo:rerun-if-changed=assets/icon.png");
+        println!("cargo:rerun-if-changed=assets/tray_icon_mac.png");
     }
 
     #[cfg(windows)]

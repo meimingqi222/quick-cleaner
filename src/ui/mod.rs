@@ -4,11 +4,14 @@ mod actions;
 pub mod adapters;
 mod app_icons;
 pub mod components;
+pub mod desktop;
 pub mod i18n;
 pub mod shell;
 pub mod state;
 pub mod text_input;
 pub mod theme;
+pub mod tray_host;
+pub mod tray_overview;
 pub mod views;
 pub use state::*;
 
@@ -35,6 +38,7 @@ use crate::ui::components::render_scan_line;
 use crate::ui::i18n::*;
 use crate::ui::shell::{render_sidebar, render_top_bar, OverlayStack, View};
 use crate::ui::theme::*;
+pub use crate::ui::views::TrayPopover;
 use crate::ui::views::{
     render_apps_context_menu, render_apps_view, render_clean_bar, render_dashboard_view,
     render_declutter_context_menu, render_declutter_view, render_disk_clean_bar, render_disk_view,
@@ -380,18 +384,13 @@ impl Root {
 
     /// 关闭完全磁盘访问权限引导弹窗。
     ///
-    /// 用户点「稍后」走到这里：选择不带 FDA 继续使用。若此时还没扫过垃圾，
-    /// 就触发首次扫描——启动时为了不触发 TCC 弹窗刻意跳过了，这里补上。
+    /// 关闭引导仅回到主界面，扫描由用户显式发起。
     pub fn close_fda_guide(&mut self, cx: &mut Context<Self>) {
         self.show_fda_onboarding = false;
         #[cfg(target_os = "macos")]
         crate::platform::macos::permission_drop::hide();
         self.fda_drop_task = None;
-        if !self.junk.scanned && !self.junk.scanning && !self.clean.running {
-            self.start_scan(cx);
-        } else {
-            cx.notify();
-        }
+        cx.notify();
     }
 
     /// 切换「不再自动弹出完全磁盘访问权限引导」，并立刻落盘。
@@ -1010,4 +1009,23 @@ fn show_fda_drop_panel(bundle: &Path, lang: Language, allow_fallback: bool) -> b
         },
         allow_fallback,
     )
+}
+
+#[cfg(test)]
+mod tray_entry_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn dismissing_permission_guide_does_not_start_a_scan(cx: &mut gpui::TestAppContext) {
+        let root = cx.new(Root::new);
+        root.update(cx, |root, cx| {
+            assert!(!root.junk.scanning && !root.apps.scanning);
+            root.close_fda_guide(cx);
+            assert!(
+                !root.junk.scanning,
+                "dismissing a window is not scan authorization"
+            );
+            assert!(!root.apps.scanning);
+        });
+    }
 }

@@ -1,0 +1,10 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.19s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 3 tests
+test ui::desktop::tests::native_close_delivers_cleanup_once ... ok
+test ui::desktop::tests::close_shortcut_removes_window_without_quitting ... ok
+test ui::desktop::tests::keepalive_survives_the_last_user_window ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 839 filtered out; finished in 0.00s

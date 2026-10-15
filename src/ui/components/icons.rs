@@ -1257,3 +1257,105 @@ pub fn icon_close(fg: u32, size: f32) -> AnyElement {
 pub fn icon_folder(fg: u32, size: f32) -> AnyElement {
     icon_folder_file(fg, size)
 }
+
+/// 用户账户轮廓图标（纯矢量绘制）
+pub fn icon_user_account(fg: u32, size: f32) -> AnyElement {
+    let head = size * 0.38;
+    let shoulder_w = size * 0.8;
+    let shoulder_h = size * 0.35;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(1.5))
+        .child(
+            div()
+                .w(px(head))
+                .h(px(head))
+                .rounded_full()
+                .border_2()
+                .border_color(rgb(fg)),
+        )
+        .child(
+            div()
+                .w(px(shoulder_w))
+                .h(px(shoulder_h))
+                .rounded_t(px(4.))
+                .border_2()
+                .border_color(rgb(fg)),
+        )
+        .into_any_element()
+}
+
+/// 闪电加速 / 内存释放图标（纯矢量折线绘制）
+pub fn icon_bolt(fg: u32, size: f32) -> AnyElement {
+    let w = size * 0.55;
+    let h = size * 0.85;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(w))
+                .h(px(h))
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(0.))
+                        .left(px(w * 0.3))
+                        .w(px(w * 0.7))
+                        .h(px(h * 0.45))
+                        .border_t_2()
+                        .border_r_2()
+                        .border_color(rgb(fg)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(px(0.))
+                        .left(px(0.))
+                        .w(px(w * 0.7))
+                        .h(px(h * 0.55))
+                        .border_b_2()
+                        .border_l_2()
+                        .border_color(rgb(fg)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// 扫帚 / 垃圾清理图标（纯矢量绘制）
+pub fn icon_broom(fg: u32, size: f32) -> AnyElement {
+    let handle_h = size * 0.45;
+    let brush_w = size * 0.7;
+    let brush_h = size * 0.4;
+    div()
+        .w(px(size))
+        .h(px(size))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(1.))
+        .child(div().w(px(2.5)).h(px(handle_h)).rounded_full().bg(rgb(fg)))
+        .child(
+            div()
+                .w(px(brush_w))
+                .h(px(brush_h))
+                .rounded_b(px(3.))
+                .border_2()
+                .border_color(rgb(fg))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().w(px(1.5)).h(px(brush_h * 0.6)).bg(rgb(fg))),
+        )
+        .into_any_element()
+}

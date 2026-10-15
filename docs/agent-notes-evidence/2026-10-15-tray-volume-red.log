@@ -1,0 +1,24 @@
+   Compiling quick-cleaner v0.0.14 (<HOME>/work/code/quick-cleaner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.25s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-97227dffa5c6c597)
+
+running 1 test
+test platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container ... FAILED
+
+failures:
+
+---- platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container stdout ----
+
+thread 'platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container' (10807580) panicked at src/platform/macos/disk.rs:229:9:
+assertion `left == right` failed
+  left: "/dev/disk3s3"
+ right: "/dev/disk3"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::disk::tests::tray_snapshot_and_recovery_share_one_container
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 845 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

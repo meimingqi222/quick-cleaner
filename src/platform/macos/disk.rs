@@ -20,6 +20,18 @@ pub fn force_delete_access(_path: &std::path::Path) -> bool {
     false
 }
 
+// 根卷可能是 /dev/disk3s3s1（快照），普通 APFS 卷是 /dev/disk3s5。
+fn container_device_key(device: &str) -> String {
+    let mut key = device;
+    while let Some((prefix, suffix)) = key.rsplit_once('s') {
+        if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+            break;
+        }
+        key = prefix;
+    }
+    key.to_owned()
+}
+
 /// macOS 上可供分析的物理磁盘。
 ///
 /// 现代 macOS（Catalina+）把系统卷和数据卷分开挂载：
@@ -45,11 +57,7 @@ pub fn list_volumes() -> Vec<VolumeId> {
             }
             .to_string_lossy()
             .into_owned();
-            let dev_key = dev
-                .rsplit_once('s')
-                .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
-                .map(|(prefix, _)| prefix.to_string())
-                .unwrap_or(dev);
+            let dev_key = container_device_key(&dev);
             let block = buf.f_bsize as u64;
             let total = buf.f_blocks * block;
             by_device.insert(
@@ -106,11 +114,7 @@ pub fn list_volumes() -> Vec<VolumeId> {
             }
             .to_string_lossy()
             .into_owned();
-            let dev_key = dev
-                .rsplit_once('s')
-                .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
-                .map(|(prefix, _)| prefix.to_string())
-                .unwrap_or(dev);
+            let dev_key = container_device_key(&dev);
 
             let block = buf.f_bsize as u64;
             let total = buf.f_blocks * block;
@@ -120,7 +124,10 @@ pub fn list_volumes() -> Vec<VolumeId> {
                 .entry(dev_key)
                 .and_modify(|(_root, _, t, label)| {
                     // 更新标签为更有意义的卷名（只要名字不空就替换空标签）
-                    if !name.is_empty() && (label.is_empty() || name.len() > label.len()) {
+                    if !name.is_empty()
+                        && !matches!(name.as_str(), "Recovery" | "Preboot" | "VM" | "Update")
+                        && (label.is_empty() || name.len() > label.len())
+                    {
                         *label = name.clone();
                     }
                     // 同一容器容量相同，保存总量即可
@@ -215,6 +222,19 @@ pub fn detect_system_language() -> crate::core::i18n::Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_snapshot_and_recovery_share_one_container() {
+        assert_eq!(
+            container_device_key("/dev/disk3s3s1"),
+            container_device_key("/dev/disk3s5")
+        );
+        assert_ne!(
+            container_device_key("/dev/disk3s3s1"),
+            container_device_key("/dev/disk4s1")
+        );
+        assert_eq!(container_device_key("server/share"), "server/share");
+    }
 
     /// `statfs` 至少要能拿到自洽的数字：容量为正、可用不超过容量。
     #[test]

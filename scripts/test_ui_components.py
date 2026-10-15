@@ -46,6 +46,36 @@ class BoundaryTests(unittest.TestCase):
             found = guard.scan(root)
             self.assertEqual(found['components-no-business'], {'src/ui/theme.rs': 1})
 
+    def test_tray_content_rejects_window_and_business_control(self):
+        for source in (
+            'cx.open_window(options, render);', 'window.remove_window();',
+            'use gpui::{WindowHandle as Handle};',
+            'use crate::{platform as native};', 'use crate as app;',
+            'cx.defer(callback);', 'cx.spawn(task);', 'cx.quit();',
+            'self.model.update(cx, callback);', 'std::process::Command::new(cmd);',
+            'window.on_window_should_close(cx, callback);',
+        ):
+            self.assertIn('tray-content-no-lifecycle', guard.violations(source, 'tray-content'), source)
+
+    def test_tray_content_accepts_read_render_and_session_events(self):
+        source = '''let state = self.model.read(cx); session.emit(Action::Open, cx);
+        session.dismiss(cx); cx.observe(&model, callback);
+        // cx.open_window();
+        let text = r#"cx.spawn(task)"#;
+        #[cfg(test)]
+        mod tests { fn fixture() { cx.open_window(options, render); } }
+        '''
+        self.assertFalse(guard.violations(source, 'tray-content'))
+
+    def test_tray_content_scan_covers_split_content_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            content = root / 'src/ui/views/tray_popover'
+            content.mkdir(parents=True)
+            (content / 'hardware.rs').write_text('cx.spawn(task);', encoding='utf-8')
+            self.assertEqual(guard.scan(root)['tray-content-no-lifecycle'],
+                             {'src/ui/views/tray_popover/hardware.rs': 1})
+
     def test_baselines_can_shrink_but_cannot_grow_or_transfer(self):
         old = {'rule': {'a.rs': 2}}
         self.assertFalse(guard.growth({'rule': {'a.rs': 1}}, old))

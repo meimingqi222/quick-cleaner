@@ -47,155 +47,17 @@ impl OverlayId {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct OverlayEntry {
-    pub id: OverlayId,
-    pub policy: OverlayPolicy,
-    pub parent: Option<OverlayId>,
-    pub close: CloseAction,
-    /// 打开那一刻的焦点快照，仅供 Esc 关闭后恢复。
-    pub restore_focus: Option<FocusHandle>,
+impl gpui_app_widgets::overlay_stack::OverlayIdentity for OverlayId {
+    type Close = CloseAction;
+    fn close_action(self) -> Self::Close {
+        self.close_action()
+    }
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscapeOutcome {
-    Close(OverlayId),
-    /// 最上层是模态且不响应 Esc：吞掉，不让 Esc 落到下层。
-    Swallow,
-    PassThrough,
-}
-
-/// 只看栈顶：Esc 不会越过它去关下面的浮层。
+pub type OverlayEntry = gpui_app_widgets::overlay_stack::OverlayEntry<OverlayId>;
+pub type OverlayStack = gpui_app_widgets::overlay_stack::OverlayStack<OverlayId>;
+pub type EscapeOutcome = gpui_app_widgets::overlay_stack::EscapeOutcome<OverlayId>;
 pub fn escape_target(stack: &[OverlayEntry], composing: bool) -> EscapeOutcome {
-    let Some(top) = stack.last() else {
-        return EscapeOutcome::PassThrough;
-    };
-    if composing {
-        return EscapeOutcome::PassThrough;
-    }
-    if top.policy.key_dismisses("escape", false) {
-        EscapeOutcome::Close(top.id)
-    } else {
-        EscapeOutcome::Swallow
-    }
-}
-
-#[derive(Default)]
-pub struct OverlayStack(Vec<OverlayEntry>);
-
-impl OverlayStack {
-    /// `open` 是本帧所有打开的浮层。已在栈内的保持位置，新的压栈并记录 `focused`，
-    /// 不在 `open` 里的移除。
-    pub fn sync(&mut self, open: &[(OverlayId, OverlayPolicy)], focused: Option<FocusHandle>) {
-        let orphaned = self.orphaned(open);
-        self.0.retain(|entry| {
-            open.iter().any(|(id, _)| *id == entry.id) && !orphaned.contains(&entry.id)
-        });
-        for (id, policy) in open {
-            if orphaned.contains(id) {
-                continue;
-            }
-            match self.0.iter_mut().find(|entry| entry.id == *id) {
-                Some(entry) => entry.policy = *policy,
-                None => self.0.push(OverlayEntry {
-                    id: *id,
-                    policy: *policy,
-                    parent: None,
-                    close: id.close_action(),
-                    restore_focus: focused.clone(),
-                }),
-            }
-        }
-    }
-
-    pub fn entries(&self) -> &[OverlayEntry] {
-        &self.0
-    }
-
-    pub fn orphaned(&self, open: &[(OverlayId, OverlayPolicy)]) -> Vec<OverlayId> {
-        let mut gone: Vec<_> = self
-            .0
-            .iter()
-            .filter(|entry| !open.iter().any(|(id, _)| *id == entry.id))
-            .map(|entry| entry.id)
-            .collect();
-        let mut children = Vec::new();
-        for entry in &self.0 {
-            if entry.parent.is_some_and(|parent| gone.contains(&parent)) {
-                gone.push(entry.id);
-                children.push(entry.id);
-            }
-        }
-        children
-    }
-
-    pub fn priority(&self, id: OverlayId) -> usize {
-        100 + self
-            .0
-            .iter()
-            .position(|entry| entry.id == id)
-            .unwrap_or(self.0.len())
-    }
-
-    pub fn is_top(&self, id: OverlayId) -> bool {
-        self.0.last().is_some_and(|entry| entry.id == id)
-    }
-
-    pub fn modal_on_top(&self) -> bool {
-        self.0.last().is_some_and(|entry| entry.policy.modal)
-    }
-
-    /// A child must name a registered parent; updates never duplicate entries.
-    pub fn set_parent(&mut self, id: OverlayId, parent: OverlayId) -> bool {
-        let Some(parent_index) = self.0.iter().position(|entry| entry.id == parent) else {
-            return false;
-        };
-        let Some(child_index) = self.0.iter().position(|entry| entry.id == id) else {
-            return false;
-        };
-        if parent_index >= child_index {
-            return false;
-        }
-        self.0[child_index].parent = Some(parent);
-        true
-    }
-
-    /// Return children first so their business close callbacks run before the parent.
-    pub fn remove(&mut self, id: OverlayId) -> Vec<OverlayId> {
-        self.remove_entries(id)
-            .into_iter()
-            .map(|entry| entry.id)
-            .collect()
-    }
-
-    pub fn remove_entries(&mut self, id: OverlayId) -> Vec<OverlayEntry> {
-        let mut removed = vec![id];
-        for entry in &self.0 {
-            if entry.parent.is_some_and(|parent| removed.contains(&parent)) {
-                removed.push(entry.id);
-            }
-        }
-        let entries = self
-            .0
-            .iter()
-            .rev()
-            .filter(|entry| removed.contains(&entry.id))
-            .cloned()
-            .collect();
-        self.0.retain(|entry| !removed.contains(&entry.id));
-        entries
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn restore_focus(&self, id: OverlayId) -> Option<FocusHandle> {
-        self.0
-            .iter()
-            .find(|entry| entry.id == id)
-            .and_then(|entry| entry.restore_focus.clone())
-    }
+    gpui_app_widgets::overlay_stack::escape_target(stack, composing)
 }
 
 impl Root {

@@ -52,3 +52,13 @@ pre-commit 会对暂存文件自动打印命中提醒（不阻断）；CI 的 `a
 - Windows 卸载走官方 `UninstallString`，成功判据是登记项或安装目录没了，不是进程退出码 0。
 - 界面文案走 `ui/i18n.rs` 的 `tr_*`，不要在视图里写死中英串。
 - 注释只写非显然的约束，不要叙述实现步骤。
+
+## 系统托盘内容开发边界
+
+- 托盘窗口统一使用 `gpui-app-host`（兄弟仓库 `../gpui-app-kit`）；本地 `src/ui/tray_host.rs` 只适配图标和本地化菜单。公共宿主负责开关、定位、焦点、Esc、失焦与销毁。
+- `src/ui/views/tray_popover.rs` 及其同名子目录只负责布局、读取模型与发送 `TraySession` 事件。仅调整 UI 时不要改公共宿主或桌面生命周期适配。
+- 采样、命令与动作路由放 `src/ui/tray_overview.rs`；新增动作在控制层声明是否收起窗口，内容不要自行关窗、defer、spawn、quit 或直接 update 模型。
+- 复用方式与验证见 [托盘宿主架构说明](docs/agent-notes/implemented/architecture/2026-10-15-tray-host-content-boundary.md)。现有 `python3 scripts/check-ui-components.py` 会检查内容边界；不要加 baseline 例外规避检查。
+
+共享输入编辑、滚动和浮层核心在 `gpui-app-widgets`；产品配色、OverlayId 和业务关闭回调留在应用。
+构建通过 Cargo.toml 中固定提交的 Git 依赖获取公共库；`../gpui-app-kit` 只用于公共库联合开发、内容守卫和回归测试 anchor 校验。接入与私库认证见公共库 README.md。

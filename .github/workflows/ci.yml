@@ -32,6 +32,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/gpui-kit
+        with:
+          token: ${{ secrets.GPUI_APP_KIT_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -53,7 +56,9 @@ jobs:
       # 二进制里存在，所以两个 job 各产一份 --list 产物，由 verify-anchors
       # job 取并集校验。
       - name: Dump test list
-        run: cargo test --lib -- --list > testlist-windows.txt
+        run: |
+          cargo test --lib -- --list > testlist-windows.txt
+          cargo test --manifest-path ../gpui-app-kit/Cargo.toml --workspace --lib -- --list >> testlist-windows.txt
       - uses: actions/upload-artifact@v4
         with:
           name: testlist-windows
@@ -69,6 +74,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/gpui-kit
+        with:
+          token: ${{ secrets.GPUI_APP_KIT_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -85,7 +93,9 @@ jobs:
       - name: Run tests
         run: cargo test
       - name: Dump test list
-        run: cargo test --lib -- --list > testlist-macos.txt
+        run: |
+          cargo test --lib -- --list > testlist-macos.txt
+          cargo test --manifest-path ../gpui-app-kit/Cargo.toml --workspace --lib -- --list >> testlist-macos.txt
       - uses: actions/upload-artifact@v4
         with:
           name: testlist-macos
@@ -98,6 +108,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/gpui-kit
+        with:
+          token: ${{ secrets.GPUI_APP_KIT_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'

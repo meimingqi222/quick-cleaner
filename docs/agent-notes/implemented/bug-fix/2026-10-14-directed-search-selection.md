@@ -35,7 +35,7 @@ utf16_selection 同时提供规范化 UTF-16 范围和方向，由 `src/ui/shell
 - `src/ui/components/search_input.rs::shift_selection_shrinks_on_reverse`
 - `src/ui/components/search_input.rs::shift_selection_preserves_anchor_across_unicode_and_home_end`
 - `src/ui/components/search_input.rs::reverse_mouse_selection_keeps_anchor_for_shift_arrow`
-- `src/ui/components/input.rs::directed_selection_reports_utf16_and_replaces_exact_text`
+- `../gpui-app-kit/crates/ui-widgets/src/input.rs::directed_selection_reports_utf16_and_replaces_exact_text`
 
 Proved: 修复前真实 GPUI 键盘事件自然红跑，Shift+右再 Shift+左的断言实际 0..2、期望 1..1，
 见 `docs/agent-notes-evidence/2026-10-14-selection-red.log`；恢复方向后同 focused 转绿，见

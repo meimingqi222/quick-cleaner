@@ -5,6 +5,8 @@ edition = "2021"
 default-run = "quick-cleaner"
 
 [dependencies]
+gpui-app-host = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
+gpui-app-widgets = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
 # `default-features = false` 关掉 Linux 的 wayland/x11 和 Windows 的 manifest，
 # 但必须保留 `font-kit`——否则 macOS 上会用 NoopTextSystem，文字全部不可见
 # （光栅化返回空像素，布局占位但渲染透明）。
@@ -22,7 +24,7 @@ serde_json = "1"
 toml = "0.8"
 chrono = "0.4"
 lz4_flex = "0.14.0"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 # 状态监控页的 CPU / 内存 / 进程 / 网络采样与用户信息。关掉默认特性只留需要的。
 sysinfo = { version = "0.37", default-features = false, features = ["system", "network", "multithread", "user"] }
 # 自动更新：阻塞 HTTP 拉 GitHub Releases，无 async runtime
@@ -47,7 +49,7 @@ libc = "0.2"
 objc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl", "iphlpapi", "tcpmib", "udpmib", "iprtrmib"] }
+winapi = { version = "0.3", features = ["shellapi", "libloaderapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl", "iphlpapi", "tcpmib", "udpmib", "iprtrmib"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
@@ -133,10 +135,10 @@ required-features = ["authprobe"]
 # 一个 macOS 主线程死锁：window_did_change_key_status 持 window_state
 # 锁时调 resignKeyWindow，resign 同步发出 windowDidResignKey 通知重入
 # 同一回调，parking_lot 不可重入 → 卡死（macOS 27 窗口状态恢复时实测
-# 可复现）。vendor/gpui 是 0.2.2 原样拷贝，只打上游同款补丁（先
+# 可复现）。../gpui-app-kit/vendor/gpui 是 0.2.2 原样拷贝，只打上游同款补丁（先
 # drop(lock) 再 resignKeyWindow）。升级到官方带修复的版本后删掉本节。
 [patch.crates-io]
-gpui = { path = "vendor/gpui" }
+gpui = { git = "https://github.com/meimingqi222/gpui-app-kit.git", rev = "3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56" }
 
 [dev-dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["test-support"] }

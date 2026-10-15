@@ -11,6 +11,8 @@ component files without deleting callers would leave these independent paths act
 
 ## Decision
 
+Shared behavior now lives in sibling gpui-app-kit (input/text, scroll/scroll_area, overlay/overlay_stack).
+QuickCleaner retains themed adapters, its OverlayId and Root business close routing.
 Production uses InputHost bindings, because the Entity spike lacks both native
 Windows and macOS IME acceptance. Components own text state/edit behavior and
 rendering; adapters bind existing Root child state and business callbacks; shell
@@ -48,9 +50,9 @@ remain pending and are documented in docs/ui-baselines/README.md.
 
 ## Verification
 
-- `src/ui/components/input.rs::bindings_isolate_fields_and_commit_composition_once`
-- `src/ui/components/scroll_area.rs::virtualized_lists_drag_outside_and_keep_independent_offsets`
-- `src/ui/components/scroll_area.rs::normal_scroll_view_measures_content_and_supports_shared_drag`
+- `../gpui-app-kit/crates/ui-widgets/src/input.rs::bindings_isolate_fields_and_commit_composition_once`
+- `../gpui-app-kit/crates/ui-widgets/src/scroll_area.rs::virtualized_lists_drag_outside_and_keep_independent_offsets`
+- `../gpui-app-kit/crates/ui-widgets/src/scroll_area.rs::normal_scroll_view_measures_content_and_supports_shared_drag`
 - `src/ui/shell/overlay_stack.rs::nested_close_is_children_first_and_render_order_matches_escape`
 - `src/ui/shell/overlay_stack.rs::disappearing_parent_removes_open_children_without_registering_them_again`
 - `src/ui/shell/overlay_stack.rs::escape_closes_only_the_top_popup_and_modal_swallows`

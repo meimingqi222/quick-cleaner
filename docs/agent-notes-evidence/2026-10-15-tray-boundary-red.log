@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_tray_content_rejects_window_and_business_control (test_ui_components.BoundaryTests.test_tray_content_rejects_window_and_business_control)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<HOME>/work/code/quick-cleaner/scripts/test_ui_components.py", line 58, in test_tray_content_rejects_window_and_business_control
+    self.assertIn('tray-content-no-lifecycle', guard.violations(source, 'tray-content'), source)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'tray-content-no-lifecycle' not found in {} : cx.open_window(options, render);
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

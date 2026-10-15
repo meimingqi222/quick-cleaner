@@ -7,10 +7,17 @@
 // 走的是 cargo test 的独立测试二进制，不受影响）。
 #![windows_subsystem = "windows"]
 
-use gpui::{actions, px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
-use quick_cleaner::ui::Root;
-
-actions!(quick_cleaner, [Quit]);
+use gpui::{
+    px, size, App, AppContext, Application, Bounds, WindowBounds, WindowHandle, WindowOptions,
+};
+use quick_cleaner::ui::tray_host::{TrayHost, TrayMenu};
+use quick_cleaner::ui::tray_overview::OverviewController;
+use quick_cleaner::ui::{desktop, Root};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
 
 fn main() {
     // 风扇特权守护进程的两个非 GUI 入口（详见 platform::macos::fanhelper）：
@@ -58,69 +65,141 @@ fn main() {
         quick_cleaner::core::log::install_panic_hook();
     }
 
-    Application::new().run(move |cx: &mut App| {
+    type OpenMain = Arc<dyn Fn(&mut App) + Send + Sync>;
+    let reopen_handler = std::rc::Rc::new(std::cell::RefCell::new(None::<OpenMain>));
+    let application = Application::new();
+    let reopen = reopen_handler.clone();
+    application.on_reopen(move |cx| {
+        let handler = reopen.borrow().clone();
+        if let Some(open) = handler {
+            open(cx);
+        }
+    });
+    application.run(move |cx: &mut App| {
         #[cfg(target_os = "macos")]
         quick_cleaner::platform::macos::set_dock_icon();
 
-        #[cfg(target_os = "macos")]
-        {
-            cx.set_menus(vec![gpui::Menu {
-                name: "QuickCleaner".into(),
-                items: vec![gpui::MenuItem::action("Quit QuickCleaner", Quit)],
-            }]);
-            cx.bind_keys([
-                gpui::KeyBinding::new("cmd-q", Quit, None),
-                gpui::KeyBinding::new("cmd-w", Quit, None),
-            ]);
-        }
+        let tray = TrayHost::new(340., 430.);
+        let tray_available = Arc::new(AtomicBool::new(false));
 
-        #[cfg(not(target_os = "macos"))]
-        cx.bind_keys([
-            gpui::KeyBinding::new("ctrl-q", Quit, None),
-            gpui::KeyBinding::new("alt-f4", Quit, None),
-        ]);
+        let main_window_holder: Arc<Mutex<Option<WindowHandle<Root>>>> = Arc::new(Mutex::new(None));
+        let root_holder = Arc::new(Mutex::new(None::<gpui::Entity<Root>>));
+        let on_main_closed: Arc<dyn Fn(&mut App) + Send + Sync> = {
+            let holder = main_window_holder.clone();
+            let available = tray_available.clone();
+            Arc::new(move |cx| {
+                *holder.lock().unwrap() = None;
+                desktop::main_window_closed(cx, available.load(Ordering::Acquire));
+            })
+        };
+        desktop::bind_actions(cx, {
+            let main = main_window_holder.clone();
+            let tray = tray.clone();
+            let closed = on_main_closed.clone();
+            move |cx| {
+                let Some(active) = cx.active_window() else {
+                    return;
+                };
+                if tray.close_active(active, cx) {
+                    return;
+                }
+                let main_handle = *main.lock().unwrap();
+                if main_handle.is_some_and(|h| gpui::AnyWindowHandle::from(h) == active) {
+                    let closed = closed.clone();
+                    desktop::close_window(active, cx, move |cx| closed(cx));
+                }
+            }
+        });
 
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        // 打开或聚焦主窗口
+        let open_main_window: Arc<dyn Fn(&mut App) + Send + Sync> = {
+            let holder = main_window_holder.clone();
+            let root_holder = root_holder.clone();
+            let on_main_closed = on_main_closed.clone();
+            Arc::new(move |cx: &mut App| {
+                desktop::show_main_window();
+                let mut guard = holder.lock().unwrap();
+                if let Some(ref handle) = *guard {
+                    cx.activate(true);
+                    let _ = handle.update(cx, |_, window, _| {
+                        window.activate_window();
+                    });
+                    return;
+                }
 
-        let bounds = Bounds::centered(None, size(px(1280.), px(880.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |window, cx| {
-                window.on_window_should_close(cx, |_, cx| {
-                    cx.quit();
-                    true
-                });
+                let bounds = Bounds::centered(None, size(px(1280.), px(880.)), cx);
+                let handle = cx
+                    .open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(bounds)),
+                            ..Default::default()
+                        },
+                        |window, cx| {
+                            let closed = on_main_closed.clone();
+                            desktop::install_close_handler(window, cx, move |cx| closed(cx));
 
-                let root = cx.new(Root::new);
-                let startup = root.clone();
-                // 先返回根视图，让窗口获得绘制机会；启动任务随后异步安排。
-                cx.spawn(async move |cx| {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(100))
-                        .await;
-                    startup
-                        .update(cx, |root, cx| {
-                            // FDA 引导由弹窗按钮触发首次扫描。
-                            #[cfg(target_os = "macos")]
-                            if !root.show_fda_onboarding {
-                                root.start_scan(cx);
+                            let mut saved = root_holder.lock().unwrap();
+                            if let Some(root) = saved.as_ref() {
+                                return root.clone();
                             }
-                            #[cfg(not(target_os = "macos"))]
-                            root.start_scan(cx);
-                            root.start_apps_scan(cx);
-                            root.start_update_scheduler(cx);
-                        })
-                        .ok();
-                })
-                .detach();
-                root
-            },
-        )
-        .unwrap();
+                            let root = cx.new(Root::new);
+                            *saved = Some(root.clone());
+                            let startup = root.clone();
+                            cx.spawn(async move |cx| {
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(100))
+                                    .await;
+                                startup
+                                    .update(cx, |root, cx| {
+                                        root.start_update_scheduler(cx);
+                                    })
+                                    .ok();
+                            })
+                            .detach();
+                            root
+                        },
+                    )
+                    .unwrap();
 
-        cx.activate(true);
+                *guard = Some(handle);
+                cx.activate(true);
+            })
+        };
+
+        let open_main: Arc<dyn Fn(&mut App) + Send + Sync> = {
+            let tray = tray.clone();
+            let open = open_main_window.clone();
+            Arc::new(move |cx| tray.dismiss_then(open.clone(), cx))
+        };
+        let scan = {
+            let open = open_main_window.clone();
+            let main = main_window_holder.clone();
+            Arc::new(move |cx: &mut App| {
+                open(cx);
+                let handle = *main.lock().unwrap();
+                if let Some(handle) = handle {
+                    let _ = handle.update(cx, |root, _, cx| {
+                        root.view = quick_cleaner::ui::shell::View::Junk;
+                        root.start_scan(cx);
+                    });
+                }
+            })
+        };
+        let overview = OverviewController::new(open_main_window, scan);
+        let actions = overview.clone();
+        let lang = quick_cleaner::core::settings::Settings::load().language;
+        let available = tray.install(
+            cx,
+            TrayMenu {
+                open_main: quick_cleaner::ui::i18n::tr_tray_open_main(lang),
+                quit: quick_cleaner::ui::i18n::tr_tray_quit(lang),
+                on_open_main: open_main.clone(),
+            },
+            Arc::new(move |action, cx| actions.handle(action, cx)),
+            move |session, _, cx| overview.content(session, cx),
+        );
+        tray_available.store(available, Ordering::Release);
+        *reopen_handler.borrow_mut() = Some(open_main.clone());
+        open_main(cx);
     });
 }
