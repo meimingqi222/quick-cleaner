@@ -1,6 +1,7 @@
 # Rust 构建产物
 /target
 /dist
+.amp/portals/
 *.pdb
 *.ilk
 *.rs.bk
