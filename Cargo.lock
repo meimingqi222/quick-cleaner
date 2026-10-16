@@ -4582,7 +4582,7 @@ dependencies = [
 
 [[package]]
 name = "quick-cleaner"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "bincode",
  "chrono",
