@@ -1,0 +1,13 @@
+Source: https://github.com/meimingqi222/quick-cleaner/actions/runs/38902146798
+Commit: b2b6bc9024fb9e60443cf6df00aaccccc3672371; real native CI red before path declaration fix
+Test (macOS)	Run tests	2026-10-16T12:48:51.8185940Z thread 'core::rules::tests::embedded_and_source_rules_have_identical_policy' (35550) panicked at src/core/rules/mod.rs:1427:10:
+Test (macOS)	Run tests	2026-10-16T12:48:51.8186150Z called `Result::unwrap()` on an `Err` value: "Invalid residual matching policy"
+Test (macOS)	Run tests	2026-10-16T12:48:51.8186210Z stack backtrace:
+--
+Test (macOS)	Run tests	2026-10-16T12:48:51.8794840Z thread 'platform::macos::apps::tests::zoom_discovers_only_the_declared_confined_uninstaller' (36400) panicked at src/core/rules/mod.rs:1739:22:
+Test (macOS)	Run tests	2026-10-16T12:48:51.8794980Z valid embedded rules: "Invalid residual matching policy"
+Test (macOS)	Run tests	2026-10-16T12:48:51.8795030Z stack backtrace:
+--
+Test (Windows)	Run tests	2026-10-16T12:48:15.5776970Z thread 'core::rules::tests::embedded_and_source_rules_have_identical_policy' (7988) panicked at src\core\rules\mod.rs:1427:10:
+Test (Windows)	Run tests	2026-10-16T12:48:15.5777181Z called `Result::unwrap()` on an `Err` value: "Invalid residual matching policy"
+Test (Windows)	Run tests	2026-10-16T12:48:15.5777253Z stack backtrace:

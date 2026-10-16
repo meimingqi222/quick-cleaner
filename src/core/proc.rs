@@ -209,7 +209,15 @@ mod tests {
         let started = ready.exists();
         let mutated = marker.exists();
         let _ = std::fs::remove_dir_all(dir);
-        assert!(started, "test must actually launch the descendant");
+        assert!(
+            started,
+            "test must actually launch the descendant; elapsed={elapsed:?}, result={:?}",
+            run.as_ref().map(|out| (
+                out.exit_code,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        );
         assert!(run.is_none(), "EOF is required as well as parent exit");
         assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
         assert!(!mutated);

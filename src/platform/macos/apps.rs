@@ -432,13 +432,16 @@ fn find_uninstaller(app_path: &Path, bundle_id: Option<&str>) -> Option<PathBuf>
         return script_uninstall::uninstaller(app_path, &spec);
     }
     if let Some(id) = bundle_id {
-        let declared =
-            crate::core::rules::list("residual-macos", &format!("embedded_uninstaller:{id}"));
-        if !declared.is_empty() {
+        let snapshot = crate::core::rules::current();
+        if let Some(declared) = snapshot
+            .definition("residual-macos")
+            .locations
+            .get(&format!("embedded_uninstaller:{id}"))
+        {
             return declared
-                .into_iter()
+                .iter()
                 .take(16)
-                .map(|relative| app_path.join(relative))
+                .map(|row| app_path.join(&row.path))
                 .find(|path| {
                     path.extension().is_some_and(|ext| ext == "app")
                         && path.is_dir()
@@ -525,11 +528,10 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
         return Ok(());
     }
     if app.uninstall_string.is_none()
-        && !crate::core::rules::list(
-            "residual-macos",
-            &format!("embedded_uninstaller:{}", app.registry_subpath),
-        )
-        .is_empty()
+        && crate::core::rules::current()
+            .definition("residual-macos")
+            .locations
+            .contains_key(&format!("embedded_uninstaller:{}", app.registry_subpath))
     {
         return Err(
             "Required official uninstaller unavailable; no fallback deletion performed".into(),
@@ -880,6 +882,7 @@ mod tests {
             Some(entry.clone())
         );
         assert_eq!(find_uninstaller(&bundle, Some("us.zoom.other")), None);
+        std::fs::create_dir_all(bundle.join("Contents/Resources/Uninstall Other.app")).unwrap();
         std::fs::remove_dir_all(&entry).unwrap();
         assert_eq!(find_uninstaller(&bundle, Some("us.zoom.xos")), None);
         let external = root.join("external.app");

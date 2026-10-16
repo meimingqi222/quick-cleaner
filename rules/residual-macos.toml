@@ -15,8 +15,6 @@ manual_uninstall_bundle_ids = [
 ]
 
 manual_app_support_bundle_ids = ["app.qingjian.inputmethod"]
-# https://mole.fit/tested-apps/zoom — 官方入口在 Frameworks，不在 Resources。
-"embedded_uninstaller:us.zoom.xos" = ["Contents/Frameworks/ZoomUninstaller.app"]
 helper_id_suffixes = [".helper.renderer", ".helper.plugin", ".helper.alerts", ".helper.gpu", ".helper.np", ".helper", ".shipit", ".sparkle", ".xpc"]
 shared_vendor_prefixes = ["com.apple", "com.google", "com.microsoft", "com.adobe", "com.amazon", "com.oracle", "com.jetbrains", "org.mozilla", "org.chromium", "com.electron", "net.java"]
 dot_config_parents = ["", ".config", ".cache", ".local/share", ".local/state"]
@@ -25,6 +23,8 @@ id_file_suffixes = [".plist", ".binarycookies", ".savedstate", ".sfl2", ".sfl3",
 
 # 完整卸载指南复核后补充的精确主 ID 别名；均需用户选择，不收共享父目录。
 [locations]
+# https://mole.fit/tested-apps/zoom — 官方入口在 Frameworks，不在 Resources。
+"embedded_uninstaller:us.zoom.xos" = [{ path = "Contents/Frameworks/ZoomUninstaller.app", source = "Other" }]
 # https://mole.fit/tested-apps/fleet
 "app:com.jetbrains.fleet" = [
   { path = "Application Support/JetBrains/Fleet", source = "AppSupportDir" },
