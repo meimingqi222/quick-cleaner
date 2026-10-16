@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "cask_uninstall.rs"]
+mod cask_uninstall;
 #[path = "script_uninstall.rs"]
 mod script_uninstall;
 
@@ -429,6 +431,21 @@ fn find_uninstaller(app_path: &Path, bundle_id: Option<&str>) -> Option<PathBuf>
     if let Some(spec) = bundle_id.and_then(crate::core::rules::uninstall::script_for) {
         return script_uninstall::uninstaller(app_path, &spec);
     }
+    if let Some(id) = bundle_id {
+        let declared =
+            crate::core::rules::list("residual-macos", &format!("embedded_uninstaller:{id}"));
+        if !declared.is_empty() {
+            return declared
+                .into_iter()
+                .take(16)
+                .map(|relative| app_path.join(relative))
+                .find(|path| {
+                    path.extension().is_some_and(|ext| ext == "app")
+                        && path.is_dir()
+                        && crate::core::rules::facts::confined_path(app_path, path).unwrap_or(false)
+                });
+        }
+    }
     let resources = app_path.join("Contents").join("Resources");
     if let Ok(entries) = std::fs::read_dir(&resources) {
         for entry in entries.flatten() {
@@ -504,35 +521,54 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
         return Err("系统自带应用位于只读的系统卷上，无法卸载".into());
     }
 
+    if cask_uninstall::run(app)? {
+        return Ok(());
+    }
+    if app.uninstall_string.is_none()
+        && !crate::core::rules::list(
+            "residual-macos",
+            &format!("embedded_uninstaller:{}", app.registry_subpath),
+        )
+        .is_empty()
+    {
+        return Err(
+            "Required official uninstaller unavailable; no fallback deletion performed".into(),
+        );
+    }
+
     // 优先调用应用自带的卸载程序
     if let Some(uninstaller) = &app.uninstall_string {
         let uninstaller_path = PathBuf::from(uninstaller);
-        if uninstaller_path.exists() {
-            let status = std::process::Command::new("open")
-                .arg("--wait-apps")
-                .arg(&uninstaller_path)
-                .status();
-            match status {
-                Ok(exit) if exit.success() && wait_until_removed(loc) => return Ok(()),
-                Ok(exit) if exit.success() => {
-                    return Err(format!(
-                        "自带卸载程序已退出，但应用仍然存在：{}",
-                        loc.display()
-                    ));
-                }
-                Ok(exit) => {
-                    return Err(format!("自带卸载程序退出异常：{exit}"));
-                }
-                Err(error) => {
-                    return Err(format!("无法启动自带卸载程序：{error}"));
-                }
+        if !crate::core::rules::facts::confined_path(loc, &uninstaller_path).unwrap_or(false)
+            || !uninstaller_path.is_dir()
+        {
+            return Err("自带卸载程序已缺失或路径发生变化；未执行回退删除".into());
+        }
+        let status = std::process::Command::new("open")
+            .arg("--wait-apps")
+            .arg(&uninstaller_path)
+            .status();
+        match status {
+            Ok(exit) if exit.success() && wait_until_removed(loc) => return Ok(()),
+            Ok(exit) if exit.success() => {
+                return Err(format!(
+                    "自带卸载程序已退出，但应用仍然存在：{}",
+                    loc.display()
+                ));
+            }
+            Ok(exit) => {
+                return Err(format!("自带卸载程序退出异常：{exit}"));
+            }
+            Err(error) => {
+                return Err(format!("无法启动自带卸载程序：{error}"));
             }
         }
     }
 
     // 回退：移入废纸篓
     super::trash::move_to_trash(loc)?;
-    if loc.exists() {
+    if !matches!(std::fs::symlink_metadata(loc), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
         Err(format!("卸载后应用程序仍然存在：{}", loc.display()))
     } else {
         Ok(())
@@ -543,12 +579,14 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
 /// 一个很短的收敛窗口，避免刚退出就误判并再次送废纸篓。
 fn wait_until_removed(path: &Path) -> bool {
     for _ in 0..50 {
-        if !path.exists() {
-            return true;
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(_) => return false,
+            Ok(_) => {}
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    !path.exists()
+    matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// 是否位于系统卷（SSV 密封只读）。
@@ -830,6 +868,30 @@ fn is_real_bundle(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_discovers_only_the_declared_confined_uninstaller() {
+        let root = crate::core::testing::fixture("zoom_uninstall_entry");
+        let bundle = root.join("zoom.us.app");
+        let entry = bundle.join("Contents/Frameworks/ZoomUninstaller.app");
+        std::fs::create_dir_all(&entry).unwrap();
+        assert_eq!(
+            find_uninstaller(&bundle, Some("us.zoom.xos")),
+            Some(entry.clone())
+        );
+        assert_eq!(find_uninstaller(&bundle, Some("us.zoom.other")), None);
+        std::fs::remove_dir_all(&entry).unwrap();
+        assert_eq!(find_uninstaller(&bundle, Some("us.zoom.xos")), None);
+        let external = root.join("external.app");
+        std::fs::create_dir_all(&external).unwrap();
+        std::os::unix::fs::symlink(&external, &entry).unwrap();
+        assert_eq!(find_uninstaller(&bundle, Some("us.zoom.xos")), None);
+        let loop_dir = root.join("loop");
+        std::os::unix::fs::symlink(&loop_dir, &loop_dir).unwrap();
+        assert!(!wait_until_removed(&loop_dir.join("state")));
+        assert!(wait_until_removed(&root.join("missing")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn qingjian_discovery_includes_both_input_method_roots() {

@@ -248,6 +248,27 @@ mod tests {
     }
 
     #[test]
+    fn vendor_component_removal_never_degrades_to_bundle_trash() {
+        for id in [
+            "com.docker.docker",
+            "com.teamviewer.TeamViewer",
+            "at.obdev.littlesnitchmini",
+            "com.nssurge.surge-mac",
+            "com.synology.CloudStationUI",
+            "com.displaylink.DisplayLinkUserAgent",
+            "com.wacom.WacomCenter",
+            "com.elgato.StreamDeck",
+        ] {
+            let mut product = app(id, "fixture", "fixture");
+            product.registry_root = AppRegRoot::Hkcu;
+            product.registry_subpath = id.into();
+            assert!(requires_manual_uninstall(&product), "{id}");
+            product.registry_subpath.push_str(".other");
+            assert!(!requires_manual_uninstall(&product));
+        }
+    }
+
+    #[test]
     fn msime_data_warning_requires_complete_registration_identity() {
         let snapshot = super::super::current();
         let warnings = &snapshot

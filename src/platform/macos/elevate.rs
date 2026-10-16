@@ -149,7 +149,9 @@ pub fn elevated_remove(paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     planned
         .into_iter()
         .map(|(_, path)| path.clone())
-        .filter(|path| std::fs::symlink_metadata(path).is_err())
+        .filter(|path| {
+            matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        })
         .collect()
 }
 

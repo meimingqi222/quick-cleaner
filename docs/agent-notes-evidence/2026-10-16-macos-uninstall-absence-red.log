@@ -1,0 +1,26 @@
+Manufactured regression: exact production verify_residuals function with only its filesystem predicate reverted to p.exists(). Portable Linux harness; native extension/metadata boundaries stubbed, no native uninstall executed.
+   Compiling qc-uninstall-inventory-check v0.0.0 (/tmp/qc-uninstall-inventory)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running unittests lib.rs (/tmp/qc-uninstall-inventory/target/debug/deps/qc_uninstall_inventory_check-2a6e22e0493ee14b)
+
+running 1 test
+test platform::residuals::uninstall_verification_keeps_unreadable_paths_and_dangling_links ... FAILED
+
+failures:
+
+---- platform::residuals::uninstall_verification_keeps_unreadable_paths_and_dangling_links stdout ----
+
+thread 'platform::residuals::uninstall_verification_keeps_unreadable_paths_and_dangling_links' (30076) panicked at verify-test.rs:29:9:
+assertion `left == right` failed
+  left: []
+ right: ["/tmp/uninstall_unknown_paths_30075/loop/state", "/tmp/uninstall_unknown_paths_30075/dangling"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::residuals::uninstall_verification_keeps_unreadable_paths_and_dangling_links
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+Exit status: 101

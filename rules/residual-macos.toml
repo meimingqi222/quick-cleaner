@@ -1,19 +1,153 @@
 id = "residual-macos"
-version = 3
+version = 4
 platform = "macos"
 required = ["file", "registration"]
 
 # Bundle-ID evidence and family exclusion algorithms remain fixed in Rust.
 [lists]
-# 内部 GUI 卸载入口，没有可供外部调用的卸载命令。
-manual_uninstall_bundle_ids = ["app.msime.macos", "app.msime.inputmethod.MetasequoiaIME", "app.msime.macos.pinyin", "app.msime.inputmethod.pinyin", "app.msime.macos.wubi", "app.msime.inputmethod.wubi", "app.msime.macos.japanese", "app.msime.inputmethod.japanese", "app.msime.macos.vietnamese", "app.msime.inputmethod.vietnamese", "app.msime.macos.tibetan", "app.msime.inputmethod.tibetan"]
+# 官方交互式/驱动卸载不能用删 bundle 替代。来源为 tested-apps 对应产品完整指南。
+manual_uninstall_bundle_ids = [
+  "app.msime.macos", "app.msime.inputmethod.MetasequoiaIME", "app.msime.macos.pinyin", "app.msime.inputmethod.pinyin",
+  "app.msime.macos.wubi", "app.msime.inputmethod.wubi", "app.msime.macos.japanese", "app.msime.inputmethod.japanese",
+  "app.msime.macos.vietnamese", "app.msime.inputmethod.vietnamese", "app.msime.macos.tibetan", "app.msime.inputmethod.tibetan",
+  "com.docker.docker", "com.teamviewer.TeamViewer", "at.obdev.littlesnitchmini", "com.nssurge.surge-mac",
+  "com.synology.CloudStationUI", "com.displaylink.DisplayLinkUserAgent", "com.wacom.WacomCenter", "com.elgato.StreamDeck",
+]
 
 manual_app_support_bundle_ids = ["app.qingjian.inputmethod"]
+# https://mole.fit/tested-apps/zoom — 官方入口在 Frameworks，不在 Resources。
+"embedded_uninstaller:us.zoom.xos" = ["Contents/Frameworks/ZoomUninstaller.app"]
 helper_id_suffixes = [".helper.renderer", ".helper.plugin", ".helper.alerts", ".helper.gpu", ".helper.np", ".helper", ".shipit", ".sparkle", ".xpc"]
 shared_vendor_prefixes = ["com.apple", "com.google", "com.microsoft", "com.adobe", "com.amazon", "com.oracle", "com.jetbrains", "org.mozilla", "org.chromium", "com.electron", "net.java"]
 dot_config_parents = ["", ".config", ".cache", ".local/share", ".local/state"]
 protected_dot_dirs = ["config", "cache", "local", "ssh", "gnupg", "aws", "kube", "docker", "npm", "cargo", "rustup", "gradle", "nvm", "pyenv", "vim", "git", "trash"]
 id_file_suffixes = [".plist", ".binarycookies", ".savedstate", ".sfl2", ".sfl3", ".sfl4"]
+
+# 完整卸载指南复核后补充的精确主 ID 别名；均需用户选择，不收共享父目录。
+[locations]
+# https://mole.fit/tested-apps/fleet
+"app:com.jetbrains.fleet" = [
+  { path = "Application Support/JetBrains/Fleet", source = "AppSupportDir" },
+  { path = "Caches/JetBrains/Fleet", source = "CacheDir" },
+  { path = "Logs/JetBrains/Fleet", source = "LogDir" },
+]
+# https://mole.fit/tested-apps/megasync
+"app:mega.mac" = [{ path = "Application Support/Mega Limited/MEGAsync", source = "AppSupportDir" }]
+# https://mole.fit/tested-apps/stream-deck
+"app:com.elgato.StreamDeck" = [
+  { path = "Application Support/elgato/StreamDeck", source = "AppSupportDir" },
+  { path = "Caches/elgato/StreamDeck", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/google-japanese-input
+"app:com.google.inputmethod.Japanese" = [{ path = "Application Support/Google/JapaneseInput", source = "AppSupportDir" }]
+# https://mole.fit/tested-apps/chatgpt — 不触及独立 Codex CLI 的 ~/.codex。
+"app:com.openai.codex" = [
+  { path = "Caches/ChatGPTHelper", source = "CacheDir" },
+  { path = "Preferences/ChatGPTHelper.plist", source = "PreferenceFile" },
+]
+# https://mole.fit/tested-apps/ticktick
+"app:com.TickTick.task.mac" = [
+  { path = "Application Support/bugsnag-shared-com.TickTick.task.mac", source = "AppSupportDir" },
+  { path = "Caches/bugsnag-shared-com.TickTick.task.mac", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/tencent-docs
+"app:com.tencent.mac.tdappdesktop" = [
+  { path = "Application Support/TDAppDesktop", source = "AppSupportDir" },
+  { path = "Caches/tdappdesktop-updater", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/yuque
+"app:com.yuque.app" = [{ path = "Application Support/yuque-desktop", source = "AppSupportDir" }]
+# https://mole.fit/tested-apps/wps-notes
+"app:cn.kdocs.ai-note" = [
+  { path = "Application Support/wpsnote", source = "AppSupportDir" },
+  { path = "Application Support/Kingsoft/wpsnote", source = "AppSupportDir" },
+]
+# https://mole.fit/tested-apps/spotify
+"app:com.spotify.client" = [{ path = "Application Support/io.branch/com.spotify.client", source = "AppSupportDir" }]
+# https://mole.fit/tested-apps/qq-music
+"app:com.tencent.QQMusicMac" = [{ path = "Caches/Matrix/CrashBlock/QQMusic", source = "CacheDir" }]
+# https://mole.fit/tested-apps/musescore
+"app:org.musescore.MuseScore" = [
+  { path = "Application Support/MuseScore/MuseScore4", source = "AppSupportDir" },
+  { path = "Caches/MuseScore/MuseScore4", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/dingtalk
+"app:com.alibaba.DingTalkMac" = [
+  { path = "Application Support/DingTalkMac", source = "AppSupportDir" },
+  { path = "Caches/KSCrash/DingTalk", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/feishu — 与国际版身份和数据分开。
+"app:com.electron.lark" = [
+  { path = "Application Support/LarkShell", source = "AppSupportDir" },
+  { path = "Caches/LarkShell", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/lark
+"app:com.larksuite.larkApp" = [
+  { path = "Application Support/LarkInternational", source = "AppSupportDir" },
+  { path = "Caches/LarkInternational", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/spark-desktop
+"app:com.readdle.SparkDesktop" = [{ path = "Logs/SparkMacDesktop", source = "LogDir" }]
+# https://mole.fit/tested-apps/ferdium
+"app:org.ferdium.ferdium-app" = [{ path = "Application Support/Caches/ferdium-updater", source = "CacheDir" }]
+# https://mole.fit/tested-apps/plexamp
+"app:tv.plex.plexamp" = [{ path = "Application Support/Caches/plexamp-updater", source = "CacheDir" }]
+# https://mole.fit/tested-apps/epic-games-launcher
+"app:com.epicgames.EpicGamesLauncher" = [
+  { path = "Logs/Unreal Engine/EpicGamesLauncher", source = "LogDir" },
+  { path = "Preferences/Unreal Engine/EpicGamesLauncher", source = "PreferenceFile" },
+]
+# https://mole.fit/tested-apps/geforce-now
+"app:com.nvidia.gfnpc.mall" = [
+  { path = "Application Support/NVIDIA/GeForceNOW", source = "AppSupportDir" },
+  { path = "Caches/NVIDIA/GeForceNOW", source = "CacheDir" },
+  { path = "Caches/com.apple.nsurlsessiond/Downloads/com.nvidia.gfnpc.mall", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/scribus
+"app:net.scribus" = [{ path = "Preferences/Scribus", source = "PreferenceFile" }]
+# https://mole.fit/tested-apps/lyx — '-' 属于产品前缀，后缀仅接受数字版本。
+"versioned:org.lyx.lyx" = [{ path = "Application Support/LyX-", source = "AppSupportDir" }]
+"app:org.lyx.lyx" = [{ path = "Caches/com.apple.python/Applications/LyX.app", source = "CacheDir" }]
+# https://mole.fit/tested-apps/tencent-lemon
+"app:com.tencent.Lemon" = [
+  { path = "Caches/com.tencent.LemonMonitor", source = "CacheDir" },
+  { path = "Logs/LemonMonitor.log", source = "LogDir" },
+  { path = "Logs/Tencent Lemon.log", source = "LogDir" },
+  { path = "Preferences/com.tencent.LemonUpdate.plist", source = "PreferenceFile" },
+  { path = "Preferences/LemonMonitor_packet.dat", source = "PreferenceFile" },
+  { path = "Preferences/Tencent Lemon_packet.dat", source = "PreferenceFile" },
+]
+# https://mole.fit/tested-apps/firefox
+"app:org.mozilla.firefox" = [{ path = "Caches/Mozilla/updates/Applications/Firefox", source = "CacheDir" }]
+# https://mole.fit/tested-apps/zen-browser
+"app:app.zen-browser.zen" = [
+  { path = "Caches/Mozilla/updates/Applications/Zen", source = "CacheDir" },
+  { path = "Caches/Mozilla/updates/Applications/Zen Browser", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/thunderbird
+"app:org.mozilla.thunderbird" = [{ path = "Caches/Mozilla/updates/Applications/Thunderbird", source = "CacheDir" }]
+# https://mole.fit/tested-apps/beekeeper-studio
+"app:io.beekeeperstudio.desktop" = [{ path = "Application Support/Caches/beekeeper-studio-updater", source = "CacheDir" }]
+# https://mole.fit/tested-apps/evernote
+"app:com.evernote.Evernote" = [
+  { path = "Caches/evernote-client-updater", source = "CacheDir" },
+  { path = "Application Support/Caches/evernote-client-updater", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/free-download-manager
+"app:org.freedownloadmanager.fdm6" = [
+  { path = "Application Support/Softdeluxe/Free Download Manager", source = "AppSupportDir" },
+  { path = "Caches/Softdeluxe/Free Download Manager", source = "CacheDir" },
+]
+# https://mole.fit/tested-apps/webex — 不收独立 Webex Meetings 或共享厂商父目录。
+"app:Cisco-Systems.Spark" = [
+  { path = "Application Support/Cisco Spark", source = "AppSupportDir" },
+  { path = "Application Support/Cisco Webex Launcher", source = "AppSupportDir" },
+]
+# https://mole.fit/tested-apps/zoom — 不包含用户会议录制目录。
+"app:us.zoom.xos" = [
+  { path = "Preferences/ZoomChat.plist", source = "PreferenceFile" },
+  { path = "Logs/ZoomPhone", source = "LogDir" },
+]
 
 [[locations.satellite_dirs]]
 path = "Preferences"
@@ -42,6 +176,177 @@ source = "Other"
 [[locations.satellite_dirs]]
 path = "LaunchAgents"
 source = "LaunchAgent"
+
+# 共享父目录只用于查找，不作为残留目标；只收精确 ID/应用名的子项，均不预选。
+[[locations.review_id_dirs]]
+path = "WebKit"
+source = "Other"
+
+[[locations.review_dirs]]
+path = "Application Support/Caches"
+source = "CacheDir"
+
+[[locations.review_dirs]]
+path = "Caches/SentryCrash"
+source = "CacheDir"
+
+[[locations.review_dirs]]
+path = "Caches/com.plausiblelabs.crashreporter.data"
+source = "CacheDir"
+
+[[locations.review_dirs]]
+path = "Caches/CloudKit"
+source = "CacheDir"
+
+[[locations.review_dirs]]
+path = "Caches/com.crashlytics.data"
+source = "CacheDir"
+
+[[locations.review_dirs]]
+path = "Application Support/com.bugsnag.Bugsnag"
+source = "AppSupportDir"
+
+# 清理 manifest 本身必须证明 JSON 的 path 指向待卸载 .app 内的现存文件。
+[[locations.native_messaging_dirs]]
+path = "Application Support/Google/Chrome/NativeMessagingHosts"
+source = "Other"
+
+[[locations.native_messaging_dirs]]
+path = "Application Support/Chromium/NativeMessagingHosts"
+source = "Other"
+
+[[locations.native_messaging_dirs]]
+path = "Application Support/Microsoft Edge/NativeMessagingHosts"
+source = "Other"
+
+[[locations.native_messaging_dirs]]
+path = "Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+source = "Other"
+
+[[locations.native_messaging_dirs]]
+path = "Application Support/Vivaldi/NativeMessagingHosts"
+source = "Other"
+
+[[locations.native_messaging_dirs]]
+path = "Application Support/Mozilla/NativeMessagingHosts"
+source = "Other"
+
+# 公开卸载指南确认的异名路径。key 是完整 Bundle ID，不按显示名/厂商前缀触发。
+# https://mole.fit/tested-apps/notion
+[[locations."app:notion.id"]]
+path = "Application Support/Caches/notion-updater"
+source = "CacheDir"
+
+# https://mole.fit/tested-apps/imageoptim
+[[locations."app:net.pornel.ImageOptim"]]
+path = "Caches/ImageOptimResults.db"
+source = "CacheDir"
+
+# https://mole.fit/tested-apps/linkly-ai
+[[locations."app:ai.linkly.desktop"]]
+path = "Application Support/linkly-ai-diagnostics"
+source = "LogDir"
+
+# https://mole.fit/tested-apps/jetbrains-toolbox
+[[locations."app:com.jetbrains.toolbox"]]
+path = "Application Support/JetBrains/Toolbox"
+source = "AppSupportDir"
+
+[[locations."app:com.jetbrains.toolbox"]]
+path = "Caches/JetBrains/Toolbox"
+source = "CacheDir"
+
+[[locations."app:com.jetbrains.toolbox"]]
+path = "Logs/JetBrains/Toolbox"
+source = "LogDir"
+
+# https://mole.fit/tested-apps/chrome ; 不收共享的 Google 更新器或 Google 父目录。
+[[locations."app:com.google.Chrome"]]
+path = "Application Support/Google/Chrome"
+source = "AppSupportDir"
+
+[[locations."app:com.google.Chrome"]]
+path = "Caches/Google/Chrome"
+source = "CacheDir"
+
+# https://mole.fit/tested-apps/brave
+[[locations."app:com.brave.Browser"]]
+path = "Application Support/BraveSoftware/Brave-Browser"
+source = "AppSupportDir"
+
+[[locations."app:com.brave.Browser"]]
+path = "Caches/BraveSoftware/Brave-Browser"
+source = "CacheDir"
+
+# versioned 的最后一段是产品前缀，只接受点分数字版本，不收厂商根或其它 edition。
+# https://mole.fit/tested-apps/android-studio
+[[locations."versioned:com.google.android.studio"]]
+path = "Application Support/Google/AndroidStudio"
+source = "AppSupportDir"
+
+[[locations."versioned:com.google.android.studio"]]
+path = "Caches/Google/AndroidStudio"
+source = "CacheDir"
+
+[[locations."versioned:com.google.android.studio"]]
+path = "Logs/Google/AndroidStudio"
+source = "LogDir"
+
+# https://mole.fit/tested-apps/intellij-idea
+[[locations."versioned:com.jetbrains.intellij"]]
+path = "Application Support/JetBrains/IntelliJIdea"
+source = "AppSupportDir"
+
+[[locations."versioned:com.jetbrains.intellij"]]
+path = "Caches/JetBrains/IntelliJIdea"
+source = "CacheDir"
+
+[[locations."versioned:com.jetbrains.intellij"]]
+path = "Logs/JetBrains/IntelliJIdea"
+source = "LogDir"
+
+[[locations."versioned:com.jetbrains.intellij"]]
+path = "Preferences/IntelliJIdea"
+source = "PreferenceFile"
+
+# https://mole.fit/tested-apps/intellij-idea-ce
+[[locations."versioned:com.jetbrains.intellij.ce"]]
+path = "Application Support/JetBrains/IdeaIC"
+source = "AppSupportDir"
+
+[[locations."versioned:com.jetbrains.intellij.ce"]]
+path = "Caches/JetBrains/IdeaIC"
+source = "CacheDir"
+
+[[locations."versioned:com.jetbrains.intellij.ce"]]
+path = "Logs/JetBrains/IdeaIC"
+source = "LogDir"
+
+# https://mole.fit/tested-apps/pycharm
+[[locations."versioned:com.jetbrains.pycharm"]]
+path = "Application Support/JetBrains/PyCharm"
+source = "AppSupportDir"
+
+[[locations."versioned:com.jetbrains.pycharm"]]
+path = "Caches/JetBrains/PyCharm"
+source = "CacheDir"
+
+[[locations."versioned:com.jetbrains.pycharm"]]
+path = "Logs/JetBrains/PyCharm"
+source = "LogDir"
+
+# https://mole.fit/tested-apps/datagrip
+[[locations."versioned:com.jetbrains.datagrip"]]
+path = "Application Support/JetBrains/DataGrip"
+source = "AppSupportDir"
+
+[[locations."versioned:com.jetbrains.datagrip"]]
+path = "Caches/JetBrains/DataGrip"
+source = "CacheDir"
+
+[[locations."versioned:com.jetbrains.datagrip"]]
+path = "Logs/JetBrains/DataGrip"
+source = "LogDir"
 
 [[locations.user_family_dirs]]
 path = "Application Support"

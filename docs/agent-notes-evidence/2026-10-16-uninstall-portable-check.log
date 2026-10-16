@@ -1,0 +1,42 @@
+Linux portable harness only: production cask/model/process modules and extracted completion/verification; native boundaries stubbed. Not a full product build or native uninstall acceptance.
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests lib.rs (/tmp/qc-uninstall-inventory/target/debug/deps/qc_uninstall_inventory_check-2a6e22e0493ee14b)
+
+running 32 tests
+test core::model::tests::docker_path_round_trips ... ok
+test completion::completion_refuses_unknown_path ... ok
+test core::cask::tests::installed_cask_scope_refuses_companions_scripts_and_unknown_scope ... ok
+test core::cask::tests::installed_cask_scope_uses_persisted_appdir_and_exact_target ... ok
+test core::model::tests::identity_recheck_fails_when_path_vanishes ... ok
+test core::model::tests::identity_recheck_fails_after_delete_and_recreate ... ok
+test core::model::tests::identity_recheck_ignores_dir_mtime_churn ... ok
+test core::model::tests::identity_recheck_inplace_write_verdict_is_platform_split ... ok
+test core::model::tests::memory_uses_binary_units_like_the_system_does ... ok
+test core::model::tests::identity_recheck_fails_when_ancestor_becomes_symlink ... ok
+test core::model::tests::real_paths_are_not_virtual ... ok
+test core::model::tests::snapshot_path_round_trips ... ok
+test core::model::tests::identity_recheck_passes_for_unchanged_file ... ok
+test core::model::tests::test_check_from_counts ... ok
+test core::model::tests::test_commas ... ok
+test core::model::tests::test_fmt_size ... ok
+test core::model::tests::truncate_is_char_safe ... ok
+test core::proc::tests::call_with_timeout_returns_value_before_deadline ... ok
+test core::proc::tests::missing_program_is_none ... ok
+test core::proc::tests::nonzero_exit_is_reported_but_not_an_error ... ok
+test core::proc::tests::collects_stdout_and_exit_status ... ok
+test core::proc::tests::signal_termination_has_no_exit_code ... ok
+test core::testing::tests::fixture_is_reusable_within_a_process ... ok
+test core::testing::tests::reclaim_leaves_live_and_foreign_names_alone ... ok
+test platform::apps::cask_uninstall::tests::cask_inventory_uses_installed_scope_and_rejects_corrupt_or_redirected_records ... ok
+test platform::command::tests::a_system_command_resolves_through_path ... ok
+test platform::command::tests::an_absolute_path_is_taken_at_face_value ... ok
+test platform::command::tests::an_unknown_command_resolves_to_nothing ... ok
+test platform::residuals::uninstall_verification_keeps_unreadable_paths_and_dangling_links ... ok
+test core::proc::tests::large_output_does_not_deadlock ... ok
+test core::proc::tests::call_with_timeout_returns_none_after_deadline ... ok
+test core::proc::tests::timeout_returns_none ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+Test exit status: 0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s

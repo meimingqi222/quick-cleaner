@@ -4,6 +4,8 @@
 
 pub mod apps;
 pub mod brew;
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) mod cask;
 pub mod categories;
 pub mod cleaner;
 pub mod declutter;
