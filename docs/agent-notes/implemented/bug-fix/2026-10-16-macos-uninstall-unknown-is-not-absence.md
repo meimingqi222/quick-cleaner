@@ -39,4 +39,6 @@ Proved: 在 Linux 隔离 Cargo harness 中提取生产 verify_residuals 函数�
 真实临时文件与身份捕获参与执行；未用权限错误的伪造返回值。
 
 Limitation: harness 的原生扩展/应用元数据边界为未调用的 stub；未运行提权删除、
-真实 Homebrew 或原生卸载器，不是端到端卸载验收。完整产品测试仍需 macOS。
+真实 Homebrew 或原生卸载器，不是端到端卸载验收。后续 macOS 原生 CI
+run 38907489652 已运行并通过此回归及完整 811 项测试：
+https://github.com/meimingqi222/quick-cleaner/actions/runs/38907489652 。

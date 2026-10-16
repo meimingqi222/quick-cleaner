@@ -66,7 +66,10 @@ the delayed write. The parent test still requires real readiness, None at the sa
 two-second deadline, return before three seconds and no delayed write. No retries,
 ignored tests, longer deadlines or production runner changes. The separate cmd/
 PowerShell tree-termination test retains coverage of an actual scripted tool.
-Native green acceptance of the revised fixture is pending its CI run.
+Native CI run 38907489652 passed the revised fixture and all 778 Windows tests
+(zero failures, nine pre-existing ignored tests). The elevated ACL step also passed.
+The same run passed all 811 macOS tests and the combined bound-anchor check:
+https://github.com/meimingqi222/quick-cleaner/actions/runs/38907489652 .
 
 Pitfalls P1-P47 reviewed: P6 elevated recovery, P20 owner failure handling,
 P23 hidden consoles, P40 command quoting, P43 bounded node-only ACL repair and

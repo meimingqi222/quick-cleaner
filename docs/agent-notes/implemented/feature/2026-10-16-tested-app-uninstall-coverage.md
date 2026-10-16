@@ -71,8 +71,8 @@ https://mole.fit/tested-apps/opencat 、https://mole.fit/tested-apps/ticktick �
 vChewing 与 DiskWise 没有详情页，不能称其卸载方法已核实。
 
 不能承诺全部零残留，也没有安装它们逐一运行。共享 SDK/模型/项目、系统扩展、
-权限/SIP、需要用户选择的官方卸载步骤保持保护或人工处理。所有产品改动仍是本地
-未发布代码。Homebrew CLI 不提供不可变 receipt 执行接口：执行前复读只能缩小
+权限/SIP、需要用户选择的官方卸载步骤保持保护或人工处理。产品改动已提交推送，
+v0.0.16 tag 指向通过原生 CI 的提交。Homebrew CLI 不提供不可变 receipt 执行接口：执行前复读只能缩小
 竞态窗口，不能消除 Homebrew 自身加载元数据的竞态；NO_INSTALL_FROM_API 不等于
 完全离线。任一 Caskroom 损坏/不可读当前会保守阻止卸载，包括无关应用，这是
 已知可用性限制；不支持自定义 Homebrew prefix。智能清理保持原状。
@@ -91,15 +91,22 @@ vChewing 与 DiskWise 没有详情页，不能称其卸载方法已核实。
 Proved: Linux 临时隔离 Cargo harness 直接引用生产 cask 策略与 inventory 模块，
 三项 cask 测试通过，真实文件夹覆盖重命名目标、持久化 appdir、最新定义中的伴随
 应用、损坏和重定向记录；focused clippy -D warnings 通过。这不是原生 brew 执行。
-13 份 TOML 可解析，locations 50/64，格式、空白和 UI 守卫通过。
+13 份 TOML 可解析，初始 locations 50/64；Zoom 改用路径声明后为 51/64。
+格式、空白和 UI 守卫通过。
 最终同一隔离 harness 全跑为 32 passed、0 failed（没有忽略测试），clippy 通过；
 证据 `docs/agent-notes-evidence/2026-10-16-uninstall-portable-check.log`。
 
-Limitation: 新增残留扫描、Zoom 发现和人工路由的完整产品测试尚未原生执行。
-完整 cargo test 在 gdk-sys 缺少 gdk-3.0 处停止；产品也没有 Linux 平台实现。
+后续原生 CI run 38907489652：macOS 编译、严格 clippy 和 811 项测试通过；
+Windows 严格 clippy、提权 ACL 检查和 778 项测试通过，回归记录与真实测试绑定
+校验通过。上述新增残留扫描、Zoom 和人工路由测试均参与原生执行：
+https://github.com/meimingqi222/quick-cleaner/actions/runs/38907489652 。
+既有忽略项为 macOS 12 项、Windows 9 项；本轮没有新增忽略测试。
+
+Limitation: Linux orb 的完整 cargo test 在 gdk-sys 缺少 gdk-3.0 处停止，
+产品也没有 Linux 平台实现；以上原生结论来自 GitHub CI，不来自 orb。
 隔离 harness 的全跑曾为 31 通过、1 失败，失败是既有模型测试的 Linux inode
-立即复用，不隐藏、不改该测试。完整编译、macOS/Windows 回归、界面文字布局及
-实际卸载验收仍需原生 runner；不以静态分类或隔离 harness 代替这些验证。
+立即复用，不隐藏、不改该测试。界面文字布局、真实 Homebrew/官方卸载器及全部
+822 款软件安装后逐一卸载仍未验收；不能将 CI 单元回归当成全部软件零残留证明。
 
 Pitfalls checked: 全表已读；P19 保留原有残留去重，P25/P28/P37 保留冻结身份及
 删除前复核，P30 不改变固定 GPUI Git patch，P31 不扩张孤儿扫描，P32 不把名称
