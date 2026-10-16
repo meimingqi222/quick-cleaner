@@ -43,8 +43,11 @@ Proved: both Windows and macOS source/bundle tests failed with Invalid residual
 matching policy before the fix; the Zoom discovery test also failed at snapshot
 initialization. Real CI excerpts are in
 `docs/agent-notes-evidence/2026-10-16-uninstaller-path-policy-red.log`.
-Green native rerun is pending when this fix is committed; do not treat TOML parsing
-or a successful build as completion evidence.
+Run 38905831194 then passed source/bundle validation on both platforms and Zoom
+discovery on macOS (811 native tests passed). Evidence:
+`docs/agent-notes-evidence/2026-10-16-uninstaller-path-policy-green.log`.
+Windows overall was still red on the independent descendant-readiness test; this
+does not claim all CI passed. TOML parsing or build success alone is not acceptance.
 
 Pitfalls checked: P19/P25/P28/P31/P37 ownership and identity are unchanged;
 P36 configuration structure and runtime validation are preserved; P49/P50 official
