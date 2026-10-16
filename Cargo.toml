@@ -51,7 +51,7 @@ libc = "0.2"
 objc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "libloaderapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl", "iphlpapi", "tcpmib", "udpmib", "iprtrmib"] }
+winapi = { version = "0.3", features = ["shellapi", "libloaderapi", "winbase", "winnt", "minwinbase", "fileapi", "handleapi", "shobjidl", "shobjidl_core", "shlobj", "shtypes", "objbase", "combaseapi", "ioapiset", "winioctl", "errhandlingapi", "processthreadsapi", "securitybaseapi", "sddl", "winreg", "tlhelp32", "jobapi2", "namedpipeapi", "winnls", "winsvc", "processenv", "impl-default", "winuser", "wingdi", "synchapi", "sysinfoapi", "minwindef", "basetsd", "windef", "winerror", "pdh", "psapi", "dxgi", "dxgiformat", "dxgitype", "d3d9types", "unknwnbase", "wbemcli", "oaidl", "oleauto", "rpcdce", "rpc", "rpcndr", "wtypes", "wtypesbase", "ntdef", "objidlbase", "objidl", "propidl", "iphlpapi", "tcpmib", "udpmib", "iprtrmib"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
