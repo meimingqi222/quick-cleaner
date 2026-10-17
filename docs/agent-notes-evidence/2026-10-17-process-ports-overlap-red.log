@@ -1,0 +1,16 @@
+Organic visual regression, reported by the user on 2026-10-17.
+Source thread: https://ampcode.com/threads/T-01a14396-c484-75ac-ba26-0073e2f27045
+Original Windows screenshot:
+https://ampcode.com/user-content/attachments/ca5c336eecbd156ec53ab89772e642589772bbbb0ce5e48cdbbe7a701b88e7b5-image.png
+
+Observed: with the right process detail drawer open, the selected
+AppleMobileDeviceService.exe row's port badges extend into the CPU column,
+overlapping the CPU bar and percent text. The mDNSResponder.exe row also has
+multiple port badges beside its name. The detail drawer is visibly open.
+
+This records the user's observed failure, not a locally executed test failure.
+The new focused GPUI layout test still needs native Windows/macOS execution:
+cargo test --lib process_ports_stay_before_cpu_with_detail_open_and_closed -- --nocapture
+The Linux orb attempt stops in GTK/Pango dependency build scripts before tests;
+the product also has no Linux platform implementation. No post-fix screenshot
+or native green test result is claimed here.

@@ -78,6 +78,8 @@ Note: `2026-10-05-os-version-badge-width.md`
     测试 `os_name_keeps_version_and_drops_the_sku`。
   - 版面兜底：徽章走 `header_chip`（可收缩 + `truncate`），卡片外壳
     `status_card()` 带 `overflow_hidden`，画出去的部分一定被裁掉。
+  - 进程表同样要守列边界：详情展开会压缩名称列，名称文本可收缩并截断，
+    端口与分组数量不收缩，三种行的名称列都要裁剪；回归用例及验收状态见 Note。
 - **改状态卡片文案时**：
   - 禁止假设「文字长了会自动省略」，gpui 这条路在这里不通。
   - 禁止拿 macOS 的字符串长度当版面依据，两边的系统名不一样长。
