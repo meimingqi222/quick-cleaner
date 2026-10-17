@@ -1,7 +1,7 @@
 //! 空间透镜业务：采样与维护动作；窗口生命周期由 tray_host 提供。
 use crate::core::tray_status::{TraySampler, TraySnapshot};
 use crate::core::user_accounts::{list_local_accounts, LocalAccount};
-use crate::ui::tray_host::{AppCallback, PopoverLifetime, TrayAction, TraySession};
+use crate::ui::tray_host::{PopoverLifetime, TrayAction, TraySession};
 use crate::ui::views::tray_popover::TrayPopover;
 use gpui::{App, AppContext, Context, Entity, WeakEntity};
 use std::sync::{Arc, Mutex};
@@ -14,10 +14,12 @@ pub struct TrayVolumeInfo {
     pub free_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum OverviewAction {
     OpenMain,
     ScanJunk,
+    OpenView(crate::ui::shell::View),
+    AnalyzeDisk(String),
     ReleaseMemory,
     Quit,
 }
@@ -202,19 +204,19 @@ impl TrayOverview {
     }
 }
 
+pub type OverviewDispatcher = Arc<dyn Fn(OverviewAction, &mut App) + Send + Sync>;
+
 /// 仅保存当前模型的弱引用；关窗后不因控制器常驻而保留内容与任务。
 #[derive(Clone)]
 pub struct OverviewController {
     model: Arc<Mutex<Option<WeakEntity<TrayOverview>>>>,
-    on_open_main: AppCallback,
-    on_scan: AppCallback,
+    dispatcher: OverviewDispatcher,
 }
 impl OverviewController {
-    pub fn new(on_open_main: AppCallback, on_scan: AppCallback) -> Self {
+    pub fn new(dispatcher: OverviewDispatcher) -> Self {
         Self {
             model: Arc::new(Mutex::new(None)),
-            on_open_main,
-            on_scan,
+            dispatcher,
         }
     }
     pub fn content(
@@ -233,15 +235,13 @@ impl OverviewController {
     }
     pub fn handle(&self, action: OverviewAction, cx: &mut App) {
         match action {
-            OverviewAction::OpenMain => (self.on_open_main)(cx),
-            OverviewAction::ScanJunk => (self.on_scan)(cx),
-            OverviewAction::Quit => cx.quit(),
             OverviewAction::ReleaseMemory => {
                 let model = self.model.lock().unwrap().clone();
                 if let Some(model) = model {
                     let _ = model.update(cx, |model, cx| model.trigger_purge_memory(cx));
                 }
             }
+            action => (self.dispatcher)(action, cx),
         }
     }
 }
@@ -256,7 +256,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
-        let host = crate::ui::tray_host::TrayHost::new(340., 430.);
+        let host = crate::ui::tray_host::TrayHost::new(360., 560.);
         let mut saved = None;
         let (_, visual) = cx.add_window_view(|window, cx| {
             host.mount(

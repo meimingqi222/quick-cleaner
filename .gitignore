@@ -65,6 +65,7 @@ $RECYCLE.BIN/
 .vscode/
 .commandcode/
 /.zcode/
+.claude/
 *.swp
 *.swo
 *~
