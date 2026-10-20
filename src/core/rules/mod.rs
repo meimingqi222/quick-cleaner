@@ -10,8 +10,9 @@ pub(crate) mod uninstall;
 pub mod variables;
 pub mod versions;
 pub use plan::{
-    CleanupPlan, CompletionCondition, InstallationInstance, NativeKind, OfficialOperation,
-    Operation, PlanAction, PlanStep, PlannedTarget, RuleObservation, RuleRef, TargetScope,
+    CleanupPlan, CompletionCondition, ExecutionRoute, InstallationInstance, NativeKind,
+    OfficialOperation, Operation, PlanAction, PlanStep, PlannedTarget, RuleObservation, RuleRef,
+    TargetScope,
 };
 
 use serde::{Deserialize, Serialize};

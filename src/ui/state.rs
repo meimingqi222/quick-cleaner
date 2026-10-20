@@ -167,11 +167,7 @@ impl JunkState {
                 // （Go modcache / pnpm store）删除时不逐文件累计体积，把
                 // 扫描阶段的称重带下去做一次性记账。其余真实路径用不到
                 // 这个字段，保持 None。
-                let size_hint = if i.operation.is_native_resource()
-                    || matches!(
-                        i.operation,
-                        crate::core::rules::Operation::Go | crate::core::rules::Operation::Pnpm
-                    ) {
+                let size_hint = if i.operation.carries_scan_size() {
                     Some(i.size)
                 } else {
                     None
@@ -181,12 +177,7 @@ impl JunkState {
                     rule: Some(i.rule.clone()),
                     operation: i.operation.clone(),
                     path: i.path.clone(),
-                    remove_dir: matches!(
-                        i.operation,
-                        crate::core::rules::Operation::File
-                            | crate::core::rules::Operation::Tree
-                            | crate::core::rules::Operation::GitWorktree { .. }
-                    ),
+                    remove_dir: i.operation.removes_directory(),
                     size_hint,
                     disposal: i.disposal,
                     identity: i.identity,

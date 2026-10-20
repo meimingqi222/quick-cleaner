@@ -250,20 +250,6 @@ fn dedupe_paths(t: &mut Vec<ScanTarget>) {
         .collect();
 }
 
-/// 操作是否会删除整个子树；只有这样的父目标才覆盖子目标。
-fn covers_subtree(operation: &crate::core::rules::Operation) -> bool {
-    use crate::core::rules::Operation;
-    matches!(
-        operation,
-        Operation::Tree
-            | Operation::Contents
-            | Operation::Go
-            | Operation::Pnpm
-            | Operation::GitWorktree { .. }
-            | Operation::Trash
-    )
-}
-
 /// 最外层仍在覆盖这条路径的祖先（路径集合唯一决定，与输入顺序无关）。
 fn covering_ancestor(
     paths: &[String],
@@ -273,7 +259,7 @@ fn covering_ancestor(
     let path = &paths[index];
     let mut found: Option<usize> = None;
     for (other, candidate) in paths.iter().enumerate() {
-        if other == index || candidate == path || !covers_subtree(&operations[other]) {
+        if other == index || candidate == path || !operations[other].covers_subtree() {
             continue;
         }
         if !crate::core::safety::at_or_under(path, candidate) {

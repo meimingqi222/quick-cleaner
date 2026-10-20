@@ -1166,100 +1166,61 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
             continue;
         }
 
-        if matches!(
-            t.operation,
-            crate::core::rules::Operation::Docker { .. }
-                | crate::core::rules::Operation::Snapshot { .. }
-                | crate::core::rules::Operation::Brew
-        ) {
-            let native_plan;
-            let plan = if let Some(plan) = plans.first() {
-                plan
-            } else {
-                native_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
-                    crate::core::rules::RuleRef::engine(),
-                    vec![crate::core::rules::PlannedTarget {
-                        path: d.clone(),
-                        operation: t.operation.clone(),
-                        identity: t.identity,
-                        disposal: t.disposal,
-                    }],
-                ));
-                &native_plan
-            };
-            if let Some(index) = plan.targets.iter().position(|target| {
-                target.operation.target_key(&target.path) == t.operation.target_key(d)
-            }) {
-                report.merge(crate::core::rules::flow::execute_native(
-                    plan,
-                    index,
-                    p,
-                    t.size_hint,
-                ));
-            } else {
-                report.record(d, CleanResult::Failed);
-            }
-            continue;
-        }
-
-        if matches!(
-            t.operation,
-            crate::core::rules::Operation::Go | crate::core::rules::Operation::Pnpm
-        ) {
-            let owner_plan;
-            let plan = if let Some(plan) = plans.first() {
-                plan
-            } else {
-                owner_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
-                    crate::core::rules::RuleRef::engine(),
-                    vec![crate::core::rules::PlannedTarget {
-                        path: d.clone(),
-                        operation: t.operation.clone(),
-                        identity: t.identity,
-                        disposal: t.disposal,
-                    }],
-                ));
-                &owner_plan
-            };
-            if let Some(index) = plan.targets.iter().position(|target| {
-                target.operation.target_key(&target.path) == t.operation.target_key(d)
-            }) {
-                report.merge(crate::core::rules::flow::execute_owner(
-                    plan,
-                    index,
-                    p,
-                    spot.get(d)
-                        .copied()
-                        .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
-                    t.size_hint,
-                ));
-            } else {
-                report.record(d, CleanResult::Failed);
-            }
-            continue;
-        }
-
-        if matches!(
-            t.operation,
-            crate::core::rules::Operation::File
-                | crate::core::rules::Operation::Tree
-                | crate::core::rules::Operation::Contents
-        ) && !t.plans.is_empty()
-        {
-            let plan = &t.plans[0];
-            if let Some(index) = plan.targets.iter().position(|target| {
-                target.operation.target_key(&target.path) == t.operation.target_key(d)
-            }) {
-                report.merge(crate::core::rules::flow::execute_filesystem(
-                    plan,
-                    index,
-                    p,
-                    spot.get(d)
-                        .copied()
-                        .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
-                ));
+        match t.operation.route() {
+            crate::core::rules::ExecutionRoute::Native => {
+                let mut fallback = None;
+                if let Some((plan, index)) = plan_and_index(plans, &mut fallback, t) {
+                    report.merge(crate::core::rules::flow::execute_native(
+                        plan,
+                        index,
+                        p,
+                        t.size_hint,
+                    ));
+                } else {
+                    report.record(d, CleanResult::Failed);
+                }
                 continue;
             }
+            crate::core::rules::ExecutionRoute::Owner => {
+                let mut fallback = None;
+                if let Some((plan, index)) = plan_and_index(plans, &mut fallback, t) {
+                    report.merge(crate::core::rules::flow::execute_owner(
+                        plan,
+                        index,
+                        p,
+                        spot.get(d)
+                            .copied()
+                            .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
+                        t.size_hint,
+                    ));
+                } else {
+                    report.record(d, CleanResult::Failed);
+                }
+                continue;
+            }
+            crate::core::rules::ExecutionRoute::Filesystem => {
+                // 文件系统目标只用随扫描冻结的计划：`t.rule` 合成的 legacy
+                // 计划与 engine 兜底都不走这条路由。找不到 index 不落失败，
+                // 继续走下面 remove_dir/清空内容的旧路径。
+                if let Some(plan) = t.plans.first() {
+                    if let Some(index) = plan.targets.iter().position(|target| {
+                        target.operation.target_key(&target.path) == t.operation.target_key(d)
+                    }) {
+                        report.merge(crate::core::rules::flow::execute_filesystem(
+                            plan,
+                            index,
+                            p,
+                            spot.get(d)
+                                .copied()
+                                .unwrap_or(crate::core::inuse::SpotCheck::Unknown),
+                        ));
+                        continue;
+                    }
+                }
+            }
+            crate::core::rules::ExecutionRoute::Worktree
+            | crate::core::rules::ExecutionRoute::Unrouted
+            | crate::core::rules::ExecutionRoute::Trash => {}
         }
 
         if t.remove_dir {
@@ -1277,24 +1238,8 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
                 t.operation,
                 crate::core::rules::Operation::GitWorktree { .. }
             ) {
-                let worktree_plan;
-                let plan = if let Some(plan) = plans.first() {
-                    plan
-                } else {
-                    worktree_plan = std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
-                        crate::core::rules::RuleRef::engine(),
-                        vec![crate::core::rules::PlannedTarget {
-                            path: d.clone(),
-                            operation: t.operation.clone(),
-                            identity: t.identity,
-                            disposal: t.disposal,
-                        }],
-                    ));
-                    &worktree_plan
-                };
-                if let Some(index) = plan.targets.iter().position(|target| {
-                    target.operation.target_key(&target.path) == t.operation.target_key(d)
-                }) {
+                let mut fallback = None;
+                if let Some((plan, index)) = plan_and_index(plans, &mut fallback, t) {
                     report.merge(crate::core::rules::flow::execute_worktree(
                         plan,
                         index,
@@ -1333,6 +1278,33 @@ pub fn clean_targets(targets: &[CleanTarget], p: &CleanProgress) -> CleanReport 
 
     audit_result(&report, p);
     report
+}
+
+/// Native/Owner/Worktree 路由共用的「取计划 + 定位 index」：优先用冻结计划
+/// 的 `first()`，没有就由 `RuleRef::engine()` 合成兜底；再按 `target_key`
+/// 找 index。找不到计划内位置返回 `None`，由调用方记 Failed。
+fn plan_and_index<'a>(
+    plans: &'a [std::sync::Arc<crate::core::rules::CleanupPlan>],
+    fallback: &'a mut Option<std::sync::Arc<crate::core::rules::CleanupPlan>>,
+    t: &CleanTarget,
+) -> Option<(&'a crate::core::rules::CleanupPlan, usize)> {
+    let plan = if let Some(plan) = plans.first() {
+        plan
+    } else {
+        fallback.insert(std::sync::Arc::new(crate::core::rules::CleanupPlan::new(
+            crate::core::rules::RuleRef::engine(),
+            vec![crate::core::rules::PlannedTarget {
+                path: t.path.clone(),
+                operation: t.operation.clone(),
+                identity: t.identity,
+                disposal: t.disposal,
+            }],
+        )))
+    };
+    let index = plan.targets.iter().position(|target| {
+        target.operation.target_key(&target.path) == t.operation.target_key(&t.path)
+    })?;
+    Some((plan.as_ref(), index))
 }
 
 pub(crate) fn merge_targets(targets: &[CleanTarget]) -> Vec<CleanTarget> {

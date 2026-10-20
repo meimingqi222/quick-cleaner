@@ -321,12 +321,129 @@ pub enum Operation {
     Registration,
     OfficialUninstall,
 }
+/// `clean_targets` 里按 `Operation` 分派的执行路由。穷尽 match：新增
+/// 变体必须在这里显式归类，编译器会拦下落写的分支。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExecutionRoute {
+    /// 整批只清一次回收站（`platform::empty_trash`），不走计划。
+    Trash,
+    /// 原生资源执行器：`flow::execute_native`。
+    Native,
+    /// 宿主命令执行器：`flow::execute_owner`。
+    Owner,
+    /// 冻结文件系统计划：`flow::execute_filesystem`。
+    Filesystem,
+    /// linked worktree 执行器：`flow::execute_worktree`。
+    Worktree,
+    /// 不走 clean_targets 专用分支：落到通用 remove_dir/内容清空路径。
+    Unrouted,
+}
+
 impl Operation {
+    /// 清理时是否连目录本身一起删。
+    pub fn removes_directory(&self) -> bool {
+        match self {
+            Self::File | Self::Tree | Self::GitWorktree { .. } => true,
+            Self::Contents
+            | Self::Docker { .. }
+            | Self::Brew
+            | Self::Go
+            | Self::Pnpm
+            | Self::Snapshot { .. }
+            | Self::Trash
+            | Self::Native { .. }
+            | Self::Registration
+            | Self::OfficialUninstall => false,
+        }
+    }
+
+    /// 删除时不逐文件累计体积的目标：扫描期称重随 `size_hint` 带下去做
+    /// 一次性记账。虚拟路径（Docker 镜像 / brew / 快照）与 owner 命令
+    /// 路由的缓存（Go modcache / pnpm store）属于这类；真实路径用不到
+    /// 这个字段。
+    pub fn carries_scan_size(&self) -> bool {
+        match self {
+            Self::Docker { .. }
+            | Self::Snapshot { .. }
+            | Self::Brew
+            | Self::Native { .. }
+            | Self::Go
+            | Self::Pnpm => true,
+            Self::File
+            | Self::Tree
+            | Self::GitWorktree { .. }
+            | Self::Contents
+            | Self::Trash
+            | Self::Registration
+            | Self::OfficialUninstall => false,
+        }
+    }
+
+    /// 该操作的目标是否在路径上覆盖整棵子树（P19 去重/拆分的依据）。
+    pub fn covers_subtree(&self) -> bool {
+        match self {
+            Self::Tree
+            | Self::Contents
+            | Self::Go
+            | Self::Pnpm
+            | Self::GitWorktree { .. }
+            | Self::Trash => true,
+            Self::File
+            | Self::Docker { .. }
+            | Self::Brew
+            | Self::Snapshot { .. }
+            | Self::Native { .. }
+            | Self::Registration
+            | Self::OfficialUninstall => false,
+        }
+    }
+
+    /// 以文件系统实体为落点、需要做路径保护复核的操作。
+    pub fn is_filesystem_backed(&self) -> bool {
+        match self {
+            Self::File
+            | Self::Tree
+            | Self::Contents
+            | Self::Go
+            | Self::Pnpm
+            | Self::GitWorktree { .. } => true,
+            Self::Docker { .. }
+            | Self::Brew
+            | Self::Snapshot { .. }
+            | Self::Trash
+            | Self::Native { .. }
+            | Self::Registration
+            | Self::OfficialUninstall => false,
+        }
+    }
+
+    /// `clean_targets` 的执行路由。
+    pub fn route(&self) -> ExecutionRoute {
+        match self {
+            Self::Trash => ExecutionRoute::Trash,
+            Self::Docker { .. } | Self::Snapshot { .. } | Self::Brew => ExecutionRoute::Native,
+            Self::Go | Self::Pnpm => ExecutionRoute::Owner,
+            Self::File | Self::Tree | Self::Contents => ExecutionRoute::Filesystem,
+            Self::GitWorktree { .. } => ExecutionRoute::Worktree,
+            Self::Native { .. } | Self::Registration | Self::OfficialUninstall => {
+                ExecutionRoute::Unrouted
+            }
+        }
+    }
+
     pub fn is_native_resource(&self) -> bool {
-        matches!(
-            self,
-            Self::Docker { .. } | Self::Snapshot { .. } | Self::Brew | Self::Native { .. }
-        )
+        match self {
+            Self::Docker { .. } | Self::Snapshot { .. } | Self::Brew | Self::Native { .. } => true,
+            Self::File
+            | Self::Tree
+            | Self::GitWorktree { .. }
+            | Self::Contents
+            | Self::Go
+            | Self::Pnpm
+            | Self::Trash
+            | Self::Registration
+            | Self::OfficialUninstall => false,
+        }
     }
 
     pub fn for_scanned_path(&self, path: &std::path::Path) -> Self {
@@ -509,6 +626,104 @@ mod tests {
     }
 
     use super::*;
+    /// 迁移金样：每个变体的新方法必须等于改动前的内联 `matches!` 结果。
+    /// 旧表达式原样保留在测试里作对照；新增变体不带对照会编译报错。
+    #[test]
+    fn operation_properties_match_previous_inline_predicates() {
+        let variants = [
+            Operation::File,
+            Operation::Tree,
+            Operation::GitWorktree {
+                registration: std::path::PathBuf::from("/repo/.git/worktrees/x"),
+            },
+            Operation::Contents,
+            Operation::Docker {
+                reference: "sha256:1".into(),
+            },
+            Operation::Brew,
+            Operation::Go,
+            Operation::Pnpm,
+            Operation::Snapshot {
+                name: "2026-10-04-120000".into(),
+            },
+            Operation::Trash,
+            Operation::Native {
+                native: NativeKind::RegistryKey,
+                identifier: "HKCU/x".into(),
+            },
+            Operation::Registration,
+            Operation::OfficialUninstall,
+        ];
+        for operation in variants {
+            assert_eq!(
+                operation.removes_directory(),
+                matches!(
+                    operation,
+                    Operation::File | Operation::Tree | Operation::GitWorktree { .. }
+                ),
+                "removes_directory: {operation:?}"
+            );
+            assert_eq!(
+                operation.carries_scan_size(),
+                operation.is_native_resource()
+                    || matches!(operation, Operation::Go | Operation::Pnpm),
+                "carries_scan_size: {operation:?}"
+            );
+            assert_eq!(
+                operation.covers_subtree(),
+                matches!(
+                    operation,
+                    Operation::Tree
+                        | Operation::Contents
+                        | Operation::Go
+                        | Operation::Pnpm
+                        | Operation::GitWorktree { .. }
+                        | Operation::Trash
+                ),
+                "covers_subtree: {operation:?}"
+            );
+            assert_eq!(
+                operation.is_filesystem_backed(),
+                matches!(
+                    operation,
+                    Operation::File
+                        | Operation::Tree
+                        | Operation::Contents
+                        | Operation::Go
+                        | Operation::Pnpm
+                        | Operation::GitWorktree { .. }
+                ),
+                "is_filesystem_backed: {operation:?}"
+            );
+            assert_eq!(
+                operation.is_native_resource(),
+                matches!(
+                    operation,
+                    Operation::Docker { .. }
+                        | Operation::Snapshot { .. }
+                        | Operation::Brew
+                        | Operation::Native { .. }
+                ),
+                "is_native_resource: {operation:?}"
+            );
+            let route = match operation {
+                Operation::Trash => ExecutionRoute::Trash,
+                Operation::Docker { .. } | Operation::Snapshot { .. } | Operation::Brew => {
+                    ExecutionRoute::Native
+                }
+                Operation::Go | Operation::Pnpm => ExecutionRoute::Owner,
+                Operation::File | Operation::Tree | Operation::Contents => {
+                    ExecutionRoute::Filesystem
+                }
+                Operation::GitWorktree { .. } => ExecutionRoute::Worktree,
+                Operation::Native { .. }
+                | Operation::Registration
+                | Operation::OfficialUninstall => ExecutionRoute::Unrouted,
+            };
+            assert_eq!(operation.route(), route, "route: {operation:?}");
+        }
+    }
+
     #[test]
     fn native_parameters_and_keys_do_not_follow_display_uris() {
         let operation = Operation::Docker {
@@ -1365,15 +1580,7 @@ impl CleanupPlan {
         preserve.extend(self.rule.preserved_live());
         for (index, target) in self.targets.iter().enumerate() {
             self.rule.authorizes(&target.path)?;
-            if matches!(
-                target.operation,
-                Operation::File
-                    | Operation::Tree
-                    | Operation::Contents
-                    | Operation::Go
-                    | Operation::Pnpm
-                    | Operation::GitWorktree { .. }
-            ) {
+            if target.operation.is_filesystem_backed() {
                 let protected = if target.operation == Operation::Contents {
                     crate::core::safety::is_contents_protected(&target.path)
                 } else {
