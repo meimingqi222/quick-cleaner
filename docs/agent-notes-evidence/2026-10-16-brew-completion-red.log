@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.23s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 1 test
+test platform::macos::apps::brew_uninstall::tests::brew_uninstall_missing_app_with_remaining_record_is_incomplete ... FAILED
+
+failures:
+
+---- platform::macos::apps::brew_uninstall::tests::brew_uninstall_missing_app_with_remaining_record_is_incomplete stdout ----
+
+thread 'platform::macos::apps::brew_uninstall::tests::brew_uninstall_missing_app_with_remaining_record_is_incomplete' (12880252) panicked at src/platform/macos/brew_uninstall.rs:384:24:
+called `Result::unwrap_err()` on an `Ok` value: true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::apps::brew_uninstall::tests::brew_uninstall_missing_app_with_remaining_record_is_incomplete
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 822 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `--lib`

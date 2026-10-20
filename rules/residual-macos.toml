@@ -170,6 +170,10 @@ path = "HTTPStorages"
 source = "Other"
 
 [[locations.satellite_dirs]]
+path = "WebKit"
+source = "Other"
+
+[[locations.satellite_dirs]]
 path = "Saved Application State"
 source = "Other"
 

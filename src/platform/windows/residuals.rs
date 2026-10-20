@@ -655,6 +655,7 @@ fn scan_shortcuts(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 let size = dir_or_file_size(p);
                 out.push(ResidualItem {
                     rule: None,
+                    requires_confirmation: false,
                     kind: ResidualKind::File(p.to_path_buf(), size),
                     confidence: conf,
                     source: ResidualSource::Shortcut,
@@ -762,6 +763,7 @@ fn scan_run_keys(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
                 }
                 out.push(ResidualItem {
                     rule: None,
+                    requires_confirmation: false,
                     kind: ResidualKind::RegistryValue(reg_root, key.to_string(), name),
                     confidence: if certain {
                         Confidence::Certain
@@ -803,6 +805,7 @@ fn scan_user_environment(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         };
         out.push(ResidualItem {
             rule: None,
+            requires_confirmation: false,
             kind: ResidualKind::RegistryValue(AppRegRoot::Hkcu, key.clone(), name),
             confidence,
             source: ResidualSource::UserEnvEntry,
@@ -1234,6 +1237,7 @@ fn scan_scheduled_tasks(ctx: &Ctx, out: &mut Vec<ResidualItem>) {
         let name = format!(r"\{rel_str}");
         out.push(ResidualItem {
             rule: None,
+            requires_confirmation: false,
             kind: ResidualKind::ScheduledTask(name),
             confidence: if hit_dir {
                 Confidence::Certain
@@ -1385,6 +1389,7 @@ fn push_dir(out: &mut Vec<ResidualItem>, path: PathBuf, conf: Confidence, source
     let identity = crate::core::model::capture_identity(&path);
     out.push(ResidualItem {
         rule: None,
+        requires_confirmation: false,
         kind: ResidualKind::Directory(path, size),
         confidence: conf,
         source,

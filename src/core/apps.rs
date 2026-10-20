@@ -333,7 +333,7 @@ impl AppFilterPreset {
 
 /// 某一项残留与该软件关联的把握程度。
 ///
-/// 决定它是否默认勾选。照搬 Bulk Crap Uninstaller 的思路：靠名字模糊匹配
+/// 默认只勾选确定且无需手动确认的条目。靠名字模糊匹配
 /// 出来的东西不能和「明确指向安装目录」的东西一视同仁，否则一次误删就
 /// 可能带走别的软件的数据。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -341,7 +341,7 @@ pub enum Confidence {
     /// 名字相近，但没有指向该软件的硬证据。默认不勾选。
     Possible,
     /// 有明确证据：路径就是安装目录、注册表值直接指向安装目录、
-    /// 或者本来就是该软件自己的卸载登记项。默认勾选。
+    /// 或者本来就是该软件自己的卸载登记项。无需手动确认时默认勾选。
     Certain,
 }
 
@@ -637,6 +637,8 @@ pub struct ResidualItem {
     pub rule: Option<crate::core::rules::RuleRef>,
     pub kind: ResidualKind,
     pub confidence: Confidence,
+    /// 归属确定也可能包含需保留的数据；此标志只控制默认勾选。
+    pub requires_confirmation: bool,
     /// 这条是被哪个扫描器发现的
     pub source: ResidualSource,
     /// 扫描/卸载后复核时的文件系统身份。注册表、任务和系统扩展没有路径，
@@ -658,6 +660,7 @@ impl ResidualItem {
             rule: None,
             kind,
             confidence: Confidence::Certain,
+            requires_confirmation: false,
             source,
             identity,
             owner_bundle_id: None,
@@ -670,6 +673,7 @@ impl ResidualItem {
             rule: None,
             kind,
             confidence: Confidence::Possible,
+            requires_confirmation: false,
             source,
             identity,
             owner_bundle_id: None,
@@ -756,9 +760,11 @@ pub fn dedupe_residuals(items: &mut Vec<ResidualItem>) {
     for item in items.drain(..) {
         match positions.get(&residual_key(&item.kind)) {
             Some(&index) => {
+                let manual = item.requires_confirmation || kept[index].requires_confirmation;
                 if item.confidence > kept[index].confidence {
                     kept[index] = item;
                 }
+                kept[index].requires_confirmation = manual;
             }
             None => {
                 positions.insert(residual_key(&item.kind), kept.len());
@@ -783,6 +789,28 @@ pub fn dedupe_residuals(items: &mut Vec<ResidualItem>) {
             _ => None,
         })
         .collect();
+    let manual: Vec<_> = kept
+        .iter()
+        .filter(|item| item.requires_confirmation)
+        .map(|item| item.kind.clone())
+        .collect();
+    for item in &mut kept {
+        item.requires_confirmation |= manual.iter().any(|child| match (&item.kind, child) {
+            (
+                ResidualKind::Directory(parent, _),
+                ResidualKind::File(path, _) | ResidualKind::Directory(path, _),
+            ) => crate::core::safety::at_or_under(
+                &crate::core::safety::norm(path),
+                &crate::core::safety::norm(parent),
+            ),
+            (
+                ResidualKind::RegistryKey(root, parent),
+                ResidualKind::RegistryKey(child_root, sub)
+                | ResidualKind::RegistryValue(child_root, sub, _),
+            ) => root == child_root && registry_under(&registry_norm(sub), &registry_norm(parent)),
+            _ => false,
+        });
+    }
     kept.retain(|item| match &item.kind {
         ResidualKind::Directory(path, _) => {
             let key = crate::core::safety::norm(path);
@@ -982,12 +1010,12 @@ pub fn residual_clean_follow_up(
 }
 
 impl ResidualScanResult {
-    /// 默认应当勾选的条目下标——只勾「确定」的。
+    /// 默认只勾归属确定且不要求手动确认的条目。
     pub fn default_selection(&self) -> std::collections::HashSet<usize> {
         self.items
             .iter()
             .enumerate()
-            .filter(|(_, it)| it.confidence.is_certain())
+            .filter(|(_, it)| it.confidence.is_certain() && !it.requires_confirmation)
             .map(|(i, _)| i)
             .collect()
     }
@@ -1298,6 +1326,48 @@ mod tests {
     /// 把索引结果映射回软件名，方便断言。
     fn names(apps: &[InstalledApp], idx: &[usize]) -> Vec<String> {
         idx.iter().map(|&i| apps[i].name.clone()).collect()
+    }
+
+    #[test]
+    fn residual_confirmation_is_independent_of_confidence_and_survives_dedup() {
+        let plain = ResidualItem::certain(
+            ResidualKind::File("/tmp/qc-manual/data".into(), 1),
+            ResidualSource::Other,
+        );
+        let mut manual = plain.clone();
+        manual.requires_confirmation = true;
+        for mut items in [
+            vec![plain.clone(), manual.clone()],
+            vec![manual.clone(), plain.clone()],
+            vec![
+                ResidualItem::certain(
+                    ResidualKind::Directory("/tmp/qc-manual".into(), 1),
+                    ResidualSource::Other,
+                ),
+                manual,
+            ],
+        ] {
+            dedupe_residuals(&mut items);
+            assert_eq!(items.len(), 1);
+            assert!(items[0].confidence.is_certain());
+            let result = ResidualScanResult {
+                items,
+                ..Default::default()
+            };
+            assert!(
+                result.default_selection().is_empty(),
+                "confirmation must survive merging"
+            );
+        }
+        assert_eq!(
+            ResidualScanResult {
+                items: vec![plain],
+                ..Default::default()
+            }
+            .default_selection()
+            .len(),
+            1
+        );
     }
 
     #[test]

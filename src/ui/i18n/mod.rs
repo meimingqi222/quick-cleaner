@@ -641,10 +641,10 @@ pub fn tr_status_orphan_scanning(lang: Language) -> &'static str {
 pub fn tr_status_orphan_done(lang: Language, count: usize, size: &str) -> String {
     match lang {
         Language::Zh => {
-            format!("扫描完成：发现 {count} 项已卸载软件的残留，共 {size}")
+            format!("扫描完成：发现 {count} 项待核对残留，共 {size}")
         }
         Language::En => {
-            format!("Scan complete — {count} leftovers from removed apps, {size} total")
+            format!("Scan complete — {count} leftover candidates, {size} total")
         }
     }
 }
@@ -656,10 +656,10 @@ pub fn tr_status_orphan_done(lang: Language, count: usize, size: &str) -> String
 pub fn tr_status_orphan_unknown(lang: Language) -> &'static str {
     match lang {
         Language::Zh => {
-            "这次查不出结果：Spotlight 索引此刻不可用。没有猜测，也没有删除任何内容，稍后可重试"
+            "这次查不出结果：应用清单或系统登记此刻不可用。没有猜测，也没有删除任何内容，稍后可重试"
         }
         Language::En => {
-            "Could not determine anything this time: the Spotlight index is unavailable. Nothing was guessed or deleted — try again later"
+            "Could not determine anything this time: the app inventory or system registrations are unavailable. Nothing was guessed or deleted — try again later"
         }
     }
 }
@@ -719,18 +719,18 @@ pub fn tr_status_orphan_still_installed(lang: Language) -> &'static str {
 
 pub fn tr_orphan_modal_title(lang: Language, count: usize) -> String {
     match lang {
-        Language::Zh => format!("发现 {count} 项已卸载软件的残留"),
-        Language::En => format!("Found {count} leftovers from apps no longer installed"),
+        Language::Zh => format!("发现 {count} 项待核对残留"),
+        Language::En => format!("Found {count} leftover candidates"),
     }
 }
 
 pub fn tr_orphan_modal_sub(lang: Language, size: &str) -> String {
     match lang {
         Language::Zh => format!(
-            "按 Bundle ID 匹配：这些软件的本体已经不在本机，缓存与配置还留在用户目录里，预计释放 {size}"
+            "已核对应用清单与系统登记。“确定”有应用身份佐证；“可能”仅匹配目录名称。均需手动勾选，预计释放 {size}"
         ),
         Language::En => format!(
-            "Matched by bundle ID: the apps are gone, their caches and preferences are still here. Potential space: {size}"
+            "Checked installed apps and system registrations. Certain items have app identity evidence; Possible items match names only. Select items manually. Potential space: {size}"
         ),
     }
 }

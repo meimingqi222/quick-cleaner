@@ -1,0 +1,18 @@
+   Compiling quick-cleaner v0.0.15 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.05s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 10 tests
+test platform::macos::residuals::tests::orphan_id_rule_keeps_live_owners_and_their_families ... ok
+test platform::macos::residuals::orphan_evidence::tests::registration_records_keep_exact_paths_and_reject_unknown_output ... ok
+test platform::macos::residuals::tests::orphan_evidence_upgrades_exact_removed_owner_without_preselection ... ok
+test platform::macos::residuals::tests::orphan_gate_refuses_when_any_owner_is_back_or_unknown ... ok
+test platform::macos::residuals::tests::orphan_entry_name_parser_accepts_real_ids_and_rejects_lookalikes ... ok
+test platform::macos::residuals::tests::orphan_names_reject_rotated_logs_and_compiler_caches ... ok
+test platform::macos::residuals::tests::orphan_scan_finds_removed_apps_and_skips_live_ones ... ok
+test core::categories::dev::tests::orphaned_workspaces_follow_recorded_local_paths_only ... ok
+test platform::macos::cache::tests::orphan_prune_removes_covered_index_but_keeps_current ... ok
+test platform::macos::residuals::orphan_evidence::tests::registered_live_bundle_blocks_orphans_and_unknown_refuses ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 818 filtered out; finished in 0.06s
+

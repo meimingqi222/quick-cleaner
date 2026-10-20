@@ -23,6 +23,9 @@ use crate::core::proc::run_with_timeout;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "orphan_evidence.rs"]
+mod orphan_evidence;
+
 fn residual_locations(key: &str) -> Vec<(String, ResidualSource)> {
     crate::core::rules::current()
         .definition("residual-macos")
@@ -81,8 +84,11 @@ fn scan_residuals_in(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualScanR
                 .any(|id| id == &app.registry_subpath);
         for item in &mut result.items {
             item.rule = Some(crate::core::rules::RuleRef::new("residual-macos", None));
-            if manual_data && item.source == ResidualSource::AppSupportDir {
-                item.confidence = crate::core::apps::Confidence::Possible;
+            if (manual_data && item.source == ResidualSource::AppSupportDir)
+                || item.source == ResidualSource::ContainerDir
+                || item.source == ResidualSource::ApplicationScript
+            {
+                item.requires_confirmation = true;
             }
         }
         result
@@ -101,13 +107,24 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
 
     // ---- 确定 ----
     // Login Item / XPC / appex 的 ID 必须在 .app 还在时从包里读。
-    for (index, id) in bundle_ids.iter().enumerate() {
-        let primary = index == 0;
+    // 同时在 review_id_dirs 声明的目录（如 WebKit）是共享父目录：子项按
+    // 卫星匹配纳入但只给 possible——审核表的「均不预选」语义更保守，优先。
+    let review_roots: std::collections::BTreeSet<String> = residual_locations("review_id_dirs")
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    for id in &bundle_ids {
         for (subdir, source) in residual_locations("satellite_dirs") {
-            add_bundle_satellites(&mut items, &library.join(subdir), id, source);
+            add_bundle_satellites(
+                &mut items,
+                &library.join(&subdir),
+                id,
+                source,
+                !review_roots.contains(&subdir),
+            );
         }
         if let Some(cache_root) = darwin_cache {
-            add_bundle_satellites(&mut items, cache_root, id, ResidualSource::CacheDir);
+            add_bundle_satellites(&mut items, cache_root, id, ResidualSource::CacheDir, true);
         }
 
         add_named_entry(
@@ -116,7 +133,7 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
             id,
             "",
             ResidualSource::ApplicationScript,
-            primary,
+            true,
         );
         let recent = library.join(
             "Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments",
@@ -186,6 +203,7 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
     add_review_residuals(&mut items, &library, app, &bundle_ids);
     add_native_messaging_manifests(&mut items, &library, app);
     add_native_messaging_manifests(&mut items, roots.system_library, app);
+    // 精确容器归属不降低置信度；默认选择在外层单独控制。
     for id in &bundle_ids {
         add_named_entry(
             &mut items,
@@ -193,7 +211,7 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
             id,
             "",
             ResidualSource::ContainerDir,
-            false,
+            true,
         );
         for suffix in [".bom", ".plist"] {
             add_named_entry(
@@ -215,7 +233,7 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
             &group_id,
             "",
             ResidualSource::ContainerDir,
-            false,
+            true,
         );
         add_named_entry(
             &mut items,
@@ -223,7 +241,7 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
             &group_id,
             "",
             ResidualSource::ApplicationScript,
-            false,
+            true,
         );
     }
 
@@ -546,6 +564,7 @@ fn add_bundle_satellites(
     root: &Path,
     bundle_id: &str,
     source: ResidualSource,
+    certain: bool,
 ) {
     if !valid_bundle_id(bundle_id) {
         return;
@@ -566,7 +585,11 @@ fn add_bundle_satellites(
         } else {
             ResidualKind::File(path, size)
         };
-        items.push(ResidualItem::certain(kind, source));
+        items.push(if certain {
+            ResidualItem::certain(kind, source)
+        } else {
+            ResidualItem::possible(kind, source)
+        });
     }
 }
 
@@ -1068,10 +1091,17 @@ fn add_system_extensions(items: &mut Vec<ResidualItem>, bundle_ids: &[String]) {
         if !owned {
             continue;
         }
-        items.push(ResidualItem::possible(
-            ResidualKind::SystemExtension(team_id, bundle_id),
-            ResidualSource::SystemExtension,
-        ));
+        let exact = bundle_ids
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(&bundle_id));
+        let kind = ResidualKind::SystemExtension(team_id, bundle_id);
+        let mut item = if exact {
+            ResidualItem::certain(kind, ResidualSource::SystemExtension)
+        } else {
+            ResidualItem::possible(kind, ResidualSource::SystemExtension)
+        };
+        item.requires_confirmation = true;
+        items.push(item);
     }
 }
 
@@ -1193,8 +1223,36 @@ static ID_FILE_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::Ru
 pub fn scan_orphan_residuals() -> Option<ResidualScanResult> {
     let home = super::user_env::user_home()?;
     let installed = super::apps::installed_bundle_ids()?;
-    let installed_lower = lowercased(&installed);
-    Some(scan_orphan_residuals_in(&home, &installed_lower))
+    let mut installed_lower = lowercased(&installed);
+    let mut result = scan_orphan_residuals_in(&home, &installed_lower);
+    let mut removed = orphan_evidence::supplement(
+        result
+            .items
+            .iter()
+            .filter_map(|item| item.owner().map(str::to_owned)),
+        &mut installed_lower,
+    )?;
+    removed.extend(orphan_evidence::trashed_bundle_ids(&home));
+    classify_orphan_evidence(&mut result, &installed_lower, &removed);
+    Some(result)
+}
+
+fn classify_orphan_evidence(
+    result: &mut ResidualScanResult,
+    installed_lower: &std::collections::HashSet<String>,
+    removed: &std::collections::HashSet<String>,
+) {
+    result.items.retain(|item| {
+        item.owner()
+            .is_some_and(|id| is_orphan_id(id, installed_lower))
+    });
+    for item in &mut result.items {
+        if item.owner().is_some_and(|id| removed.contains(id)) {
+            item.confidence = crate::core::apps::Confidence::Certain;
+        }
+        item.requires_confirmation = true;
+    }
+    result.total_file_size = result.items.iter().map(ResidualItem::size).sum();
 }
 
 /// 扫描主体的可测版本：`installed_lower` 必须是已装 Bundle ID 的全小写集合。
@@ -1273,7 +1331,18 @@ pub fn orphan_owners_all_gone(items: &[ResidualItem]) -> bool {
     let Some(installed) = super::apps::installed_bundle_ids() else {
         return false;
     };
-    orphan_owners_all_gone_in(items, &lowercased(&installed))
+    let mut installed = lowercased(&installed);
+    if orphan_evidence::supplement(
+        items
+            .iter()
+            .filter_map(|item| item.owner().map(str::to_owned)),
+        &mut installed,
+    )
+    .is_none()
+    {
+        return false;
+    }
+    orphan_owners_all_gone_in(items, &installed)
 }
 
 fn orphan_owners_all_gone_in(
@@ -1339,7 +1408,37 @@ fn looks_like_bundle_id(id: &str) -> bool {
     if !(2..=8).contains(&tld.len()) || !tld.bytes().all(|b| b.is_ascii_alphabetic()) {
         return false;
     }
-    parts.len() > 2 || parts[1].bytes().any(|b| b.is_ascii_uppercase())
+    if parts.len() == 2 {
+        return parts[1].bytes().any(|b| b.is_ascii_uppercase());
+    }
+    // 多段普通文件名也满足 Bundle ID 字符集，首段必须有域名空间依据。
+    tld.len() == 2
+        || matches!(
+            tld.to_ascii_lowercase().as_str(),
+            "com"
+                | "org"
+                | "net"
+                | "edu"
+                | "gov"
+                | "app"
+                | "dev"
+                | "info"
+                | "biz"
+                | "xyz"
+                | "pro"
+                | "cloud"
+                | "tech"
+                | "software"
+                | "tools"
+                | "games"
+                | "studio"
+                | "design"
+                | "online"
+                | "site"
+                | "name"
+                | "local"
+                | "group"
+        )
 }
 
 /// `com.apple.*` 之类的系统身份一律不算孤儿。
@@ -1614,6 +1713,10 @@ mod tests {
                 |item| matches!(&item.kind, ResidualKind::Directory(path, _) if path == &data),
             )
             .expect("learning data must remain available for explicit cleanup");
+        assert!(
+            result.items[index].confidence.is_certain(),
+            "known learning-data ownership is certain"
+        );
         assert!(
             !selected.contains(&index),
             "learning data and keys require explicit selection"
@@ -1992,6 +2095,21 @@ mod tests {
             2
         );
 
+        for (index, item) in result.items.iter().enumerate().filter(|(_, item)| {
+            matches!(
+                item.source,
+                ResidualSource::ContainerDir | ResidualSource::ApplicationScript
+            )
+        }) {
+            assert!(
+                item.confidence.is_certain(),
+                "embedded helper identity is hard ownership evidence"
+            );
+            assert!(
+                !result.default_selection().contains(&index),
+                "containers and scripts require manual selection"
+            );
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2209,6 +2327,56 @@ mod tests {
 
     /// ByHost 里 Sparkle ShipIt / 本机 UUID 偏好是本应用的，应默认勾选；
     /// 同厂商另一个产品的 ByHost 只能标「可能」。
+    #[test]
+    fn webkit_residual_scan_matches_ghostty_without_sibling_products() {
+        let root = std::env::temp_dir().join(format!(
+            "quick-cleaner-webkit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        let webkit = home.join("Library/WebKit");
+        for id in [
+            "com.mitchellh.ghostty",
+            "com.mitchellh.ghostty.helper",
+            "com.mitchellh.ghostty.beta",
+            "com.mitchellh.other",
+        ] {
+            std::fs::create_dir_all(webkit.join(id)).unwrap();
+            std::fs::write(webkit.join(id).join("state"), b"webkit data").unwrap();
+        }
+        let app = make_app("Ghostty", "com.mitchellh.ghostty");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &root.join("receipts"),
+                darwin_cache: None,
+                applications: &root.join("applications"),
+            },
+        );
+        let paths: Vec<_> = result
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ResidualKind::Directory(path, _) if path.starts_with(&webkit) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            paths.contains(&webkit.join("com.mitchellh.ghostty")),
+            "missing Ghostty WebKit: {paths:?}"
+        );
+        assert!(paths.contains(&webkit.join("com.mitchellh.ghostty.helper")));
+        assert_eq!(paths.len(), 2, "must not claim sibling WebKit data");
+        assert!(result.total_file_size > 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn scan_marks_byhost_shipit_certain_but_not_sibling_products() {
         let root = std::env::temp_dir().join(format!(
@@ -2791,6 +2959,74 @@ mod tests {
         // 真的没人了
         assert!(is_orphan_id("com.dbeaver.application", &held));
         assert!(is_orphan_id("com.dbeaver.product.enterprise", &held));
+    }
+
+    #[test]
+    fn orphan_names_reject_rotated_logs_and_compiler_caches() {
+        for name in [
+            "warp.log.old.0",
+            "warp.log.old.1",
+            "main.kts.compiled.cache",
+            "server.log.2026.10",
+        ] {
+            assert_eq!(bundle_id_from_entry_name(name), None, "{name}");
+        }
+        assert_eq!(
+            bundle_id_from_entry_name("com.vendor.Widget.plist"),
+            Some("com.vendor.widget".into())
+        );
+    }
+
+    #[test]
+    fn orphan_evidence_upgrades_exact_removed_owner_without_preselection() {
+        let item = |id: &str| {
+            ResidualItem::possible(
+                ResidualKind::Directory(PathBuf::from("/tmp").join(id), 5),
+                ResidualSource::CacheDir,
+            )
+            .for_bundle(id)
+        };
+        let mut result = ResidualScanResult {
+            items: vec![
+                item("org.webkit.playwright"),
+                item("com.mitchellh.ghostty"),
+                item("com.mitchellh.other"),
+                item("com.hackemist.sdimagecache"),
+            ],
+            ..Default::default()
+        };
+        classify_orphan_evidence(
+            &mut result,
+            &installed(&["org.webkit.playwright"]),
+            &installed(&["com.mitchellh.ghostty"]),
+        );
+        assert_eq!(result.items.len(), 3);
+        assert!(
+            result.items[0].confidence.is_certain(),
+            "verified removed app must be certain"
+        );
+        assert!(
+            !result.items[1].confidence.is_certain(),
+            "trash evidence must not upgrade siblings"
+        );
+        assert!(
+            !result.items[2].confidence.is_certain(),
+            "library namespace is not an app identity"
+        );
+        assert!(result.default_selection().is_empty());
+        assert_eq!(result.total_file_size, 15);
+        classify_orphan_evidence(
+            &mut result,
+            &installed(&["com.mitchellh.ghostty"]),
+            &installed(&["com.mitchellh.ghostty"]),
+        );
+        assert!(
+            result
+                .items
+                .iter()
+                .all(|item| item.owner() != Some("com.mitchellh.ghostty")),
+            "live installation overrides a trashed copy"
+        );
     }
 
     #[test]

@@ -1352,13 +1352,16 @@ mod tests {
             .find(|r| r.id == "residual-macos")
             .unwrap();
         for (key, count) in [
-            ("satellite_dirs", 7),
+            ("satellite_dirs", 8),
             ("user_family_dirs", 11),
             ("system_family_dirs", 8),
             ("orphan_roots", 9),
         ] {
             assert_eq!(rule.locations[key].len(), count);
         }
+        assert!(rule.locations["satellite_dirs"].iter().any(|row| {
+            row.path == "WebKit" && row.source == crate::core::apps::ResidualSource::Other
+        }));
         for key in ["shared_vendor_prefixes", "protected_dot_dirs"] {
             let mut altered = baseline.clone();
             altered

@@ -1,0 +1,24 @@
+   Compiling quick-cleaner v0.0.15 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.18s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 1 test
+test platform::macos::residuals::tests::orphan_names_reject_rotated_logs_and_compiler_caches ... FAILED
+
+failures:
+
+---- platform::macos::residuals::tests::orphan_names_reject_rotated_logs_and_compiler_caches stdout ----
+
+thread 'platform::macos::residuals::tests::orphan_names_reject_rotated_logs_and_compiler_caches' (12982511) panicked at src/platform/macos/residuals.rs:2456:13:
+assertion `left == right` failed: warp.log.old.0
+  left: Some("warp.log.old.0")
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::residuals::tests::orphan_names_reject_rotated_logs_and_compiler_caches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 823 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

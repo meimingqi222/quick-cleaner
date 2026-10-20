@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 01s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 1 test
+test platform::macos::residuals::tests::webkit_residual_scan_matches_ghostty_without_sibling_products ... FAILED
+
+failures:
+
+---- platform::macos::residuals::tests::webkit_residual_scan_matches_ghostty_without_sibling_products stdout ----
+
+thread 'platform::macos::residuals::tests::webkit_residual_scan_matches_ghostty_without_sibling_products' (12871434) panicked at src/platform/macos/residuals.rs:1859:9:
+missing Ghostty WebKit: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::residuals::tests::webkit_residual_scan_matches_ghostty_without_sibling_products
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 822 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `--lib`

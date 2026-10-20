@@ -35,6 +35,10 @@ both platforms. Two order-independent levels:
    dropped because the ancestor's recorded size already counted it and deleting the
    ancestor removes it.
 
+Explicit manual-confirmation requirements survive same-target merges (OR) and propagate
+from covered descendants to the ancestor. Thus collapsing a container cannot silently
+turn its data into a default selection.
+
 The ancestor keeps **its own** confidence. A merge never upgrades deletion
 authority: a guessed (`Possible`) parent that absorbs a `Certain` child stays
 `Possible`, so it cannot become auto-selectable by covering a more certain item.
@@ -69,3 +73,5 @@ behavior is covered by core fixtures; the Windows live scan test still passes.
 
 Model migration, not an organic bug fix; no red-run proof is claimed. Actual
 unified gate results and limitations are recorded in RULES_REFACTOR_STATUS.
+
+- `src/core/apps.rs::residual_confirmation_is_independent_of_confidence_and_survives_dedup`

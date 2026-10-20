@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling quick-cleaner v0.0.15 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.93s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 1 test
+test platform::macos::residuals::orphan_evidence::tests::registered_live_bundle_blocks_orphans_and_unknown_refuses ... FAILED
+
+failures:
+
+---- platform::macos::residuals::orphan_evidence::tests::registered_live_bundle_blocks_orphans_and_unknown_refuses stdout ----
+
+thread 'platform::macos::residuals::orphan_evidence::tests::registered_live_bundle_blocks_orphans_and_unknown_refuses' (13016979) panicked at src/platform/macos/orphan_evidence.rs:215:9:
+assertion failed: installed.contains("org.webkit.playwright")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::residuals::orphan_evidence::tests::registered_live_bundle_blocks_orphans_and_unknown_refuses
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 827 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--lib`

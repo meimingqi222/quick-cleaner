@@ -4,8 +4,8 @@
 //! - 从 `Info.plist` 读取 `CFBundleIdentifier`、`CFBundleShortVersionString`、应用名
 //! - 枚举 `/Applications`、`/System/Applications`、`~/Applications`、`/Applications/Utilities`
 //! - 系统自带应用标记为 `is_system_component`，不可卸载
-//! - 卸载优先调用应用自带的卸载程序（`Contents/Resources/*.app/Uninstall *.app`），
-//!   没有则移入废纸篓
+//! - 已审查脚本/手动卸载策略优先；其余先交给精确拥有该路径的 Homebrew cask，
+//!   无 cask 归属时调用自带卸载程序，最后回退到废纸篓
 
 use crate::core::apps::{AppRegRoot, InstalledApp};
 use rayon::prelude::*;
@@ -387,7 +387,7 @@ pub(crate) fn read_info_plist(plist_path: &Path) -> (Option<String>, Option<Stri
     (bundle_id, version)
 }
 
-fn plist_string(path: &Path, key: &str) -> Option<String> {
+pub(super) fn plist_string(path: &Path, key: &str) -> Option<String> {
     let run = crate::core::proc::run_with_timeout(
         "/usr/bin/plutil",
         &[
@@ -504,10 +504,17 @@ pub(crate) fn alloc_size(m: &std::fs::Metadata) -> u64 {
     m.blocks() * 512
 }
 
-/// macOS 上「卸载」优先调用应用自带的卸载程序，没有则移入废纸篓。
+/// macOS 上卸载遵循已审查策略、Homebrew 归属、自带卸载器、废纸篓的顺序。
 ///
 /// 系统自带的 App 在密封只读的系统卷上，删不掉也不该删，直接挡回去。
 pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
+    run_uninstaller_with_brew(app, cask_uninstall::run)
+}
+
+fn run_uninstaller_with_brew(
+    app: &InstalledApp,
+    brew: impl FnOnce(&InstalledApp) -> Result<bool, String>,
+) -> Result<(), String> {
     if crate::core::rules::uninstall::requires_manual_uninstall(app) {
         return Err("此应用需要在官方设置界面完成卸载；未执行直接删除。".into());
     }
@@ -524,7 +531,7 @@ pub fn run_uninstaller_and_wait(app: &InstalledApp) -> Result<(), String> {
         return Err("系统自带应用位于只读的系统卷上，无法卸载".into());
     }
 
-    if cask_uninstall::run(app)? {
+    if brew(app)? {
         return Ok(());
     }
     if app.uninstall_string.is_none()
@@ -939,6 +946,28 @@ mod tests {
         assert_eq!(parsed.0.as_deref(), Some("2026-08-14"));
         assert!(parsed.1 > 0);
         assert!(parse_metadata_date("(null)").is_none());
+    }
+
+    /// Homebrew 归属检查失败时错误必须原样返回，绝不能落到废纸篓回退——
+    /// 否则一次 `brew` 调用超时就会变成「直接把应用本体删了」。
+    #[test]
+    fn homebrew_error_never_reaches_trash_fallback() {
+        let root = crate::core::testing::fixture("qc_homebrew_no_fallback");
+        let loc = root.join("Applications/Ghostty.app");
+        std::fs::create_dir_all(loc.join("Contents")).unwrap();
+        std::fs::write(
+            loc.join("Contents/Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.mitchellh.ghostty</string></dict></plist>"#,
+        )
+        .unwrap();
+        let app = parse_app_bundle(&loc, false, (None, 0), 0).unwrap();
+
+        let result =
+            run_uninstaller_with_brew(&app, |_| Err("Homebrew uninstall timed out".into()));
+
+        assert_eq!(result, Err("Homebrew uninstall timed out".into()));
+        assert!(loc.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// 空 bundle id 无从查证 → 必须是"测不出"，不能是"没装"。

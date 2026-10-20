@@ -20,7 +20,7 @@ A plugin system or workflow state machine would duplicate native uninstall paths
 
 ## Consequences
 
-A second fictional product is discovered and uninstalled using configuration only, with a different script path, Bash and literal arguments. Qingjian behavior remains covered by the moved regression tests. MSIME macOS receives guidance rather than unattended uninstall; automatic Homebrew routing and real input-source interaction are not implemented. Tests use dedicated fixtures, and AppleScript tests remove administrator authorization. Windows identity policies run cross-platform; Windows-native execution needs Windows acceptance.
+A second fictional product is discovered and uninstalled using configuration only, with a different script path, Bash and literal arguments. Qingjian behavior remains covered by the moved regression tests. MSIME macOS receives guidance rather than unattended uninstall; real input-source interaction is not automated. Homebrew routing for ordinary single-app casks is added in `2026-10-16-webkit-homebrew-uninstall.md`, after the manual and reviewed-script guards; those guards remain authoritative. Tests use dedicated fixtures, and AppleScript tests remove administrator authorization. Windows identity policies run cross-platform; Windows-native execution needs Windows acceptance.
 
 ## Verification
 

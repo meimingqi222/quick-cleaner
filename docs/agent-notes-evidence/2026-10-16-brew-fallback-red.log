@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.98s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-cd0c7483c028aca5)
+
+running 1 test
+test platform::macos::apps::brew_uninstall::tests::brew_uninstall_error_never_reaches_trash_fallback ... FAILED
+
+failures:
+
+---- platform::macos::apps::brew_uninstall::tests::brew_uninstall_error_never_reaches_trash_fallback stdout ----
+
+thread 'platform::macos::apps::brew_uninstall::tests::brew_uninstall_error_never_reaches_trash_fallback' (12877708) panicked at src/platform/macos/brew_uninstall.rs:351:9:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err("Homebrew uninstall timed out")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    platform::macos::apps::brew_uninstall::tests::brew_uninstall_error_never_reaches_trash_fallback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 822 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `--lib`
