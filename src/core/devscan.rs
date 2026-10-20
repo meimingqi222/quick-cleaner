@@ -242,6 +242,48 @@ pub fn code_roots() -> Vec<(PathBuf, usize)> {
     roots
 }
 
+/// Every discovery channel verifies the same live project and installation evidence.
+pub(super) fn candidate_allowed(path: &Path, marker: &Marker) -> bool {
+    if crate::core::safety::is_protected(path)
+        || crate::core::safety::is_development_installation_path(path)
+    {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    match marker.dir.as_str() {
+        "node_modules" | ".next" | ".nuxt" | ".svelte-kit" | ".angular" | "dist" => {
+            use std::io::Read;
+            let Ok(file) = std::fs::File::open(parent.join("package.json")) else {
+                return false;
+            };
+            let mut bytes = Vec::new();
+            if file.take(1024 * 1024 + 1).read_to_end(&mut bytes).is_err()
+                || bytes.len() > 1024 * 1024
+            {
+                return false;
+            }
+            let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                return false;
+            };
+            if !manifest.is_object() {
+                return false;
+            }
+            if marker.dir == "dist" {
+                return parent.join("src").is_dir()
+                    && manifest
+                        .pointer("/scripts/build")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|script| !script.trim().is_empty());
+            }
+            true
+        }
+        ".venv" | "venv" => path.join("pyvenv.cfg").is_file(),
+        _ => true,
+    }
+}
+
 pub(super) struct Hit {
     pub(super) path: PathBuf,
     /// 命中的规则本身。标签是双语的，直到建 `ScanItem` 时才展开。
@@ -518,6 +560,76 @@ mod tests {
     }
 
     #[test]
+    fn installation_dependencies_are_not_build_garbage() {
+        let base = crate::core::testing::fixture("qc_installation_build_boundary");
+        let project = base.join("projects/demo");
+        let installed = [
+            base.join(".nvm/versions/node/v22/lib"),
+            base.join("Tool.app/Contents/Resources/app"),
+            base.join("Library/Application Support/Tool/runtime"),
+            base.join(".local/share/uv/tools/cli"),
+        ];
+        for parent in std::iter::once(&project).chain(installed.iter()) {
+            std::fs::create_dir_all(parent.join("node_modules")).unwrap();
+            std::fs::write(parent.join("package.json"), b"{}").unwrap();
+        }
+        std::fs::create_dir_all(base.join("unverified/venv")).unwrap();
+        let live = AtomicBool::new(true);
+        let mut hits = Vec::new();
+        collect(&base, 0, 20, &live, &mut hits);
+        let paths: Vec<_> = hits.iter().map(|hit| hit.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![project.join("node_modules")],
+            "installed tools must never be offered as rebuildable dependencies"
+        );
+        #[cfg(not(windows))]
+        {
+            let scan = crate::platform::macos::walk::scan_root(
+                &base,
+                crate::core::disk::VolumeId::from_mount_point(base.clone()),
+                &live,
+            )
+            .unwrap();
+            let mut hits = Vec::new();
+            collect_tree(&scan.tree, scan.tree.root(), 0, 20, &live, &mut hits);
+            let paths: Vec<_> = hits
+                .iter()
+                .map(|(idx, _)| PathBuf::from(scan.tree.path_of(*idx)))
+                .collect();
+            assert_eq!(paths, vec![project.join("node_modules")]);
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn build_candidates_require_project_and_environment_evidence() {
+        let base = crate::core::testing::fixture("qc_build_candidate_evidence");
+        let project = base.join("project");
+        std::fs::create_dir_all(project.join("dist")).unwrap();
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let dist = MARKERS.iter().find(|marker| marker.dir == "dist").unwrap();
+        std::fs::write(project.join("package.json"), b"{}").unwrap();
+        assert!(!candidate_allowed(&project.join("dist"), &dist));
+        std::fs::write(
+            project.join("package.json"),
+            br#"{"scripts":{"build":"tool build"}}"#,
+        )
+        .unwrap();
+        assert!(candidate_allowed(&project.join("dist"), &dist));
+        let venv = MARKERS.iter().find(|marker| marker.dir == ".venv").unwrap();
+        std::fs::create_dir_all(project.join(".venv")).unwrap();
+        assert!(!candidate_allowed(&project.join(".venv"), &venv));
+        std::fs::write(project.join(".venv/pyvenv.cfg"), b"home = /python").unwrap();
+        assert!(candidate_allowed(&project.join(".venv"), &venv));
+        let root = base.join(".nvm");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("CACHEDIR.TAG"), CACHEDIR_SIGNATURE).unwrap();
+        assert!(!candidate_allowed(&root, &CACHEDIR_MARKER));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn does_not_descend_into_a_matched_directory() {
         let base = crate::core::testing::fixture("qc_devscan_nested");
         let _ = std::fs::remove_dir_all(&base);
@@ -525,6 +637,7 @@ mod tests {
         // node_modules 里往往还嵌着 node_modules，只应报告最外层那个
         let nested = base.join("node_modules").join("pkg").join("node_modules");
         std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(base.join("package.json"), b"{}").unwrap();
 
         let live = AtomicBool::new(true);
         let mut hits = Vec::new();

@@ -170,6 +170,8 @@ pub(crate) fn spot_check_without_handle_probe(
         .collect()
 }
 
+pub mod cache_release;
+
 #[cfg(windows)]
 pub mod windows;
 #[cfg(windows)]

@@ -18,6 +18,10 @@ use std::path::PathBuf;
 #[derive(Clone, Debug)]
 pub enum ConfirmKind {
     CleanSelected,
+    ReleaseCache {
+        plan: Box<crate::core::cache_release::ReleasePlan>,
+        force: bool,
+    },
     CleanPath(PathBuf, u64),
     CleanDiskSelected,
     /// 冗余整理（相似照片/重复文件/大文件/下载）把选中的条目移入废纸篓。
@@ -66,6 +70,7 @@ pub fn render_confirm_dialog(
     let is_fan_install = matches!(&req.kind, ConfirmKind::InstallFanHelper(_));
     let is_update = matches!(&req.kind, ConfirmKind::InstallUpdate);
     let confirm_label = match &req.kind {
+        ConfirmKind::ReleaseCache { force, .. } => tr_release_cache(lang, *force),
         ConfirmKind::UninstallApp(_) => tr_confirm_action_uninstall(lang),
         ConfirmKind::KillProcess { .. } => tr_confirm_kill_title(lang),
         ConfirmKind::InstallFanHelper(_) => tr_confirm_action_install(lang),
@@ -130,6 +135,10 @@ pub fn render_confirm_dialog(
         )
         .child(
             div()
+                .id("confirm-detail")
+                .when(matches!(&req.kind, ConfirmKind::ReleaseCache { .. }), |d| {
+                    d.max_h(px(260.)).overflow_y_scroll()
+                })
                 .text_xs()
                 .text_color(rgb(detail_color))
                 .child(req.detail.clone()),

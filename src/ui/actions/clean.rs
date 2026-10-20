@@ -91,6 +91,9 @@ impl crate::ui::Root {
         };
         match req.kind {
             ConfirmKind::CleanSelected => self.start_clean(cx),
+            ConfirmKind::ReleaseCache { plan, force } => {
+                self.execute_release_cache(*plan, force, cx)
+            }
             ConfirmKind::CleanPath(p, size) => self.start_clean_path(p, size, cx),
             ConfirmKind::CleanDiskSelected => self.start_clean_disk_selected(cx),
             ConfirmKind::CleanDeclutter(tab) => self.run_declutter_clean(tab, cx),

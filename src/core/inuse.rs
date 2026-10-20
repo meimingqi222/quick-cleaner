@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 /// 与 `open` 都会阻止清理。三者可以同时成立，徽标优先展示解释力更强的应用名。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Busy {
+    /// The rule recommendation before occupancy downgraded it; not inferred from category.
+    pub recommended_before_busy: bool,
     pub app: Option<String>,
     pub open: bool,
     /// 占用检测本身失败/超时/输出不完整，测不出真实状态。按占用处理。
@@ -77,7 +79,13 @@ pub fn apply_busy(categories: &mut [CategorySummary], busy: &HashMap<PathBuf, Bu
         for item in &mut cat.items {
             if let Some(b) = busy.get(&item.path) {
                 if !b.is_empty() {
-                    item.busy = Some(b.clone());
+                    let mut busy = b.clone();
+                    busy.recommended_before_busy = item.recommended
+                        || item
+                            .busy
+                            .as_ref()
+                            .is_some_and(|old| old.recommended_before_busy);
+                    item.busy = Some(busy);
                     item.recommended = false;
                     n += 1;
                 }
@@ -130,6 +138,7 @@ mod tests {
     #[test]
     fn badge_prefers_app_over_open() {
         let b = Busy {
+            recommended_before_busy: false,
             app: Some("Edge".into()),
             open: true,
             unknown: false,
@@ -139,6 +148,7 @@ mod tests {
         assert!(app_level);
         assert!(
             !Busy {
+                recommended_before_busy: false,
                 app: None,
                 open: true,
                 unknown: false
@@ -153,6 +163,7 @@ mod tests {
     #[test]
     fn badge_shows_unknown_when_detection_failed() {
         let (text, app_level) = Busy {
+            recommended_before_busy: false,
             app: None,
             open: false,
             unknown: true,
@@ -167,6 +178,7 @@ mod tests {
     fn is_empty_accounts_for_unknown() {
         assert!(Busy::default().is_empty());
         assert!(!Busy {
+            recommended_before_busy: false,
             app: None,
             open: false,
             unknown: true
@@ -202,6 +214,7 @@ mod tests {
         let busy = HashMap::from([(
             PathBuf::from("/a"),
             Busy {
+                recommended_before_busy: false,
                 app: Some("A".into()),
                 open: false,
                 unknown: false,
@@ -210,6 +223,21 @@ mod tests {
         assert_eq!(apply_busy(&mut cats, &busy), 1);
         assert!(cats[0].items[0].busy.is_some());
         assert!(!cats[0].items[0].recommended);
+        assert!(
+            cats[0].items[0]
+                .busy
+                .as_ref()
+                .unwrap()
+                .recommended_before_busy
+        );
+        apply_busy(&mut cats, &busy);
+        assert!(
+            cats[0].items[0]
+                .busy
+                .as_ref()
+                .unwrap()
+                .recommended_before_busy
+        );
         assert!(cats[0].items[1].busy.is_none());
     }
 }
