@@ -1,42 +1,21 @@
 //! 开发相关：构建产物、AI 编程助手缓存、编辑器工作区
 
-use super::{target, target_with_recommendation, ScanTarget};
+use super::{target_with_recommendation, ScanTarget};
 use crate::core::categories::CategoryId;
-use crate::core::i18n::Text;
 use crate::core::rules::Operation;
 use std::path::Path;
 
 /// 开发相关清理目标：AI agent 缓存、构建产物、iOS 备份、编辑器工作区
 pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
-    if let (Some(cache), Some(data)) = (
-        crate::platform::user_cache_dir(),
-        crate::platform::user_data_dir(),
-    ) {
+    #[cfg(not(test))]
+    let _ = home;
+    if let Some(data) = crate::platform::user_data_dir() {
         // AI 编程助手的会话记录与缓存
-        push_ai_agent_targets(t, home, &cache, &data);
+        push_ai_agent_targets(t, &data);
+        #[cfg(test)]
+        crate::core::rules::versions::append_fixture(t, "zed_node", home, &data);
     }
 }
-
-/// CLI 型 agent：`~/.<目录>` 下可安全清理的子目录。
-///
-/// 这份表是照着本机实际目录逐个核对出来的，不是按命名惯例猜的。
-/// 收录标准：**删掉只丢历史/缓存，不影响工具启动与身份**。
-/// 因此配置（`settings.json`、`config.toml`）、凭据（`auth.json`、
-/// `oauth_creds.json`）、记忆（`memories`）、已安装的插件与技能
-/// （`plugins`、`skills`——本机各占约 380 MB，是最大的诱惑也是最不该动的）
-/// 一律不在表内。
-///
-/// 每个子目录带一个「默认是否勾选」标记，**不靠名字启发式现推**：
-/// 同一条 `matches!(sub, "cache" | "log" | ...)` 过去同时决定了「纯临时的
-/// `.tmp` 不勾」和「827 MB 的会话记录也不勾」——两件事，一条规则。
-/// 判据是规范第二条：删掉只丢「重新生成 / 重新下载」的勾，
-/// 会丢会话、历史、编辑快照的一律不勾（仍然展示，用户可手动选）。
-///
-/// 平台无关：目录名和子目录名在 Windows / macOS 上一致，只有根目录
-/// （`%USERPROFILE%` ↔ `~`）在调用方拼接。
-/// CLI agent 的一个可清理子目录：`(子目录名, 默认是否勾选)`。
-pub(super) type AgentSubdir = (String, bool);
-pub(super) type CliAgent = (String, String, Vec<AgentSubdir>);
 
 fn layouts(catalog: &str) -> Vec<crate::core::rules::Layout> {
     crate::core::rules::current()
@@ -45,22 +24,6 @@ fn layouts(catalog: &str) -> Vec<crate::core::rules::Layout> {
         .get(catalog)
         .cloned()
         .unwrap_or_default()
-}
-
-fn cli_agents() -> Vec<CliAgent> {
-    layouts("cli_agents")
-        .into_iter()
-        .map(|row| {
-            (
-                row.path,
-                row.zh,
-                row.children
-                    .into_iter()
-                    .map(|child| (child.path, child.recommended))
-                    .collect(),
-            )
-        })
-        .collect()
 }
 
 /// Electron / Chromium 系 AI 编程应用在「 roaming 」根下的目录名。
@@ -97,77 +60,19 @@ pub(super) fn local_agent_claimed_children(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// AI 编程助手的缓存、会话残留与临时 worktree。
+/// AI 编程助手的内容签名发现：Electron/Chromium 系应用的缓存叶子。
 ///
-/// 三种来源，覆盖面各不同：
-/// - **固定路径**：`CLI_AGENTS` 逐个子目录列出。不存在的会在扫描阶段被
-///   `path.exists()` 过滤掉，多列几个候选的代价只是一次 stat。
-/// - **内容签名**：Electron/Chromium 系应用（[`push_chromium_app_caches`]）
-///   与 agent 目录下自建的浏览器 profile。这里**不看名字**——名字只决定
-///   归到 AI 类还是应用缓存。
-/// - **动态发现**：旧版本目录、日志库、编辑器清单，都在 `directories` 规则里。
+/// 这里**不看名字**——覆盖面靠内容签名（`categories::chromium`），名字只
+/// 决定归到 AI 类还是应用缓存。cli agent 子目录、local agent 缓存、agent
+/// 浏览器 profile 与临时 worktree 都由 `directories` 规则产出（见
+/// development.toml），不在这里重抄一份目录拼接。
 ///
 /// 平台无关：调用方传入平台对应的根目录即可——
-/// - Windows: `home = %USERPROFILE%`, `local = %LOCALAPPDATA%`, `roaming = %APPDATA%`
-/// - macOS:   `home = ~`, `local = ~/Library/Caches`, `roaming = ~/Library/Application Support`
-pub(super) fn push_ai_agent_targets(
-    t: &mut Vec<ScanTarget>,
-    home: &Path,
-    local: &Path,
-    roaming: &Path,
-) {
-    const AGENT: CategoryId = CategoryId::AiAgents;
-
-    // ---- CLI 型 agent ----
-    for (dir, label, subs) in &cli_agents() {
-        for (sub, recommended) in subs {
-            t.push(target_with_recommendation(
-                home.join(dir).join(sub),
-                format!("{label} · {sub}"),
-                AGENT,
-                *recommended,
-                Operation::Contents,
-                ("engine", "development_candidate"),
-            ));
-        }
-    }
-    // 日志库、扩展 tasks 等搜索式布局走 `directories` 规则（见 development.toml），
-    // 不再在这里重抄一份目录拼接。
-    // agent 目录下自建的浏览器 profile：`~/.gemini/antigravity-browser-profile`
-    // 是 Chromium 的 userData 形状，同样只收叶子。
-    for (dir, label, _) in &cli_agents() {
-        push_chromium_leaves(t, &home.join(dir), label, AGENT);
-    }
-
+/// - Windows: `roaming = %APPDATA%`
+/// - macOS:   `roaming = ~/Library/Application Support`
+pub(super) fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, roaming: &Path) {
     // ---- Electron / Chromium 系应用：按内容签名认，不按应用名认 ----
     push_chromium_app_caches(t, roaming);
-
-    // ---- local 根下的缓存与更新包 ----
-    for row in layouts("local_agents") {
-        if row.children.is_empty() {
-            t.push(target(
-                local.join(&row.path),
-                Text::new(row.zh, row.en),
-                AGENT,
-                Operation::Contents,
-                ("engine", "agent_history"),
-            ));
-        } else {
-            for child in &row.children {
-                t.push(target_with_recommendation(
-                    local.join(&row.path).join(&child.path),
-                    Text::new(
-                        format!("{} · {}", row.zh, child.path),
-                        format!("{} · {}", row.en, child.path),
-                    ),
-                    AGENT,
-                    child.recommended,
-                    Operation::Contents,
-                    ("engine", "development_candidate"),
-                ));
-            }
-        }
-    }
 
     // electron-updater 的更新包目录：展开 `%LOCALAPPDATA%` 一层逐个探内容。
     // 不再按应用名列清单——那张 6 个名字的表实测只剩 1 个命中，而真实存在的
@@ -175,44 +80,9 @@ pub(super) fn push_ai_agent_targets(
     // `~/Library/Caches`，两边共用同一套签名。
     #[cfg(windows)]
     {
-        super::updater::push_updater_dirs_under(t, local);
-    }
-
-    #[cfg(test)]
-    crate::core::rules::versions::append_fixture(t, "zed_node", home, roaming);
-
-    // ---- AI agent 的临时 git worktree（单列一类，风险更高）----
-    for row in layouts("worktrees") {
-        for name in ["worktrees", ".worktrees"] {
-            push_worktrees(t, &home.join(&row.path).join(name), &row.zh, &row.en);
+        if let Some(local) = crate::platform::user_cache_dir() {
+            super::updater::push_updater_dirs_under(t, &local);
         }
-    }
-    for row in layouts("roaming_worktrees") {
-        push_worktrees(t, &roaming.join(&row.path), &row.zh, &row.en);
-    }
-
-    // 编辑器扩展清单（`.obsolete`）与孤立工作区（`workspace.json`）也由
-    // `directories` 规则读取（见 development.toml），不在这里再抄一份 JSON 解析。
-}
-
-fn push_worktrees(t: &mut Vec<ScanTarget>, container: &Path, zh: &str, en: &str) {
-    for path in crate::core::worktrees::discover(container) {
-        if crate::core::safety::is_protected(&path) {
-            continue;
-        }
-        let Ok(worktree) = crate::core::worktrees::inspect(&path) else {
-            continue;
-        };
-        let registration = worktree.admin;
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let label = Text::new(format!("{zh} · {name}"), format!("{en} · {name}"));
-        t.push(target(
-            path,
-            label,
-            CategoryId::DevWorktrees,
-            Operation::GitWorktree { registration },
-            ("engine", "linked_worktree"),
-        ));
     }
 }
 
@@ -303,15 +173,15 @@ mod tests {
     use super::*;
 
     /// 走生产选择器（`directories` 规则）而不是测试专用的拼接，夹具与运行时同一条路径。
-    fn rule_directories(home: &Path, roaming: &Path) -> Vec<ScanTarget> {
+    fn rule_directories(home: &Path, local: &Path, roaming: &Path) -> Vec<ScanTarget> {
         let snapshot = crate::core::rules::snapshot();
-        let roots = crate::core::rules::directories::fixture_roots(home, roaming);
+        let roots = crate::core::rules::directories::fixture_roots_with_local(home, local, roaming);
         crate::core::rules::directories::scan_at(&snapshot, "development", &roots).0
     }
 
     /// 编辑器清单产出的目标：Tree + `DevBuild`。
     fn manifest_targets(home: &Path, roaming: &Path) -> Vec<std::path::PathBuf> {
-        rule_directories(home, roaming)
+        rule_directories(home, &home.join("local"), roaming)
             .into_iter()
             .filter(|target| {
                 target.category == CategoryId::DevBuild && target.operation == Operation::Tree
@@ -441,23 +311,17 @@ mod tests {
 
     #[test]
     fn ai_agent_targets_never_touch_config_or_credentials() {
-        for (dir, label, subs) in &cli_agents() {
-            for (sub, _) in subs {
-                assert!(
-                    !NEVER_CLEAN.contains(&sub.as_str()),
-                    "{label}（{dir}）把 {sub} 列成了可清理项，这会破坏用户配置"
-                );
-            }
-        }
-        for row in layouts("local_agents") {
-            for child in &row.children {
-                assert!(
-                    !NEVER_CLEAN.contains(&child.path.as_str()),
-                    "{}（{}）把 {} 列成了可清理项",
-                    row.zh,
-                    row.path,
-                    child.path
-                );
+        for catalog in ["cli_agents", "local_agents"] {
+            for row in layouts(catalog) {
+                for child in &row.children {
+                    assert!(
+                        !NEVER_CLEAN.contains(&child.path.as_str()),
+                        "{}（{}）把 {} 列成了可清理项，这会破坏用户配置",
+                        row.zh,
+                        row.path,
+                        child.path
+                    );
+                }
             }
         }
     }
@@ -470,11 +334,11 @@ mod tests {
     #[test]
     fn temp_subdirs_are_recommended_and_history_is_not() {
         let recommended = |dir: &str, sub: &str| {
-            cli_agents()
+            layouts("cli_agents")
                 .iter()
-                .find(|(name, _, _)| *name == dir)
-                .and_then(|(_, _, subs)| subs.iter().find(|(name, _)| *name == sub))
-                .map(|(_, recommended)| *recommended)
+                .find(|row| row.path == dir)
+                .and_then(|row| row.children.iter().find(|child| child.path == sub))
+                .map(|child| child.recommended)
                 .unwrap_or_else(|| panic!("{dir}/{sub} 不在表里"))
         };
         for (dir, sub) in [
@@ -590,38 +454,31 @@ mod tests {
     #[test]
     fn owned_agent_session_worktrees_are_filtered_by_core_safety() {
         let root = crate::core::testing::fixture("agent_session_discovery_guard");
-        let workspace = root.join("workspace");
-        let container = workspace.join("subagent-worktrees");
-        let checkout = container.join("child");
-        let common = root.join("repo/.git");
-        let admin = common.join("worktrees/child");
-        std::fs::create_dir_all(&checkout).unwrap();
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::write(common.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
-        std::fs::write(admin.join("HEAD"), b"fixture\n").unwrap();
-        std::fs::write(admin.join("commondir"), b"../..\n").unwrap();
-        std::fs::write(
-            admin.join("gitdir"),
-            checkout.join(".git").to_string_lossy().as_bytes(),
-        )
-        .unwrap();
-        std::fs::write(
-            checkout.join(".git"),
-            format!("gitdir: {}\n", admin.display()),
-        )
-        .unwrap();
+        let home = root.join("home");
+        // 声明容器是 `home/.codex/worktrees`；会话归属判据只认
+        // `subagent-worktrees` 祖先与其父目录里的 marker 文件。
+        let container = home.join(".codex/worktrees");
+        let checkout = container.join("subagent-worktrees/child");
+        let admin = linked_worktree(&root.join("repo"), &checkout);
         std::fs::write(checkout.join("sentinel"), b"session source").unwrap();
+        let scan = |targets: &mut Vec<ScanTarget>| {
+            targets.extend(
+                rule_directories(&home, &root.join("local"), &root.join("roaming"))
+                    .into_iter()
+                    .filter(|target| target.category == CategoryId::DevWorktrees),
+            );
+        };
         let mut targets = Vec::new();
-        push_worktrees(&mut targets, &container, "fixture", "fixture");
+        scan(&mut targets);
         assert_eq!(
             targets.len(),
             1,
             "fixture must be a discoverable linked checkout"
         );
-        std::fs::write(workspace.join("runtime.sqlite"), b"owner metadata").unwrap();
+        std::fs::write(container.join("runtime.sqlite"), b"owner metadata").unwrap();
         targets.clear();
         assert!(crate::core::safety::is_protected(&checkout));
-        push_worktrees(&mut targets, &container, "fixture", "fixture");
+        scan(&mut targets);
         assert!(
             targets.is_empty(),
             "protected session checkout must not be offered for cleanup"
@@ -648,9 +505,12 @@ mod tests {
             std::fs::create_dir_all(roaming.join("Cursor").join(leaf)).unwrap();
             std::fs::write(roaming.join("Cursor").join(leaf).join("data"), b"x").unwrap();
         }
-        let mut targets = Vec::new();
+        // 声明式目录选择器只发真实存在的目录目标。
+        std::fs::create_dir_all(home.join(".claude/cache")).unwrap();
+        std::fs::create_dir_all(home.join(".claude/projects")).unwrap();
+        let mut targets = rule_directories(&home, &local, &roaming);
 
-        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
+        push_ai_agent_targets(&mut targets, &roaming);
 
         let claude_cache = home.join(".claude/cache");
         let claude_projects = home.join(".claude/projects");
@@ -678,8 +538,6 @@ mod tests {
     #[test]
     fn chromium_shape_wins_over_the_app_name_list() {
         let root = crate::core::testing::fixture("qc_ai_shape");
-        let home = root.join("home");
-        let local = root.join("local");
         let roaming = root.join("roaming");
         for app in ["Codex", "SomeToolNobodyListed"] {
             for leaf in ["Cache", "Code Cache", "GPUCache"] {
@@ -689,7 +547,7 @@ mod tests {
             }
         }
         let mut targets = Vec::new();
-        push_ai_agent_targets(&mut targets, &home, &local, &roaming);
+        push_ai_agent_targets(&mut targets, &roaming);
 
         let category = |path: std::path::PathBuf| {
             targets
@@ -808,7 +666,7 @@ mod tests {
         ] {
             std::fs::write(codex.join(name), b"db").unwrap();
         }
-        let targets = rule_directories(&home, &root.join("roaming"));
+        let targets = rule_directories(&home, &root.join("local"), &root.join("roaming"));
         let log_databases: Vec<_> = targets
             .iter()
             .filter(|target| target.operation == Operation::File)
@@ -978,7 +836,7 @@ mod tests {
         ] {
             std::fs::create_dir_all(global_storage(host, extension)).unwrap();
         }
-        let targets = rule_directories(&home, &roaming);
+        let targets = rule_directories(&home, &root.join("local"), &roaming);
         let storage = |host: &str, extension: &str| {
             targets
                 .iter()
@@ -1024,7 +882,7 @@ mod tests {
         )
         .unwrap();
 
-        let targets: Vec<_> = rule_directories(&root, &root.join("roaming"))
+        let targets: Vec<_> = rule_directories(&root, &root.join("local"), &root.join("roaming"))
             .into_iter()
             .filter(|target| target.category == CategoryId::DevBuild)
             .collect();
@@ -1160,5 +1018,147 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 一个合法的 linked worktree：`checkout/.git` 指到 `repo/.git/worktrees/<名>`，
+    /// 管理目录的 gitdir/commondir 互指回去。返回管理目录路径。
+    fn linked_worktree(repo: &std::path::Path, checkout: &std::path::Path) -> std::path::PathBuf {
+        let common = repo.join(".git");
+        let admin = common.join("worktrees").join(checkout.file_name().unwrap());
+        std::fs::create_dir_all(checkout).unwrap();
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(common.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("HEAD"), b"fixture\n").unwrap();
+        std::fs::write(admin.join("commondir"), b"../..\n").unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            checkout.join(".git").to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+        admin
+    }
+
+    /// AI agent 布局的迁移夹具：每个 cli agent 声明的一部分子目录（缺的、
+    /// 是文件而不是目录的、未声明的额外目录都覆盖到）、local agent 子目录、
+    /// `.gemini` 下的 Chromium 浏览器 profile、home 与 roaming 两处合法
+    /// worktree、一个被 core safety 挡掉的会话 worktree，以及走剩余 provider
+    /// 的 roaming 应用缓存与 zed_node 版本目录。
+    fn ai_agent_layout_fixture() -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let root = crate::core::testing::fixture("ai_agent_layout_baseline");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let local = root.join("local");
+        let roaming = root.join("roaming");
+        std::fs::create_dir_all(home.join(".claude/cache")).unwrap();
+        std::fs::create_dir_all(home.join(".claude/projects")).unwrap();
+        // 声明过但实际是文件：不是目录，永远不能成为目录目标。
+        std::fs::write(home.join(".claude/file-history"), b"file").unwrap();
+        std::fs::create_dir_all(home.join(".claude/.undeclared")).unwrap();
+        std::fs::create_dir_all(home.join(".codex/cache")).unwrap();
+        std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+        // `.codex/worktrees` 同时是未声明子目录与声明的 worktree 容器。
+        linked_worktree(
+            &root.join("repo-codex"),
+            &home.join(".codex/worktrees/feature-x"),
+        );
+        std::fs::create_dir_all(home.join(".gemini/tmp")).unwrap();
+        let profile = home.join(".gemini/antigravity-browser-profile");
+        for leaf in ["Cache", "GPUCache"] {
+            std::fs::create_dir_all(profile.join(leaf)).unwrap();
+            std::fs::write(profile.join(leaf).join("data"), b"x").unwrap();
+        }
+        // `Cookies` 不是缓存叶子：登录态不进表。
+        std::fs::create_dir_all(profile.join("Cookies")).unwrap();
+        std::fs::create_dir_all(home.join(".qwen/tmp")).unwrap();
+        std::fs::create_dir_all(home.join(".augment/observability")).unwrap();
+        std::fs::create_dir_all(home.join(".copilot/logs")).unwrap();
+        std::fs::create_dir_all(home.join(".workbuddy/logs")).unwrap();
+        std::fs::create_dir_all(local.join("claude-cli-nodejs/Cache")).unwrap();
+        std::fs::create_dir_all(local.join("amp/logs")).unwrap();
+        std::fs::create_dir_all(local.join("amp/traces")).unwrap();
+        std::fs::create_dir_all(local.join("amp/.undeclared")).unwrap();
+        std::fs::create_dir_all(local.join("Zed/logs")).unwrap();
+        for leaf in ["Cache", "Code Cache", "GPUCache"] {
+            std::fs::create_dir_all(roaming.join("Cursor").join(leaf)).unwrap();
+            std::fs::write(roaming.join("Cursor").join(leaf).join("data"), b"x").unwrap();
+        }
+        for leaf in ["Cache", "GPUCache"] {
+            std::fs::create_dir_all(roaming.join("UnlistedTool").join(leaf)).unwrap();
+            std::fs::write(roaming.join("UnlistedTool").join(leaf).join("data"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(roaming.join("Zed/node/node-v20.1/cache")).unwrap();
+        let maka_repo = root.join("repo-maka");
+        linked_worktree(&maka_repo, &roaming.join("Maka/workspaces/feature-y"));
+        // 归属证据在场的会话 worktree：能被发现，但绝不能进清理表。
+        let workspace = roaming.join("Maka/workspaces/session-ws");
+        linked_worktree(&maka_repo, &workspace.join("subagent-worktrees/agent-1"));
+        std::fs::write(workspace.join("runtime.sqlite"), b"owner metadata").unwrap();
+        (root, home, local, roaming)
+    }
+
+    fn ai_agent_rows(targets: &[ScanTarget], root: &Path) -> Vec<serde_json::Value> {
+        let canonical = std::fs::canonicalize(root).unwrap();
+        let relative = |path: &Path| {
+            path.strip_prefix(root)
+                .or_else(|_| path.strip_prefix(&canonical))
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        };
+        let mut rows: Vec<_> = targets
+            .iter()
+            // 基线只记录解析为真实目录的目标：不存在的声明项称重阶段就丢；
+            // 声明位置上是文件时，目录语义的清理目标不成立。
+            .filter(|target| target.path.is_dir())
+            .map(|target| {
+                let operation = match &target.operation {
+                    Operation::GitWorktree { .. } => "GitWorktree".to_string(),
+                    other => format!("{other:?}"),
+                };
+                let mut row = serde_json::json!({
+                    "path": relative(&target.path),
+                    "zh": target.label.get(crate::core::i18n::Language::Zh),
+                    "en": target.label.get(crate::core::i18n::Language::En),
+                    "category": format!("{:?}", target.category),
+                    "recommended": target.recommended,
+                    "operation": operation,
+                    "disposal": format!("{:?}", target.disposal),
+                });
+                if let Operation::GitWorktree { registration } = &target.operation {
+                    row["registration"] = serde_json::json!(relative(registration));
+                }
+                row
+            })
+            .collect();
+        rows.sort_by(|a, b| a["path"].as_str().unwrap().cmp(b["path"].as_str().unwrap()));
+        rows
+    }
+
+    /// 迁移金样：目标、标签、类别、推荐与操作逐项与记录基线一致。基线由
+    /// 迁移前的 `push_ai_agent_targets` 产出后提交，此后规则扫描加剩余
+    /// provider 输出必须逐行相同；有差异说明行为变了，不是改基线的理由。
+    #[test]
+    fn ai_agent_layouts_preserve_the_migration_baseline() {
+        let (root, home, local, roaming) = ai_agent_layout_fixture();
+        let mut targets = rule_directories(&home, &local, &roaming);
+        push_ai_agent_targets(&mut targets, &roaming);
+        // 版本夹具挂到 `push_dev_targets`；基线扫描不经过它，这里显式补齐。
+        crate::core::rules::versions::append_fixture(&mut targets, "zed_node", &home, &roaming);
+        let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/ai-agent-layout-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(ai_agent_rows(&targets, &root), expected);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

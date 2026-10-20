@@ -700,7 +700,7 @@ mod tests {
             .validate()
             .unwrap_err()
             .contains("Current version changed"));
-        assert_eq!(frozen.rule.snapshot.definition("development").version, 5);
+        assert_eq!(frozen.rule.snapshot.definition("development").version, 6);
         std::fs::remove_dir(&pointer)
             .or_else(|_| std::fs::remove_file(&pointer))
             .unwrap();

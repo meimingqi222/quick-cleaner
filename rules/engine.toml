@@ -1,5 +1,5 @@
 id = "engine"
-version = 6
+version = 7
 platform = "all"
 required = ["file", "providers", "declutter", "docker", "snapshot", "owner"]
 
@@ -49,14 +49,6 @@ disposal = "permanent"
 
 [provider_policies.cache_candidate]
 recommended = true
-disposal = "permanent"
-
-[provider_policies.agent_history]
-recommended = false
-disposal = "permanent"
-
-[provider_policies.linked_worktree]
-recommended = false
 disposal = "permanent"
 
 [provider_policies.development_candidate]

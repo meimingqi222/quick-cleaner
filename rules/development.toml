@@ -1,10 +1,28 @@
 id = "development"
-version = 5
+version = 6
 platform = "all"
 required = ["chromium", "file", "version_retention", "directory_selection"]
 [lists]
 ai_app_dirs = ["Claude", "Codex", "Cursor", "CursorStar", "Trae", "Trae CN", "TRAE SOLO CN", "Windsurf", "Windsurf - Next", "Kiro", "Zed", "Void", "CodeBuddy", "CodeRabbit", "Antigravity", "AutoGLM", "WorkBuddy", "@genie", "devin", "Devin - Next", "anythingllm-desktop", "crush-gui", "CatPawAI", "Maka", "MiniMax", "MiniMax Code", "Xiaomi MiMo", "Grok Bot", "Doubao", "LobsterAI", "xyz.chatboxapp.app", "com.qoder.app.stable", "Qoder", "Paseo"]
 vscode_hosts = ["Code", "Trae", "Trae CN", "Cursor", "Windsurf - Next"]
+
+# cli 型 agent：`~/.<目录>` 下可安全清理的子目录。
+#
+# 这张表是照着本机实际目录逐个核对出来的，不是按命名惯例猜的。
+# 收录标准：**删掉只丢历史/缓存，不影响工具启动与身份**。
+# 因此配置（`settings.json`、`config.toml`）、凭据（`auth.json`、
+# `oauth_creds.json`）、记忆（`memories`）、已安装的插件与技能
+# （`plugins`、`skills`——本机各占约 380 MB，是最大的诱惑也是最不该动的）
+# 一律不在表内。
+#
+# 每个子目录带一个「默认是否勾选」的 `recommended` 标记，
+# **不靠名字启发式现推**：同一条 `matches!(sub, "cache" | "log" | ...)`
+# 过去同时决定了「纯临时的 `.tmp` 不勾」和「827 MB 的会话记录也不勾」——
+# 两件事，一条规则。判据是规范第二条：删掉只丢「重新生成 / 重新下载」
+# 的勾，会丢会话、历史、编辑快照的一律不勾（仍然展示，用户可手动选）。
+#
+# 平台无关：目录名和子目录名在 Windows / macOS 上一致，只有根目录
+# （`%USERPROFILE%` ↔ `~`）由 `root` 拼接。
 
 [[catalogs.cli_agents]]
 path = ".claude"
@@ -303,6 +321,72 @@ category = "AiAgents"
 operation = "contents"
 disposal = "permanent"
 recommended = true
+
+# cli agent 声明过的子目录：逐行只读一次目录清单，按声明顺序取在列表里
+# 且是目录的子项；缺失、是文件或未声明的一律不入表。
+[[directories]]
+id = "cli_agent_children"
+root = "home"
+paths = ["{cli_agents}"]
+select = { kind = "layout_children", catalog = "cli_agents" }
+zh = "{cli_agents} · {name}"
+en = "{cli_agents} · {name}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# `%LOCALAPPDATA%` / `~/Library/Caches` 下的 agent 缓存子目录，同一张声明表。
+[[directories]]
+id = "local_agent_children"
+root = "local"
+paths = ["{local_agents}"]
+select = { kind = "layout_children", catalog = "local_agents" }
+zh = "{local_agents} · {name}"
+en = "{local_agents} · {name}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# agent 目录下自建的浏览器 profile：内容签名成立才收叶子（登录态不入表）。
+[[directories]]
+id = "cli_agent_browser_leaves"
+root = "home"
+paths = ["{cli_agents}"]
+select = { kind = "signature_leaves", signature = "chromium" }
+zh = "{cli_agents} · {trail}"
+en = "{cli_agents} · {trail}"
+category = "AiAgents"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# agent 的临时 git worktree：逐容器做轻量登记核验，只收合法 linked
+# checkout 的精确登记；core safety 保护的会话资源在发射时仍被挡掉。
+[[directories]]
+id = "agent_worktrees"
+root = "home"
+paths = ["{worktrees}"]
+select = { kind = "linked_worktrees", containers = ["worktrees", ".worktrees"] }
+zh = "{worktrees} · {name}"
+en = "{worktrees} · {name}"
+category = "DevWorktrees"
+operation = "tree"
+disposal = "permanent"
+recommended = false
+
+[[directories]]
+id = "roaming_agent_worktrees"
+root = "roaming"
+paths = ["{roaming_worktrees}"]
+select = { kind = "linked_worktrees", containers = [] }
+zh = "{roaming_worktrees} · {name}"
+en = "{roaming_worktrees} · {name}"
+category = "DevWorktrees"
+operation = "tree"
+disposal = "permanent"
+recommended = false
 
 # agent 根目录下的 `logs*.sqlite`：日志库开着 WAL，预选只会制造必然失败，
 # 所以列出来但不勾。会话历史（`thread_history_1.sqlite`）和记忆不在此列。

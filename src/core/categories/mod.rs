@@ -1324,7 +1324,7 @@ mod tests {
                 Text::same("具体规则"),
                 CategoryId::AiAgents,
                 crate::core::rules::Operation::Contents,
-                ("engine", "agent_history"),
+                ("engine", "cache_candidate"),
             ),
             target(
                 PathBuf::from("/tmp/qc-dup/a"),

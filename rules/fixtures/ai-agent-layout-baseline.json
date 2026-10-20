@@ -1,0 +1,211 @@
+[
+  {
+    "path": "home/.augment/observability",
+    "zh": "Augment · observability",
+    "en": "Augment · observability",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.claude/cache",
+    "zh": "Claude Code · cache",
+    "en": "Claude Code · cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.claude/projects",
+    "zh": "Claude Code · projects",
+    "en": "Claude Code · projects",
+    "category": "AiAgents",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.codex/cache",
+    "zh": "Codex · cache",
+    "en": "Codex · cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.codex/sessions",
+    "zh": "Codex · sessions",
+    "en": "Codex · sessions",
+    "category": "AiAgents",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.codex/worktrees/feature-x",
+    "zh": "Codex · feature-x",
+    "en": "Codex · feature-x",
+    "category": "DevWorktrees",
+    "recommended": false,
+    "operation": "GitWorktree",
+    "disposal": "Permanent",
+    "registration": "repo-codex/.git/worktrees/feature-x"
+  },
+  {
+    "path": "home/.copilot/logs",
+    "zh": "Copilot CLI · logs",
+    "en": "Copilot CLI · logs",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.gemini/antigravity-browser-profile/Cache",
+    "zh": "Gemini CLI · antigravity-browser-profile · Cache",
+    "en": "Gemini CLI · antigravity-browser-profile · Cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.gemini/antigravity-browser-profile/GPUCache",
+    "zh": "Gemini CLI · antigravity-browser-profile · GPUCache",
+    "en": "Gemini CLI · antigravity-browser-profile · GPUCache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.gemini/tmp",
+    "zh": "Gemini CLI · tmp",
+    "en": "Gemini CLI · tmp",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.qwen/tmp",
+    "zh": "Qwen Code · tmp",
+    "en": "Qwen Code · tmp",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/.workbuddy/logs",
+    "zh": "WorkBuddy · logs",
+    "en": "WorkBuddy · logs",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "local/Zed/logs",
+    "zh": "Zed · logs",
+    "en": "Zed · logs",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "local/amp/logs",
+    "zh": "Amp · logs",
+    "en": "Amp · logs",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "local/amp/traces",
+    "zh": "Amp · traces",
+    "en": "Amp · traces",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "local/claude-cli-nodejs/Cache",
+    "zh": "Claude Code Node · Cache",
+    "en": "Claude Code Node · Cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/Cursor/Cache",
+    "zh": "Cursor · Cache",
+    "en": "Cursor · Cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/Cursor/Code Cache",
+    "zh": "Cursor · Code Cache",
+    "en": "Cursor · Code Cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/Cursor/GPUCache",
+    "zh": "Cursor · GPUCache",
+    "en": "Cursor · GPUCache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/Maka/workspaces/feature-y",
+    "zh": "Maka · feature-y",
+    "en": "Maka · feature-y",
+    "category": "DevWorktrees",
+    "recommended": false,
+    "operation": "GitWorktree",
+    "disposal": "Permanent",
+    "registration": "repo-maka/.git/worktrees/feature-y"
+  },
+  {
+    "path": "roaming/UnlistedTool/Cache",
+    "zh": "UnlistedTool · Cache",
+    "en": "UnlistedTool · Cache",
+    "category": "UserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/UnlistedTool/GPUCache",
+    "zh": "UnlistedTool · GPUCache",
+    "en": "UnlistedTool · GPUCache",
+    "category": "UserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "roaming/Zed/node/node-v20.1/cache",
+    "zh": "Zed · npm 缓存",
+    "en": "Zed · npm cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  }
+]

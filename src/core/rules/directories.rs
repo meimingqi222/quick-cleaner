@@ -43,6 +43,7 @@ pub struct DirectoryRule {
 pub enum DirectoryRoot {
     Home,
     Roaming,
+    Local,
     UserTempParent,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +94,18 @@ pub enum Selection {
         catalog_policy: BTreeMap<String, CatalogPolicy>,
         #[serde(default)]
         leaf_policy: Option<LeafPolicy>,
+    },
+    /// Declared children of each row of one catalog, kept in declaration order.
+    LayoutChildren {
+        catalog: String,
+    },
+    /// Cache leaves a content signature finds inside each expanded directory.
+    SignatureLeaves {
+        signature: String,
+    },
+    /// Linked Git worktrees under declared container names.
+    LinkedWorktrees {
+        containers: Vec<String>,
     },
 }
 /// Per-catalog target shape for `catalog_children`: where a matched child goes
@@ -150,11 +163,14 @@ fn uri_prefix(value: &str) -> bool {
 fn names(values: &[String]) -> bool {
     values.len() <= 128 && values.iter().all(|v| name(v))
 }
-fn label(value: &str, tokens: &BTreeSet<String>) -> bool {
+fn label(value: &str, tokens: &BTreeSet<String>, trail_allowed: bool) -> bool {
     let mut rest = value
         .replace("{name}", "")
         .replace("{parent}", "")
         .replace("{relative}", "");
+    if trail_allowed {
+        rest = rest.replace("{trail}", "");
+    }
     for token in tokens {
         rest = rest.replace(token, "");
     }
@@ -179,6 +195,28 @@ fn leaf_signature(name: &str, dir: &Path) -> Vec<PathBuf> {
         "chromium" => crate::core::categories::chromium::cache_leaves(dir),
         _ => Vec::new(),
     }
+}
+/// A leaf a signature picked inside a directory: the emitted path, the
+/// `{trail}` label part and the vocabulary name that decides recommendation.
+struct SignedLeaf {
+    path: PathBuf,
+    trail: String,
+    name: String,
+}
+/// The signature leaves under `dir`, shared by catalog leaf policies and the
+/// `signature_leaves` selection so both speak one leaf vocabulary.
+fn signed_leaves(signature: &str, dir: &Path) -> Vec<SignedLeaf> {
+    leaf_signature(signature, dir)
+        .into_iter()
+        .filter_map(|leaf| {
+            let trail = crate::core::categories::chromium::leaf_trail(dir, &leaf);
+            Some(SignedLeaf {
+                path: leaf,
+                name: trail.last()?.clone(),
+                trail: trail.join(" · "),
+            })
+        })
+        .collect()
 }
 /// True when two dispatched catalogs claim the same child name.
 fn duplicate_dispatch_paths(
@@ -334,6 +372,30 @@ pub(super) fn validate(rule: &RuleDefinition) -> Result<(), String> {
                     // on map iteration order.
                     && !duplicate_dispatch_paths(rule, catalog_policy)
             }
+            Selection::LayoutChildren { catalog } => {
+                entry.operation == PathOperation::Contents
+                    && entry.log_policy.is_none()
+                    && entry.paths == [format!("{{{catalog}}}")]
+                    && rule.catalogs.get(catalog).is_some_and(|rows| {
+                        !rows.is_empty()
+                            && rows.len() <= 128
+                            && rows.iter().all(|row| {
+                                !row.children.is_empty()
+                                    && row.children.iter().all(|child| name(&child.path))
+                            })
+                    })
+            }
+            Selection::SignatureLeaves { signature } => {
+                LEAF_SIGNATURES.contains(&signature.as_str())
+                    && entry.operation == PathOperation::Contents
+                    && entry.log_policy.is_none()
+            }
+            Selection::LinkedWorktrees { containers } => {
+                containers.len() <= 4
+                    && containers.iter().all(|container| name(container))
+                    && entry.operation == PathOperation::Tree
+                    && entry.log_policy.is_none()
+            }
         };
         let mut tokens = BTreeSet::new();
         let valid_templates = entry.paths.iter().all(|path| {
@@ -349,8 +411,16 @@ pub(super) fn validate(rule: &RuleDefinition) -> Result<(), String> {
             || entry.paths.len() > 32
             || entry.paths.iter().any(|p| !super::relative(p))
             || !valid_templates
-            || !label(&entry.zh, &tokens)
-            || !label(&entry.en, &tokens)
+            || !label(
+                &entry.zh,
+                &tokens,
+                matches!(entry.select, Selection::SignatureLeaves { .. }),
+            )
+            || !label(
+                &entry.en,
+                &tokens,
+                matches!(entry.select, Selection::SignatureLeaves { .. }),
+            )
             || CategoryId::from_rule(&entry.category).is_none()
             || !valid_selection
             || entry.disposal != Disposal::Permanent
@@ -375,6 +445,7 @@ fn declared_root(
     match root {
         DirectoryRoot::Home => roots.get("home")?.clone(),
         DirectoryRoot::Roaming => roots.get("roaming")?.clone(),
+        DirectoryRoot::Local => roots.get("local")?.clone(),
         DirectoryRoot::UserTempParent => roots
             .get("user_temp")?
             .as_ref()?
@@ -745,6 +816,57 @@ fn append_rule(
                     }
                     continue;
                 }
+                if let Selection::SignatureLeaves { signature } = &entry.select {
+                    for leaf in signed_leaves(signature, &root) {
+                        let mut bindings = bindings.clone();
+                        bindings.push(Binding {
+                            token: "{trail}".into(),
+                            zh: leaf.trail.clone(),
+                            en: leaf.trail,
+                        });
+                        emitter.emit_with(
+                            targets,
+                            enumeration,
+                            Candidate::new(leaf.path, &leaf.name, &relative),
+                            &bindings,
+                            crate::core::categories::chromium::leaf_recommended(&leaf.name),
+                            entry.operation.operation(),
+                        );
+                    }
+                    continue;
+                }
+                if let Selection::LinkedWorktrees { containers } = &entry.select {
+                    let containers: Vec<PathBuf> = if containers.is_empty() {
+                        vec![root.clone()]
+                    } else {
+                        containers.iter().map(|name| root.join(name)).collect()
+                    };
+                    for container in containers {
+                        if !enumeration.directory(&anchor, &container).unwrap_or(false) {
+                            continue;
+                        }
+                        for path in crate::core::worktrees::discover(&container) {
+                            let Ok(worktree) = crate::core::worktrees::inspect(&path) else {
+                                continue;
+                            };
+                            let name = path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            emitter.emit_with(
+                                targets,
+                                enumeration,
+                                Candidate::new(path.clone(), &name, &format!("{relative}/{name}")),
+                                &bindings,
+                                true,
+                                super::Operation::GitWorktree {
+                                    registration: worktree.admin,
+                                },
+                            );
+                        }
+                    }
+                    continue;
+                }
                 if let Selection::Path { directories_only } = &entry.select {
                     let name = relative.rsplit('/').next().unwrap_or_default();
                     let present = if *directories_only {
@@ -767,7 +889,10 @@ fn append_rule(
                     continue;
                 };
                 match &entry.select {
-                    Selection::Path { .. } | Selection::ManifestChildren { .. } => unreachable!(),
+                    Selection::Path { .. }
+                    | Selection::ManifestChildren { .. }
+                    | Selection::SignatureLeaves { .. }
+                    | Selection::LinkedWorktrees { .. } => unreachable!(),
                     Selection::OrphanedChildren {
                         manifest,
                         pointer: json,
@@ -976,6 +1101,34 @@ fn append_rule(
                             }
                         }
                     }
+                    Selection::LayoutChildren { catalog } => {
+                        let Some(row) = rule
+                            .catalogs
+                            .get(catalog)
+                            .and_then(|rows| rows.iter().find(|row| row.path == relative))
+                        else {
+                            continue;
+                        };
+                        for declared in &row.children {
+                            let Some(child) = children
+                                .iter()
+                                .find(|child| child.directory && child.name == declared.path)
+                            else {
+                                continue;
+                            };
+                            emitter.emit(
+                                targets,
+                                enumeration,
+                                Candidate::new(
+                                    child.path.clone(),
+                                    &child.name,
+                                    &format!("{relative}/{}", child.name),
+                                ),
+                                &bindings,
+                                declared.recommended,
+                            );
+                        }
+                    }
                     Selection::CatalogChildren {
                         catalog_policy,
                         leaf_policy,
@@ -984,33 +1137,26 @@ fn append_rule(
                             // 内容签名先于名字：命中叶子词汇的目录只收叶子，
                             // 不能因为目录名也在派发表里就把宿主本体收进来。
                             if let Some(policy) = leaf_policy {
-                                let leaves = leaf_signature(&policy.signature, &child.path);
+                                let leaves = signed_leaves(&policy.signature, &child.path);
                                 if !leaves.is_empty() {
                                     let category = CategoryId::from_rule(&policy.category)
                                         .expect("validated category");
                                     for leaf in leaves {
-                                        let trail = crate::core::categories::chromium::leaf_trail(
-                                            &child.path,
-                                            &leaf,
-                                        );
-                                        let Some(leaf_name) = trail.last().cloned() else {
-                                            continue;
-                                        };
-                                        let trail = trail.join(" · ");
                                         let render = |template: &str| {
                                             template
                                                 .replace("{name}", &child.name)
-                                                .replace("{trail}", &trail)
+                                                .replace("{trail}", &leaf.trail)
                                         };
                                         emitter.push_target(
                                             targets,
                                             enumeration,
-                                            leaf,
+                                            leaf.path,
                                             Text::new(render(&policy.zh), render(&policy.en)),
                                             category,
                                             crate::core::categories::chromium::leaf_recommended(
-                                                &leaf_name,
+                                                &leaf.name,
                                             ),
+                                            entry.operation.operation(),
                                         );
                                     }
                                     continue;
@@ -1034,6 +1180,7 @@ fn append_rule(
                                     CategoryId::from_rule(&policy.category)
                                         .expect("validated category"),
                                     policy.recommended,
+                                    entry.operation.operation(),
                                 );
                                 continue;
                             }
@@ -1087,6 +1234,26 @@ impl Emitter<'_> {
         bindings: &[Binding],
         recommended: bool,
     ) {
+        self.emit_with(
+            targets,
+            enumeration,
+            candidate,
+            bindings,
+            recommended,
+            self.entry.operation.operation(),
+        );
+    }
+    /// Same as [`Emitter::emit`] but a candidate may carry its own typed
+    /// operation (a discovered Git worktree keeps its exact registration).
+    fn emit_with(
+        &self,
+        targets: &mut Vec<ScanTarget>,
+        enumeration: &mut Enumeration,
+        candidate: Candidate,
+        bindings: &[Binding],
+        recommended: bool,
+        operation: super::Operation,
+    ) {
         let Self { entry, .. } = self;
         let Candidate {
             path,
@@ -1116,10 +1283,14 @@ impl Emitter<'_> {
             Text::new(render(&entry.zh, false), render(&entry.en, true)),
             CategoryId::from_rule(&entry.category).expect("validated category"),
             entry.recommended && recommended,
+            operation,
         );
     }
     /// Catalog/leaf dispatch targets carry their own label, category and
     /// recommendation from the declared policy instead of the entry shape.
+    /// `operation` lets a discovered resource keep its typed parameters
+    /// (the declared `PathOperation` is only the capability bound).
+    #[allow(clippy::too_many_arguments)]
     fn push_target(
         &self,
         targets: &mut Vec<ScanTarget>,
@@ -1128,6 +1299,7 @@ impl Emitter<'_> {
         label: Text,
         category: CategoryId,
         recommended: bool,
+        operation: super::Operation,
     ) {
         let Self {
             snapshot,
@@ -1146,7 +1318,10 @@ impl Emitter<'_> {
                 ..
             }
             | Selection::ContainerDirectories { .. }
-            | Selection::CatalogChildren { .. } => ExpectedKind::Directory,
+            | Selection::CatalogChildren { .. }
+            | Selection::LayoutChildren { .. }
+            | Selection::SignatureLeaves { .. }
+            | Selection::LinkedWorktrees { .. } => ExpectedKind::Directory,
             Selection::NamedFiles { .. } | Selection::Files { .. } => ExpectedKind::File,
             Selection::ManifestChildren { .. }
             | Selection::OrphanedChildren { .. }
@@ -1165,7 +1340,7 @@ impl Emitter<'_> {
                 path,
                 label,
                 category,
-                operation: entry.operation.operation(),
+                operation,
                 disposal: entry.disposal,
                 recommended,
                 size_hint: None,
@@ -1191,6 +1366,7 @@ pub(super) fn roots(
     BTreeMap::from([
         ("home".to_string(), home.map(Path::to_path_buf)),
         ("roaming".to_string(), roaming.map(Path::to_path_buf)),
+        ("local".to_string(), home.map(Path::to_path_buf)),
         ("user_temp".to_string(), user_temp.map(Path::to_path_buf)),
     ])
 }
@@ -1273,6 +1449,19 @@ pub(crate) fn scan_at(
 #[cfg(test)]
 pub(crate) fn fixture_roots(home: &Path, roaming: &Path) -> BTreeMap<String, Option<PathBuf>> {
     roots(Some(home), Some(roaming), None)
+}
+
+/// Same as [`fixture_roots`] plus an explicit local cache root
+/// (`%LOCALAPPDATA%` / `~/Library/Caches`).
+#[cfg(test)]
+pub(crate) fn fixture_roots_with_local(
+    home: &Path,
+    local: &Path,
+    roaming: &Path,
+) -> BTreeMap<String, Option<PathBuf>> {
+    let mut roots = fixture_roots(home, roaming);
+    roots.insert("local".into(), Some(local.to_path_buf()));
+    roots
 }
 
 #[cfg(test)]
@@ -1691,6 +1880,142 @@ mod tests {
         let rule = bundle.rules.iter_mut().find(|r| r.id == "cache").unwrap();
         rule.version += 1;
         bundle.validate().unwrap();
+    }
+    #[test]
+    fn layout_children_reject_undeclared_sparse_or_unbounded_rows() {
+        let original = super::super::snapshot();
+        for fault in [
+            "unknown_catalog",
+            "empty_children",
+            "child_separator",
+            "wrong_paths",
+            "operation",
+            "log_policy",
+        ] {
+            let mut bundle = original.bundle.clone();
+            let rule = bundle
+                .rules
+                .iter_mut()
+                .find(|r| r.id == "development")
+                .unwrap();
+            let entry = rule
+                .directories
+                .iter_mut()
+                .find(|entry| entry.id == "cli_agent_children")
+                .unwrap();
+            match fault {
+                "unknown_catalog" => {
+                    entry.select = Selection::LayoutChildren {
+                        catalog: "nobody".into(),
+                    }
+                }
+                "empty_children" => {
+                    rule.catalogs
+                        .get_mut("cli_agents")
+                        .unwrap()
+                        .push(crate::core::rules::Layout {
+                            path: ".fixture".into(),
+                            zh: "夹具".into(),
+                            en: "fixture".into(),
+                            children: Vec::new(),
+                        })
+                }
+                "child_separator" => rule.catalogs.get_mut("cli_agents").unwrap()[0]
+                    .children
+                    .push(crate::core::rules::LayoutChild {
+                        path: "../escape".into(),
+                        recommended: false,
+                    }),
+                "wrong_paths" => entry.paths = vec!["{cli_agents}/extra".into()],
+                "operation" => entry.operation = PathOperation::Tree,
+                "log_policy" => {
+                    entry.log_policy = Some(LogPolicy {
+                        extensions: vec!["log".into()],
+                        exclude_exact: Vec::new(),
+                        exclude_prefixes: Vec::new(),
+                    })
+                }
+                _ => unreachable!(),
+            }
+            assert!(bundle.validate().is_err(), "{fault}");
+        }
+    }
+    #[test]
+    fn signature_leaves_and_linked_worktrees_reject_unknown_and_unbounded() {
+        let original = super::super::snapshot();
+        for fault in [
+            "signature",
+            "signature_operation",
+            "trail_elsewhere",
+            "container_name",
+            "container_count",
+            "worktree_operation",
+        ] {
+            let mut bundle = original.bundle.clone();
+            let rule = bundle
+                .rules
+                .iter_mut()
+                .find(|r| r.id == "development")
+                .unwrap();
+            match fault {
+                "signature" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "cli_agent_browser_leaves")
+                        .unwrap();
+                    entry.select = Selection::SignatureLeaves {
+                        signature: "electron".into(),
+                    };
+                }
+                "signature_operation" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "cli_agent_browser_leaves")
+                        .unwrap();
+                    entry.operation = PathOperation::File;
+                }
+                "trail_elsewhere" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "cli_agent_children")
+                        .unwrap();
+                    entry.zh = "{cli_agents} · {trail}".into();
+                }
+                "container_name" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "agent_worktrees")
+                        .unwrap();
+                    entry.select = Selection::LinkedWorktrees {
+                        containers: vec!["../escape".into()],
+                    };
+                }
+                "container_count" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "agent_worktrees")
+                        .unwrap();
+                    entry.select = Selection::LinkedWorktrees {
+                        containers: vec!["a".into(); 5],
+                    };
+                }
+                "worktree_operation" => {
+                    let entry = rule
+                        .directories
+                        .iter_mut()
+                        .find(|entry| entry.id == "agent_worktrees")
+                        .unwrap();
+                    entry.operation = PathOperation::Contents;
+                }
+                _ => unreachable!(),
+            }
+            assert!(bundle.validate().is_err(), "{fault}");
+        }
     }
     #[test]
     fn path_templates_stay_declarative_and_bounded() {

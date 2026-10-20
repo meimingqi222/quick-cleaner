@@ -740,8 +740,6 @@ fn validate_engine_policy(rule: &RuleDefinition) -> Result<(), String> {
     for key in [
         "browser_cache",
         "cache_candidate",
-        "agent_history",
-        "linked_worktree",
         "development_candidate",
         "docker_image",
         "broken_login_item",
@@ -978,7 +976,7 @@ mod tests {
         .unwrap();
         let snapshot = super::snapshot();
         let policies = &snapshot.definition("engine").provider_policies;
-        assert_eq!(baseline.len(), 31);
+        assert_eq!(baseline.len(), 23);
         for row in baseline {
             let key = row["policy"].as_str().unwrap();
             let expected = super::ProviderPolicy {

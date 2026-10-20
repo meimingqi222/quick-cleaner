@@ -113,73 +113,9 @@
   },
   {
     "provider": "dev",
-    "category": "AGENT",
-    "policy": "agent_history",
-    "operation": "Contents",
-    "recommended": false,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "AGENT",
-    "policy": "development_candidate",
-    "operation": "Contents",
-    "recommended": true,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "AGENT",
-    "policy": "development_candidate",
-    "operation": "Contents",
-    "recommended": true,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "AGENT",
-    "policy": "agent_history",
-    "operation": "Contents",
-    "recommended": false,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "DevWorktrees",
-    "policy": "linked_worktree",
-    "operation": "GitWorktree { registration }",
-    "recommended": false,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
     "category": "category",
     "policy": "development_candidate",
     "operation": "Contents",
-    "recommended": true,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "AiAgents",
-    "policy": "development_candidate",
-    "operation": "File",
-    "recommended": true,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "DevBuild",
-    "policy": "development_candidate",
-    "operation": "Tree",
-    "recommended": true,
-    "disposal": "permanent"
-  },
-  {
-    "provider": "dev",
-    "category": "DevBuild",
-    "policy": "development_candidate",
-    "operation": "Tree",
     "recommended": true,
     "disposal": "permanent"
   },
