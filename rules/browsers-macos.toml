@@ -1,0 +1,112 @@
+id = "browsers-macos"
+version = 1
+platform = "macos"
+required = ["file", "directory_selection", "chromium"]
+
+# ~/Library/Application Support 下的浏览器根。目录规则按这张表产出缓存
+# 目标，统一认领表（`rules::claims`）从同一份声明推导，开发扫描据此跳过
+# 已认领目录。Google/Chrome 只认领 Chrome，不认领 Google 的其他孩子。
+[[catalogs.app_support]]
+path = "Google/Chrome"
+zh = "Chrome"
+en = "Chrome"
+
+[[catalogs.app_support]]
+path = "Arc"
+zh = "Arc"
+en = "Arc"
+
+[[catalogs.app_support]]
+path = "BraveSoftware/Brave-Browser"
+zh = "Brave"
+en = "Brave"
+
+[[catalogs.app_support]]
+path = "Microsoft Edge"
+zh = "Edge"
+en = "Edge"
+
+[[catalogs.app_support]]
+path = "Vivaldi"
+zh = "Vivaldi"
+en = "Vivaldi"
+
+[[catalogs.app_support]]
+path = "Opera"
+zh = "Opera"
+en = "Opera"
+
+# ~/Library/Caches 下的产品目录。Chromium 系在 macOS 上把缓存放在产品名
+# 目录，不是 bundle id：Edge 的实际缓存是 "Microsoft Edge"。两段路径表示
+# 只认领孩子，父目录的其余孩子仍然入表。
+[[catalogs.library_caches]]
+path = "Google/Chrome"
+zh = "Chrome 缓存"
+en = "Chrome cache"
+
+[[catalogs.library_caches]]
+path = "com.apple.Safari"
+zh = "Safari 缓存"
+en = "Safari cache"
+
+[[catalogs.library_caches]]
+path = "Microsoft Edge"
+zh = "Edge 缓存"
+en = "Edge cache"
+
+[[catalogs.library_caches]]
+path = "Firefox"
+zh = "Firefox 缓存"
+en = "Firefox cache"
+
+[[catalogs.library_caches]]
+path = "BraveSoftware"
+zh = "Brave 缓存"
+en = "Brave cache"
+
+[[catalogs.library_caches]]
+path = "company.thebrowser.Browser"
+zh = "Arc 缓存"
+en = "Arc cache"
+
+[[catalogs.library_caches]]
+path = "Chromium"
+zh = "Chromium 缓存"
+en = "Chromium cache"
+
+[[catalogs.library_caches]]
+path = "com.operasoftware.Opera"
+zh = "Opera 缓存"
+en = "Opera cache"
+
+[[catalogs.library_caches]]
+path = "com.vivaldi.Vivaldi"
+zh = "Vivaldi 缓存"
+en = "Vivaldi cache"
+
+# ~/Library/Caches 下的浏览器产品目录本身即目标。
+[[directories]]
+id = "browser_library_caches"
+root = "local"
+paths = ["{library_caches}"]
+select = { kind = "path", directories_only = true }
+zh = "{library_caches}"
+en = "{library_caches}"
+category = "BrowserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true
+
+# Application Support 下已声明浏览器根里的缓存叶子：profile 枚举与
+# Crashpad/completed 细分由签名词汇完成，已声明根不做签名门槛。
+[[directories]]
+id = "browser_app_support_leaves"
+root = "roaming"
+paths = ["{app_support}"]
+select = { kind = "signature_leaves", signature = "chromium_declared" }
+zh = "{app_support} · {trail}"
+en = "{app_support} · {trail}"
+category = "BrowserCache"
+operation = "contents"
+disposal = "permanent"
+recommended = true

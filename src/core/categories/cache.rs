@@ -21,11 +21,12 @@ pub(super) fn push_cache_targets(
     t: &mut Vec<ScanTarget>,
     home: Option<&Path>,
     brew_cleanup_at: Option<i64>,
+    claims: &crate::core::rules::claims::Claims,
 ) {
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = home {
-            push_user_cache_targets(t, home);
+            push_user_cache_targets(t, home, claims);
         }
         // brew cleanup 不是一个目录，体积和是否出现都取决于 dry-run 与节流。
         if crate::core::brew::should_offer(brew_cleanup_at) {
@@ -42,12 +43,16 @@ pub(super) fn push_cache_targets(
         }
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (t, home, brew_cleanup_at);
+    let _ = (t, home, brew_cleanup_at, claims);
 }
 
 /// 用户缓存（`~/Library/Caches` 展开等）
 #[cfg(target_os = "macos")]
-fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+fn push_user_cache_targets(
+    t: &mut Vec<ScanTarget>,
+    home: &Path,
+    claims: &crate::core::rules::claims::Claims,
+) {
     let cache = home.join("Library/Caches");
 
     // `~/Library/Caches` 剩下的部分。
@@ -56,85 +61,23 @@ fn push_user_cache_targets(t: &mut Vec<ScanTarget>, home: &Path) {
     // 它和上面的浏览器 / Homebrew 缓存是父子关系，而 `scanner` 不做嵌套去重
     // （`scan_fixed_inner` 逐目标独立称重后直接相加），父子同时入表会让总量
     // 凭空翻倍。展开后顺带能按目录名给出标签，比一个不透明的大块更有用。
-    push_user_cache_dirs(t, &cache);
+    push_user_cache_dirs(t, &cache, claims);
 }
 
-/// `~/Library/Caches` 下已被整目录认领的名字，以及只认领了某个孩子的父目录。
-///
-/// 来源就是会产出这些目标的规则：`Library/Caches/<name>` 的条目，和浏览器
-/// 规则的 `library_caches` 目录。一段路径是整目录认领；两段路径只认领孩子，
-/// 父目录的其余孩子仍然入表。local agent 的孩子不在这里，扫描时另外并上。
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn library_cache_claims() -> (Vec<String>, Vec<(String, Vec<String>)>) {
-    let snapshot = crate::core::rules::current();
-    let mut whole = std::collections::BTreeSet::new();
-    let mut partial: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-        std::collections::BTreeMap::new();
-    let mut note = |path: &str| {
-        let Some(rest) = path.strip_prefix("Library/Caches/") else {
-            return;
-        };
-        if rest.is_empty() {
-            return;
-        }
-        match rest.split_once('/') {
-            None => {
-                whole.insert(rest.to_string());
-            }
-            Some((parent, child))
-                if !parent.is_empty() && !child.is_empty() && !child.contains('/') =>
-            {
-                partial
-                    .entry(parent.to_string())
-                    .or_default()
-                    .insert(child.to_string());
-            }
-            Some(_) => {}
-        }
-    };
-    for rule in &snapshot.bundle.rules {
-        if rule.platform != "all" && rule.platform != "macos" {
-            continue;
-        }
-        for entry in &rule.entries {
-            if entry.root == "home" {
-                note(&entry.path);
-            }
-        }
-        if let Some(rows) = rule.catalogs.get("library_caches") {
-            for row in rows {
-                note(&format!("Library/Caches/{}", row.path));
-            }
-        }
-    }
-    (
-        whole.into_iter().collect(),
-        partial
-            .into_iter()
-            .map(|(parent, kids)| (parent, kids.into_iter().collect()))
-            .collect(),
-    )
-}
-
-/// 把 `~/Library/Caches` 的顶层子目录逐个加为清理目标，跳过已被认领的。
-///
-/// 分成三步判定，而不是一律丢进同一个桶：
-/// 1. 内容命中更新包签名 → 按子项拆开，更新包叶子可默认勾选；
-/// 2. 没命中 → 整目录作为「分不清」的一项展示，不预选；
-/// 3. 探测排除名单（cache 规则 `updater_probe_exclude_prefixes`）→ 不做探测，
-///    见下方说明。
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
+pub(super) fn push_user_cache_dirs(
+    t: &mut Vec<ScanTarget>,
+    cache: &Path,
+    claims: &crate::core::rules::claims::Claims,
+) {
     let Ok(rd) = std::fs::read_dir(cache) else {
         return;
     };
-    let (whole, partial) = library_cache_claims();
     let probe_excludes = crate::core::rules::current()
         .list("cache", "updater_probe_exclude_prefixes")
         .to_vec();
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if whole.iter().any(|claimed| claimed == &name) {
+        if claims.owns(cache, &name) {
             continue;
         }
         // 跳过 Apple 系统服务缓存：这些涉及认证、iCloud、安全等关键服务，
@@ -149,17 +92,8 @@ pub(super) fn push_user_cache_dirs(t: &mut Vec<ScanTarget>, cache: &Path) {
         let dir = entry.path();
         // 该父目录里已由更具体规则认领走的孩子（普通目录为空）。父目录不能
         // 入表（会和孩子的体积双算），但其余孩子必须入表，否则它们隐身。
-        let rule_claimed = super::dev::local_agent_claimed_children(&name);
-        let table_claimed = partial
-            .iter()
-            .find(|(parent, _)| parent == &name)
-            .map(|(_, kids)| kids.as_slice())
-            .unwrap_or(&[]);
-        let claimed: Vec<&str> = table_claimed
-            .iter()
-            .map(String::as_str)
-            .chain(rule_claimed.iter().map(String::as_str))
-            .collect();
+        let claimed: Vec<String> = claims.claimed_children(cache, &name);
+        let claimed: Vec<&str> = claimed.iter().map(String::as_str).collect();
         let stem = super::updater::display_stem(&name);
         // 签名判定是按第三方更新器的产物形态做的，对 Apple 守护进程的目录
         // 没有意义：上面那张敏感表只列了确认危险的，其余探测排除名单里的
@@ -210,8 +144,12 @@ fn push_residual_children(t: &mut Vec<ScanTarget>, dir: &Path, name: &str, skip:
 
 #[cfg(test)]
 mod tests {
-    use super::library_cache_claims;
     use super::push_user_cache_dirs;
+
+    fn claims_for(home: &std::path::Path) -> crate::core::rules::claims::Claims {
+        let roots = crate::core::rules::user_roots(Some(home));
+        crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots)
+    }
     #[cfg(target_os = "macos")]
     use crate::core::categories::helpers::backdate;
     use crate::core::categories::CategoryId;
@@ -299,7 +237,7 @@ mod tests {
         std::fs::create_dir_all(caches.join("example.plainapp/state")).unwrap();
 
         let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
+        push_user_cache_dirs(&mut targets, &caches, &claims_for(&root));
         let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
 
         for leaf in ["pending", "update.zip", "current.blockmap"] {
@@ -354,7 +292,7 @@ mod tests {
         }
 
         let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
+        push_user_cache_dirs(&mut targets, &caches, &claims_for(&root));
         let recommended = |app: &str| {
             targets
                 .iter()
@@ -416,7 +354,8 @@ mod tests {
 
     /// 只被部分认领的父目录：其余孩子必须入表。
     ///
-    /// `browser.rs` 只认领 `Google/Chrome`，而旧写法把 `Google` 整个跳过，于是
+    /// 认领表（`rules::claims`，由 `library_caches` 声明推导）只认领
+    /// `Google/Chrome`，而旧写法把 `Google` 整个跳过，于是
     /// 兄弟子项（GoogleUpdater 的下载目录那一类）在界面上彻底隐身——看不见也
     /// 清不掉，比「不默认勾选」更糟。规范说得很清楚：展示不是成本，隐藏才是。
     #[test]
@@ -432,7 +371,7 @@ mod tests {
         std::fs::write(caches.join("Zed/update.zip"), b"pkg").unwrap();
 
         let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
+        push_user_cache_dirs(&mut targets, &caches, &claims_for(&root));
         let paths: Vec<&PathBuf> = targets.iter().map(|t| &t.path).collect();
 
         let sibling = google.join("Software Update");
@@ -486,7 +425,7 @@ mod tests {
         std::fs::write(daemon.join("update.zip"), b"pkg").unwrap();
 
         let mut targets = Vec::new();
-        push_user_cache_dirs(&mut targets, &caches);
+        push_user_cache_dirs(&mut targets, &caches, &claims_for(&root));
 
         assert!(
             !targets
@@ -675,34 +614,41 @@ mod tests {
     /// `~/Library/Caches` 的整目录认领跟会产出这些目标的规则走，不另维护一张表。
     #[test]
     fn library_cache_claims_follow_the_rules_that_emit_them() {
-        let (whole, partial) = library_cache_claims();
+        let home = std::path::Path::new("/qc-claims-home");
+        let roots = crate::core::rules::user_roots(Some(home));
+        let claims =
+            crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots);
+        let cache = home.join("Library/Caches");
         let snap = crate::core::rules::current();
 
         assert!(
-            !whole.iter().any(|name| name == "Google"),
-            "Google stays a partial parent: {whole:?}"
+            !claims.owns(&cache, "Google"),
+            "Google stays a partial parent"
         );
-        let chrome = partial
-            .iter()
-            .find(|(parent, _)| parent == "Google")
-            .expect("Google/Chrome is a partial claim");
-        assert_eq!(chrome.1, ["Chrome".to_string()]);
+        assert_eq!(claims.claimed_children(&cache, "Google"), ["Chrome"]);
 
+        // local_agents 的孩子经 LayoutChildren 认领：父目录保持部分认领。
+        assert_eq!(
+            claims.claimed_children(&cache, "claude-cli-nodejs"),
+            ["Cache"]
+        );
+        assert_eq!(claims.claimed_children(&cache, "amp"), ["logs", "traces"]);
         for name in ["claude-cli-nodejs", "amp", "Zed", "WorkBuddy"] {
             assert!(
-                !whole.iter().any(|claimed| claimed == name),
-                "{name} was copied from local_agents into whole-directory claims"
+                !claims.owns(&cache, name),
+                "{name} must stay a partial parent, not a whole-directory claim"
             );
         }
         assert!(
-            partial.iter().all(|(parent, kids)| {
-                !(parent == "go" && kids.iter().any(|child| child == "pkg" || child == "mod"))
-            }),
-            "go/pkg/mod must stay a package path, not a Library/Caches claim: {partial:?}"
+            !claims
+                .claimed_children(&cache, "go")
+                .iter()
+                .any(|child| child == "pkg" || child == "mod"),
+            "go/pkg/mod must stay a package path, not a Library/Caches claim"
         );
         assert!(
-            whole.iter().any(|name| name == "go"),
-            "Library/Caches/go is still a whole-directory claim"
+            claims.owns(&cache, "go"),
+            "Library/Caches/go is a whole claim"
         );
 
         for rule in snap
@@ -722,7 +668,7 @@ mod tests {
                     continue;
                 }
                 assert!(
-                    whole.iter().any(|name| name == rest),
+                    claims.owns(&cache, rest),
                     "{rest} from {} is not a whole-directory claim",
                     rule.id
                 );
@@ -732,20 +678,19 @@ mod tests {
                     match row.path.split_once('/') {
                         Some((parent, child)) if !child.is_empty() && !child.contains('/') => {
                             assert!(
-                                !whole.iter().any(|name| name == parent),
+                                !claims.owns(&cache, parent),
                                 "{parent} must stay a partial parent"
                             );
-                            let kids = partial
-                                .iter()
-                                .find(|(name, _)| name == parent)
-                                .unwrap_or_else(|| panic!("{parent} missing from partial claims"));
                             assert!(
-                                kids.1.iter().any(|name| name == child),
+                                claims
+                                    .claimed_children(&cache, parent)
+                                    .iter()
+                                    .any(|name| name == child),
                                 "{child} missing under {parent}"
                             );
                         }
                         None => assert!(
-                            whole.iter().any(|name| name == &row.path),
+                            claims.owns(&cache, &row.path),
                             "{} is not a whole-directory claim",
                             row.path
                         ),

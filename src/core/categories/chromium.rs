@@ -134,7 +134,7 @@ pub(crate) fn cache_leaves(dir: &Path) -> Vec<PathBuf> {
 /// Support 目录）：不需要内容签名，直接套用同一份叶子词汇与 Crashpad 规则。
 ///
 /// 浏览器入口用它取代自己那份硬编码叶子名单；叶子名只在 `chromium.toml` 维护。
-pub(super) fn declared_leaves(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn declared_leaves(dir: &Path) -> Vec<PathBuf> {
     let mut leaves = Vec::new();
     collect_leaves(dir, &mut leaves);
     for profile in profile_dirs(dir) {

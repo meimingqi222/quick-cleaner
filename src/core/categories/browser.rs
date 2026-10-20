@@ -1,10 +1,13 @@
 //! 浏览器缓存：Chrome / Edge / Firefox / Safari / Brave / Arc / Opera / Vivaldi
 
-#[cfg(target_os = "macos")]
-use super::target;
-use super::{target_with_recommendation, ScanTarget};
+#[cfg(any(windows, test))]
+use super::target_with_recommendation;
+use super::ScanTarget;
+#[cfg(any(windows, test))]
 use crate::core::categories::CategoryId;
+#[cfg(any(windows, test))]
 use crate::core::i18n::Text;
+#[cfg(any(windows, test))]
 use crate::core::rules::Operation;
 use std::path::Path;
 
@@ -24,35 +27,12 @@ pub(super) fn push_browser_targets(t: &mut Vec<ScanTarget>, home: &Path) {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let cache = home.join("Library/Caches");
-        let app_support = home.join("Library/Application Support");
-
-        // ~/Library/Caches/<产品名>。Edge 的实际缓存是产品名目录，不是 bundle id。
-        // 指到产品目录才能覆盖多 profile。这些名字同时用于跳过目录展开，避免双算。
-        for row in browser_catalog("library_caches") {
-            t.push(target(
-                cache.join(&row.path),
-                Text::new(row.zh.as_str(), row.en.as_str()),
-                CategoryId::BrowserCache,
-                Operation::Contents,
-                ("engine", "browser_cache"),
-            ));
-        }
-
-        // 浏览器 Application Support 下的缓存子目录
-        // Chromium 系浏览器在 ~/Library/Application Support 下也存了大量缓存：
-        // Code Cache、GPUCache、着色器缓存、Crashpad/completed 等。
-        // 这些不在 ~/Library/Caches 下，上面的展开够不到。
-        push_browser_app_support_caches(t, &app_support);
-
-        // Firefox 的 `Profiles/<profile>/cache2` 走 macos 规则的
-        // named_directories 条目，不在代码里拼目录名。
-
-        // Mail Downloads 中的附件是用户主动打开或保存过的文件，不是缓存，
-        // 不能进入智能清理候选。
-    }
+    // macOS 的 Library/Caches 与 Application Support 浏览器缓存已迁到
+    // `browsers-macos.toml` 的目录规则（path + signature_leaves）；这里只剩
+    // Windows 的 User Data 枚举。Firefox 的 `Profiles/<profile>/cache2` 走
+    // macos 规则的 named_directories 条目。
+    #[cfg(not(windows))]
+    let _ = (t, home);
 }
 
 /// Chromium 系浏览器的缓存目标（Windows）。
@@ -89,16 +69,11 @@ pub(super) fn push_chromium_browser_targets(
     }
 }
 
-/// Chromium 系浏览器在 `~/Library/Application Support` 下的根目录：
-/// `(相对路径, 显示名)`。
-///
-/// 抽成常量是因为它现在有两个用途：这里逐浏览器产出缓存目标，
-/// `dev::push_chromium_app_caches` 则要靠它**跳过**这些目录——两边认的是
-/// 同一份事实，靠各自的名单对不上就是体积双算。
-///
-/// 不在 macOS 下也编译：跳过名单是纯字符串比较，跨平台共用一个判断比
-/// 写两个 `cfg` 分支靠谱（Windows 上浏览器的 userData 在 `%LOCALAPPDATA%`，
-/// 本就不在这张表覆盖的目录里，多比一次无害）。
+/// 浏览器规则的 catalog 表查询。Windows 上只读 `windows_user_data`；
+/// macOS 的 `app_support`/`library_caches` 已迁到 `browsers-macos.toml`，
+/// 由目录规则产出目标、经 `rules::claims` 统一认领表供开发扫描跳过——
+/// 两边认的是同一份规则声明，不是两份各自维护的名单。
+#[cfg(any(windows, test))]
 fn browser_catalog(name: &str) -> Vec<crate::core::rules::Layout> {
     crate::core::rules::current()
         .definition("browsers")
@@ -106,66 +81,6 @@ fn browser_catalog(name: &str) -> Vec<crate::core::rules::Layout> {
         .get(name)
         .cloned()
         .unwrap_or_default()
-}
-
-/// `~/Library/Application Support` 的顶层目录是否整体由浏览器规则认领。
-/// `Google/Chrome` 只认领 Chrome，不能把 Google 的其他孩子一起跳过。
-pub(super) fn owns_app_support_dir(name: &str) -> bool {
-    browser_catalog("app_support")
-        .iter()
-        .any(|row| row.path == name)
-}
-
-pub(super) fn claimed_browser_child(parent: &str, child: &str) -> bool {
-    browser_catalog("app_support").iter().any(|row| {
-        row.path
-            .split_once('/')
-            .is_some_and(|(head, tail)| head == parent && tail == child)
-    })
-}
-
-pub(super) fn contains_claimed_browser_child(parent: &str) -> bool {
-    browser_catalog("app_support").iter().any(|row| {
-        row.path
-            .split_once('/')
-            .is_some_and(|(head, _)| head == parent)
-    })
-}
-
-/// Chromium 系浏览器在 `~/Library/Application Support` 下的缓存子目录。
-///
-/// Chrome / Arc / Brave / Edge 等都基于 Chromium，缓存布局一致：
-/// `<UserDataDir>/<Profile>/Code Cache`、`GPUCache`、着色器缓存等。
-/// 这些不在 `~/Library/Caches` 下，需要单独发现。
-///
-/// 叶子词汇、profile 名单和 `Crashpad/completed` 的细分全部来自
-/// `categories::chromium`：浏览器入口不再另抄一份名单。崩溃报告仍然只收
-/// 已完成的，不在写的 `pending/` 不收。
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn push_browser_app_support_caches(t: &mut Vec<ScanTarget>, app_support: &Path) {
-    for row in browser_catalog("app_support") {
-        let root = app_support.join(&row.path);
-        if !root.is_dir() {
-            continue;
-        }
-        for leaf in super::chromium::declared_leaves(&root) {
-            let trail = super::chromium::leaf_trail(&root, &leaf);
-            let Some(leaf_name) = trail.last() else {
-                continue;
-            };
-            t.push(target_with_recommendation(
-                leaf,
-                Text::new(
-                    format!("{} · {}", row.zh, trail.join(" · ")),
-                    format!("{} · {}", row.en, trail.join(" · ")),
-                ),
-                CategoryId::BrowserCache,
-                super::chromium::leaf_recommended(leaf_name),
-                Operation::Contents,
-                ("engine", "browser_cache"),
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -237,9 +152,14 @@ mod tests {
         write(&chrome.join("CachedExtensionVSIXs/extension.vsix"));
         write(&chrome.join("SomeOtherDir/GPUCache/data"));
         write(&app_support.join("Safari/Cache/data"));
-        let mut targets = Vec::new();
 
-        super::push_browser_app_support_caches(&mut targets, &app_support);
+        // 迁到 `browsers-macos.toml` 的 signature_leaves 规则后，测试走同一
+        // 条生产扫描路径，断言不变。
+        let snapshot = crate::core::rules::snapshot();
+        let roots =
+            std::collections::BTreeMap::from([("roaming".to_string(), Some(app_support.clone()))]);
+        let (targets, _) =
+            crate::core::rules::directories::scan_at(&snapshot, "browsers-macos", &roots);
 
         let entry = |rel: &str| targets.iter().find(|t| t.path == chrome.join(rel));
         assert_eq!(entry("Default/GPUCache").map(|t| t.recommended), Some(true));

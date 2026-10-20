@@ -1,0 +1,137 @@
+[
+  {
+    "path": "home/Library/Application Support/MobileSync/Backup",
+    "zh": "iOS 设备备份",
+    "en": "iOS Device Backup",
+    "category": "IosBackup",
+    "recommended": false,
+    "operation": "Tree",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Firefox",
+    "zh": "Firefox 缓存",
+    "en": "Firefox cache",
+    "category": "BrowserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Google/Chrome",
+    "zh": "Chrome 缓存",
+    "en": "Chrome cache",
+    "category": "BrowserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Google/Other",
+    "zh": "~/Library/Caches/Google/Other",
+    "en": "~/Library/Caches/Google/Other",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Homebrew",
+    "zh": "Homebrew 缓存",
+    "en": "Homebrew cache",
+    "category": "PackageCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Microsoft Edge",
+    "zh": "Edge 缓存",
+    "en": "Edge cache",
+    "category": "BrowserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/MyUpdater/pending",
+    "zh": "MyUpdater · pending",
+    "en": "MyUpdater · pending",
+    "category": "UpdaterPackages",
+    "recommended": false,
+    "operation": "Tree",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/UnknownVendor",
+    "zh": "~/Library/Caches/UnknownVendor",
+    "en": "~/Library/Caches/UnknownVendor",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Zed/extra",
+    "zh": "~/Library/Caches/Zed/extra",
+    "en": "~/Library/Caches/Zed/extra",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/Zed/logs",
+    "zh": "Zed · logs",
+    "en": "Zed · logs",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/claude-cli-nodejs/Cache",
+    "zh": "Claude Code Node · Cache",
+    "en": "Claude Code Node · Cache",
+    "category": "AiAgents",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/claude-cli-nodejs/other",
+    "zh": "~/Library/Caches/claude-cli-nodejs/other",
+    "en": "~/Library/Caches/claude-cli-nodejs/other",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/com.apple.Safari",
+    "zh": "Safari 缓存",
+    "en": "Safari cache",
+    "category": "BrowserCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/com.apple.dt.Xcode",
+    "zh": "~/Library/Caches/com.apple.dt.Xcode",
+    "en": "~/Library/Caches/com.apple.dt.Xcode",
+    "category": "UserTemp",
+    "recommended": false,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  },
+  {
+    "path": "home/Library/Caches/pip",
+    "zh": "pip 缓存",
+    "en": "pip cache",
+    "category": "PackageCache",
+    "recommended": true,
+    "operation": "Contents",
+    "disposal": "Permanent"
+  }
+]

@@ -128,7 +128,7 @@ pub struct LeafPolicy {
 }
 /// Implemented leaf-signature capabilities; the vocabulary itself lives in the
 /// named rule, configuration only selects the capability.
-const LEAF_SIGNATURES: [&str; 1] = ["chromium"];
+const LEAF_SIGNATURES: [&str; 2] = ["chromium", "chromium_declared"];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogPolicy {
@@ -193,6 +193,8 @@ fn bounded_label(value: &str, rest: &str) -> bool {
 fn leaf_signature(name: &str, dir: &Path) -> Vec<PathBuf> {
     match name {
         "chromium" => crate::core::categories::chromium::cache_leaves(dir),
+        // 已声明的浏览器根：不做签名门槛，只收声明目录下的叶子词汇。
+        "chromium_declared" => crate::core::categories::chromium::declared_leaves(dir),
         _ => Vec::new(),
     }
 }
@@ -438,7 +440,7 @@ pub(super) fn validate(rule: &RuleDefinition) -> Result<(), String> {
     Ok(())
 }
 /// The anchor a declared root resolves to for this scan; missing roots are absent.
-fn declared_root(
+pub(crate) fn declared_root(
     root: DirectoryRoot,
     roots: &BTreeMap<String, Option<PathBuf>>,
 ) -> Option<PathBuf> {
@@ -463,6 +465,10 @@ impl Binding {
     fn render(&self, template: &str, en: bool) -> String {
         template.replace(&self.token, if en { &self.en } else { &self.zh })
     }
+}
+/// Expanded literal paths only: the claims table needs the path, not labels.
+pub(crate) fn expand_paths(rule: &RuleDefinition, path: &str) -> Option<Vec<String>> {
+    expand(rule, path).map(|expanded| expanded.into_iter().map(|(path, _)| path).collect())
 }
 /// Validation bounded this expansion; configuration order is kept so plans stay stable.
 fn expand(rule: &RuleDefinition, path: &str) -> Option<Vec<(String, Vec<Binding>)>> {

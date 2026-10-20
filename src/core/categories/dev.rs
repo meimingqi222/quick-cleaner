@@ -6,17 +6,21 @@ use crate::core::rules::Operation;
 use std::path::Path;
 
 /// 开发相关清理目标：AI agent 缓存、构建产物、iOS 备份、编辑器工作区
-pub(super) fn push_dev_targets(t: &mut Vec<ScanTarget>, home: &Path) {
+pub(super) fn push_dev_targets(
+    t: &mut Vec<ScanTarget>,
+    home: &Path,
+    roaming: &Path,
+    claims: &crate::core::rules::claims::Claims,
+) {
     #[cfg(not(test))]
     let _ = home;
-    if let Some(data) = crate::platform::user_data_dir() {
-        // AI 编程助手的会话记录与缓存
-        push_ai_agent_targets(t, &data);
-        #[cfg(test)]
-        crate::core::rules::versions::append_fixture(t, "zed_node", home, &data);
-    }
+    // AI 编程助手的会话记录与缓存
+    push_ai_agent_targets(t, roaming, claims);
+    #[cfg(test)]
+    crate::core::rules::versions::append_fixture(t, "zed_node", home, roaming);
 }
 
+#[cfg(test)]
 fn layouts(catalog: &str) -> Vec<crate::core::rules::Layout> {
     crate::core::rules::current()
         .definition("development")
@@ -47,19 +51,6 @@ fn is_ai_app_dir(name: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(name))
 }
 
-/// `%LOCALAPPDATA%` / `~/Library/Caches` 下已被 local agent 规则认领的子目录。
-///
-/// macOS 扫 `~/Library/Caches` 时用它跳过这些孩子，避免和下面的目标双算。
-/// electron-updater 的更新包不在这张表里：它们靠内容签名认领。
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn local_agent_claimed_children(name: &str) -> Vec<String> {
-    layouts("local_agents")
-        .into_iter()
-        .find(|row| row.path == name)
-        .map(|row| row.children.into_iter().map(|child| child.path).collect())
-        .unwrap_or_default()
-}
-
 /// AI 编程助手的内容签名发现：Electron/Chromium 系应用的缓存叶子。
 ///
 /// 这里**不看名字**——覆盖面靠内容签名（`categories::chromium`），名字只
@@ -70,9 +61,13 @@ pub(super) fn local_agent_claimed_children(name: &str) -> Vec<String> {
 /// 平台无关：调用方传入平台对应的根目录即可——
 /// - Windows: `roaming = %APPDATA%`
 /// - macOS:   `roaming = ~/Library/Application Support`
-pub(super) fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, roaming: &Path) {
+pub(super) fn push_ai_agent_targets(
+    t: &mut Vec<ScanTarget>,
+    roaming: &Path,
+    claims: &crate::core::rules::claims::Claims,
+) {
     // ---- Electron / Chromium 系应用：按内容签名认，不按应用名认 ----
-    push_chromium_app_caches(t, roaming);
+    push_chromium_app_caches(t, roaming, claims);
 
     // electron-updater 的更新包目录：展开 `%LOCALAPPDATA%` 一层逐个探内容。
     // 不再按应用名列清单——那张 6 个名字的表实测只剩 1 个命中，而真实存在的
@@ -93,9 +88,14 @@ pub(super) fn push_ai_agent_targets(t: &mut Vec<ScanTarget>, roaming: &Path) {
 /// （AI 工具进 `AiAgents`，其余进 `UserCache`）。因此漏一个名字的代价从
 /// 「一堆缓存永远清不掉」降成「分类标签不够准」。
 ///
-/// 浏览器不在这里：它们用的是同一个 profile 布局，已经由 `browser.rs` 逐
-/// 浏览器认领（包括 `Crashpad/completed` 这类特殊处置），重复入表就是双算。
-fn push_chromium_app_caches(t: &mut Vec<ScanTarget>, roaming: &Path) {
+/// 浏览器不在这里：它们用的是同一个 profile 布局，已经由 `browsers-macos`
+/// 规则逐浏览器声明（包括 `Crashpad/completed` 这类特殊处置），本函数经
+/// `rules::claims` 统一认领表跳过——重复入表就是双算。
+fn push_chromium_app_caches(
+    t: &mut Vec<ScanTarget>,
+    roaming: &Path,
+    claims: &crate::core::rules::claims::Claims,
+) {
     let Ok(entries) = std::fs::read_dir(roaming) else {
         return;
     };
@@ -104,15 +104,16 @@ fn push_chromium_app_caches(t: &mut Vec<ScanTarget>, roaming: &Path) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if super::browser::owns_app_support_dir(&name) {
+        if claims.owns(roaming, &name) {
             continue;
         }
-        if super::browser::contains_claimed_browser_child(&name) {
+        let claimed = claims.claimed_children(roaming, &name);
+        if !claimed.is_empty() {
             if let Ok(children) = std::fs::read_dir(entry.path()) {
                 for child in children.flatten() {
                     let child_name = child.file_name().to_string_lossy().into_owned();
                     if child.file_type().is_ok_and(|kind| kind.is_dir())
-                        && !super::browser::claimed_browser_child(&name, &child_name)
+                        && !claimed.iter().any(|name| name == &child_name)
                     {
                         let category = if is_ai_app_dir(&child_name) {
                             CategoryId::AiAgents
@@ -177,6 +178,15 @@ mod tests {
         let snapshot = crate::core::rules::snapshot();
         let roots = crate::core::rules::directories::fixture_roots_with_local(home, local, roaming);
         crate::core::rules::directories::scan_at(&snapshot, "development", &roots).0
+    }
+
+    fn fixture_claims(
+        home: &Path,
+        local: &Path,
+        roaming: &Path,
+    ) -> crate::core::rules::claims::Claims {
+        let roots = crate::core::rules::directories::fixture_roots_with_local(home, local, roaming);
+        crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots)
     }
 
     /// 编辑器清单产出的目标：Tree + `DevBuild`。
@@ -510,7 +520,11 @@ mod tests {
         std::fs::create_dir_all(home.join(".claude/projects")).unwrap();
         let mut targets = rule_directories(&home, &local, &roaming);
 
-        push_ai_agent_targets(&mut targets, &roaming);
+        push_ai_agent_targets(
+            &mut targets,
+            &roaming,
+            &fixture_claims(&home, &local, &roaming),
+        );
 
         let claude_cache = home.join(".claude/cache");
         let claude_projects = home.join(".claude/projects");
@@ -547,7 +561,11 @@ mod tests {
             }
         }
         let mut targets = Vec::new();
-        push_ai_agent_targets(&mut targets, &roaming);
+        push_ai_agent_targets(
+            &mut targets,
+            &roaming,
+            &fixture_claims(&roaming, &roaming, &roaming),
+        );
 
         let category = |path: std::path::PathBuf| {
             targets
@@ -579,7 +597,11 @@ mod tests {
             }
         }
         let mut targets = Vec::new();
-        push_chromium_app_caches(&mut targets, &roaming);
+        push_chromium_app_caches(
+            &mut targets,
+            &roaming,
+            &fixture_claims(&roaming, &roaming, &roaming),
+        );
         assert!(targets
             .iter()
             .any(|target| target.path == roaming.join("Google/OtherApp/Cache")));
@@ -1151,7 +1173,11 @@ mod tests {
     fn ai_agent_layouts_preserve_the_migration_baseline() {
         let (root, home, local, roaming) = ai_agent_layout_fixture();
         let mut targets = rule_directories(&home, &local, &roaming);
-        push_ai_agent_targets(&mut targets, &roaming);
+        push_ai_agent_targets(
+            &mut targets,
+            &roaming,
+            &fixture_claims(&home, &local, &roaming),
+        );
         // 版本夹具挂到 `push_dev_targets`；基线扫描不经过它，这里显式补齐。
         crate::core::rules::versions::append_fixture(&mut targets, "zed_node", &home, &roaming);
         let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(

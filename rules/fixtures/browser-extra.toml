@@ -8,9 +8,9 @@ required = ["file"]
 # 证明新增浏览器根只需加一行 TOML——已编译客户端下一次扫描就按同一份
 # Chromium 叶子词汇把这个新根表面化，没有任何针对新根的 Rust 分支。
 
-# ~/Library/Application Support 下的浏览器根。发现 Application Support 缓存
-# 和开发扫描跳过认领目录都读这张表。Google/Chrome 只认领 Chrome，不认领
-# Google 的其他孩子。
+# ~/Library/Application Support 下的浏览器根。目录规则按这张表产出缓存
+# 目标，统一认领表（`rules::claims`）从同一份声明推导，开发扫描据此跳过
+# 已认领目录。Google/Chrome 只认领 Chrome，不认领 Google 的其他孩子。
 [[catalogs.app_support]]
 path = "Google/Chrome"
 zh = "Chrome"

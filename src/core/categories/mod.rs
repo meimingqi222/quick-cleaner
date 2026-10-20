@@ -165,18 +165,21 @@ pub fn all_targets(brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
 fn collect_targets(home: Option<PathBuf>, brew_cleanup_at: Option<i64>) -> Vec<ScanTarget> {
     let mut t: Vec<ScanTarget> = Vec::new();
     let home = home.as_deref();
+    let roots = crate::core::rules::user_roots(home);
+    let claims =
+        crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots);
     for provider in crate::core::rules::list("engine", "providers") {
         match provider.as_str() {
             "system" => system::push_system_targets(&mut t, home),
-            "cache" => cache::push_cache_targets(&mut t, home, brew_cleanup_at),
+            "cache" => cache::push_cache_targets(&mut t, home, brew_cleanup_at, &claims),
             "browser" => {
                 if let Some(home) = home {
                     browser::push_browser_targets(&mut t, home)
                 }
             }
             "development" => {
-                if let Some(home) = home {
-                    dev::push_dev_targets(&mut t, home)
+                if let (Some(home), Some(Some(roaming))) = (home, roots.get("roaming")) {
+                    dev::push_dev_targets(&mut t, home, roaming, &claims)
                 }
             }
             "docker" => docker::push_docker_targets(&mut t),
@@ -1194,8 +1197,11 @@ mod tests {
         std::fs::create_dir_all(cache.join("JetBrains")).unwrap();
         std::fs::create_dir_all(cache.join("ms-playwright")).unwrap();
         let mut targets = Vec::new();
+        let roots = crate::core::rules::user_roots(Some(&root));
+        let claims =
+            crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots);
 
-        push_user_cache_dirs(&mut targets, &cache);
+        push_user_cache_dirs(&mut targets, &cache, &claims);
 
         for path in [cache.join("JetBrains"), cache.join("ms-playwright")] {
             let target = targets
@@ -1495,6 +1501,119 @@ mod tests {
                 "保留项的父目录不能被拆成目标"
             );
         });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~/Library/Caches` + `~/Library/Application Support` 两棵树产生的全部
+    /// 目标基线：浏览器规则迁移、认领表统一前后必须逐行一致。
+    #[cfg(target_os = "macos")]
+    fn library_layout_fixture() -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = crate::core::testing::fixture("library_claims_baseline");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cache = home.join("Library/Caches");
+        let roaming = home.join("Library/Application Support");
+        let dir = |path: &std::path::Path| std::fs::create_dir_all(path).unwrap();
+        dir(&cache.join("Google/Chrome"));
+        std::fs::write(cache.join("Google/Chrome/blob"), b"x").unwrap();
+        dir(&cache.join("Google/Other"));
+        dir(&cache.join("Microsoft Edge"));
+        dir(&cache.join("com.apple.Safari"));
+        dir(&cache.join("Firefox"));
+        dir(&cache.join("Homebrew"));
+        dir(&cache.join("pip"));
+        dir(&cache.join("claude-cli-nodejs/Cache"));
+        dir(&cache.join("claude-cli-nodejs/other"));
+        dir(&cache.join("Zed/logs"));
+        dir(&cache.join("Zed/extra"));
+        dir(&cache.join("UnknownVendor"));
+        // electron-updater 签名：pending/ + update.zip。
+        dir(&cache.join("MyUpdater/pending"));
+        std::fs::write(cache.join("MyUpdater/update.zip"), b"x").unwrap();
+        dir(&cache.join("com.apple.dt.Xcode/Downloads"));
+        std::fs::write(cache.join("loose-file"), b"x").unwrap();
+        for leaf in ["Cache", "GPUCache", "Code Cache"] {
+            dir(&roaming.join("Google/Chrome/Default").join(leaf));
+        }
+        dir(&roaming.join("Google/OtherApp/Cache"));
+        dir(&roaming.join("Google/OtherApp/GPUCache"));
+        dir(&roaming.join("Arc/Cache"));
+        for leaf in ["Code Cache", "GPUCache", "DawnGraphiteCache"] {
+            dir(&roaming.join("Maka").join(leaf));
+        }
+        dir(&roaming.join("Code/CachedExtensionVSIXs"));
+        dir(&roaming.join("MobileSync/Backup/device-1"));
+        dir(&roaming.join("Microsoft Edge/Default/GPUCache"));
+        (root, home)
+    }
+
+    /// 当前代码下两棵树会产生的全部目标：cache 目录枚举、浏览器
+    /// provider、dev 的 Chromium 应用签名发现、全部 `entries`/`directories`
+    /// 规则路径（roots 由 fixture home 推导）。
+    #[cfg(target_os = "macos")]
+    fn library_targets(home: &std::path::Path, root: &std::path::Path) -> Vec<ScanTarget> {
+        let mut t = Vec::new();
+        let roots = crate::core::rules::user_roots(Some(home));
+        let claims =
+            crate::core::rules::claims::Claims::collect(&crate::core::rules::current(), &roots);
+        cache::push_user_cache_dirs(&mut t, &home.join("Library/Caches"), &claims);
+        browser::push_browser_targets(&mut t, home);
+        dev::push_ai_agent_targets(&mut t, &home.join("Library/Application Support"), &claims);
+        crate::core::rules::append_path_targets(&mut t, Some(home));
+        let canonical = std::fs::canonicalize(root).unwrap();
+        t.retain(|target| target.path.starts_with(root) || target.path.starts_with(&canonical));
+        t
+    }
+
+    #[cfg(target_os = "macos")]
+    fn library_rows(targets: &[ScanTarget], root: &std::path::Path) -> Vec<serde_json::Value> {
+        let canonical = std::fs::canonicalize(root).unwrap();
+        let relative = |path: &std::path::Path| {
+            path.strip_prefix(root)
+                .or_else(|_| path.strip_prefix(&canonical))
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        };
+        let mut rows: Vec<_> = targets
+            .iter()
+            .filter(|target| target.path.is_dir())
+            .map(|target| {
+                let operation = match &target.operation {
+                    crate::core::rules::Operation::GitWorktree { .. } => "GitWorktree".to_string(),
+                    other => format!("{other:?}"),
+                };
+                let mut row = serde_json::json!({
+                    "path": relative(&target.path),
+                    "zh": target.label.get(crate::core::i18n::Language::Zh),
+                    "en": target.label.get(crate::core::i18n::Language::En),
+                    "category": format!("{:?}", target.category),
+                    "recommended": target.recommended,
+                    "operation": operation,
+                    "disposal": format!("{:?}", target.disposal),
+                });
+                if let crate::core::rules::Operation::GitWorktree { registration } =
+                    &target.operation
+                {
+                    row["registration"] = serde_json::json!(relative(registration));
+                }
+                row
+            })
+            .collect();
+        rows.sort_by(|a, b| a["path"].as_str().unwrap().cmp(b["path"].as_str().unwrap()));
+        rows
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn library_roots_preserve_the_claim_baseline() {
+        let (root, home) = library_layout_fixture();
+        let rows = library_rows(&library_targets(&home, &root), &root);
+        let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/library-claims-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(rows, expected);
         let _ = std::fs::remove_dir_all(root);
     }
 }

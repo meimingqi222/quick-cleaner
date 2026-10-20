@@ -1,6 +1,7 @@
 //! Bundled declarative policy selects fixed capabilities; deletion authority remains in safety/cleaner.
 #[cfg(any(test, windows))]
 pub(crate) mod app_data;
+pub mod claims;
 pub mod directories;
 pub mod execution;
 pub mod facts;
@@ -1012,7 +1013,7 @@ mod tests {
         .unwrap();
         let snapshot = super::snapshot();
         let policies = &snapshot.definition("engine").provider_policies;
-        assert_eq!(baseline.len(), 23);
+        assert_eq!(baseline.len(), 15);
         for row in baseline {
             let key = row["policy"].as_str().unwrap();
             let expected = super::ProviderPolicy {
@@ -1609,9 +1610,9 @@ mod tests {
             assert!(!rule.recommended, "{path} stays unselected");
         }
 
-        let browsers = snap.definition("browsers");
-        let paths = |name: &str| -> Vec<&str> {
-            browsers
+        let browsers_macos = snap.definition("browsers-macos");
+        let macos_paths = |name: &str| -> Vec<&str> {
+            browsers_macos
                 .catalogs
                 .get(name)
                 .unwrap_or_else(|| panic!("missing catalog {name}"))
@@ -1620,7 +1621,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            paths("app_support"),
+            macos_paths("app_support"),
             [
                 "Google/Chrome",
                 "Arc",
@@ -1631,7 +1632,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            paths("library_caches"),
+            macos_paths("library_caches"),
             [
                 "Google/Chrome",
                 "com.apple.Safari",
@@ -1644,6 +1645,16 @@ mod tests {
                 "com.vivaldi.Vivaldi",
             ]
         );
+        let browsers = snap.definition("browsers");
+        let paths = |name: &str| -> Vec<&str> {
+            browsers
+                .catalogs
+                .get(name)
+                .unwrap_or_else(|| panic!("missing catalog {name}"))
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect()
+        };
         assert_eq!(
             paths("windows_user_data"),
             [
@@ -1849,18 +1860,16 @@ impl IntoIterator for &RuleList {
     }
 }
 
-pub fn append_path_targets(
-    targets: &mut Vec<crate::core::categories::ScanTarget>,
-    home: Option<&std::path::Path>,
-) {
-    let snapshot = current();
-    // 用户级根的解析方式按平台区分：
-    // - Windows 从登记表解析**真实前台用户**的目录（`real_user_*`），与 home
-    //   锚点相互独立——home 未知时 LOCALAPPDATA 仍可能可信（缩略图缓存就靠
-    //   它），未知则各自返回 None；
-    // - macOS 没有独立账户模型，用户目录一律由调用方的 home 推导：home 未知
-    //   就整块不展开用户路径，而不是回退到 `dirs::*` 指向的进程账户
-    //   （那会在「不扫用户目录」的前提下扫用户目录）。
+/// 用户级扫描根的解析：append_path_targets 与认领表共用同一份 roots。
+///
+/// 用户级根的解析方式按平台区分：
+/// - Windows 从登记表解析**真实前台用户**的目录（`real_user_*`），与 home
+///   锚点相互独立——home 未知时 LOCALAPPDATA 仍可能可信（缩略图缓存就靠
+///   它），未知则各自返回 None；
+/// - macOS 没有独立账户模型，用户目录一律由调用方的 home 推导：home 未知
+///   就整块不展开用户路径，而不是回退到 `dirs::*` 指向的进程账户
+///   （那会在「不扫用户目录」的前提下扫用户目录）。
+pub fn user_roots(home: Option<&std::path::Path>) -> BTreeMap<String, Option<std::path::PathBuf>> {
     #[cfg(windows)]
     let (local, roaming) = (
         crate::platform::user_cache_dir(),
@@ -1871,7 +1880,7 @@ pub fn append_path_targets(
         home.map(|h| h.join("Library/Caches")),
         home.map(|h| h.join("Library/Application Support")),
     );
-    let mut roots = BTreeMap::from([
+    BTreeMap::from([
         ("home".into(), home.map(std::path::Path::to_path_buf)),
         ("local".into(), local.clone()),
         ("cache".into(), local),
@@ -1884,7 +1893,15 @@ pub fn append_path_targets(
                 .map(std::path::PathBuf::from)
                 .or_else(|| cfg!(windows).then(|| std::path::PathBuf::from("C:/Windows"))),
         ),
-    ]);
+    ])
+}
+
+pub fn append_path_targets(
+    targets: &mut Vec<crate::core::categories::ScanTarget>,
+    home: Option<&std::path::Path>,
+) {
+    let snapshot = current();
+    let mut roots = user_roots(home);
     if cfg!(windows) {
         for entry in snapshot.bundle.rules.iter().flat_map(|rule| &rule.entries) {
             if let Some(letter) = drive_root(&entry.root) {
