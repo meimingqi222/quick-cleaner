@@ -1,5 +1,5 @@
 id = "build"
-version = 1
+version = 2
 platform = "all"
 required = ["build_markers"]
 
@@ -7,25 +7,25 @@ required = ["build_markers"]
 dir = "node_modules"
 zh = "Node 依赖"
 en = "Node dependencies"
-sibling_any = []
+sibling_any = ["package.json"]
 
 [[markers]]
 dir = ".next"
 zh = "Next.js 构建缓存"
 en = "Next.js build cache"
-sibling_any = []
+sibling_any = ["package.json"]
 
 [[markers]]
 dir = ".nuxt"
 zh = "Nuxt 构建缓存"
 en = "Nuxt build cache"
-sibling_any = []
+sibling_any = ["package.json"]
 
 [[markers]]
 dir = ".svelte-kit"
 zh = "SvelteKit 构建缓存"
 en = "SvelteKit build cache"
-sibling_any = []
+sibling_any = ["package.json"]
 
 [[markers]]
 dir = ".turbo"
@@ -43,7 +43,7 @@ sibling_any = []
 dir = ".angular"
 zh = "Angular 构建缓存"
 en = "Angular build cache"
-sibling_any = []
+sibling_any = ["package.json"]
 
 [[markers]]
 dir = "dist"
@@ -61,13 +61,13 @@ sibling_any = ["Cargo.toml"]
 dir = ".venv"
 zh = "Python 虚拟环境"
 en = "Python virtualenv"
-sibling_any = []
+sibling_any = ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"]
 
 [[markers]]
 dir = "venv"
 zh = "Python 虚拟环境"
 en = "Python virtualenv"
-sibling_any = []
+sibling_any = ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"]
 
 [[markers]]
 dir = "__pycache__"

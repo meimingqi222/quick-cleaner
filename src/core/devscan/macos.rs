@@ -967,7 +967,14 @@ pub(super) fn collect_tree(
             .iter()
             .find(|m| m.dir == lower && has_sibling(&files, &m.sibling_any))
         {
-            Some(marker) => out.push((child, marker)),
+            Some(marker) => {
+                let mut cache = std::collections::HashMap::new();
+                let path = PathBuf::from(tree.path_of_with(child, &mut cache));
+                if super::candidate_allowed(&path, &marker) {
+                    out.push((child, marker));
+                }
+            }
+            None if matches!(lower.as_str(), "node_modules" | ".venv" | "venv") => {}
             None => {
                 // 名字没命中，看 child 的子项里有没有 CACHEDIR.TAG（树内
                 // 查名，无 IO）；有再读盘验签名——验签名的文件 IO 只发生
@@ -981,7 +988,9 @@ pub(super) fn collect_tree(
                     let mut cache: std::collections::HashMap<u32, String> =
                         std::collections::HashMap::new();
                     let path = std::path::PathBuf::from(tree.path_of_with(child, &mut cache));
-                    if super::has_cachedir_tag(&path) {
+                    if super::candidate_allowed(&path, &super::CACHEDIR_MARKER)
+                        && super::has_cachedir_tag(&path)
+                    {
                         out.push((child, super::CACHEDIR_MARKER.clone()));
                         continue;
                     }

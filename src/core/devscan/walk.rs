@@ -106,13 +106,22 @@ pub(super) fn collect(
             .iter()
             .find(|m| m.dir == lower && has_sibling(&file_names, &m.sibling_any))
         {
-            Some(marker) => out.push(Hit { path, marker }),
+            Some(marker) => {
+                if super::candidate_allowed(&path, &marker) {
+                    out.push(Hit { path, marker });
+                }
+            }
             // 名字没命中，但目录自己声明了「我是缓存」（CACHEDIR.TAG
             // 签名验证）——自声明比名字特征更强，见 devscan::CACHEDIR_SIGNATURE。
-            None if super::has_cachedir_tag(&path) => out.push(Hit {
-                path,
-                marker: super::CACHEDIR_MARKER.clone(),
-            }),
+            None if matches!(lower.as_str(), "node_modules" | ".venv" | "venv") => {}
+            None if super::has_cachedir_tag(&path)
+                && super::candidate_allowed(&path, &super::CACHEDIR_MARKER) =>
+            {
+                out.push(Hit {
+                    path,
+                    marker: super::CACHEDIR_MARKER.clone(),
+                })
+            }
             // 命中的目录不再下钻；没命中的继续往下找
             None => collect(&path, depth + 1, max_depth, live, out),
         }

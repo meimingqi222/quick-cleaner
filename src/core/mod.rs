@@ -4,6 +4,7 @@
 
 pub mod apps;
 pub mod brew;
+pub mod cache_release;
 pub mod categories;
 pub mod cleaner;
 pub mod declutter;

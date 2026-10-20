@@ -71,6 +71,7 @@ type ItemRowData = (
     u64,
     u64,
     Option<(String, bool)>,
+    bool,
 );
 
 fn render_category_items(
@@ -129,17 +130,35 @@ fn render_category_items(
                         item.file_count,
                         item.size,
                         busy,
+                        crate::core::cache_release::eligible(item)
+                            && (item.busy.as_ref().is_some_and(|busy| !busy.unknown)
+                                || this.clean.last_failed.iter().any(|failed| {
+                                    failed.path == item.path
+                                        && failed.reason == crate::core::cleaner::FailReason::InUse
+                                })),
                     ))
                 })
                 .collect();
 
             rows.into_iter()
-                .map(|(i, path, label, path_text, file_count, size, busy)| {
-                    let checked = this.junk.selected.contains(&path);
-                    item_row(
-                        i, path, label, path_text, file_count, size, busy, checked, lang, cx,
-                    )
-                })
+                .map(
+                    |(i, path, label, path_text, file_count, size, busy, can_release)| {
+                        let checked = this.junk.selected.contains(&path);
+                        item_row(
+                            i,
+                            path,
+                            label,
+                            path_text,
+                            file_count,
+                            size,
+                            busy,
+                            can_release && !this.clean.running,
+                            checked,
+                            lang,
+                            cx,
+                        )
+                    },
+                )
                 .collect()
         }),
     )
@@ -172,6 +191,7 @@ fn item_row(
     file_count: u64,
     size: u64,
     busy: Option<(String, bool)>,
+    can_release: bool,
     checked: bool,
     lang: Language,
     cx: &mut Context<Root>,
@@ -179,6 +199,7 @@ fn item_row(
     let dim = size == 0;
     let toggle_path = path.clone();
     let exclude_target = path.clone();
+    let release_target = path.clone();
 
     let content = div()
         .flex()
@@ -245,6 +266,20 @@ fn item_row(
             },
             !dim,
         ))
+        .when(can_release, |row| {
+            row.child(
+                Button::new(
+                    SharedString::from(format!("release-{idx}")),
+                    ButtonVariant::Link,
+                )
+                .label(tr_release_cache(lang, false))
+                .size(ButtonSize::Slim)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.request_release_cache(release_target.clone(), cx);
+                })),
+            )
+        })
         // 「永久排除」：把这个路径拉进用户白名单，从列表移走、任何清理
         // 通道永远跳过。点击必须 stop_propagation——否则排除的同时会把
         // 这条目当成普通点击勾选上，与「永远别碰」的意图恰好相反。

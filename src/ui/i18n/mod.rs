@@ -33,6 +33,8 @@
 //! （API 名、错误码、路径），因为它们会被原样嵌进这里的本地化外壳。
 //! 见 `tr_scan_error`。
 
+mod cache_release;
+pub use cache_release::*;
 mod declutter;
 pub use declutter::*;
 mod dev_env;

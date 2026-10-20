@@ -274,6 +274,57 @@ pub fn is_protected_residual_path(path: &Path) -> bool {
     is_system_root_dir(path) || is_protected(path)
 }
 
+/// Installation ownership excludes a tree from build-artifact discovery, not from its owner's uninstall route.
+pub fn is_development_installation_path(path: &Path) -> bool {
+    let lower = format!("{}/", norm(path).replace('\\', "/").trim_end_matches('/'));
+    let components: Vec<_> = lower.split('/').collect();
+    if components
+        .iter()
+        .any(|part| part.ends_with(".app") || *part == "appdata")
+    {
+        return true;
+    }
+    if [
+        "/library/application support/",
+        "/library/extensions/",
+        "/.nvm/",
+        "/.fnm/",
+        "/.volta/",
+        "/.asdf/installs/",
+        "/mise/installs/",
+        "/.pyenv/versions/",
+        "/.bun/install/",
+        "/.local/share/uv/tools/",
+        "/.local/share/pipx/",
+        "/.local/pipx/",
+        "/.conda/envs/",
+        "/miniconda3/",
+        "/anaconda3/",
+        "/miniforge3/",
+        "/.workbuddy/binaries/",
+        "/lib/node_modules",
+        "/pnpm/global/",
+        "/.npm-global/",
+    ]
+    .iter()
+    .any(|prefix| lower.contains(prefix))
+    {
+        return true;
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("node_modules"))
+            || ancestor.join("conda-meta").is_dir()
+            || ancestor.join("pipx_metadata.json").is_file()
+            || ancestor.join("pyvenv.cfg").is_file()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// A clean checkout can still be required by an application's session recovery.
 /// Bare filesystem deletion cannot commit the owner's reference retirement.
 pub fn is_managed_agent_worktree(path: &Path) -> bool {
