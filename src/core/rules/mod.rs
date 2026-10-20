@@ -61,6 +61,11 @@ pub struct RuleDefinition {
     pub numbers: BTreeMap<String, u64>,
     #[serde(default)]
     pub provider_policies: BTreeMap<String, ProviderPolicy>,
+    /// Declared category policy: safety level and group per `CategoryId`.
+    /// Only the engine rule may declare it; validation requires the key set
+    /// to match `CategoryId::ALL` exactly.
+    #[serde(default)]
+    pub categories: BTreeMap<String, CategoryPolicy>,
     #[serde(default)]
     pub entries: Vec<PathRule>,
     #[serde(default)]
@@ -109,6 +114,14 @@ pub struct ResidualLocation {
 pub struct ProviderPolicy {
     pub recommended: bool,
     pub disposal: crate::core::cleaner::Disposal,
+}
+/// A category's declared policy in the engine rule: safety level decides
+/// default preselection, group decides developer-section placement.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CategoryPolicy {
+    pub safety: crate::core::categories::Safety,
+    pub group: crate::core::categories::CategoryGroup,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,6 +179,12 @@ pub struct PathRule {
 #[serde(rename_all = "snake_case")]
 pub enum PathOperation {
     File,
+    /// 连目录本身一起删掉。默认策略是「清空内容、保留目录」——
+    /// `%TEMP%`、`Windows\Temp`、`.cargo\registry` 这些被大量程序假定
+    /// 存在，删掉目录本身会导致后续写入失败。整目录删除只用于留了
+    /// 空壳反而误导工具的产物：空的 `.venv` 会让 Python 工具认成损坏的
+    /// 虚拟环境，空的 `node_modules` 会让包管理器以为依赖已装好，空的
+    /// worktree 目录纯粹是垃圾。
     Tree,
     Contents,
     Go,
@@ -472,6 +491,12 @@ impl RuleBundle {
                     return Err("Invalid Chromium signature threshold".into());
                 }
             }
+            if rule.id != "engine" && !rule.categories.is_empty() {
+                return Err(format!(
+                    "Only the engine rule declares categories: {}",
+                    rule.id
+                ));
+            }
             if rule.id == "engine" {
                 validate_engine_policy(rule)?;
                 if rule.lists.get("providers").is_none_or(|list| {
@@ -754,6 +779,16 @@ fn validate_engine_policy(rule: &RuleDefinition) -> Result<(), String> {
             return Err(format!("Missing provider policy: {key}"));
         }
     }
+    // 类别策略表必须恰好覆盖 `CategoryId::ALL`——少一个、多一个、拼错
+    // 一个都是声明错误，不能让缺省回退默默兜住。
+    let declared: BTreeSet<&str> = rule.categories.keys().map(String::as_str).collect();
+    let expected: BTreeSet<String> = crate::core::categories::CategoryId::ALL
+        .iter()
+        .map(|category| format!("{category:?}"))
+        .collect();
+    if declared != expected.iter().map(String::as_str).collect() {
+        return Err("Category policy must cover every CategoryId exactly".into());
+    }
     for (key, minimum, maximum) in [
         ("photo_distance", 0, 5),
         ("photo_burst_distance", 0, 8),
@@ -987,6 +1022,40 @@ mod tests {
         }
     }
 
+    /// 类别策略迁移金样：safety/开发者分组/默认勾选与迁移前的 Rust 表
+    /// 逐项一致。基线由改动前的 `CategoryId::safety()` 等产出后提交。
+    #[test]
+    fn category_policies_match_migration_baseline() {
+        let baseline: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../rules/fixtures/category-policy-baseline.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            baseline.len(),
+            crate::core::categories::CategoryId::ALL.len()
+        );
+        for row in baseline {
+            let id = row["id"].as_str().unwrap();
+            let category = crate::core::categories::CategoryId::from_rule(id)
+                .unwrap_or_else(|| panic!("unknown category {id}"));
+            assert_eq!(
+                category.safety(),
+                serde_json::from_value(row["safety"].clone()).unwrap(),
+                "safety: {id}"
+            );
+            assert_eq!(
+                category.is_developer(),
+                row["developer"].as_bool().unwrap(),
+                "developer: {id}"
+            );
+            assert_eq!(
+                category.default_selected(),
+                row["default_selected"].as_bool().unwrap(),
+                "default_selected: {id}"
+            );
+        }
+    }
+
     #[test]
     fn provider_policy_validation_rejects_missing_unbounded_and_script_fields() {
         use super::*;
@@ -1187,17 +1256,8 @@ mod tests {
         let mut actual = Vec::new();
         for rule in &bundle.rules {
             for entry in &rule.entries {
-                let category =
-                    crate::core::categories::CategoryId::from_rule(&entry.category).unwrap();
-                let path = std::path::Path::new("C:/isolated").join(&entry.path);
-                // Trash scope is tied to the actual user/volume, not this synthetic root.
-                if entry.operation != PathOperation::Trash {
-                    assert_eq!(
-                        entry.operation.operation(),
-                        Operation::classify(&path, category.removes_directory())
-                    );
-                }
-                assert_eq!(entry.disposal, category.disposal());
+                // operation/disposal 是条目自己声明的字段，基线行逐项钉住；
+                // 不再回推类别默认值来交叉验证。
                 actual.push(serde_json::json!({
                     "rule": rule.id, "root": entry.root, "path": entry.path,
                     "category": entry.category, "recommended": entry.recommended,

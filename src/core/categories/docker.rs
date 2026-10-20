@@ -47,6 +47,8 @@ pub(super) fn push_docker_targets(t: &mut Vec<ScanTarget>) {
             label,
             CategoryId::DockerImages,
             junk.image.size,
+            // 虚拟路径条目整体即目标，没有「目录与内容」之分；同时避免
+            // 清理完成回调把非整删目标当成「只清空了内容」而整树失效磁盘索引。
             Operation::Docker { reference },
             ("engine", "docker_image"),
         );

@@ -543,7 +543,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 div()
                     .id(SharedString::from(format!(
                         "cb-{}",
-                        id.name_lang(Language::En)
+                        tr_category_name(Language::En, id)
                     )))
                     .flex_none()
                     .cursor_pointer()
@@ -557,7 +557,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                 div()
                     .id(SharedString::from(format!(
                         "row-{}",
-                        id.name_lang(Language::En)
+                        tr_category_name(Language::En, id)
                     )))
                     .flex_1()
                     .min_w(px(0.))
@@ -587,7 +587,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(rgb(TEXT))
-                                            .child(id.name_lang(lang)),
+                                            .child(tr_category_name(lang, id)),
                                     )
                                     // 开发者类目默认不勾选，用徽标说明「要自己勾」，
                                     // 免得用户以为扫出来了却没被清掉是 bug
@@ -614,7 +614,7 @@ pub fn render_junk_view(root: &Root, cx: &mut Context<Root>) -> AnyElement {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child(id.desc_lang(lang)),
+                                    .child(tr_category_desc(lang, id)),
                             ),
                     )
                     .child(

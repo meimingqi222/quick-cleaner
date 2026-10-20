@@ -53,8 +53,8 @@ pub(super) fn collect_tree_and_build_items(
                 return None;
             }
             let path = PathBuf::from(tree.path_of_with(idx, &mut cache));
-            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`，
-            // 见 `categories::mod`），删除时验的是根身份，所以这里值得
+            // 发现式扫描命中的都是 DevBuild（`Operation::Tree` 整目录删除，
+            // 空壳会被工具认成完好环境），删除时验的是根身份，所以这里值得
             // 多付一次 stat 把身份取到——树上的聚合体积/计数不含
             // Metadata，没法像 scanner::scan_fixed_inner 那样顺手拿。
             let identity = crate::core::model::capture_identity(&path)?;

@@ -227,6 +227,8 @@ pub(super) fn push_local_snapshots(t: &mut Vec<ScanTarget>) {
                 format!("Local snapshot · {name}"),
             ),
             CategoryId::LocalSnapshots,
+            // 快照是整条虚拟路径即目标；若不是整体操作会被
+            // clean_dir_contents 当普通目录跳过，tmutil 根本执行不到。
             Operation::Snapshot { name },
             ("engine", "local_snapshot"),
         );

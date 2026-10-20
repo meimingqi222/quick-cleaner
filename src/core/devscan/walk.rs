@@ -33,7 +33,7 @@ pub(super) fn discover_via_walk_roots(
         .filter(|_| live.load(Ordering::Relaxed))
         .filter_map(|hit| {
             let acc = measure_dir(&hit.path, live);
-            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`），
+            // 发现式扫描命中的都是 DevBuild（`Operation::Tree` 整目录删除），
             // 删除时验的是根身份。`measure_dir` 只遍历子项称重，不会顺手
             // 留一份根自己的 Metadata，这里多付一次 stat 换取该目标也能
             // 享受身份防护——一个 hit 一次，相对于紧随其后的递归遍历

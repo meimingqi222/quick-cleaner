@@ -976,9 +976,9 @@ pub struct CleanTarget {
     pub path: PathBuf,
     /// 连目录本身一起删，还是只清空内容。
     ///
-    /// 见 `CategoryId::removes_directory`：系统缓存目录要保留（大量程序
-    /// 假定它们存在），开发产物目录要删干净（空的 `.venv` / `node_modules`
-    /// 比不存在更糟）。
+    /// 由 `operation`（`File`/`Tree`/`GitWorktree`）决定：系统缓存目录要
+    /// 保留（大量程序假定它们存在），开发产物目录要删干净（空的
+    /// `.venv` / `node_modules` 比不存在更糟）。
     pub remove_dir: bool,
     /// 虚拟路径目标（Docker 镜像）的真实体积。真实路径的体积在删除时
     /// 逐文件累计，用不到这个字段。

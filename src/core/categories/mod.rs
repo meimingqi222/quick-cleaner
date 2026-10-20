@@ -11,34 +11,24 @@ mod system;
 mod updater;
 
 use crate::core::i18n::{Language, Text};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// 类别的安全等级，由 `rules/engine.toml` 的 `[categories.*]` 声明。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Safety {
     Safe,
     Caution,
     Danger,
 }
 
-impl Safety {
-    pub fn label(&self) -> &'static str {
-        self.label_lang(Language::Zh)
-    }
-
-    pub fn label_lang(&self, lang: Language) -> &'static str {
-        match lang {
-            Language::Zh => match self {
-                Safety::Safe => "安全清理",
-                Safety::Caution => "注意",
-                Safety::Danger => "危险",
-            },
-            Language::En => match self {
-                Safety::Safe => "Safe",
-                Safety::Caution => "Caution",
-                Safety::Danger => "Danger",
-            },
-        }
-    }
+/// 类别分组，同样由 `rules/engine.toml` 的 `[categories.*]` 声明。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CategoryGroup {
+    General,
+    Developer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -98,102 +88,30 @@ impl CategoryId {
         CategoryId::DockerImages,
     ];
 
-    /// 扫描完成后是否默认勾选。
-    ///
-    /// 规范：**一个目标可以被默认勾选，必须同时满足三条**——
-    ///
-    /// 1. **认得出**：有内容签名或明确的所有者证据说明这类文件就是它声称的
-    ///    用途。目录名不算证据——本仓库曾按应用名列更新器目录，实测 6 个名字
-    ///    里 5 个在机器上不存在，而真实存在的 4 个一个都没被列到。
-    /// 2. **最坏情况能界定**：删除的代价止于「重新下载 / 重新生成」。只要可能
-    ///    损失凭据、密钥、登录态、未提交改动、唯一副本（崩溃报告、待上传的诊
-    ///    断包）、或内网里根本没有上游可拉的东西（`~/.m2`、`go/pkg/mod`、
-    ///    `~/.gradle/caches`），这条就不成立。
-    /// 3. **不在事务中间**：所有权程序可能正在用或马上要用它就不行。用年龄门
-    ///    （`helpers::is_older_than`）判定，代价只是让「刚刚下好的东西」这一
-    ///    轮不动，仍然整项展示。
-    ///
-    /// 任何一条不成立：**照样展示给用户**，只是不预选。展示不是成本，隐藏才
-    /// 是——一个目标不进表，用户既看不见也清不掉。
-    ///
-    /// 类别只是这三条的缺省表达，判定单位始终是单个目标（见 `ScanTarget::
-    /// recommended`）。所以同一类别里可以同时有 `PackageCache` 的公共 registry
-    /// 缓存（三条都成立）和 `go/pkg/mod`（第 2 条不成立）。
-    ///
-    /// 这条规范会推翻直觉，两处已知例子：应用更新包看着像「正在用的东西」但
-    /// 三条都成立；整个 `~/Library/Logs` 看着就是日志，实际是一个目标覆盖 N 个
-    /// 所有者、里面躺着 `OneDrive/…/general.keystore` 和 `DiagnosticReports`。
+    /// 扫描完成后是否默认勾选：`engine.toml` 的 `[categories.*]` 里
+    /// `safety = "safe"` 的类别。判据本身（三条规范）写在 engine.toml。
     pub fn default_selected(&self) -> bool {
         self.safety() == Safety::Safe
     }
 
+    /// 类别策略表：`engine.toml` 的 `[categories.<CategoryId>]`。校验保证
+    /// 键集合与 `CategoryId::ALL` 一致；万一取不到按最保守的返回（危险、
+    /// 开发类），不预选。
+    fn policy(&self) -> crate::core::rules::CategoryPolicy {
+        crate::core::rules::current()
+            .definition("engine")
+            .categories
+            .get(&format!("{self:?}"))
+            .copied()
+            .unwrap_or(crate::core::rules::CategoryPolicy {
+                safety: Safety::Danger,
+                group: CategoryGroup::Developer,
+            })
+    }
+
     /// 是否属于开发者类目。
     pub fn is_developer(&self) -> bool {
-        matches!(
-            self,
-            CategoryId::AiAgents
-                | CategoryId::DevBuild
-                | CategoryId::DevWorktrees
-                | CategoryId::LocalSnapshots
-                | CategoryId::IosBackup
-                | CategoryId::OldIdeData
-                | CategoryId::DockerImages
-        )
-    }
-
-    /// 清理时是否连目录本身一起删掉。
-    ///
-    /// 默认策略是「清空内容、保留目录」——`%TEMP%`、`Windows\Temp`、
-    /// `.cargo\registry` 这些被大量程序假定存在，删掉目录本身会导致
-    /// 后续写入失败。
-    ///
-    /// 但开发产物正相反：留一个空的 `.venv` 会让 Python 工具认成损坏的
-    /// 虚拟环境，空的 `node_modules` 会让包管理器以为依赖已装好，空的
-    /// worktree 目录纯粹是垃圾。这些必须整个删掉。
-    /// 该类目删除时走永久删除还是废纸篓/回收站。
-    ///
-    /// 默认永久删除：缓存、临时文件、构建产物本来就该重建，进废纸篓
-    /// 只是把占用从一个目录挪到另一个目录，用户还得再清一次。
-    ///
-    /// 例外是「删错了代价不对称」的类目——判据两条同时成立：
-    ///
-    /// 1. **误删的痛感远大于体积收益**：旧版 IDE 数据里躺着用户多年攒下
-    ///    的配置、快捷键、插件设置，认错版本号删掉就没了；而它通常只有
-    ///    几百 MB 到几个 GB。
-    /// 2. **体积不足以撑爆废纸篓**：这一条把 `IosBackup` 排除在外——单个
-    ///    备份动辄几十 GB，`recycle_path` 又刻意不往 `bytes` 上记账
-    ///    （「已释放 X」必须是真的释放了才算），进废纸篓的结果是用户看到
-    ///    「已释放 0 B」、磁盘一点没空出来，与他勾选这一项的目的直接相反。
-    ///
-    /// 注意 `BrokenLoginItems` 不在这里——它的 plist 早就在
-    /// `clean_targets` 里单独走 `move_to_trash` 了，那条分支先于本字段
-    /// 生效，这里不重复表达。
-    #[cfg(test)]
-    pub fn disposal(&self) -> crate::core::cleaner::Disposal {
-        use crate::core::cleaner::Disposal;
-        match self {
-            CategoryId::OldIdeData => Disposal::RecycleBin,
-            _ => Disposal::Permanent,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn removes_directory(&self) -> bool {
-        matches!(
-            self,
-            CategoryId::DevBuild | CategoryId::DevWorktrees | CategoryId::IosBackup
-                | CategoryId::OldIdeData
-                // 更新包是暂存产物：留一个空的 `pending/` 或
-                // `update.<随机串>/` 纯粹是垃圾，更新器下次自己重建。
-                | CategoryId::UpdaterPackages
-                // 快照是整条虚拟路径即目标；不走 remove_dir 分支的话会被
-                // clean_dir_contents 当普通目录跳过，tmutil 根本执行不到。
-                | CategoryId::LocalSnapshots
-                // 虚拟路径条目整体即目标，没有「目录与内容」之分；同时
-                // 避免清理完成回调把非 remove_dir 目标当成「只清空了内容」
-                // 而整树失效磁盘索引。
-                | CategoryId::DockerImages
-        )
+        self.policy().group == CategoryGroup::Developer
     }
 
     /// 该类目是否靠发现式扫描产生（而非固定路径表）。
@@ -204,195 +122,8 @@ impl CategoryId {
         matches!(self, CategoryId::DevBuild)
     }
 
-    /// 中文文案。**仅供日志与命令行**，界面上用 `name_lang(lang)`。
-    pub fn name(&self) -> &'static str {
-        self.name_lang(Language::Zh)
-    }
-
-    pub fn name_lang(&self, lang: Language) -> &'static str {
-        match lang {
-            Language::Zh => match self {
-                CategoryId::SystemTemp => "系统临时文件",
-                CategoryId::UserTemp => "用户临时文件",
-                CategoryId::UserCache => "应用缓存",
-                CategoryId::BrowserCache => "浏览器缓存",
-                CategoryId::PackageCache => "包管理缓存",
-                CategoryId::UpdaterPackages => "应用更新包",
-                CategoryId::Logs => "日志与崩溃转储",
-                CategoryId::RecycleBin => "回收站 / 废纸篓",
-                CategoryId::Thumbnails => "缩略图缓存",
-                CategoryId::BrokenLoginItems => "损坏的登录项",
-                CategoryId::AiAgents => "AI 编程助手缓存",
-                CategoryId::DevBuild => "项目构建产物与依赖",
-                CategoryId::DevWorktrees => "AI agent 临时 worktree",
-                CategoryId::LocalSnapshots => "APFS 本地快照",
-                CategoryId::IosBackup => "iOS 设备备份",
-                CategoryId::OldIdeData => "旧版 IDE 数据",
-                CategoryId::DockerImages => "冗余 Docker 镜像",
-            },
-            Language::En => match self {
-                CategoryId::SystemTemp => "System Temp Files",
-                CategoryId::UserTemp => "User Temp Files",
-                CategoryId::UserCache => "Application Cache",
-                CategoryId::BrowserCache => "Browser Cache",
-                CategoryId::PackageCache => "Package Manager Cache",
-                CategoryId::UpdaterPackages => "Application Update Packages",
-                CategoryId::Logs => "Logs & Crash Dumps",
-                CategoryId::RecycleBin => "Recycle Bin / Trash",
-                CategoryId::Thumbnails => "Thumbnail Cache",
-                CategoryId::BrokenLoginItems => "Broken Login Items",
-                CategoryId::AiAgents => "AI Assistant Cache",
-                CategoryId::DevBuild => "Build Artifacts & Deps",
-                CategoryId::DevWorktrees => "AI Agent Git Worktrees",
-                CategoryId::LocalSnapshots => "APFS Local Snapshots",
-                CategoryId::IosBackup => "iOS Device Backup",
-                CategoryId::OldIdeData => "Old IDE Version Data",
-                CategoryId::DockerImages => "Redundant Docker Images",
-            },
-        }
-    }
-
-    pub fn icon(&self) -> &'static str {
-        match self {
-            CategoryId::SystemTemp => "🗑",
-            CategoryId::UserTemp => "📂",
-            CategoryId::UserCache => "📂",
-            CategoryId::BrowserCache => "🌐",
-            CategoryId::PackageCache => "📦",
-            CategoryId::UpdaterPackages => "⬆️",
-            CategoryId::Logs => "📝",
-            CategoryId::RecycleBin => "♻️",
-            CategoryId::Thumbnails => "🖼",
-            CategoryId::BrokenLoginItems => "🚫",
-            CategoryId::AiAgents => "🤖",
-            CategoryId::DevBuild => "🛠",
-            CategoryId::DevWorktrees => "🌿",
-            CategoryId::LocalSnapshots => "📸",
-            CategoryId::IosBackup => "📱",
-            CategoryId::OldIdeData => "💻",
-            CategoryId::DockerImages => "🐳",
-        }
-    }
-
-    /// 中文文案。**仅供日志与命令行**，界面上用 `desc_lang(lang)`。
-    pub fn desc(&self) -> &'static str {
-        self.desc_lang(Language::Zh)
-    }
-
-    pub fn desc_lang(&self, lang: Language) -> &'static str {
-        match lang {
-            Language::Zh => match self {
-                CategoryId::SystemTemp => "系统临时文件与系统更新残留",
-                CategoryId::UserTemp => "用户主目录下的应用临时文件",
-                CategoryId::UserCache => "应用明确存放在缓存目录中的可重建数据",
-                CategoryId::BrowserCache => "Chrome / Edge / Safari 等浏览器的缓存数据",
-                CategoryId::PackageCache => "npm / pnpm / cargo / go 等包管理器缓存",
-                CategoryId::UpdaterPackages => {
-                    "已下载的更新包与更新器暂存，删了最多多下一次更新，不丢任何数据"
-                }
-                CategoryId::Logs => "系统与应用日志、崩溃转储",
-                CategoryId::RecycleBin => "回收站/废纸篓中已删除的文件",
-                CategoryId::Thumbnails => "系统缩略图缓存，可安全重建",
-                CategoryId::BrokenLoginItems => "引用目标已不存在或配置已失效的启动项",
-                CategoryId::AiAgents => {
-                    "Claude Code / Codex / Trae / Cursor 等 AI 编程工具的会话记录与缓存"
-                }
-                CategoryId::DevBuild => {
-                    "代码目录下的 node_modules / target / .venv / bin·obj 等，可重新构建"
-                }
-                CategoryId::DevWorktrees => "AI agent 留下的临时 git worktree，可能含未提交改动",
-                CategoryId::LocalSnapshots => "APFS 本地快照，macOS「磁盘莫名爆满」的头号原因",
-                CategoryId::IosBackup => {
-                    "iTunes / Finder 创建的 iOS 设备完整备份，单个可达 100 GB+"
-                }
-                CategoryId::OldIdeData => {
-                    "Application Support 下 JetBrains 的按版本数据目录，当前版本之外的旧目录，移入废纸篓"
-                }
-                CategoryId::DockerImages => {
-                    "悬空镜像、未被任何容器使用的镜像与同仓库旧版本标签，经 docker image rm 释放"
-                }
-            },
-            Language::En => match self {
-                CategoryId::SystemTemp => "System temporary files and update leftovers",
-                CategoryId::UserTemp => "Application temporary files under user profile",
-                CategoryId::UserCache => "Rebuildable data stored in application cache directories",
-                CategoryId::BrowserCache => "Cache files from Chrome, Edge, Firefox, Safari",
-                CategoryId::PackageCache => "Caches from npm, pnpm, Cargo, Go, pip, etc.",
-                CategoryId::UpdaterPackages => {
-                    "Downloaded update packages and updater staging; costs a re-download, loses no data"
-                }
-                CategoryId::Logs => "System and application event logs and crash dumps",
-                CategoryId::RecycleBin => "Deleted files in Recycle Bin or Trash",
-                CategoryId::Thumbnails => "System thumbnail cache, safe to rebuild",
-                CategoryId::BrokenLoginItems => {
-                    "Startup entries whose executable is missing or configuration is invalid"
-                }
-                CategoryId::AiAgents => {
-                    "Session records and caches from Claude, Cursor, Trae, etc."
-                }
-                CategoryId::DevBuild => {
-                    "node_modules, target, .venv, bin/obj in projects, rebuildable"
-                }
-                CategoryId::DevWorktrees => {
-                    "Temporary worktrees created by AI agents, may contain uncommitted edits"
-                }
-                CategoryId::LocalSnapshots => {
-                    "APFS local snapshots, the #1 cause of mysterious disk-full on macOS"
-                }
-                CategoryId::IosBackup => {
-                    "Full iOS device backups created by iTunes / Finder, can be 100 GB+ each"
-                }
-                CategoryId::OldIdeData => {
-                    "Per-version JetBrains data dirs under Application Support, excluding the newest, moved to Trash"
-                }
-                CategoryId::DockerImages => {
-                    "Dangling images, tags unused by any container and old versions, freed via docker image rm"
-                }
-            },
-        }
-    }
-
     pub fn safety(&self) -> Safety {
-        match self {
-            // Windows/macOS 临时目录都可能包含正在运行的安装事务、socket 或锁。
-            // 当前实现未按年龄和占用状态逐文件筛选，不能默认清理。
-            CategoryId::SystemTemp => Safety::Caution,
-            // 此类包含第三方应用缓存、窗口恢复状态和容器临时目录。
-            // 应用可能错误地把状态放进名为 Caches/tmp 的目录，不能承诺无损。
-            CategoryId::UserTemp => Safety::Caution,
-            CategoryId::UserCache => Safety::Safe,
-            // Service Worker、IndexedDB、Cookie 等状态数据已明确排除，剩余项
-            // 只有 HTTP/代码/着色器缓存和已完成的崩溃报告。
-            CategoryId::BrowserCache => Safety::Safe,
-            // 类目级 Safe 是缺省值，不是保证。这一类里既有公共 registry 的本机
-            // 镜像（npm、pip、uv、cargo…），也有 `go/pkg/mod`、`~/.gradle/caches`、
-            // `~/.nuget/packages` 这种可能握着一份私有构件的唯一副本——后者按
-            // 规范第 2 条逐个降级，判据写在 `cache.rs`。
-            CategoryId::PackageCache => Safety::Safe,
-            // 内容按签名判定，只可能是更新器的下载产物：唯一代价是重新下载。
-            // 「刚下完、马上要装」的窗口由目标级年龄门挡住（updater.rs），
-            // 不达标的叶子照样列出但不预选，所以类目级默认勾选不会撞上
-            // 正在进行换版。
-            CategoryId::UpdaterPackages => Safety::Safe,
-            // Safe 的前提是每个目标都还像日志。整目录一个目标做不到这一点，
-            // 所以 `~/Library/Logs` 按顶层子目录展开，非日志的条目各自降级
-            // （`system::push_log_dir_targets`）。
-            CategoryId::Logs => Safety::Safe,
-            CategoryId::RecycleBin => Safety::Caution,
-            CategoryId::Thumbnails => Safety::Safe,
-            CategoryId::BrokenLoginItems => Safety::Safe,
-            CategoryId::AiAgents => Safety::Caution,
-            CategoryId::DevBuild => Safety::Caution,
-            CategoryId::DevWorktrees => Safety::Danger,
-            CategoryId::LocalSnapshots => Safety::Caution,
-            CategoryId::IosBackup => Safety::Danger,
-            // 内容是已卸载旧版本的配置/插件/缓存（当前版本的数据目录保留），
-            // 但毕竟按版本永久删除，仍需用户确认。
-            CategoryId::OldIdeData => Safety::Caution,
-            // 「未被使用」不等于「不再需要」：用户可能特意拉了基础镜像备
-            // 用，且删除按镜像永久执行，必须由用户逐项勾选。
-            CategoryId::DockerImages => Safety::Caution,
-        }
+        self.policy().safety
     }
 }
 
@@ -1659,37 +1390,54 @@ mod tests {
     }
 
     /// 处置方式是「删错了代价对称不对称」的表达，不是按类别大小拍脑袋。
-    /// 这个测试把两条判据都钉住，防止以后有人顺手把某个大类改成废纸篓。
+    /// 声明源是 `engine.toml` 的 provider 策略与规则条目的 `disposal`：
+    /// 这个测试钉住「只有旧版 IDE 数据走废纸篓」，防止有人顺手把某个
+    /// 大类改成废纸篓。
     #[test]
     fn disposal_routes_only_asymmetric_cost_categories_to_trash() {
         use crate::core::cleaner::Disposal;
+        let bundle = &crate::core::rules::snapshot().bundle;
 
         // 旧版 IDE 数据：误删掉的是多年配置，体积却只有几百 MB 到几 GB。
-        assert_eq!(CategoryId::OldIdeData.disposal(), Disposal::RecycleBin);
-
-        // 缓存与构建产物：本来就该重建，进废纸篓只是把占用挪个地方。
-        for cat in [
-            CategoryId::UserCache,
-            CategoryId::BrowserCache,
-            CategoryId::PackageCache,
-            CategoryId::DevBuild,
-            CategoryId::SystemTemp,
-        ] {
+        // 它是 provider 策略 `old_ide_data` 上唯一的回收站例外。
+        let policies = &bundle
+            .rules
+            .iter()
+            .find(|rule| rule.id == "engine")
+            .unwrap()
+            .provider_policies;
+        assert_eq!(policies["old_ide_data"].disposal, Disposal::RecycleBin);
+        for (key, policy) in policies {
             assert_eq!(
-                cat.disposal(),
-                Disposal::Permanent,
-                "{cat:?} 是可重建产物，不该走废纸篓"
+                policy.disposal == Disposal::RecycleBin,
+                key == "old_ide_data",
+                "provider policy {key} 不该走废纸篓"
             );
         }
 
-        // iOS 备份是刻意的例外：单个备份动辄几十 GB，而 `recycle_path`
-        // 刻意不往 bytes 上记账，走废纸篓的结果是用户看到「已释放 0 B」、
-        // 磁盘一点没空出来，与他勾选这一项的目的直接相反。
-        assert_eq!(
-            CategoryId::IosBackup.disposal(),
-            Disposal::Permanent,
-            "iOS 备份体积过大，进废纸篓不释放空间，等于没清"
-        );
+        // 路径与目录条目同理：只有 iOS 备份这类体积案例被单独钉住——
+        // 单个备份动辄几十 GB，`recycle_path` 刻意不往 bytes 上记账，
+        // 走废纸篓的结果是「已释放 0 B」、磁盘没空出来，与勾选目的相反。
+        for rule in &bundle.rules {
+            for entry in &rule.entries {
+                assert_eq!(
+                    entry.disposal,
+                    Disposal::Permanent,
+                    "{}/{} 是可重建产物，不该走废纸篓",
+                    rule.id,
+                    entry.path
+                );
+            }
+            for entry in &rule.directories {
+                assert_eq!(
+                    entry.disposal,
+                    Disposal::Permanent,
+                    "{}/{} 不该走废纸篓",
+                    rule.id,
+                    entry.id
+                );
+            }
+        }
     }
 
     /// 嵌套保留深到两层：拆分递归进入含保留项的子树，每一层的兄弟子项各自

@@ -48,7 +48,7 @@ pub(super) fn discover_via_mft(
                 continue;
             }
             let path = PathBuf::from(tree.path_of_with(idx.0, &mut cache));
-            // 发现式扫描命中的都是 DevBuild（`removes_directory() == true`），
+            // 发现式扫描命中的都是 DevBuild（`Operation::Tree` 整目录删除），
             // 删除时验的是根身份。MFT 树上的聚合体积/计数不含
             // dev/ino/mtime，这里多付一次 stat 换身份——一个 hit 一次，
             // 相对于本来就要做的 MFT 全盘解析可以忽略不计。

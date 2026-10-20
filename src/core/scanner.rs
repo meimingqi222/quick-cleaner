@@ -839,14 +839,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    fn item(path: &str, size: u64, cat: CategoryId) -> ScanItem {
+    fn item(
+        path: &str,
+        size: u64,
+        cat: CategoryId,
+        operation: crate::core::rules::Operation,
+        disposal: crate::core::cleaner::Disposal,
+    ) -> ScanItem {
         ScanItem {
             plans: Vec::new(),
-            operation: crate::core::rules::Operation::classify(
-                Path::new(path),
-                cat.removes_directory(),
-            ),
-            disposal: cat.disposal(),
+            operation,
+            disposal,
             rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(path),
             label: path.into(),
@@ -874,8 +877,20 @@ mod tests {
         let mut cats = vec![summary(
             CategoryId::UserTemp,
             vec![
-                item(r"C:\a", 1000, CategoryId::UserTemp),
-                item(r"C:\b", 500, CategoryId::UserTemp),
+                item(
+                    r"C:\a",
+                    1000,
+                    CategoryId::UserTemp,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
+                item(
+                    r"C:\b",
+                    500,
+                    CategoryId::UserTemp,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
             ],
         )];
         assert_eq!(cats[0].total_size, 1500);
@@ -898,8 +913,20 @@ mod tests {
         let mut cats = vec![summary(
             CategoryId::UserTemp,
             vec![
-                item(r"C:\ok", 1000, CategoryId::UserTemp),
-                item(r"C:\locked", 700, CategoryId::UserTemp),
+                item(
+                    r"C:\ok",
+                    1000,
+                    CategoryId::UserTemp,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
+                item(
+                    r"C:\locked",
+                    700,
+                    CategoryId::UserTemp,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
             ],
         )];
 
@@ -922,8 +949,20 @@ mod tests {
         let mut cats = vec![summary(
             CategoryId::PackageCache,
             vec![
-                item(r"C:\picked", 100, CategoryId::PackageCache),
-                item(r"C:\other", 900, CategoryId::PackageCache),
+                item(
+                    r"C:\picked",
+                    100,
+                    CategoryId::PackageCache,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
+                item(
+                    r"C:\other",
+                    900,
+                    CategoryId::PackageCache,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                ),
             ],
         )];
 
@@ -939,11 +978,23 @@ mod tests {
         let mut cats = vec![
             summary(
                 CategoryId::UserTemp,
-                vec![item(r"C:\t", 200, CategoryId::UserTemp)],
+                vec![item(
+                    r"C:\t",
+                    200,
+                    CategoryId::UserTemp,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                )],
             ),
             summary(
                 CategoryId::DevBuild,
-                vec![item(r"D:\p\target", 5000, CategoryId::DevBuild)],
+                vec![item(
+                    r"D:\p\target",
+                    5000,
+                    CategoryId::DevBuild,
+                    crate::core::rules::Operation::Tree,
+                    crate::core::cleaner::Disposal::Permanent,
+                )],
             ),
         ];
 
@@ -1042,7 +1093,13 @@ mod tests {
         let dir = real_dir("basic");
         let mut cats = empty_cats();
 
-        let mut it = item(&dir.to_string_lossy(), 4096, CategoryId::DevBuild);
+        let mut it = item(
+            &dir.to_string_lossy(),
+            4096,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         it.path = dir.clone();
         merge_discovered(&mut cats, vec![it], false);
 
@@ -1070,7 +1127,13 @@ mod tests {
         assert!(!gone.exists());
 
         let mut cats = empty_cats();
-        let mut it = item("placeholder", 9999, CategoryId::DevBuild);
+        let mut it = item(
+            "placeholder",
+            9999,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         it.path = gone;
         merge_discovered(&mut cats, vec![it], false);
 
@@ -1088,7 +1151,13 @@ mod tests {
         let dir = real_dir("dup");
         let mut cats = empty_cats();
 
-        let mut first = item(&dir.to_string_lossy(), 1000, CategoryId::DevBuild);
+        let mut first = item(
+            &dir.to_string_lossy(),
+            1000,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         first.path = dir.clone();
         cats.iter_mut()
             .find(|c| c.category == CategoryId::DevBuild)
@@ -1096,7 +1165,13 @@ mod tests {
             .items
             .push(first);
 
-        let mut again = item(&dir.to_string_lossy(), 1000, CategoryId::DevBuild);
+        let mut again = item(
+            &dir.to_string_lossy(),
+            1000,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         again.path = dir.clone();
         merge_discovered(&mut cats, vec![again], false);
 
@@ -1116,7 +1191,13 @@ mod tests {
         let child = root.join("node_modules");
         std::fs::create_dir_all(&child).unwrap();
         let mut cats = empty_cats();
-        let fixed = item(&root.to_string_lossy(), 1000, CategoryId::UserCache);
+        let fixed = item(
+            &root.to_string_lossy(),
+            1000,
+            CategoryId::UserCache,
+            crate::core::rules::Operation::Contents,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         let fixed_cat = cats
             .iter_mut()
             .find(|cat| cat.category == CategoryId::UserCache)
@@ -1124,7 +1205,13 @@ mod tests {
         fixed_cat.items.push(fixed);
         fixed_cat.total_size = 1000;
 
-        let discovered = item(&child.to_string_lossy(), 400, CategoryId::DevBuild);
+        let discovered = item(
+            &child.to_string_lossy(),
+            400,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         merge_discovered(&mut cats, vec![discovered], false);
 
         assert!(cats
@@ -1140,9 +1227,27 @@ mod tests {
     #[test]
     fn fixed_category_items_are_sorted_by_size() {
         let cats = aggregate(vec![
-            item("/cache/tiny", 8 * 1024, CategoryId::UserTemp),
-            item("/cache/large", 4 * 1024 * 1024 * 1024, CategoryId::UserTemp),
-            item("/cache/medium", 128 * 1024 * 1024, CategoryId::UserTemp),
+            item(
+                "/cache/tiny",
+                8 * 1024,
+                CategoryId::UserTemp,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            ),
+            item(
+                "/cache/large",
+                4 * 1024 * 1024 * 1024,
+                CategoryId::UserTemp,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            ),
+            item(
+                "/cache/medium",
+                128 * 1024 * 1024,
+                CategoryId::UserTemp,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            ),
         ]);
 
         let user_temp = cats
@@ -1163,9 +1268,21 @@ mod tests {
         let big = real_dir("sort_big");
         let mut cats = empty_cats();
 
-        let mut a = item(&small.to_string_lossy(), 100, CategoryId::DevBuild);
+        let mut a = item(
+            &small.to_string_lossy(),
+            100,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         a.path = small.clone();
-        let mut b = item(&big.to_string_lossy(), 5000, CategoryId::DevBuild);
+        let mut b = item(
+            &big.to_string_lossy(),
+            5000,
+            CategoryId::DevBuild,
+            crate::core::rules::Operation::Tree,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         b.path = big.clone();
         merge_discovered(&mut cats, vec![a, b], false);
 

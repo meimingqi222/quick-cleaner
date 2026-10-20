@@ -322,35 +322,6 @@ pub enum Operation {
     OfficialUninstall,
 }
 impl Operation {
-    #[cfg(test)]
-    pub fn classify(path: &std::path::Path, remove_directory: bool) -> Self {
-        if let Some(reference) = crate::core::model::docker_rmi_ref(path) {
-            Self::Docker { reference }
-        } else if crate::core::brew::is_brew_virtual(path) {
-            Self::Brew
-        } else if let Some(name) = crate::core::model::snapshot_name(path) {
-            Self::Snapshot { name }
-        } else if crate::platform::is_system_trash(path) {
-            Self::Trash
-        } else if crate::core::owner::is_go_modcache(path) {
-            Self::Go
-        } else if crate::core::owner::is_pnpm_store(path) {
-            Self::Pnpm
-        } else if remove_directory {
-            if path.join(".git").is_file() {
-                Self::GitWorktree {
-                    registration: crate::core::worktrees::inspect(path)
-                        .map(|entry| entry.admin)
-                        .unwrap_or_else(|_| path.join(".git")),
-                }
-            } else {
-                Self::Tree
-            }
-        } else {
-            Self::Contents
-        }
-    }
-
     pub fn is_native_resource(&self) -> bool {
         matches!(
             self,
@@ -538,71 +509,6 @@ mod tests {
     }
 
     use super::*;
-    #[test]
-    fn typed_operation_preserves_existing_owner_routes() {
-        for (path, operation) in [
-            (
-                "docker://image/sha256:123",
-                Operation::Docker {
-                    reference: "sha256:123".into(),
-                },
-            ),
-            ("brew://cleanup", Operation::Brew),
-            ("C:/Users/test/go/pkg/mod", Operation::Go),
-            ("C:/Users/test/.pnpm-store", Operation::Pnpm),
-            ("C:/Users/test/cache", Operation::Contents),
-        ] {
-            assert_eq!(
-                Operation::classify(std::path::Path::new(path), false),
-                operation,
-                "{path}"
-            );
-        }
-        assert_eq!(
-            Operation::classify(std::path::Path::new("C:/Users/test/app"), true),
-            Operation::Tree
-        );
-    }
-    #[test]
-    fn typed_operation_matches_all_legacy_dispatch_predicates() {
-        for path in [
-            "docker://image/ghcr.io/example/image:latest",
-            "brew://cleanup",
-            "brew://other",
-            "tmutil://snapshot/2026-10-04-120000",
-            "C:/Users/test/go/pkg/mod",
-            "C:/Users/test/go/pkg/mod/cache",
-            "C:/Users/test/.pnpm-store",
-            "C:/Users/test/cache",
-            "C:/Users/test/app.exe",
-        ] {
-            let path = std::path::Path::new(path);
-            for remove in [false, true] {
-                let operation = Operation::classify(path, remove);
-                assert_eq!(
-                    matches!(operation, Operation::Docker { .. }),
-                    crate::core::model::docker_rmi_ref(path).is_some()
-                );
-                assert_eq!(
-                    operation == Operation::Brew,
-                    crate::core::brew::is_brew_virtual(path)
-                );
-                assert_eq!(
-                    matches!(operation, Operation::Snapshot { .. }),
-                    crate::core::model::snapshot_name(path).is_some()
-                );
-                assert_eq!(
-                    operation == Operation::Go,
-                    crate::core::owner::is_go_modcache(path)
-                );
-                assert_eq!(
-                    operation == Operation::Pnpm,
-                    crate::core::owner::is_pnpm_store(path)
-                );
-            }
-        }
-    }
-
     #[test]
     fn native_parameters_and_keys_do_not_follow_display_uris() {
         let operation = Operation::Docker {

@@ -1,5 +1,5 @@
 id = "engine"
-version = 7
+version = 8
 platform = "all"
 required = ["file", "providers", "declutter", "docker", "snapshot", "owner"]
 
@@ -67,6 +67,23 @@ disposal = "permanent"
 recommended = false
 disposal = "permanent"
 
+# 处置方式（永久删除还是废纸篓/回收站）默认是永久：缓存、临时文件、
+# 构建产物本来就该重建，进废纸篓只是把占用从一个目录挪到另一个目录，
+# 用户还得再清一次。
+#
+# 例外是「删错了代价不对称」的类目——判据两条同时成立：
+#
+# 1. 误删的痛感远大于体积收益：旧版 IDE 数据里躺着用户多年攒下
+#    的配置、快捷键、插件设置，认错版本号删掉就没了；而它通常只有
+#    几百 MB 到几个 GB。
+# 2. 体积不足以撑爆废纸篓：这一条把 iOS 备份排除在外——单个
+#    备份动辄几十 GB，`recycle_path` 又刻意不往 `bytes` 上记账
+#    （「已释放 X」必须是真的释放了才算），进废纸篓的结果是用户看到
+#    「已释放 0 B」、磁盘一点没空出来，与他勾选这一项的目的直接相反。
+#
+# 注意损坏登录项不在这里——它的 plist 早就在 `clean_targets` 里单独走
+# `move_to_trash` 了，那条分支先于本字段生效，这里不重复表达。
+
 [provider_policies.old_ide_data]
 recommended = false
 disposal = "recycle_bin"
@@ -86,3 +103,119 @@ disposal = "permanent"
 [provider_policies.brew_cleanup]
 recommended = true
 disposal = "permanent"
+
+# 类别策略：每类的安全等级决定默认勾选，分组决定开发类归属。
+#
+# 「扫描完成后是否默认勾选」的规范：**一个目标可以被默认勾选，必须
+# 同时满足三条**——
+#
+# 1. 认得出：有内容签名或明确的所有者证据说明这类文件就是它声称的
+#    用途。目录名不算证据——本仓库曾按应用名列更新器目录，实测 6 个名字
+#    里 5 个在机器上不存在，而真实存在的 4 个一个都没被列到。
+# 2. 最坏情况能界定：删除的代价止于「重新下载 / 重新生成」。只要可能
+#    损失凭据、密钥、登录态、未提交改动、唯一副本（崩溃报告、待上传的诊
+#    断包）、或内网里根本没有上游可拉的东西（`~/.m2`、`go/pkg/mod`、
+#    `~/.gradle/caches`），这条就不成立。
+# 3. 不在事务中间：所有权程序可能正在用或马上要用它就不行。用年龄门
+#    （`helpers::is_older_than`）判定，代价只是让「刚刚下好的东西」这一
+#    轮不动，仍然整项展示。
+#
+# 任何一条不成立：**照样展示给用户**，只是不预选。展示不是成本，隐藏才
+# 是——一个目标不进表，用户既看不见也清不掉。
+#
+# 类别只是这三条的缺省表达，判定单位始终是单个目标（见 `ScanTarget::
+# recommended`）。所以同一类别里可以同时有包管理公共 registry
+# 缓存（三条都成立）和 `go/pkg/mod`（第 2 条不成立）。
+#
+# 这条规范会推翻直觉，两处已知例子：应用更新包看着像「正在用的东西」但
+# 三条都成立；整个 `~/Library/Logs` 看着就是日志，实际是一个目标覆盖 N 个
+# 所有者、里面躺着 `OneDrive/…/general.keystore` 和 `DiagnosticReports`。
+
+# Windows/macOS 临时目录都可能包含正在运行的安装事务、socket 或锁。
+# 当前实现未按年龄和占用状态逐文件筛选，不能默认清理。
+[categories.SystemTemp]
+safety = "caution"
+group = "general"
+
+# 此类包含第三方应用缓存、窗口恢复状态和容器临时目录。
+# 应用可能错误地把状态放进名为 Caches/tmp 的目录，不能承诺无损。
+[categories.UserTemp]
+safety = "caution"
+group = "general"
+
+[categories.UserCache]
+safety = "safe"
+group = "general"
+
+# Service Worker、IndexedDB、Cookie 等状态数据已明确排除，剩余项
+# 只有 HTTP/代码/着色器缓存和已完成的崩溃报告。
+[categories.BrowserCache]
+safety = "safe"
+group = "general"
+
+# 类目级 Safe 是缺省值，不是保证。这一类里既有公共 registry 的本机
+# 镜像（npm、pip、uv、cargo…），也有 `go/pkg/mod`、`~/.gradle/caches`、
+# `~/.nuget/packages` 这种可能握着一份私有构件的唯一副本——后者按
+# 规范第 2 条逐个降级，判据写在 `cache.rs`。
+[categories.PackageCache]
+safety = "safe"
+group = "general"
+
+# 内容按签名判定，只可能是更新器的下载产物：唯一代价是重新下载。
+# 「刚下完、马上要装」的窗口由目标级年龄门挡住（updater.rs），
+# 不达标的叶子照样列出但不预选，所以类目级默认勾选不会撞上
+# 正在进行换版。
+[categories.UpdaterPackages]
+safety = "safe"
+group = "general"
+
+# Safe 的前提是每个目标都还像日志。整目录一个目标做不到这一点，
+# 所以 `~/Library/Logs` 按顶层子目录展开，非日志的条目各自降级
+# （`system::push_log_dir_targets`）。
+[categories.Logs]
+safety = "safe"
+group = "general"
+
+[categories.RecycleBin]
+safety = "caution"
+group = "general"
+
+[categories.Thumbnails]
+safety = "safe"
+group = "general"
+
+[categories.BrokenLoginItems]
+safety = "safe"
+group = "general"
+
+[categories.AiAgents]
+safety = "caution"
+group = "developer"
+
+[categories.DevBuild]
+safety = "caution"
+group = "developer"
+
+[categories.DevWorktrees]
+safety = "danger"
+group = "developer"
+
+[categories.LocalSnapshots]
+safety = "caution"
+group = "developer"
+
+[categories.IosBackup]
+safety = "danger"
+group = "developer"
+
+# 内容是已卸载旧版本的配置/插件/缓存（当前版本的数据目录保留），
+# 但毕竟按版本永久删除，仍需用户确认。
+[categories.OldIdeData]
+safety = "caution"
+group = "developer"
+
+# 「未被使用」不等于「不再需要」：用户可能特意拉了基础镜像备
+# 用，且删除按镜像永久执行，必须由用户逐项勾选。
+[categories.DockerImages]
+safety = "caution"
+group = "developer"

@@ -1256,15 +1256,18 @@ mod tests {
         std::fs::remove_dir_all(env_path).unwrap();
     }
 
-    fn item(path: &str, cat: CategoryId, size: u64, files: u64) -> ScanItem {
+    fn item(
+        path: &str,
+        cat: CategoryId,
+        size: u64,
+        files: u64,
+        operation: crate::core::rules::Operation,
+        disposal: crate::core::cleaner::Disposal,
+    ) -> ScanItem {
         ScanItem {
             plans: Vec::new(),
-            operation: crate::core::rules::Operation::classify(
-                Path::new(path),
-                cat.removes_directory(),
-            )
-            .for_scanned_path(Path::new(path)),
-            disposal: cat.disposal(),
+            operation: operation.for_scanned_path(Path::new(path)),
+            disposal,
             rule: crate::core::rules::RuleRef::engine(),
             path: PathBuf::from(path),
             label: bilingual(|_| path.to_string()),
@@ -1280,13 +1283,19 @@ mod tests {
 
     /// 同 [`item`]，但带上一份真实的身份快照——用来测试
     /// `selected_targets()` 是否老老实实把它原样搬进了 `CleanTarget`。
-    fn item_with_identity(path: &Path, cat: CategoryId, size: u64, files: u64) -> ScanItem {
+    fn item_with_identity(
+        path: &Path,
+        cat: CategoryId,
+        size: u64,
+        files: u64,
+        operation: crate::core::rules::Operation,
+        disposal: crate::core::cleaner::Disposal,
+    ) -> ScanItem {
         let identity = crate::core::model::capture_identity(path);
         ScanItem {
             plans: Vec::new(),
-            operation: crate::core::rules::Operation::classify(path, cat.removes_directory())
-                .for_scanned_path(path),
-            disposal: cat.disposal(),
+            operation: operation.for_scanned_path(path),
+            disposal,
             rule: crate::core::rules::RuleRef::engine(),
             path: path.to_path_buf(),
             label: bilingual(|_| path.display().to_string()),
@@ -1320,15 +1329,36 @@ mod tests {
                     category: recommended,
                     total_size: 300,
                     items: vec![
-                        item(r"C:\rec\a", recommended, 100, 3),
-                        item(r"C:\rec\b", recommended, 200, 5),
+                        item(
+                            r"C:\rec\a",
+                            recommended,
+                            100,
+                            3,
+                            crate::core::rules::Operation::Contents,
+                            crate::core::cleaner::Disposal::Permanent,
+                        ),
+                        item(
+                            r"C:\rec\b",
+                            recommended,
+                            200,
+                            5,
+                            crate::core::rules::Operation::Contents,
+                            crate::core::cleaner::Disposal::Permanent,
+                        ),
                     ],
                     partial: false,
                 },
                 CategorySummary {
                     category: opt_in,
                     total_size: 50,
-                    items: vec![item(r"C:\opt\c", opt_in, 50, 1)],
+                    items: vec![item(
+                        r"C:\opt\c",
+                        opt_in,
+                        50,
+                        1,
+                        crate::core::rules::Operation::Contents,
+                        crate::core::cleaner::Disposal::Permanent,
+                    )],
                     partial: false,
                 },
             ],
@@ -1377,7 +1407,14 @@ mod tests {
     fn recommended_selection_is_per_item_within_one_category() {
         let mut j = junk_fixture();
         let cat = opt_in_cat(&j);
-        let mut safe_cache = item(r"C:\opt\safe-cache", cat, 25, 1);
+        let mut safe_cache = item(
+            r"C:\opt\safe-cache",
+            cat,
+            25,
+            1,
+            crate::core::rules::Operation::Contents,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         safe_cache.recommended = true;
         j.categories[1].items.push(safe_cache);
         j.categories[1].total_size += 25;
@@ -1484,25 +1521,34 @@ mod tests {
         assert!(!j.expanded.contains(&id));
     }
 
-    /// 目录的处置方式来自类目；单文件始终直接删除。
+    /// 处置方式来自扫描目标声明的 operation/disposal：整目录删除的目标
+    /// `remove_dir` 为真，清空内容的为假；不再按类目推断。
     #[test]
     fn selected_targets_carry_per_category_disposal() {
         let mut j = junk_fixture();
+        // 让其中一条目标带整目录删除的 operation，两侧分支都被覆盖。
+        {
+            let item = &mut j.categories[0].items[0];
+            item.operation = crate::core::rules::Operation::Tree;
+            *item = item.clone().freeze_plan();
+        }
         j.select_every();
 
         let targets = j.selected_targets();
         assert_eq!(targets.len(), 3);
         for t in &targets {
-            let cat = j
+            let item = j
                 .items()
                 .find(|i| i.path == t.path)
-                .expect("目标必须来自扫描结果")
-                .category;
-            assert_eq!(t.remove_dir, cat.removes_directory());
-            // 这个测试名一直写着 per_category_disposal，但在 disposal 通道
-            // 接上之前只断言得了 remove_dir。现在补齐名实。
-            assert_eq!(t.disposal, cat.disposal());
+                .expect("目标必须来自扫描结果");
+            assert_eq!(
+                t.remove_dir,
+                item.operation == crate::core::rules::Operation::Tree
+            );
+            assert_eq!(t.disposal, item.disposal);
         }
+        assert!(targets.iter().any(|t| t.remove_dir));
+        assert!(targets.iter().any(|t| !t.remove_dir));
     }
 
     #[test]
@@ -1535,9 +1581,23 @@ mod tests {
         let path = PathBuf::from(r"C:\shared\cache");
         let first = j.categories[0].category;
         let second = j.categories[1].category;
-        j.categories[0].items = vec![item(&path.to_string_lossy(), first, 10, 2)];
+        j.categories[0].items = vec![item(
+            &path.to_string_lossy(),
+            first,
+            10,
+            2,
+            crate::core::rules::Operation::Contents,
+            crate::core::cleaner::Disposal::Permanent,
+        )];
         j.categories[0].total_size = 10;
-        j.categories[1].items = vec![item(&path.to_string_lossy(), second, 10, 2)];
+        j.categories[1].items = vec![item(
+            &path.to_string_lossy(),
+            second,
+            10,
+            2,
+            crate::core::rules::Operation::Contents,
+            crate::core::cleaner::Disposal::Permanent,
+        )];
         j.categories[1].total_size = 10;
         j.select_every();
 
@@ -1556,13 +1616,27 @@ mod tests {
             CategorySummary {
                 category: CategoryId::UserCache,
                 total_size: 12,
-                items: vec![item_with_identity(&root, CategoryId::UserCache, 12, 1)],
+                items: vec![item_with_identity(
+                    &root,
+                    CategoryId::UserCache,
+                    12,
+                    1,
+                    crate::core::rules::Operation::Contents,
+                    crate::core::cleaner::Disposal::Permanent,
+                )],
                 partial: false,
             },
             CategorySummary {
                 category: CategoryId::DevBuild,
                 total_size: 12,
-                items: vec![item_with_identity(&root, CategoryId::DevBuild, 12, 1)],
+                items: vec![item_with_identity(
+                    &root,
+                    CategoryId::DevBuild,
+                    12,
+                    1,
+                    crate::core::rules::Operation::Tree,
+                    crate::core::cleaner::Disposal::Permanent,
+                )],
                 partial: false,
             },
         ];
@@ -1594,7 +1668,14 @@ mod tests {
         j.categories = vec![CategorySummary {
             category: CategoryId::UserTemp,
             total_size: 1,
-            items: vec![item_with_identity(&real, CategoryId::UserTemp, 1, 1)],
+            items: vec![item_with_identity(
+                &real,
+                CategoryId::UserTemp,
+                1,
+                1,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            )],
             partial: false,
         }];
         j.select_every();
@@ -1626,7 +1707,14 @@ mod tests {
     fn selected_plan_summary_lists_rules_and_blocked_reasons() {
         let real = crate::core::testing::file_path("qc_ui_plan_summary");
         std::fs::write(&real, b"x").unwrap();
-        let mut item = item_with_identity(&real, CategoryId::UserTemp, 1, 1);
+        let mut item = item_with_identity(
+            &real,
+            CategoryId::UserTemp,
+            1,
+            1,
+            crate::core::rules::Operation::Contents,
+            crate::core::cleaner::Disposal::Permanent,
+        );
         let mut plan = crate::core::rules::CleanupPlan::new(
             crate::core::rules::RuleRef::engine(),
             vec![crate::core::rules::PlannedTarget {
@@ -1667,7 +1755,14 @@ mod tests {
         j.categories = vec![CategorySummary {
             category: CategoryId::UserTemp,
             total_size: 1,
-            items: vec![item(&path.to_string_lossy(), CategoryId::UserTemp, 1, 1)],
+            items: vec![item(
+                &path.to_string_lossy(),
+                CategoryId::UserTemp,
+                1,
+                1,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            )],
             partial: false,
         }];
         j.select_every();
@@ -1710,7 +1805,14 @@ mod tests {
         j.categories = vec![CategorySummary {
             category: CategoryId::UserTemp,
             total_size: 1000,
-            items: vec![item(r"C:\temp", CategoryId::UserTemp, 1000, 10)],
+            items: vec![item(
+                r"C:\temp",
+                CategoryId::UserTemp,
+                1000,
+                10,
+                crate::core::rules::Operation::Contents,
+                crate::core::cleaner::Disposal::Permanent,
+            )],
             partial: false,
         }];
 

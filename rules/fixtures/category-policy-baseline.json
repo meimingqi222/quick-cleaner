@@ -1,0 +1,104 @@
+[
+  {
+    "id": "SystemTemp",
+    "safety": "caution",
+    "developer": false,
+    "default_selected": false
+  },
+  {
+    "id": "UserTemp",
+    "safety": "caution",
+    "developer": false,
+    "default_selected": false
+  },
+  {
+    "id": "UserCache",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "BrowserCache",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "PackageCache",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "UpdaterPackages",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "Logs",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "RecycleBin",
+    "safety": "caution",
+    "developer": false,
+    "default_selected": false
+  },
+  {
+    "id": "Thumbnails",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "BrokenLoginItems",
+    "safety": "safe",
+    "developer": false,
+    "default_selected": true
+  },
+  {
+    "id": "AiAgents",
+    "safety": "caution",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "DevBuild",
+    "safety": "caution",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "DevWorktrees",
+    "safety": "danger",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "LocalSnapshots",
+    "safety": "caution",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "IosBackup",
+    "safety": "danger",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "OldIdeData",
+    "safety": "caution",
+    "developer": true,
+    "default_selected": false
+  },
+  {
+    "id": "DockerImages",
+    "safety": "caution",
+    "developer": true,
+    "default_selected": false
+  }
+]

@@ -89,6 +89,8 @@ pub(super) fn push_updater_artifacts(t: &mut Vec<ScanTarget>, dir: &Path, stem: 
     for name in artifacts {
         let path = dir.join(&name);
         let stale = super::helpers::is_older_than(&path, stale_after());
+        // 更新包是暂存产物：留一个空的 `pending/` 或 `update.<随机串>/`
+        // 纯粹是垃圾，更新器下次自己重建——所以连目录一起删（Tree）。
         t.push(target_with_recommendation(
             path,
             Text::same(format!("{stem} · {name}")),
