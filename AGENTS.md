@@ -53,6 +53,13 @@ pre-commit 会对暂存文件自动打印命中提醒（不阻断）；CI 的 `a
 - 界面文案走 `ui/i18n.rs` 的 `tr_*`，不要在视图里写死中英串。
 - 注释只写非显然的约束，不要叙述实现步骤。
 
+## 规则 DSL 准入
+
+- 新增 `Selection` 变体，引入时至少要有 2 条 bundled 声明使用；只服务一个应用的逻辑留在 provider 里。确有理由单用的，写进 `SINGLE_USE_SELECTIONS` 并给出理由，由 `selection_kinds_meet_the_admission_bar` 检查。新增 leaf signature 或 `Operation` 变体按同一标准判断（测试只检查 signature 至少被用到一次，不数次数）。
+- 新 selection 必须在 `rules::claims::Claims::collect` 里显式决定认不认领（那里是穷尽 match）；新 `Operation` 变体必须补 `plan.rs` 上的属性方法（`removes_directory`/`covers_subtree`/`route` 等，穷尽 match）。
+- 把 provider 逻辑迁成规则时，先用**未改代码**生成迁移基线（`rules/fixtures/*-baseline.json`），迁移后逐行一致；基线不许为让测试通过而改，测试里不留写基线的开关。
+- 类别的安全等级与分组在 `engine.toml` 的 `[categories.*]`，文案在 `ui/i18n` 的 `tr_category_*`。
+
 ## 系统托盘内容开发边界
 
 - 托盘窗口统一使用 `gpui-app-host`（兄弟仓库 `../gpui-app-kit`）；本地 `src/ui/tray_host.rs` 只适配图标和本地化菜单。公共宿主负责开关、定位、焦点、Esc、失焦与销毁。

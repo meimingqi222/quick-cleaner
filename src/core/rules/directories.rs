@@ -108,6 +108,81 @@ pub enum Selection {
         containers: Vec<String>,
     },
 }
+impl Selection {
+    /// Serde 的 `kind` 名（snake_case）。穷尽 match：新增变体必须在这里
+    /// 登记，`SELECTION_KINDS` 与变体一一对应由测试保证。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Children { .. } => "children",
+            Self::ContainerDirectories { .. } => "container_directories",
+            Self::NamedFiles { .. } => "named_files",
+            Self::NamedDirectories { .. } => "named_directories",
+            Self::Files { .. } => "files",
+            Self::Path { .. } => "path",
+            Self::ManifestChildren { .. } => "manifest_children",
+            Self::OrphanedChildren { .. } => "orphaned_children",
+            Self::CatalogChildren { .. } => "catalog_children",
+            Self::LayoutChildren { .. } => "layout_children",
+            Self::SignatureLeaves { .. } => "signature_leaves",
+            Self::LinkedWorktrees { .. } => "linked_worktrees",
+        }
+    }
+}
+/// 全部 selection kind：与 `Selection` 变体一一对应，新增变体两处一起加。
+#[cfg(test)]
+pub(crate) const SELECTION_KINDS: &[&str] = &[
+    "children",
+    "container_directories",
+    "named_files",
+    "named_directories",
+    "files",
+    "path",
+    "manifest_children",
+    "orphaned_children",
+    "catalog_children",
+    "layout_children",
+    "signature_leaves",
+    "linked_worktrees",
+];
+/// 准入门槛的例外名单：被少于 2 条 bundled 声明使用的 kind 必须在这里
+/// 登记理由；条目过期（达到 2 次使用）即删。新增 selection 默认要 2 处
+/// 使用，只服务一个应用的逻辑留在 provider 里。
+#[cfg(test)]
+pub(crate) const SINGLE_USE_SELECTIONS: &[(&str, &str)] = &[
+    // `~/Library/Caches` 整棵树的归属分发骨架：catalog 决定类别与勾选，
+    // 叶子签名兜底未声明项——是 cache 规则的核心能力，但目前只有
+    // `home_cache` 一条声明。
+    (
+        "catalog_children",
+        "home_cache 的 catalog 分发 + 叶子签名兜底骨架；暂仅一条声明",
+    ),
+    // 精确文件名匹配（前缀+后缀）：agent_log_databases 用它把
+    // `logs/*.sqlite` 收成文件目标而不是整目录。
+    (
+        "files",
+        "agent_log_databases 的精确文件匹配（logs/*.sqlite 收文件目标）",
+    ),
+    // 按 JSON 清单挑子目录：`.obsolete` 记录已废弃的编辑器扩展，
+    // 清的是清单里仍存在的目录。
+    (
+        "manifest_children",
+        "obsolete_editor_extensions 按 .obsolete 清单挑废弃扩展目录",
+    ),
+    // 按名字 + 一层下探定位目录：Firefox `Profiles/<p>/cache2` 的
+    // profile 下探一层取同名缓存目录。
+    (
+        "named_directories",
+        "firefox_profile_caches 的 Profiles/<p>/cache2 按名定位",
+    ),
+    // 按名字定位散文件：.DS_Store 这类 Finder 元数据文件。
+    ("named_files", "finder_metadata 按名收 Finder 元数据文件"),
+    // 清单里记着本地路径、但路径已不存在的工作区：VS Code 系
+    // `workspace.json` 孤儿工作区。
+    (
+        "orphaned_children",
+        "orphaned_editor_workspaces 按 workspace.json 清孤儿工作区",
+    ),
+];
 /// Per-catalog target shape for `catalog_children`: where a matched child goes
 /// and whether it is preselected. The rule's own category/recommended stay the
 /// fallback for children no catalog claims.
@@ -2455,5 +2530,121 @@ mod tests {
         #[cfg(windows)]
         std::fs::remove_dir(&link).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `SELECTION_KINDS` 与 `Selection` 变体一一对应：每个变体各反序列化
+    /// 一个样例，断言 `kind()` 落在表里且表长 == 变体数。新增变体没登记
+    /// 会同时过不了样例断言与长度断言。
+    #[test]
+    fn selection_kind_names_cover_every_variant() {
+        let samples: Vec<Selection> = [
+            r#"kind = "children"
+directories_only = true
+prefixes = []"#,
+            r#"kind = "container_directories"
+paths = ["x"]
+exclude_name_policy = "p""#,
+            r#"kind = "named_files"
+name = "f"
+child_depth = 0"#,
+            r#"kind = "named_directories"
+name = "d"
+child_depth = 1"#,
+            r#"kind = "files"
+prefixes = ["a"]
+suffixes = ["b"]"#,
+            r#"kind = "path"
+directories_only = true"#,
+            r#"kind = "manifest_children"
+manifest = "m.json"
+selected_value = true"#,
+            r#"kind = "orphaned_children"
+manifest = "w.json"
+pointer = "/folder"
+uri_prefix = "file://"
+scope = "home""#,
+            r#"kind = "catalog_children"
+catalog_policy = { x = { category = "UserCache", recommended = true } }"#,
+            r#"kind = "layout_children"
+catalog = "c""#,
+            r#"kind = "signature_leaves"
+signature = "chromium""#,
+            r#"kind = "linked_worktrees"
+containers = []"#,
+        ]
+        .iter()
+        .map(|text| toml::from_str::<Selection>(text).unwrap())
+        .collect();
+        assert_eq!(samples.len(), SELECTION_KINDS.len());
+        for sample in &samples {
+            assert!(
+                SELECTION_KINDS.contains(&sample.kind()),
+                "{} not in SELECTION_KINDS",
+                sample.kind()
+            );
+        }
+    }
+
+    /// 规则 DSL 准入门槛（见 AGENTS.md「规则 DSL 准入」）：bundled 声明里
+    /// 每个 kind 至少用一次（无死能力）；单用 kind 必须在
+    /// `SINGLE_USE_SELECTIONS` 登记理由；过期条目同样被拒。叶子签名
+    /// 同样适用：每个签名至少被一处 signature_leaves 或
+    /// catalog_children 的 leaf_policy 使用。
+    #[test]
+    fn selection_kinds_meet_the_admission_bar() {
+        let snapshot = super::super::snapshot();
+        let mut counts: std::collections::BTreeMap<&str, usize> =
+            SELECTION_KINDS.iter().map(|kind| (*kind, 0)).collect();
+        let mut signatures: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for rule in &snapshot.bundle.rules {
+            for entry in &rule.directories {
+                *counts.entry(entry.select.kind()).or_insert(0) += 1;
+                match &entry.select {
+                    Selection::SignatureLeaves { signature } => {
+                        signatures.insert(signature.as_str());
+                    }
+                    Selection::CatalogChildren {
+                        leaf_policy: Some(policy),
+                        ..
+                    } => {
+                        signatures.insert(policy.signature.as_str());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (kind, count) in &counts {
+            assert!(
+                *count >= 1,
+                "selection kind {kind} is declared but never used by bundled rules"
+            );
+            if *count < 2 {
+                assert!(
+                    SINGLE_USE_SELECTIONS
+                        .iter()
+                        .any(|(single, _)| single == kind),
+                    "single-use kind {kind} must carry a reason in SINGLE_USE_SELECTIONS"
+                );
+            }
+        }
+        for (single, reason) in SINGLE_USE_SELECTIONS {
+            let count = counts
+                .get(single)
+                .unwrap_or_else(|| panic!("SINGLE_USE_SELECTIONS lists unknown kind {single}"));
+            assert!(
+                *count < 2,
+                "SINGLE_USE_SELECTIONS entry {single} is used {count} times — stale, remove it"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "SINGLE_USE_SELECTIONS entry {single} needs a reason"
+            );
+        }
+        for signature in LEAF_SIGNATURES {
+            assert!(
+                signatures.contains(signature),
+                "leaf signature {signature} is implemented but never used"
+            );
+        }
     }
 }
