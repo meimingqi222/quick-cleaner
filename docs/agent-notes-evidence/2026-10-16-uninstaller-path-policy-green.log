@@ -1,0 +1,10 @@
+Source: https://github.com/meimingqi222/quick-cleaner/actions/runs/38905831194
+Native policy-fix acceptance; Windows overall still fails separate descendant-readiness test.
+Test (macOS)	Run tests	2026-10-16T13:17:01.3308170Z test core::rules::tests::embedded_and_source_rules_have_identical_policy ... ok
+Test (macOS)	Run tests	2026-10-16T13:17:05.7103040Z test platform::macos::apps::tests::zoom_discovers_only_the_declared_confined_uninstaller ... ok
+Test (macOS)	Run tests	2026-10-16T13:18:35.8767270Z test result: ok. 811 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 131.71s
+Test (macOS)	Run tests	2026-10-16T13:18:35.9074450Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Test (macOS)	Run tests	2026-10-16T13:18:38.3034500Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Test (Windows)	Verify elevated ACL cleanup	2026-10-16T13:14:03.9105465Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 786 filtered out; finished in 0.13s
+Test (Windows)	Run tests	2026-10-16T13:16:17.4960727Z test core::rules::tests::embedded_and_source_rules_have_identical_policy ... ok
+Test (Windows)	Run tests	2026-10-16T13:18:34.9309702Z test result: FAILED. 777 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 183.26s

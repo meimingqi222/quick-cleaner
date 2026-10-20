@@ -816,6 +816,34 @@ pub fn tr_tray_purge_failed(lang: Language) -> &'static str {
     }
 }
 
+pub fn tr_tray_analyze_hint(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "分析",
+        Language::En => "Analyze",
+    }
+}
+
+pub fn tr_tray_view_processes(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "查看进程",
+        Language::En => "Processes",
+    }
+}
+
+pub fn tr_tray_quick_tools(lang: Language) -> &'static str {
+    match lang {
+        Language::Zh => "快捷功能",
+        Language::En => "Quick Tools",
+    }
+}
+
+pub fn tr_tray_volume_count(lang: Language, count: usize) -> String {
+    match lang {
+        Language::Zh => format!("({count} 卷)"),
+        Language::En => format!("({count} vols)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +906,10 @@ mod tests {
             tr_tray_disk_free(en, "100 GB"),
             tr_tray_mem_info(en, "16 GB", "32 GB", 50),
             tr_tray_cpu_info(en, 15, Some(45.0)),
+            tr_tray_analyze_hint(en).to_string(),
+            tr_tray_view_processes(en).to_string(),
+            tr_tray_quick_tools(en).to_string(),
+            tr_tray_volume_count(en, 4),
         ];
         for text in &samples {
             assert!(!has_cjk(text), "{text}");

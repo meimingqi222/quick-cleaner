@@ -51,6 +51,26 @@ but does not fix the ACL failure. The elevated fixture prints only state boolean
 counts and OS error codes on failure, without paths, SIDs or a machine log dump.
 The cleanup assertion stays a hard failure.
 
+2026-10-16 follow-up: serialization alone still did not establish descendant
+readiness. Run 38905831194 passed 777 Windows tests but failed this one assertion:
+the command returned None after 2.0096957 seconds, before the PowerShell fixture
+wrote its readiness marker. This proves the startup condition was not established,
+not precisely which PowerShell startup subsystem delayed it. Evidence:
+`docs/agent-notes-evidence/2026-10-16-windows-pipe-fixture-red.log`.
+
+`review_exited_parent_does_not_bypass_the_pipe_deadline` now re-enters the current
+native test executable as its cmd-started descendant. Only that exact test runs;
+a shim-local environment value selects the child branch and marker directory.
+It still holds inherited pipes, writes readiness, sleeps four seconds and attempts
+the delayed write. The parent test still requires real readiness, None at the same
+two-second deadline, return before three seconds and no delayed write. No retries,
+ignored tests, longer deadlines or production runner changes. The separate cmd/
+PowerShell tree-termination test retains coverage of an actual scripted tool.
+Native CI run 38907489652 passed the revised fixture and all 778 Windows tests
+(zero failures, nine pre-existing ignored tests). The elevated ACL step also passed.
+The same run passed all 811 macOS tests and the combined bound-anchor check:
+https://github.com/meimingqi222/quick-cleaner/actions/runs/38907489652 .
+
 Pitfalls P1-P47 reviewed: P6 elevated recovery, P20 owner failure handling,
 P23 hidden consoles, P40 command quoting, P43 bounded node-only ACL repair and
 P46 process-tree/pipe deadlines are preserved. No parsing, uninstall, residual

@@ -79,7 +79,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         quick_cleaner::platform::macos::set_dock_icon(cx);
 
-        let tray = TrayHost::new(340., 430.);
+        let tray = TrayHost::new(360., 560.);
         let tray_available = Arc::new(AtomicBool::new(false));
 
         let main_window_holder: Arc<Mutex<Option<WindowHandle<Root>>>> = Arc::new(Mutex::new(None));
@@ -171,21 +171,71 @@ fn main() {
             let open = open_main_window.clone();
             Arc::new(move |cx| tray.dismiss_then(open.clone(), cx))
         };
-        let scan = {
+        let action_dispatcher: quick_cleaner::ui::tray_overview::OverviewDispatcher = {
             let open = open_main_window.clone();
             let main = main_window_holder.clone();
-            Arc::new(move |cx: &mut App| {
-                open(cx);
-                let handle = *main.lock().unwrap();
-                if let Some(handle) = handle {
-                    let _ = handle.update(cx, |root, _, cx| {
-                        root.view = quick_cleaner::ui::shell::View::Junk;
-                        root.start_scan(cx);
-                    });
+            Arc::new(move |action, cx: &mut App| {
+                use quick_cleaner::ui::tray_overview::OverviewAction;
+                match action {
+                    OverviewAction::OpenMain => open(cx),
+                    OverviewAction::Quit => cx.quit(),
+                    OverviewAction::ScanJunk => {
+                        open(cx);
+                        let handle = *main.lock().unwrap();
+                        if let Some(handle) = handle {
+                            let _ = handle.update(cx, |root, _, cx| {
+                                root.view = quick_cleaner::ui::shell::View::Junk;
+                                root.start_scan(cx);
+                            });
+                        }
+                    }
+                    OverviewAction::OpenView(view) => {
+                        open(cx);
+                        let handle = *main.lock().unwrap();
+                        if let Some(handle) = handle {
+                            let _ = handle.update(cx, |root, _, cx| {
+                                root.view = view;
+                                match view {
+                                    quick_cleaner::ui::shell::View::Junk => root.start_scan(cx),
+                                    quick_cleaner::ui::shell::View::Apps => root.start_apps_scan(cx),
+                                    quick_cleaner::ui::shell::View::Disk => root.start_mft_scan(cx),
+                                    quick_cleaner::ui::shell::View::Status => root.start_status_monitor(cx),
+                                    quick_cleaner::ui::shell::View::Search => root.start_search_index(cx),
+                                    quick_cleaner::ui::shell::View::Declutter => root.start_declutter_scan(cx),
+                                    _ => {}
+                                }
+                            });
+                        }
+                    }
+                    OverviewAction::AnalyzeDisk(label) => {
+                        open(cx);
+                        let handle = *main.lock().unwrap();
+                        if let Some(handle) = handle {
+                            let _ = handle.update(cx, |root, _, cx| {
+                                root.view = quick_cleaner::ui::shell::View::Disk;
+                                #[cfg(windows)]
+                                {
+                                    if let Some(ch) = label.chars().next() {
+                                        if ch.is_ascii_alphabetic() {
+                                            let vol = quick_cleaner::core::disk::VolumeId::from_drive_letter(ch);
+                                            root.switch_disk_volume(vol, cx);
+                                        }
+                                    }
+                                }
+                                #[cfg(not(windows))]
+                                {
+                                    let vol = quick_cleaner::core::disk::VolumeId::from_mount_point(std::path::PathBuf::from(&label));
+                                    root.switch_disk_volume(vol, cx);
+                                }
+                                root.start_mft_scan(cx);
+                            });
+                        }
+                    }
+                    OverviewAction::ReleaseMemory => {}
                 }
             })
         };
-        let overview = OverviewController::new(open_main_window, scan);
+        let overview = OverviewController::new(action_dispatcher);
         let actions = overview.clone();
         let lang = quick_cleaner::core::settings::Settings::load().language;
         let available = tray.install(

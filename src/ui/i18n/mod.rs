@@ -50,8 +50,8 @@ use crate::core::i18n::Language;
 
 pub fn tr_manual_uninstall_required(lang: Language, name: &str) -> String {
     match lang {
-        Language::Zh => format!("「{name}」需要通过官方设置界面卸载。输入法请先在系统设置中移除输入源，再使用软件的卸载入口；完成后移除配套设置应用，避免再次安装，并刷新软件列表。"),
-        Language::En => format!("Uninstall \"{name}\" through its official settings. For an input method, first remove its input sources in System Settings, then use its uninstall action. Afterwards remove the companion settings app to prevent reinstallation and refresh the app list."),
+        Language::Zh => format!("「{name}」需要按官方文档使用卸载工具、软件内入口或指定的 Finder 流程；不能仅删除主应用。请先备份数据，完成服务/扩展移除及必要重启后刷新列表。输入法请先移除系统输入源，再使用官方卸载入口，并按官方说明移除配套设置应用，避免再次安装。"),
+        Language::En => format!("Remove \"{name}\" using the vendor's uninstaller, in-app action or required Finder procedure, not just main-app deletion. Back up data, finish service/extension removal and any required restart, then refresh the list. For input methods, remove system input sources first, use the official uninstall action, and remove companion settings apps as instructed to prevent reinstallation."),
     }
 }
 
@@ -3040,13 +3040,13 @@ pub fn tr_uninstall_confirm_body(lang: Language, app: &str, size: &str) -> Strin
     let macos = cfg!(target_os = "macos");
     match lang {
         Language::Zh if macos => format!(
-            "将把「{app}」{size} 移入废纸篓或调用自带卸载程序，完成后扫描卸载残留并由你确认清理。"
+            "将通过已核验的 Homebrew 卸载、自带卸载程序或废纸篓移除「{app}」{size}，完成后由你确认清理残留。不会自动执行 Homebrew zap；无法核验卸载范围时会停止。"
         ),
         Language::Zh => {
             format!("将启动「{app}」{size} 官方卸载程序，完成后扫描卸载残留并由你确认清理。")
         }
         Language::En if macos => format!(
-            "This will move \"{app}\"{size} to Trash or run its uninstaller, then scan leftovers for your review."
+            "Remove \"{app}\"{size} using verified Homebrew removal, its uninstaller or Trash, then review leftovers. Homebrew zap is never automatic; unverifiable removal scope stops the operation."
         ),
         Language::En => format!(
             "This will launch the official uninstaller for \"{app}\"{size}, then scan leftovers for your review."

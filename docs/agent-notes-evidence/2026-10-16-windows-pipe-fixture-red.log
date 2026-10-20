@@ -1,0 +1,6 @@
+Source: https://github.com/meimingqi222/quick-cleaner/actions/runs/38905831194/job/116989035465
+Real Windows CI readiness failure; production deadline unchanged.
+2026-10-16T13:18:34.9303280Z thread 'core::proc::tests::review_exited_parent_does_not_bypass_the_pipe_deadline' (6408) panicked at src\core\proc.rs:212:9:
+2026-10-16T13:18:34.9303673Z test must actually launch the descendant; elapsed=2.0096957s, result=None
+2026-10-16T13:18:34.9303895Z stack backtrace:
+2026-10-16T13:18:34.9309703Z test result: FAILED. 777 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 183.26s

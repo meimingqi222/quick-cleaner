@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Snapshots retain the toolchain and Cargo caches; never install on wake.
+# shellcheck source=/dev/null
+source "$HOME/.cargo/env"
+cargo +stable --version
+echo '[orb resume] Rust cache restored. Native application checks require macOS or Windows.'

@@ -183,6 +183,9 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
     add_crash_reporter_entries(&mut items, &library, app_name);
 
     // ---- 可能 ----
+    add_review_residuals(&mut items, &library, app, &bundle_ids);
+    add_native_messaging_manifests(&mut items, &library, app);
+    add_native_messaging_manifests(&mut items, roots.system_library, app);
     for id in &bundle_ids {
         add_named_entry(
             &mut items,
@@ -262,6 +265,135 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
         total_file_size,
         // 占位：真值由 `scan_residuals` 在文件扫描之外单独探测后覆盖。
         ..Default::default()
+    }
+}
+
+fn add_review_residuals(
+    items: &mut Vec<ResidualItem>,
+    library: &Path,
+    app: &InstalledApp,
+    bundle_ids: &[String],
+) {
+    for (key, match_name) in [("review_id_dirs", false), ("review_dirs", true)] {
+        for (relative, source) in residual_locations(key) {
+            let root = library.join(relative);
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let owned = bundle_ids.iter().any(|id| name.eq_ignore_ascii_case(id))
+                    || (match_name
+                        && is_safe_app_token(&app.name)
+                        && name.eq_ignore_ascii_case(&app.name));
+                if owned {
+                    add_review_path(items, library, entry.path(), source);
+                }
+            }
+        }
+    }
+    let snapshot = crate::core::rules::current();
+    for (key, rows) in &snapshot.definition("residual-macos").locations {
+        let (id, versioned) = if let Some(id) = key.strip_prefix("app:") {
+            (id, false)
+        } else if let Some(id) = key.strip_prefix("versioned:") {
+            (id, true)
+        } else {
+            continue;
+        };
+        if !valid_bundle_id(id) || !id.eq_ignore_ascii_case(&app.registry_subpath) {
+            continue;
+        }
+        for row in rows {
+            let path = library.join(&row.path);
+            if !versioned {
+                add_review_path(items, library, path, row.source);
+                continue;
+            }
+            let Some(parent) = path.parent() else {
+                continue;
+            };
+            let Some(prefix) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let prefix = prefix.to_ascii_lowercase();
+            let Ok(entries) = std::fs::read_dir(parent) else {
+                continue;
+            };
+            for entry in entries.take(4096).flatten() {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.strip_prefix(&prefix).is_some_and(|version| {
+                    version.split('.').all(|part| {
+                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                }) {
+                    add_review_path(items, library, entry.path(), row.source);
+                }
+            }
+        }
+    }
+}
+
+fn add_review_path(
+    items: &mut Vec<ResidualItem>,
+    library: &Path,
+    path: PathBuf,
+    source: ResidualSource,
+) {
+    // 共享父目录和重定向路径不能借精确名称获得删除授权。
+    if !crate::core::rules::facts::confined_path(library, &path).unwrap_or(false)
+        || crate::core::safety::is_protected_residual_path(&path)
+    {
+        return;
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+        return;
+    };
+    let kind = if metadata.is_dir() {
+        ResidualKind::Directory(path.clone(), super::apps::dir_size(&path))
+    } else if metadata.is_file() {
+        ResidualKind::File(path, metadata.len())
+    } else {
+        return;
+    };
+    items.push(ResidualItem::possible(kind, source));
+}
+
+fn add_native_messaging_manifests(
+    items: &mut Vec<ResidualItem>,
+    library: &Path,
+    app: &InstalledApp,
+) {
+    let Some(bundle) = app.install_location.as_deref() else {
+        return;
+    };
+    for (relative, source) in residual_locations("native_messaging_dirs") {
+        let Ok(entries) = std::fs::read_dir(library.join(relative)) else {
+            continue;
+        };
+        for entry in entries.take(4096).flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "json")
+                || !crate::core::rules::facts::confined_file(library, &path).unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(json) = crate::core::rules::facts::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            else {
+                continue;
+            };
+            let Some(executable) = json.get("path").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if crate::core::rules::facts::confined_file(bundle, Path::new(executable))
+                .unwrap_or(false)
+            {
+                add_review_path(items, library, path, source);
+            }
+        }
     }
 }
 
@@ -1401,7 +1533,9 @@ pub fn verify_residuals(items: Vec<ResidualItem>) -> Vec<ResidualItem> {
     items
         .into_iter()
         .filter(|it| match &it.kind {
-            ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => p.exists(),
+            ResidualKind::File(p, _) | ResidualKind::Directory(p, _) => {
+                !matches!(std::fs::symlink_metadata(p), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            }
             // 用户可能在两次扫描之间自己去系统设置关掉了扩展，不复查就会一直
             // 挂在残留列表里。查不到命令时保守保留，避免谎报已经清掉。
             ResidualKind::SystemExtension(_, bundle_id) => {
@@ -1496,6 +1630,265 @@ mod tests {
         let app = make_app("NonexistentApp12345", "com.nonexistent.app12345");
         let result = scan_residuals(&app);
         assert!(result.items.is_empty(), "不存在的应用不应有残留");
+    }
+
+    #[test]
+    fn uninstall_verification_keeps_unreadable_paths_and_dangling_links() {
+        let root = crate::core::testing::fixture("uninstall_unknown_paths");
+        std::fs::create_dir_all(&root).unwrap();
+        let loop_dir = root.join("loop");
+        std::os::unix::fs::symlink(&loop_dir, &loop_dir).unwrap();
+        let unknown = loop_dir.join("state");
+        let dangling = root.join("dangling");
+        let missing = root.join("missing");
+        std::os::unix::fs::symlink(&missing, &dangling).unwrap();
+        assert_ne!(
+            std::fs::symlink_metadata(&unknown).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let items = [&unknown, &dangling, &missing]
+            .into_iter()
+            .map(|path| {
+                ResidualItem::possible(ResidualKind::File(path.clone(), 12), ResidualSource::Other)
+            })
+            .collect();
+        let remaining = verify_residuals(items);
+        let paths: Vec<_> = remaining
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ResidualKind::File(path, _) => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths, [&unknown, &dangling]);
+        assert!(dangling.is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn webkit_residuals_require_exact_owner_and_manual_selection() {
+        let root = crate::core::testing::fixture("mole_webkit_residuals");
+        let home = root.join("home");
+        let webkit = home.join("Library/WebKit");
+        let owner = webkit.join("com.mitchellh.ghostty");
+        let other = webkit.join("com.mitchellh.another-app");
+        let lookalike = webkit.join("com.mitchellh.ghostty-other");
+        let name_only = webkit.join("Ghostty");
+        for path in [&owner, &other, &lookalike, &name_only] {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(path.join("website-data"), b"keep until selected").unwrap();
+        }
+        let app = make_app("Ghostty", "com.mitchellh.ghostty");
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &root.join("receipts"),
+                darwin_cache: None,
+                applications: &root.join("applications"),
+            },
+        );
+        assert_eq!(result.items.len(), 1, "{:?}", result.items);
+        assert!(matches!(
+            &result.items[0].kind,
+            ResidualKind::Directory(path, _) if path == &owner
+        ));
+        assert_eq!(result.items[0].source, ResidualSource::Other);
+        assert!(!result.items[0].confidence.is_certain());
+        assert!(result.default_selection().is_empty());
+        for path in [&owner, &other, &lookalike, &name_only] {
+            assert!(path.join("website-data").is_file());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uninstall_review_finds_nested_and_aliased_residuals_without_shared_parents() {
+        let root = crate::core::testing::fixture("mole_uninstall_review");
+        let home = root.join("home");
+        let library = home.join("Library");
+        let roots = ScanRoots {
+            home: &home,
+            system_library: &root.join("system-library"),
+            receipts: &root.join("receipts"),
+            darwin_cache: None,
+            applications: &root.join("applications"),
+        };
+        for (name, id, expected) in [
+            (
+                "Notion",
+                "notion.id",
+                vec!["Application Support/Caches/notion-updater"],
+            ),
+            (
+                "ImageOptim",
+                "net.pornel.ImageOptim",
+                vec!["Caches/ImageOptimResults.db"],
+            ),
+            (
+                "Toolbox",
+                "com.jetbrains.toolbox",
+                vec![
+                    "Application Support/JetBrains/Toolbox",
+                    "Caches/JetBrains/Toolbox",
+                    "Logs/JetBrains/Toolbox",
+                ],
+            ),
+            (
+                "Google Chrome",
+                "com.google.Chrome",
+                vec!["Application Support/Google/Chrome", "Caches/Google/Chrome"],
+            ),
+            (
+                "MEGAsync",
+                "mega.mac",
+                vec!["Application Support/Mega Limited/MEGAsync"],
+            ),
+            (
+                "Feishu",
+                "com.electron.lark",
+                vec!["Application Support/LarkShell", "Caches/LarkShell"],
+            ),
+            (
+                "Lark",
+                "com.larksuite.larkApp",
+                vec![
+                    "Application Support/LarkInternational",
+                    "Caches/LarkInternational",
+                ],
+            ),
+            (
+                "zoom.us",
+                "us.zoom.xos",
+                vec!["Preferences/ZoomChat.plist", "Logs/ZoomPhone"],
+            ),
+            (
+                "Firefox",
+                "org.mozilla.firefox",
+                vec!["Caches/Mozilla/updates/Applications/Firefox"],
+            ),
+            ("LyX", "org.lyx.lyx", vec!["Application Support/LyX-2.5"]),
+            (
+                "PyCharm",
+                "com.jetbrains.pycharm",
+                vec![
+                    "Application Support/JetBrains/PyCharm2026.1",
+                    "Application Support/JetBrains/PyCharm2025.2.4",
+                    "Caches/JetBrains/PyCharm2026.1",
+                    "Logs/JetBrains/PyCharm2026.1",
+                ],
+            ),
+            (
+                "Wispr Flow",
+                "com.electron.wispr-flow",
+                vec![
+                    "Application Support/Caches/Wispr Flow",
+                    "Caches/SentryCrash/Wispr Flow",
+                    "Caches/com.plausiblelabs.crashreporter.data/com.electron.wispr-flow",
+                ],
+            ),
+        ] {
+            for path in &expected {
+                let path = library.join(path);
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext == "db" || ext == "plist")
+                {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, b"state").unwrap();
+                } else {
+                    std::fs::create_dir_all(path).unwrap();
+                }
+            }
+            let unrelated = library.join("Application Support/Caches/unrelated");
+            std::fs::create_dir_all(&unrelated).unwrap();
+            for path in [
+                "Application Support/Google/Chrome Beta",
+                "Application Support/JetBrains/PyCharmCE2026.1",
+                "Application Support/JetBrains/PyCharm2026.1-other",
+                "Application Support/JetBrains/IntelliJIdea2026.1",
+            ] {
+                std::fs::create_dir_all(library.join(path)).unwrap();
+            }
+            let result = scan_residuals_in(&make_app(name, id), &roots);
+            let actual: Vec<_> = result
+                .items
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    ResidualKind::File(path, _) | ResidualKind::Directory(path, _) => Some(path),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(actual.len(), expected.len(), "{name}: {actual:?}");
+            for path in expected {
+                assert!(actual.contains(&&library.join(path)), "{name}: {actual:?}");
+            }
+            assert!(result.default_selection().is_empty(), "{name}");
+            assert!(!actual.contains(&&unrelated));
+            let wrong = scan_residuals_in(&make_app(name, "com.other.unrelated"), &roots);
+            // 显示名相同不能触发 ID 绑定的异名路径。
+            if name != "Wispr Flow" {
+                assert!(wrong.items.is_empty(), "{name}: {:?}", wrong.items);
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uninstall_browser_manifests_require_an_executable_inside_the_app_bundle() {
+        let root = crate::core::testing::fixture("mole_browser_hosts");
+        let home = root.join("home");
+        let library = home.join("Library");
+        let hosts = library.join("Application Support/Google/Chrome/NativeMessagingHosts");
+        let bundle = root.join("applications/Notion.app");
+        let executable = bundle.join("Contents/MacOS/browser-host");
+        let other = root.join("applications/NotionOther.app/Contents/MacOS/browser-host");
+        std::fs::create_dir_all(&hosts).unwrap();
+        for path in [&executable, &other] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"executable").unwrap();
+        }
+        for (file, path) in [
+            ("com.notion.meeting_notes.json", &executable),
+            ("com.notion.meeting_notes.v2.json", &other),
+            (
+                "unrelated.json",
+                &bundle.join("../NotionOther.app/Contents/MacOS/browser-host"),
+            ),
+        ] {
+            std::fs::write(
+                hosts.join(file),
+                serde_json::to_vec(&serde_json::json!({
+                    "name": "com.notion.meeting_notes",
+                    "path": path,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let redirected = hosts.join("redirected.json");
+        std::os::unix::fs::symlink(hosts.join("com.notion.meeting_notes.json"), &redirected)
+            .unwrap();
+        let mut app = make_app("Notion", "notion.id");
+        app.install_location = Some(bundle);
+        let result = scan_residuals_in(
+            &app,
+            &ScanRoots {
+                home: &home,
+                system_library: &root.join("system-library"),
+                receipts: &root.join("receipts"),
+                darwin_cache: None,
+                applications: &root.join("applications"),
+            },
+        );
+        assert_eq!(result.items.len(), 1, "{:?}", result.items);
+        assert!(matches!(&result.items[0].kind,
+            ResidualKind::File(path, _) if path == &hosts.join("com.notion.meeting_notes.json")));
+        assert!(result.default_selection().is_empty());
+        assert!(other.is_file());
+        assert!(redirected.is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

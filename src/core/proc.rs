@@ -195,13 +195,20 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn review_exited_parent_does_not_bypass_the_pipe_deadline() {
+        // Re-enter only this test in the descendant, without CLR/PowerShell startup.
+        if let Some(dir) = std::env::var_os("QC_PIPE_DEADLINE_DESCENDANT") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::write(dir.join("started.txt"), b"started").unwrap();
+            std::thread::sleep(Duration::from_secs(4));
+            std::fs::write(dir.join("finished.txt"), b"still running").unwrap();
+            return;
+        }
         let dir = crate::core::testing::fixture("qc_review_exited_parent");
         let shim = dir.join("probe.cmd");
-        let script = dir.join("child.ps1");
         let ready = dir.join("started.txt");
         let marker = dir.join("finished.txt");
-        std::fs::write(&script, format!("[IO.File]::WriteAllText('{}', 'started'); Start-Sleep -Seconds 4; [IO.File]::WriteAllText('{}', 'still running')", ready.display(), marker.display())).unwrap();
-        std::fs::write(&shim, format!("@echo off\r\nstart /b \"\" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"\r\nexit /b 0\r\n", script.display())).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        std::fs::write(&shim, format!("@echo off\r\nset \"QC_PIPE_DEADLINE_DESCENDANT={}\"\r\nstart /b \"\" \"{}\" --exact core::proc::tests::review_exited_parent_does_not_bypass_the_pipe_deadline --nocapture\r\nexit /b 0\r\n", dir.display(), exe.display())).unwrap();
         let start = Instant::now();
         let run = run_tool_with_timeout(&shim.to_string_lossy(), &[], Duration::from_secs(2));
         let elapsed = start.elapsed();
@@ -209,7 +216,15 @@ mod tests {
         let started = ready.exists();
         let mutated = marker.exists();
         let _ = std::fs::remove_dir_all(dir);
-        assert!(started, "test must actually launch the descendant");
+        assert!(
+            started,
+            "test must actually launch the descendant; elapsed={elapsed:?}, result={:?}",
+            run.as_ref().map(|out| (
+                out.exit_code,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        );
         assert!(run.is_none(), "EOF is required as well as parent exit");
         assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
         assert!(!mutated);

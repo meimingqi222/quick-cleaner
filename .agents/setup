@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+kit_root="$(dirname "$repo_root")/gpui-app-kit"
+kit_url="https://github.com/meimingqi222/gpui-app-kit.git"
+SECONDS=0
+echo '[orb setup] Checking Debian tools'
+packages=(build-essential ca-certificates curl git libssl-dev pkg-config python3 shellcheck)
+missing=()
+for package in "${packages[@]}"; do
+    if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
+        missing+=("$package")
+    fi
+done
+if ((${#missing[@]})); then
+    sudo apt-get update -qq
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+
+echo "[orb setup ${SECONDS}s] Preparing Rust stable (same channel as CI)"
+if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+fi
+# The installer cannot change this process's PATH.
+# shellcheck source=/dev/null
+source "$HOME/.cargo/env"
+rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+if ! grep -Fqx '# QuickCleaner orb Rust toolchain' "$HOME/.bash_profile" 2>/dev/null; then
+    cat >> "$HOME/.bash_profile" <<'PROFILE'
+
+# QuickCleaner orb Rust toolchain
+if [ -f "$HOME/.cargo/env" ]; then
+    . "$HOME/.cargo/env"
+fi
+PROFILE
+fi
+
+kit_revision="$(python3 - "$repo_root/Cargo.toml" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+manifest = tomllib.loads(Path(sys.argv[1]).read_text())
+revision = manifest['dependencies']['gpui-app-host']['rev']
+if not re.fullmatch(r'[0-9a-f]{40}', revision):
+    raise SystemExit('gpui-app-host must pin a full Git commit')
+print(revision)
+PY
+)"
+
+# Never use a developer's gh login during shared snapshot setup, nor persist a header.
+with_kit_auth() (
+    export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false
+    index="${GIT_CONFIG_COUNT:-0}"
+    export GIT_CONFIG_COUNT="$((index + 1))"
+    export "GIT_CONFIG_KEY_${index}=credential.helper"
+    export "GIT_CONFIG_VALUE_${index}="
+    if [[ -n "${GPUI_APP_KIT_TOKEN:-}" ]]; then
+        export GIT_CONFIG_COUNT="$((index + 2))"
+        export "GIT_CONFIG_KEY_$((index + 1))=http.${kit_url}.extraheader"
+        export "GIT_CONFIG_VALUE_$((index + 1))=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GPUI_APP_KIT_TOKEN" | base64 -w0)"
+    fi
+    if "$@"; then
+        exit 0
+    else
+        result=$?
+        echo 'If private Git access failed, set project secret GPUI_APP_KIT_TOKEN with read-only gpui-app-kit access; setup has no personal GitHub login.' >&2
+        exit "$result"
+    fi
+)
+
+echo "[orb setup ${SECONDS}s] Preparing pinned shared-library checkout"
+if [[ ! -e "$kit_root" ]]; then
+    with_kit_auth git clone --filter=blob:none "$kit_url" "$kit_root"
+fi
+if [[ "$(git -C "$kit_root" rev-parse HEAD)" != "$kit_revision" ]]; then
+    if [[ -n "$(git -C "$kit_root" status --porcelain)" ]]; then
+        echo 'Shared-library checkout has local changes; refusing to replace it.' >&2
+        exit 1
+    fi
+    if ! git -C "$kit_root" cat-file -e "${kit_revision}^{commit}" 2>/dev/null; then
+        with_kit_auth git -C "$kit_root" fetch origin "$kit_revision"
+    fi
+    with_kit_auth git -C "$kit_root" checkout --detach "$kit_revision"
+fi
+python3 "$kit_root/tools/check_revision.py" "$repo_root/Cargo.toml"
+
+echo "[orb setup ${SECONDS}s] Warming locked macOS/Windows dependency caches"
+targets=(--target aarch64-apple-darwin --target x86_64-apple-darwin --target x86_64-pc-windows-msvc)
+if ! cargo +stable fetch --manifest-path "$repo_root/Cargo.toml" --locked --offline "${targets[@]}"; then
+    CARGO_NET_GIT_FETCH_WITH_CLI=true with_kit_auth cargo +stable fetch --manifest-path "$repo_root/Cargo.toml" --locked "${targets[@]}"
+fi
+echo "[orb setup ${SECONDS}s] Ready for formatting and Python guards. Native build/test/run requires macOS or Windows; Linux has no platform implementation."

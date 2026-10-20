@@ -152,7 +152,12 @@ fn render_ports_badge(ports: &[u16]) -> Option<Div> {
     if ports.is_empty() {
         return None;
     }
-    let mut badges = div().flex().items_center().gap_1();
+    let mut badges = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .debug_selector(|| format!("process-ports-{}", ports[0]));
     for &p in ports.iter().take(2) {
         badges = badges.child(
             Badge::new(format!(":{p}"))
@@ -276,6 +281,7 @@ fn render_process_row(
                         .gap_1p5()
                         .min_w(px(0.))
                         .flex_1()
+                        .overflow_hidden()
                         .child(
                             // 展开/折叠箭头
                             div()
@@ -312,6 +318,8 @@ fn render_process_row(
                                 .gap_1p5()
                                 .child(
                                     div()
+                                        .min_w(px(0.))
+                                        .truncate()
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(rgb(TEXT))
@@ -319,6 +327,7 @@ fn render_process_row(
                                 )
                                 .child(
                                     div()
+                                        .flex_none()
                                         .px_1p5()
                                         .py(px(0.5))
                                         .rounded_md()
@@ -409,6 +418,7 @@ fn render_process_row(
                         .gap_1p5()
                         .min_w(px(0.))
                         .flex_1()
+                        .overflow_hidden()
                         .child(
                             // 缩进短线指示
                             div()
@@ -439,6 +449,8 @@ fn render_process_row(
                                 .gap_1p5()
                                 .child(
                                     div()
+                                        .min_w(px(0.))
+                                        .truncate()
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::NORMAL)
                                         .text_color(rgb(TEXT))
@@ -447,7 +459,10 @@ fn render_process_row(
                                 .children(ports_badge),
                         ),
                 )
-                .child(cpu_cell(proc.cpu, PROC_CPU_COL_W))
+                .child(
+                    cpu_cell(proc.cpu, PROC_CPU_COL_W)
+                        .debug_selector(|| "process-cpu-cell".into()),
+                )
                 .child(
                     div()
                         .w(px(PROC_MEM_COL_W))
@@ -526,6 +541,7 @@ fn render_process_row(
                         .gap_1p5()
                         .min_w(px(0.))
                         .flex_1()
+                        .overflow_hidden()
                         .child(div().w(px(16.)).flex_none()) // 对齐占位
                         .child(process_icon_from_source(
                             proc.icon_source.as_deref(),
@@ -541,6 +557,8 @@ fn render_process_row(
                                 .gap_1p5()
                                 .child(
                                     div()
+                                        .min_w(px(0.))
+                                        .truncate()
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(TEXT))
@@ -1014,4 +1032,81 @@ fn render_proc_detail_drawer(
                     )
                 }),
         )
+}
+
+#[cfg(test)]
+mod process_layout_tests {
+    use super::*;
+    use gpui::{AppContext, Entity, Render, TestAppContext};
+
+    struct ProcessTableFixture {
+        root: Entity<Root>,
+    }
+
+    impl Render for ProcessTableFixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.root.update(cx, |root, cx| {
+                let snap = root.monitor.snapshot.clone().unwrap();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(render_process_table(root, &snap, window, cx))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn process_ports_stay_before_cpu_with_detail_open_and_closed(cx: &mut TestAppContext) {
+        let (fixture, visual) = cx.add_window_view(|_, cx| ProcessTableFixture {
+            root: cx.new(|cx| {
+                let mut root = Root::new(cx);
+                let single = crate::core::status::ProcInfo {
+                    pid: 1,
+                    name: "AppleMobileDeviceService.exe".into(),
+                    ports: vec![10245, 10250, 10251, 10252, 10253],
+                    ..Default::default()
+                };
+                let child = crate::core::status::ProcInfo {
+                    pid: 2,
+                    name: "LongGroupedBackgroundService.exe".into(),
+                    ports: vec![5353, 5354, 5355, 5356],
+                    ..Default::default()
+                };
+                let mut sibling = child.clone();
+                sibling.pid = 3;
+                sibling.ports.clear();
+                root.monitor.expanded_groups.insert(child.name.to_lowercase());
+                root.monitor.snapshot = Some(StatusSnapshot {
+                    processes: vec![single, child, sibling],
+                    process_count: 3,
+                    ..Default::default()
+                });
+                root.rebuild_proc_view();
+                root
+            }),
+        });
+
+        for width in [1320., 1000.] {
+            for selected_pid in [None, Some(1)] {
+                fixture.update(visual, |fixture, cx| {
+                    fixture.root.update(cx, |root, _| {
+                        root.monitor.selected_proc_pid = selected_pid;
+                    });
+                    cx.notify();
+                });
+                visual.simulate_resize(gpui::size(px(width), px(700.)));
+                visual.run_until_parked();
+                let cpu = visual.debug_bounds("process-cpu-cell").unwrap();
+                for selector in ["process-ports-10245", "process-ports-5353"] {
+                    let ports = visual.debug_bounds(selector).unwrap();
+                    assert!(ports.size.width > px(0.));
+                    assert!(
+                        ports.right() <= cpu.left(),
+                        "{selector} overlaps CPU: width={width}, selected={selected_pid:?}, ports={ports:?}, cpu={cpu:?}"
+                    );
+                }
+            }
+        }
+    }
 }
