@@ -43,7 +43,7 @@ func main() {
 		s.Scanning = true
 	case "empty":
 		s.Scanned, s.AppsScanned = true, true
-	case "found", "cleaning":
+	case "found", "cleaning", "uninstalling":
 		s.Scanned, s.HasJunk, s.AppsScanned = true, true, true
 		s.Cleanable, s.Categories, s.AppCount = "1.25 GB", 3, 17
 		s.Cleaning = *state == "cleaning"
@@ -71,6 +71,9 @@ func main() {
 		envs, envActions := devEnvFixture(s)
 		if *dev {
 			apps.Tab = appui.AppsPageDevEnvironments
+		}
+		if *state == "uninstalling" {
+			apps.Uninstalling, apps.UninstallAppName, apps.UninstallPhase = true, "Example Editor 1.2.3", appui.AppsPageRemoving
 		}
 		appsActions.SetTab = func(tab appui.AppsPageTab) { apps.Tab = tab }
 		appsActions.RenderDevEnvironments = func(c *ui.Context) { envs.RenderContent(c, envActions) }

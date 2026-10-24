@@ -95,6 +95,9 @@ type AppsPageActions struct {
 	CloseResiduals, CleanSelectedResiduals, OpenSystemExtensionSettings func()
 }
 
+// uninstallProgress mirrors the Rust uninstall page: the apps view is replaced by
+// a full-size card holding a 560px centred column, an app badge, the phase meter
+// and one row per stage.
 func (s AppsPage) uninstallProgress(c *ui.Context, t appsPageCopy) {
 	phase := int(s.UninstallPhase)
 	if phase >= len(t.phases) {
@@ -105,38 +108,47 @@ func (s AppsPage) uninstallProgress(c *ui.Context, t appsPageCopy) {
 		title = fmt.Sprintf("Uninstalling \"%s\"", s.UninstallAppName)
 	}
 	ratio := []float32{0.24, 0.64, 0.92}[phase]
-	ui.Column(c.Key("apps-uninstall-progress")).Grow(1).FillWidth().Center().Gap(20).Children(func() {
-		ui.Text(c, title).FontSize(20).Bold()
-		ui.Text(c, t.phases[phase]).FontSize(14).TextColor(muted)
-		ui.Box(c).Width(420).Height(8).Radius(999).Clip().Background(surfaceHighest).Children(func() {
-			ui.Box(c).Height(8).Width(ratio * 420).Radius(999).Background(primary)
+	ui.Column(c.Key("apps-uninstall-progress")).Fill().FillWidth().Background(card).Padding(40).Center().Children(func() {
+		ui.Column(c).Width(560).Center().Gap(20).Children(func() {
+			ui.Box(c).Size(64, 64).Shrink(0).Radius(16).Background(primaryFixed).Border(1, primary.Alpha(.4)).Center().Children(func() {
+				icon(c, Apps, primary, 28)
+			})
+			ui.Column(c).Center().Gap(8).Children(func() {
+				ui.Text(c, title).FontSize(24).Bold().TextColor(text)
+				ui.Text(c, t.phases[phase]).FontSize(14).TextColor(muted)
+			})
+			ui.Box(c).Width(420).Height(6).Radius(999).Clip().Background(surfaceHighest).Children(func() {
+				ui.Box(c).Height(6).Width(ratio * 420).Radius(999).Background(primary)
+			})
+			ui.Column(c).Width(420).Padding(8, 0).Children(func() {
+				for i, label := range t.stages {
+					fg := outline
+					if i <= phase {
+						fg = text
+					}
+					row := ui.Row(c).FillWidth().Height(36).Gap(12)
+					if i == phase {
+						row.Children(func() {
+							loadingSpinner(c, 24)
+							ui.Text(c, label).FontSize(14).Bold().TextColor(fg)
+						})
+					} else if i < phase {
+						row.Children(func() {
+							ui.Box(c).Size(24, 24).Radius(999).Background(primary).Center().Children(func() {
+								ui.Text(c, "✓").FontSize(12).TextColor(card)
+							})
+							ui.Text(c, label).FontSize(14).TextColor(fg)
+						})
+					} else {
+						row.Children(func() {
+							ui.Box(c).Size(24, 24).Radius(999).Border(1, outlineVariant)
+							ui.Text(c, label).FontSize(14).TextColor(fg)
+						})
+					}
+				}
+			})
+			ui.Text(c, t.keepOpen).FontSize(12).TextColor(outline)
 		})
-		for i, label := range t.stages {
-			fg := outline
-			if i <= phase {
-				fg = text
-			}
-			row := ui.Row(c).Width(420).Height(36).Gap(12)
-			if i == phase {
-				row.Children(func() {
-					loadingSpinner(c, 24)
-					ui.Text(c, label).FontSize(14).Bold().TextColor(fg)
-				})
-			} else if i < phase {
-				row.Children(func() {
-					ui.Box(c).Size(24, 24).Radius(999).Background(primary).Center().Children(func() {
-						ui.Text(c, "✓").FontSize(12).TextColor(card)
-					})
-					ui.Text(c, label).FontSize(14).TextColor(fg)
-				})
-			} else {
-				row.Children(func() {
-					ui.Box(c).Size(24, 24).Radius(999).Border(1, outlineVariant)
-					ui.Text(c, label).FontSize(14).TextColor(fg)
-				})
-			}
-		}
-		ui.Text(c, t.keepOpen).FontSize(12).TextColor(outline)
 	})
 }
 
@@ -150,6 +162,14 @@ func (s AppsPage) busy() bool {
 func (s AppsPage) RenderContent(c *ui.Context, actions AppsPageActions) {
 	c.SetTheme(theme())
 	t := appsPageStrings(s.Language)
+	if s.Uninstalling {
+		// Rust replaces the whole apps view with the uninstall page. Keeping the
+		// tabs, stat cards and list behind it painted them through the progress.
+		ui.Column(c.Key("apps-page")).Fill().MinWidth(0).MinHeight(0).Gap(0).Background(card).TextColor(text).Children(func() {
+			s.uninstallProgress(c, t)
+		})
+		return
+	}
 	ui.Column(c.Key("apps-page")).Fill().MinWidth(0).MinHeight(0).Gap(0).Background(card).TextColor(text).Children(func() {
 		ui.Column(c).Grow(1).MinHeight(0).FillWidth().Padding(20).Gap(16).Children(func() {
 			ui.Row(c).FillWidth().Gap(16).Children(func() {
@@ -178,9 +198,6 @@ func (s AppsPage) RenderContent(c *ui.Context, actions AppsPageActions) {
 			}
 			if notice := s.Notice.Get(s.Language); notice != "" {
 				ui.Text(c, notice).FillWidth().FontSize(12).Padding(12).Radius(8).Background(cautionContainer).TextColor(caution)
-			}
-			if s.Uninstalling {
-				s.uninstallProgress(c, t)
 			}
 			ui.Row(c).FillWidth().Gap(16).Children(func() {
 				values := []string{s.TotalSize, fmt.Sprintf(t.count, len(s.Apps)), fmt.Sprintf(t.count, s.StaleCount)}

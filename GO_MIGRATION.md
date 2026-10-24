@@ -48,7 +48,7 @@ go run ./cmd/ui-gallery --state=found --dialog=permission --macos
 go run ./cmd/ui-gallery --page=search --state=found --output=search.png
 ```
 
-Gallery states: `idle`, `scanning`, `empty`, `found`, `cleaning`. Declutter tabs:
+Gallery states: `idle`, `scanning`, `empty`, `found`, `cleaning`, `uninstalling`. Declutter tabs:
 `overview`, `photos`, `duplicates`, `large`, `downloads`. Dialog fixtures:
 `confirm`, `release`, `uninstall`, `permission`, `update`, `downloading`, `ready`,
 `error`. `--macos` is a presentation fixture, not a permission probe. PNG output

@@ -986,3 +986,12 @@ Note: `2026-10-25-shortcut-83-name.md`
 - **根因**：`t.TempDir()` 返回 `MEIMIN~1` 形式的短名（本机 `D:\code\QUICK-~1\...`），而 `IShellLink::GetPath` 与 `CanonicalAppPath`（`GetFinalPathNameByHandle`）返回长名，`strings.EqualFold` 比较两者永远不等。
 - **防护**：测试改用 `sameAppPath`，两侧都过 `CanonicalAppPath` 后再比，取不到 canonical 形式时退回字面比较；`8.3 short path` 子用例用 `windows.GetShortPathName` 显式构造短名场景。回归见 Note。
 - **禁止回退**：不能把 `sameAppPath` 改回直接 `strings.EqualFold` 比较原路径；不能因为 CI 不红就删掉 `8.3 short path` 子用例；不能改 `CanonicalAppPath` 去返回短名形式（会把卷设置泄漏进应用清单匹配）。
+
+## P80 卸载进行中必须整页替换应用视图
+
+Note: `2026-10-25-uninstall-page-replaces-apps-view.md`
+
+- **症状**：卸载应用时进度页像是浮在列表上，底下卡片、标签页与统计从它后面透出来，和 Rust 的卸载过程页完全不是一个东西。
+- **根因**：Go 端把 `uninstallProgress` 插在应用页面列里、其余内容照常渲染；Rust 是整页替换（`View::Apps if self.residual.uninstall.is_some() => render_uninstall_progress(self)`），且卸载页自带 CARD 背景与 40px 内边距。
+- **防护**：`AppsPage.RenderContent` 在 `Uninstalling` 时只渲染卸载页并早退；布局对齐 Rust（560px 居中列、64px 应用徽章、6px 进度条、36px 阶段行、keep-open 脚注）。回归见 Note。
+- **禁止回退**：不能把卸载页改回与列表同页渲染（会重新出现透底和卸载中仍可点的列表按钮）；不能去掉整页 CARD 背景或 40px 内边距；不能把进度条改回 8px。

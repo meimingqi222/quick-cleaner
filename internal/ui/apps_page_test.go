@@ -101,6 +101,21 @@ func TestAppsPageBusyAndNativeCapabilities(t *testing.T) {
 			u, r := 0, 0
 			a := AppsPageActions{RequestUninstall: func(string) { u++ }, ScanResiduals: func(string) { r++ }}
 			tt := ui.NewTester(func(c *ui.Context) { s.RenderContent(c, a) }, 1280, 800)
+			if state == "verifying" {
+				// Rust 在卸载进行中把整个应用视图换成卸载页（render_uninstall_progress），
+				// 阶段文案在，列表、标签页与统计卡片都不能还画在底下。
+				for _, label := range []string{"Verifying the uninstall result", "Analyze associated files", "Remove application", "Verify remaining files", "Keep QuickCleaner open until the uninstall completes"} {
+					if !tt.HasText(label) {
+						t.Fatalf("missing uninstall stage %q: %v", label, tt.Texts())
+					}
+				}
+				for _, gone := range []string{"Force Clean", "Total Estimated Size", "Dev Environments"} {
+					if tt.HasText(gone) {
+						t.Fatalf("apps page still painted behind the uninstall page: %q", gone)
+					}
+				}
+				return
+			}
 			if err := tt.Click("Uninstall"); err != nil {
 				t.Fatal(err)
 			}
@@ -133,13 +148,6 @@ func TestAppsPageBusyAndNativeCapabilities(t *testing.T) {
 			}
 			if r != want {
 				t.Fatalf("residual count=%d want=%d", r, want)
-			}
-			if state == "verifying" {
-				for _, label := range []string{"Verifying the uninstall result", "Analyze associated files", "Remove application", "Verify remaining files"} {
-					if !tt.HasText(label) {
-						t.Fatalf("missing uninstall stage %q: %v", label, tt.Texts())
-					}
-				}
 			}
 		})
 	}

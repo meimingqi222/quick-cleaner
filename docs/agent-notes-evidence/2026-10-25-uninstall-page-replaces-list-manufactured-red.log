@@ -1,0 +1,9 @@
+== manufactured red: 还原修复前形状（卸载页与列表同页渲染），只跑 focused ==
+$ go test -count=1 -run TestAppsPageBusyAndNativeCapabilities ./internal/ui
+--- FAIL: TestAppsPageBusyAndNativeCapabilities (0.06s)
+    --- FAIL: TestAppsPageBusyAndNativeCapabilities/verifying (0.01s)
+        apps_page_test.go:114: apps page still painted behind the uninstall page: "Force Clean"
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.349s
+FAIL
+exit=1
