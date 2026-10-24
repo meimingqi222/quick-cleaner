@@ -1,0 +1,12 @@
+== restored: 版本号不再阻断短目录名匹配 ==
+$ go test -count=1 -run 'TestVersionedDisplayNameStillMatchesShortAppDataFolder|TestResidualShortNameDropsTrailingVersion' ./internal/core -v
+=== RUN   TestVersionedDisplayNameStillMatchesShortAppDataFolder
+--- PASS: TestVersionedDisplayNameStillMatchesShortAppDataFolder (0.00s)
+=== RUN   TestResidualShortNameDropsTrailingVersion
+--- PASS: TestResidualShortNameDropsTrailingVersion (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.180s
+exit=0
+$ go test -count=1 ./internal/core
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	52.164s
+exit=0

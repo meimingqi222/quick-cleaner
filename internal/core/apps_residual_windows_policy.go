@@ -31,8 +31,54 @@ type windowsResidualRoots struct {
 }
 type windowsResidualContext struct {
 	name, token, publisher, install string
-	exes                            []string
-	snapshot                        *RuleSnapshot
+	// shortToken is the display name with a trailing version removed, when that
+	// differs from token; the half-length rule in matches needs it.
+	shortToken string
+	exes       []string
+	snapshot   *RuleSnapshot
+}
+
+// windowsResidualShortName drops a trailing version from a display name.
+//
+// Windows installers commonly put the version in DisplayName ("MiniMax Code
+// 3.0.74"), which lengthens the name enough that matches rejects the "MiniMax"
+// folder the app leaves behind in %APPDATA%. Names whose remainder is too short
+// or too generic keep their full form, so nothing is matched on "App".
+func windowsResidualShortName(name string) string {
+	fields := strings.Fields(name)
+	for len(fields) > 1 {
+		last := fields[len(fields)-1]
+		if len(last) > 1 && (last[0] == 'v' || last[0] == 'V') && versionNumber(last[1:]) {
+			last = last[1:]
+		}
+		if !versionNumber(last) {
+			break
+		}
+		fields = fields[:len(fields)-1]
+	}
+	short := strings.Join(fields, " ")
+	if short == name || !IsSafeAppToken(short) || utf8.RuneCountInString(windowsResidualName(short)) < 3 {
+		return name
+	}
+	return short
+}
+
+// versionNumber reports whether s is dotted digits, as in "3.0.74" or "24".
+func versionNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func windowsResidualName(text string) string {
@@ -80,7 +126,11 @@ func (c windowsResidualContext) anchor(key string) string {
 	return v[0]
 }
 func newWindowsResidualContext(app InstalledApp, snapshot *RuleSnapshot) windowsResidualContext {
-	c := windowsResidualContext{name: windowsResidualName(app.Name), token: windowsResidualToken(app.Name), publisher: windowsResidualToken(app.Publisher), snapshot: snapshot}
+	name := windowsResidualShortName(app.Name)
+	c := windowsResidualContext{name: windowsResidualName(name), token: windowsResidualToken(app.Name), publisher: windowsResidualToken(app.Publisher), snapshot: snapshot}
+	if short := windowsResidualToken(name); short != c.token && IsSafeAppToken(short) {
+		c.shortToken = short
+	}
 	if app.InstallLocation != nil && !IsSystemRootDir(*app.InstallLocation) {
 		c.install = Norm(*app.InstallLocation)
 		if len(c.install) <= 3 {

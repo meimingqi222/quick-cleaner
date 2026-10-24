@@ -73,6 +73,10 @@ func scanWindowsResidualFiles(ctx context.Context, app InstalledApp, c windowsRe
 	if c.matchable() {
 		for _, root := range roots.data {
 			push(filepath.Join(root, c.token), ResidualAppDataDir, Certain, true)
+			if c.shortToken != "" {
+				// The display name carried a version; the folder usually drops it.
+				push(filepath.Join(root, c.shortToken), ResidualAppDataDir, Certain, true)
+			}
 			if IsSafeAppToken(c.publisher) {
 				push(filepath.Join(root, c.publisher, c.token), ResidualAppDataDir, Certain, true)
 			}

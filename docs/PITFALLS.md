@@ -995,3 +995,12 @@ Note: `2026-10-25-uninstall-page-replaces-apps-view.md`
 - **根因**：Go 端把 `uninstallProgress` 插在应用页面列里、其余内容照常渲染；Rust 是整页替换（`View::Apps if self.residual.uninstall.is_some() => render_uninstall_progress(self)`），且卸载页自带 CARD 背景与 40px 内边距。
 - **防护**：`AppsPage.RenderContent` 在 `Uninstalling` 时只渲染卸载页并早退；布局对齐 Rust（560px 居中列、64px 应用徽章、6px 进度条、36px 阶段行、keep-open 脚注）。回归见 Note。
 - **禁止回退**：不能把卸载页改回与列表同页渲染（会重新出现透底和卸载中仍可点的列表按钮）；不能去掉整页 CARD 背景或 40px 内边距；不能把进度条改回 8px。
+
+## P81 应用名带版本号时，残留模糊匹配仍要认出短目录名
+
+Note: `2026-10-25-residual-versioned-display-name.md`
+
+- **症状**：卸载后残留页显示「0 项关联残留」，但 `%APPDATA%\<产品名>` 明明还在；换成不带版本号的同类应用就能扫到。
+- **根因**：`Name` 取 Windows 的 `DisplayName`，常把版本写进名字（`MiniMax Code 3.0.74` → `minimaxcode3074`，15 字符）；候选目录 `MiniMax`（7 字符）走「应用名包含候选」的反向包含规则，要求 `7*2 >= 15`，不成立即被拒。Rust 的 `norm`/`name_matches` 同源，所以两边都有这个盲区。
+- **防护**：`windowsResidualShortName` 剥掉尾部纯数字版本段（含 `v` 前缀）后再匹配，精确目录也再试一次短名 token；剥完不足 3 字符或本身就是通用名（`App 2` → `App`）则保留原名。回归见 Note。
+- **禁止回退**：不能为了命中短名就把反向包含的比例（`size*2 >= 名字长度`）整体放宽；不能改成按发布者目录匹配（`Google`/`Tencent` 会跨产品误报）；不能只改 Rust 或只改 Go 让两个版本分叉。

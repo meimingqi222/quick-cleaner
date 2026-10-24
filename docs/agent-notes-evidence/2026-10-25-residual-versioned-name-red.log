@@ -1,0 +1,8 @@
+== red: DisplayName 带版本号时短目录名被拒，真实残留扫不到 ==
+$ go test -count=1 -run TestVersionedDisplayNameStillMatchesShortAppDataFolder ./internal/core
+--- FAIL: TestVersionedDisplayNameStillMatchesShortAppDataFolder (0.00s)
+    apps_residual_windows_test.go:57: short app data folder rejected: name="minimaxcode3074"
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.242s
+FAIL
+exit=1
