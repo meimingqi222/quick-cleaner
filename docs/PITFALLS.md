@@ -1040,3 +1040,12 @@ Note: `2026-10-25-residual-clean-keeps-review-closed.md`
 - **根因**：`requestResidualClean` 的收尾无条件调用 `showResiduals(result, app)` 重开面板；Rust 在同样位置写的是 `this.residual.result = None`，注释说明「删不掉的多半会一直删不掉」。
 - **防护**：收尾改为关闭面板（`ResidualsOpen=false`、`Residuals=nil`、尺寸与 `Occupancy` 清空），只把幸存条目留在 `r.residual.Items`；计数交给 `finishCleanup` 的提示与历史记录。回归见 Note。
 - **禁止回退**：不能在清理后重新打开残留面板；不能只在有剩余项时才重开（同样是点一次弹一次）；不能把剩余项合并进下次扫描结果；卸载流程里「卸载后立刻看残留」的那次展示不属于本约束。
+
+## P86 官方卸载器失败时不能把原始退出码当文案
+
+Note: `2026-10-25-uninstall-failure-notice.md`
+
+- **症状**：卸载失败只显示一行英文 `Capability step failed: uninstaller exited abnormally: exit code: 0x8a150057`，中文界面对着一句英文和十六进制码，既不知道有没有删东西，也不知道下一步做什么。
+- **根因**：`apps.go` 用 `core.SameText(err.Error())` 直接把错误原文当展示文案；真实原因（winget 便携包哈希与 ARP 登记不一致，`0x8A150057`）只在 winget 日志里。
+- **防护**：`core` 把已知失败类型化成 `UninstallerExitError`/`ErrUninstallNotSettled`/`StillRegisteredError`，`uninstallFailureNotice` 据此产出双语提示：说明是官方卸载器失败、未删除任何文件、给出终端 `winget uninstall` 或「设置 → 应用」的下一步，并保留退出码；未分类错误仍用原文。回归见 Note。
+- **禁止回退**：不能把 `err.Error()` 直接塞进 Notice（会再次出现整句英文）；不能为了本地化丢掉退出码（报障需要它）；不能在卸载失败后改用删除文件兜底（会绕过官方卸载器的校验）；不能给未分类错误编翻译。

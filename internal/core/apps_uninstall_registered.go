@@ -172,12 +172,31 @@ func runRegisteredAppUninstaller(app InstalledApp, r registeredUninstallRuntime)
 		return errors.New("winget refused administrator context after desktop-user retry")
 	}
 	if code != 0 {
-		return fmt.Errorf("uninstaller exited abnormally: exit code: %#x", code)
+		return &UninstallerExitError{Code: code}
 	}
 	if !r.registered(app) {
-		return errors.New("uninstaller exited but installation did not settle; files may still be in use")
+		return ErrUninstallNotSettled
 	}
-	return fmt.Errorf("uninstaller exited but application remains registered: %s", app.Name)
+	return &StillRegisteredError{Name: app.Name}
+}
+
+// UninstallerExitError is the official uninstaller's own failure. The exit code is
+// kept typed so the UI can explain it instead of printing raw English.
+type UninstallerExitError struct{ Code uint32 }
+
+func (e *UninstallerExitError) Error() string {
+	return fmt.Sprintf("uninstaller exited abnormally: exit code: %#x", e.Code)
+}
+
+// ErrUninstallNotSettled means the uninstaller exited but the installation has not
+// settled yet; files may still be in use.
+var ErrUninstallNotSettled = errors.New("uninstaller exited but installation did not settle; files may still be in use")
+
+// StillRegisteredError means the uninstaller exited yet the entry is still listed.
+type StillRegisteredError struct{ Name string }
+
+func (e *StillRegisteredError) Error() string {
+	return fmt.Sprintf("uninstaller exited but application remains registered: %s", e.Name)
 }
 
 func waitRegisteredUninstall(app InstalledApp, installDir, stem string, childOK bool, r registeredUninstallRuntime) bool {

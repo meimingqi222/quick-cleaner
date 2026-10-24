@@ -1,0 +1,11 @@
+== restored: 卸载失败提示本地化并带退出码 ==
+$ go test -count=1 -run TestUninstallFailureNoticeExplainsAndKeepsTheCode ./internal/app -v
+=== RUN   TestUninstallFailureNoticeExplainsAndKeepsTheCode
+--- PASS: TestUninstallFailureNoticeExplainsAndKeepsTheCode (0.00s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/app	1.290s
+exit=0
+$ go test -count=1 ./internal/app ./internal/core
+ok  	github.com/<user>/quick-cleaner/internal/app	2.142s
+ok  	github.com/<user>/quick-cleaner/internal/core	51.176s
+exit=0

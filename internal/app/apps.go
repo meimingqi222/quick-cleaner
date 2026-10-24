@@ -270,7 +270,7 @@ func (r *Root) requestUninstall(id string) {
 			return func() {
 				r.apps.Uninstalling = false
 				if err != nil {
-					r.apps.Notice = core.SameText(err.Error())
+					r.apps.Notice = uninstallFailureNotice(err)
 					r.failure(err)
 					r.record("uninstall", []string{a.Name}, 0, 0, 1, 0)
 					return
