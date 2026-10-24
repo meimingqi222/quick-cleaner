@@ -1,0 +1,5 @@
+--- FAIL: TestDiscoveredResidualAuthority (0.03s)
+    discovered_residual_test.go:73: late shared owner accepted
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.033s
+FAIL

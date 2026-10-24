@@ -1,0 +1,11 @@
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity/final_sigma
+    updater_test.go:228: collision=true: <nil>
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity/dotted_capital_I
+    updater_test.go:228: collision=false: zip entry "i.txt" rejected: duplicate path
+--- FAIL: TestUpdaterArchiveUnicodeCollisionParity (0.00s)
+    --- FAIL: TestUpdaterArchiveUnicodeCollisionParity/final_sigma (0.00s)
+    --- FAIL: TestUpdaterArchiveUnicodeCollisionParity/dotted_capital_I (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.005s
+FAIL

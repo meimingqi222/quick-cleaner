@@ -1,0 +1,8 @@
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity/final_sigma
+=== RUN   TestUpdaterArchiveUnicodeCollisionParity/dotted_capital_I
+--- PASS: TestUpdaterArchiveUnicodeCollisionParity (0.00s)
+    --- PASS: TestUpdaterArchiveUnicodeCollisionParity/final_sigma (0.00s)
+    --- PASS: TestUpdaterArchiveUnicodeCollisionParity/dotted_capital_I (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.005s

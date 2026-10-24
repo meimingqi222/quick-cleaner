@@ -32,6 +32,14 @@ are Certain in per-app scans; containers/scripts and retained Qingjian data requ
 selection. Name/family matches and package receipts without an exact package identity stay
 Possible. Exact system-extension identities are Certain but still require manual action.
 
+2026-10-23 Go migration: `internal/app/residuals.go` keeps the core
+`RequiresConfirmation` policy distinct from a presentation row's `Manual`
+system-action restriction. User-data rows start unchecked but accept explicit
+selection; Recommended reuses `DefaultSelection`, never confidence alone.
+System extensions remain a separate settings-guidance action. Selection is not
+deletion authority: the confirmed batch still passes the existing native
+owner/identity/safety gates.
+
 ## Alternatives considered
 
 Family-prefix matching over-claims shared vendor prefixes (`com.docker.docker` vs `com.docker.vmnetd`, `com.google.keystone.agent`). Per-item deletion when some owners are unknown — an unknown owner is not an absent one.
@@ -87,3 +95,13 @@ execution is claimed; its struct literals retain the original selection behavior
 P19 constraint merge, P28/P37 per-object identity, P31/P60 unknown-owner refusal and
 P46 bounded process execution were specifically rechecked; Qingjian P49/P50 data
 preservation and the earlier P65 Homebrew changes remain intact.
+
+Go migration regression binding (2026-10-23):
+
+- `internal/app/integration_test.go::TestResidualUserDataRequiresOptInNotPermanentDisabling`
+
+Proved: natural red — before fixing the Go controller's policy mapping, the
+focused test failed with `explicit user-data selection was incorrectly disabled`;
+see `docs/agent-notes-evidence/2026-10-23-go-residual-opt-in-red.log`. The identical
+focused command passes after separating system action from opt-in selection;
+see `docs/agent-notes-evidence/2026-10-23-go-residual-opt-in-green.log`.

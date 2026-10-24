@@ -1,0 +1,38 @@
+package core
+
+import (
+	"context"
+	"path/filepath"
+
+	"github.com/meimingqi222/quick-cleaner/internal/platform"
+)
+
+func ListInstalledApps(ctx context.Context) ([]InstalledApp, error) {
+	records := platform.ReadWindowsAppRegistrations(ctx)
+	apps := make([]InstalledApp, 0, len(records))
+	for _, record := range records {
+		app := appFromRecord(record)
+		app.InstallDate, app.InstallDateRaw = ParseInstallDate(record.InstallDate)
+		apps = append(apps, app)
+	}
+	candidates := platform.ReadWindowsAppShortcuts(ctx)
+	snapshot, err := CurrentRules()
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := platform.UserCacheDir(); ok {
+		for _, definition := range snapshot.Bundle.Rules {
+			if definition.App == nil {
+				continue
+			}
+			for _, relative := range definition.App.Targets {
+				target := filepath.Join(local, definition.App.DefaultHome, filepath.FromSlash(relative))
+				candidates = append(candidates, platform.ShortcutAppEvidence{Target: target})
+			}
+		}
+	}
+	apps = append(apps, discoverAppCandidates(ctx, apps, candidates, platform.CanonicalAppPath, func(target string) *InstalledApp { return nativeInspectSourceApp(target, snapshot) })...)
+	activity := platform.ReadWindowsAppActivity(ctx)
+	shortcuts := platform.ReadWindowsShortcutActivity(ctx)
+	return EnrichWindowsAppInventory(ctx, apps, activity, shortcuts), ctx.Err()
+}

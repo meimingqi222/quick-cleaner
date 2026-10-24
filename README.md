@@ -2,6 +2,14 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
+**Go rewrite in progress:** the target is Go + MyGo with the existing UI and
+interactions preserved, not a redesign. The Go product entry point is
+`go run ./cmd/quick-cleaner --no-elevate`; a separate non-destructive UI gallery
+is available at `go run ./cmd/ui-gallery`. Native acceptance and remaining parity
+gates are not complete; do not treat this as a validated release replacement.
+See [migration status and preview commands](GO_MIGRATION.md).
+The features and Cargo instructions below describe the existing Rust release.
+
 > **Native, multi-threaded Windows disk space analyzer & system cleaner**  
 > Built with **Rust + GPUI**, zero WebView / Electron overhead, millisecond-level responsiveness, and GPU-accelerated rendering.
 

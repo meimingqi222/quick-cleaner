@@ -1,0 +1,185 @@
+package ui_test
+
+import (
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+	"github.com/meimingqi222/quick-cleaner/internal/core"
+	appui "github.com/meimingqi222/quick-cleaner/internal/ui"
+)
+
+func TestDashboardActions(t *testing.T) {
+	for _, tc := range []struct {
+		name, circle string
+		snapshot     appui.Dashboard
+		wantScans    int
+		wantRoutes   int
+		wantReview   bool
+	}{
+		{name: "idle", circle: "Click to Start Smart Scan", wantScans: 2},
+		{name: "empty", circle: "No Junk Found", snapshot: appui.Dashboard{Scanned: true}, wantScans: 1, wantRoutes: 1},
+		{name: "found", circle: "Cleanable Found", snapshot: appui.Dashboard{Scanned: true, HasJunk: true}, wantScans: 1, wantRoutes: 1, wantReview: true},
+		{name: "scanning", circle: "Checking system caches and dev leftovers", snapshot: appui.Dashboard{Scanning: true}},
+		{name: "cleaning", circle: "Permanently removing selected items", snapshot: appui.Dashboard{Scanned: true, HasJunk: true, Cleaning: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.snapshot
+			s.Language, s.Cleanable, s.Freed = appui.English, "1.25 GB", "0 B"
+			scans, routes := 0, 0
+			actions := appui.DashboardActions{
+				Scan: func() { scans++ },
+				Navigate: func(v appui.View) {
+					if v != appui.Junk {
+						t.Errorf("circle/review route = %v, want Junk", v)
+					}
+					routes++
+				},
+			}
+			tt := ui.NewTester(func(c *ui.Context) { s.Render(c, actions) }, 1280, 880)
+			if err := tt.Click(tc.circle); err != nil {
+				t.Fatal(err)
+			}
+			rescan := "Rescan"
+			if s.Scanning || s.Cleaning {
+				rescan = "Scanning…"
+			}
+			if err := tt.Click(rescan); err != nil {
+				t.Fatal(err)
+			}
+			if scans != tc.wantScans || routes != tc.wantRoutes {
+				t.Fatalf("scans/routes = %d/%d, want %d/%d", scans, routes, tc.wantScans, tc.wantRoutes)
+			}
+			if got := tt.HasText("Review & Clean Junk"); got != tc.wantReview {
+				t.Fatalf("review visible = %v, want %v", got, tc.wantReview)
+			}
+			if tc.wantReview {
+				if err := tt.Click("Review & Clean Junk"); err != nil {
+					t.Fatal(err)
+				}
+				if routes != tc.wantRoutes+1 || scans != tc.wantScans {
+					t.Fatal("review must open junk details, not start scanning or cleaning")
+				}
+			}
+		})
+	}
+}
+
+func TestDashboardCleanProgressBar(t *testing.T) {
+	snap := core.CleanSnapshot{TotalFiles: 2000, Files: 1500, TotalBytes: 2048, Bytes: 1024, Failed: 2, Current: "/tmp/cache"}
+	stopped := 0
+	s := appui.Dashboard{Language: appui.English, Cleaning: true, CleanProgress: &snap, Stop: func() { stopped++ }}
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderPage(c, appui.Junk, appui.DashboardActions{}, func() {}) }, 1280, 880)
+	for _, label := range []string{"Deleting permanently", "1,500 / 2,000 files", "2 failed", "/tmp/cache", "Stop"} {
+		if !tt.HasText(label) {
+			t.Fatalf("missing %q: %v", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("Stop"); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 1 {
+		t.Fatal("stop did not dispatch")
+	}
+	snap.Cancelled = true
+	s.Language = appui.Chinese
+	tt.Frame()
+	if !tt.HasText("正在停止…") || !tt.HasText("1,500 / 2,000 个文件") || !tt.HasText("失败 2") {
+		t.Fatalf("cancelled copy: %v", tt.Texts())
+	}
+	if err := tt.Click("停止"); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 1 {
+		t.Fatal("cancelled bar dispatched another stop")
+	}
+	s.Cleaning = false
+	tt.Frame()
+	if tt.HasText("正在停止…") {
+		t.Fatal("idle shell still showed the clean bar")
+	}
+}
+
+func TestDashboardLanguageAndPermissionFacts(t *testing.T) {
+	s := appui.Dashboard{Scanned: true, HasJunk: true, Categories: 3, Cleanable: "1.25 GB", Freed: "0 B", MacOS: true}
+	opened := 0
+	actions := appui.DashboardActions{
+		SetLanguage:     func(l appui.Language) { s.Language = l },
+		OpenPermissions: func() { opened++ },
+	}
+	tt := ui.NewTester(func(c *ui.Context) { s.Render(c, actions) }, 1280, 880)
+	if !tt.HasText("已在 3 个类别中发现 1.25 GB 可清理内容。") {
+		t.Fatal("missing Chinese scan result")
+	}
+	if err := tt.Click("English"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("Found 1.25 GB cleanable items across 3 categories.") || tt.HasText("查看详情并清理") {
+		t.Fatal("language switch must translate results without changing their values")
+	}
+	if err := tt.Click("Limited Access (Configure)"); err != nil {
+		t.Fatal(err)
+	}
+	if opened != 1 {
+		t.Fatal("limited macOS access must open permission configuration")
+	}
+	s.FullDiskAccess = true
+	tt.Frame()
+	if err := tt.Click("Full Disk Access"); err != nil {
+		t.Fatal(err)
+	}
+	s.MacOS, s.Elevated = false, false
+	tt.Frame()
+	if !tt.HasText("Standard user") || tt.HasText("Full Disk Access") {
+		t.Fatal("Windows permission badge must reflect elevation, not macOS permissions")
+	}
+	s.Elevated = true
+	tt.Frame()
+	if err := tt.Click("Administrator"); err != nil {
+		t.Fatal(err)
+	}
+	if opened != 1 {
+		t.Fatal("granted or Windows badges must not open macOS permissions")
+	}
+}
+
+func TestDashboardStatusHeaderRouting(t *testing.T) {
+	for _, tc := range []struct {
+		language                          appui.Language
+		hardware, processes, live, paused string
+	}{
+		{appui.English, "Hardware", "Processes", "Live", "Paused"},
+		{appui.Chinese, "硬件概览", "进程管理", "实时监测", "已暂停"},
+	} {
+		s := appui.Dashboard{Language: tc.language, ProcessCount: 1234}
+		scans := 0
+		a := appui.DashboardActions{SetStatusTab: func(tab appui.StatusTab) { s.StatusTab = tab }, ToggleMonitoring: func() { s.MonitoringPaused = !s.MonitoringPaused }, Scan: func() { scans++ }}
+		tt := ui.NewTester(func(c *ui.Context) { s.RenderPage(c, appui.Status, a, func() { ui.Text(c, "sample body") }) }, 1280, 880)
+		if !tt.HasText("1,234") || tt.HasText("Rescan") || tt.HasText("重新扫描") {
+			t.Fatal("status header lost count or acquired scan control")
+		}
+		if err := tt.Click(tc.processes); err != nil {
+			t.Fatal(err)
+		}
+		if s.StatusTab != appui.StatusProcesses {
+			t.Fatal("process tab not dispatched")
+		}
+		if err := tt.Click(tc.live); err != nil {
+			t.Fatal(err)
+		}
+		if !s.MonitoringPaused || !tt.HasText(tc.paused) || !tt.HasText("sample body") {
+			t.Fatal("pause lost sampled content or status")
+		}
+		if err := tt.Click(tc.paused); err != nil {
+			t.Fatal(err)
+		}
+		if s.MonitoringPaused || !tt.HasText(tc.live) {
+			t.Fatal("resume not dispatched")
+		}
+		if err := tt.Click(tc.hardware); err != nil {
+			t.Fatal(err)
+		}
+		if s.StatusTab != appui.StatusHardware || scans != 0 {
+			t.Fatal("tab/pause action dispatched scanning")
+		}
+	}
+}

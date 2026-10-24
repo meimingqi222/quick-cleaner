@@ -2,6 +2,11 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
+**Go 重写进行中：**目标是 Go + MyGo，保持现有 UI 和交互不变，不重新设计界面。
+Go 主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，无破坏性操作的界面预览入口为
+`go run ./cmd/ui-gallery`。原生平台验收与剩余一致性门槛尚未完成，不能当作已验证的发行版替代品。
+详见[迁移状态与预览命令](GO_MIGRATION.md)。下方功能与 Cargo 构建说明仍对应现有 Rust 发行版。
+
 > **极速、原生、安全的 Windows 磁盘空间分析与系统深度清理工具**  
 > 基于 **Rust + GPUI** 构建，无 WebView / Electron 开销，毫秒级响应与 GPU 加速渲染。
 
