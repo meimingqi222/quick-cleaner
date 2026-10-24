@@ -70,9 +70,9 @@ Proved: WebKit 修复前自然红跑，断言 missing Ghostty WebKit: []，加�
 `docs/agent-notes-evidence/2026-10-16-brew-completion-green.log`。
 
 未合入方案的 8 个夹具测试还覆盖路径归属、同名副本、多应用/多主人歧义、无效清单、
-身份被替换、链接、固定无 zap 参数、超时、命令错误与未知完成状态；随实现一并移至
-`docs/temp/superseded/brew_uninstall.rs` 存档。真实 Homebrew 只读查询核对过
-JSON app target 形态，未卸载真实应用。Windows 执行未验证。
+身份被替换、链接、固定无 zap 参数、超时、命令错误与未知完成状态；这些测试随实现
+移出生产树，只留在当时的本机存档里（本地存档不入库，因此不列为可校验目标）。
+真实 Homebrew 只读查询核对过 JSON app target 形态，未卸载真实应用。Windows 执行未验证。
 
 Pitfalls checked: 完整核对 P1–P64。P1/Windows 命令解析不变；P19/P28 的去重与
 Unix dev/ino 不变；P20 的已尝试生态命令禁止裸删回退由错误传播覆盖；P31/P60 的
