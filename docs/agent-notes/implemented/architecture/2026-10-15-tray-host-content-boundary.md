@@ -53,13 +53,12 @@ Windows 代码保留原有驻留与菜单处理，本次 macOS 开发不代表�
 
 ## Verification
 
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_dispatches_after_close_and_can_keep_window`
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_old_session_cannot_touch_reopened_window`
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_toggle_opens_closes_and_reopens`
-- `../gpui-app-kit/crates/app-host/src/native.rs::popover_clamps_edges_and_keeps_menu_bar_clear_on_small_screens`
 - `src/ui/tray_overview.rs::tray_refresh_updates_repeatedly_and_stops_on_close`
 - `scripts/test_ui_components.py::test_tray_content_rejects_window_and_business_control`
 - `scripts/test_ui_components.py::test_tray_content_scan_covers_split_content_modules`
+
+宿主侧的 open/close/重开与旧会话隔离原本绑定兄弟仓库 gpui-app-kit 的测试；Go 版本改用
+MyGo，不再消费该库，跨仓绑定不再是本仓库的可校验目标。
 
 Proved: 添加边界守卫前，内容越界测试失败于 cx.open_window 未被拒绝，见
 `docs/agent-notes-evidence/2026-10-15-tray-boundary-red.log`；实现后同 focused 及完整脚本测试

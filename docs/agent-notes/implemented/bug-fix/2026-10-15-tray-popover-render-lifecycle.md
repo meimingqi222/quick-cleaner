@@ -67,9 +67,8 @@ Windows 使用 Shell 的真实注册结果判断可驻留，图标由应用传�
 - `src/ui/views/tray_popover.rs::tray_footer_stays_inside_small_window`
 - `src/ui/views/tray_popover.rs::tray_hardware_stays_visible_with_many_volumes`
 
-- `../gpui-app-kit/crates/app-host/src/desktop.rs::close_shortcut_removes_window_without_quitting`
-- `../gpui-app-kit/crates/app-host/src/desktop.rs::native_close_delivers_cleanup_once`
-- `../gpui-app-kit/crates/app-host/src/desktop.rs::keepalive_survives_the_last_user_window`
+窗口生命周期那几条原本绑定兄弟仓库 gpui-app-kit 的宿主测试；Go 版本改用 MyGo，
+不再消费该库，跨仓绑定不再是本仓库的可校验目标。
 
 Proved: 将 Cmd-W 单独恢复绑定 Quit 后，快捷键测试失败于关闭回调次数 0 != 1，见
 `docs/agent-notes-evidence/2026-10-15-desktop-close-shortcut-red.log`；恢复后 focused 全绿见
@@ -95,7 +94,7 @@ Proved: 多卷硬件可见性测试为修复前真实红跑，硬件区 top=463 
 Native verification: 用 340×430 逻辑点、中文、六卷的独立 GPUI 预览窗口检查画面，
 硬件区完整显示 CPU / 温度 / 内存 / 交换空间，磁盘区域独立裁切；不启动真实扫描。
 
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_programmatic_open_needs_no_window_event`
+原绑定为兄弟仓库 gpui-app-kit 的裸 App 启动测试；Go 版本改用 MyGo，不再消费该库，跨仓绑定不再是本仓库的可校验目标。
 
 Proved: 裸 App 启动测试在仅使用 defer 的实现下失败于 startup must not wait for a window event，
 见 `docs/agent-notes-evidence/2026-10-15-tray-startup-red.log`；改由前台任务进入 update 后，

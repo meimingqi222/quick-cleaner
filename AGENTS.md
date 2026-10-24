@@ -68,4 +68,4 @@ pre-commit 会对暂存文件自动打印命中提醒（不阻断）；CI 的 `a
 - 复用方式与验证见 [托盘宿主架构说明](docs/agent-notes/implemented/architecture/2026-10-15-tray-host-content-boundary.md)。现有 `python3 scripts/check-ui-components.py` 会检查内容边界；不要加 baseline 例外规避检查。
 
 共享输入编辑、滚动和浮层核心在 `gpui-app-widgets`；产品配色、OverlayId 和业务关闭回调留在应用。
-构建通过 Cargo.toml 中固定提交的 Git 依赖获取公共库；`../gpui-app-kit` 只用于公共库联合开发、内容守卫和回归测试 anchor 校验。接入与私库认证见公共库 README.md。
+构建通过 Cargo.toml 中固定提交的 Git 依赖获取公共库；Go 版本（`cmd/`、`internal/`）不消费该库，`../gpui-app-kit` 只在维护 Rust 参照树与联合开发时使用，agent-notes 校验不再检出它。接入与私库认证见公共库 README.md。
