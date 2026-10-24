@@ -1,8 +1,8 @@
 == manufactured red: 只撤掉 winget 退出码识别，focused ==
 $ go test -count=1 -run TestUninstallFailureNoticeExplainsAndKeepsTheCode ./internal/app
 --- FAIL: TestUninstallFailureNoticeExplainsAndKeepsTheCode (0.00s)
-    uninstall_notice_test.go:16: winget notice lost its code or hint: "官方卸载器异常退出（0x8a150057）；未删除任何文件。请用应用自带的卸载入口，或到「设置 → 应用」里重试。"
+    uninstall_notice_test.go:16: winget notice lost its code or hint: "官方卸载器异常退出（0x8a150057）；未删除任何文件。请用应用自带的卸载入口重试。"
 FAIL
-FAIL	github.com/<user>/quick-cleaner/internal/app	1.183s
+FAIL	github.com/<user>/quick-cleaner/internal/app	1.331s
 FAIL
 exit=1

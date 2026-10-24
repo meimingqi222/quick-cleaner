@@ -32,8 +32,10 @@ winget 认为便携包的实际文件哈希与 ARP 登记的对不上（`C:\User
 保持不变，日志与历史记录照旧。`internal/app/uninstall_notice.go` 的 `uninstallFailureNotice`
 据此产出双语提示：
 
-- winget 家族退出码（`0x8A15xxxx`）：说明是官方卸载器失败、**未删除任何文件**，并指出可以
-  在终端跑 `winget uninstall` 或到「设置 → 应用」卸载；退出码保留在文案里便于报障。
+- winget 家族退出码（`0x8A15xxxx`）：说明是官方卸载器失败、**未删除任何文件**，并指出可以在
+  终端跑带 `--force` 的 `winget uninstall`；退出码保留在文案里便于报障。**不能指向「设置 →
+  应用」**：那条入口执行的 `UninstallString` 就是同一条 `winget uninstall`
+  （`--product-code GitHub.Copilot_…`），指过去只会再撞一次同样的拒绝。
 - 其它非零退出码：同样的「未删除」与下一步指引，不冒充 winget。
 - 安装未落定 / 仍登记：给出对应原因与操作。
 - 未分类的错误：保留原文，不编造翻译。
@@ -46,8 +48,12 @@ winget 认为便携包的实际文件哈希与 ARP 登记的对不上（`C:\User
 
 ## Consequences
 
-页面显示「官方卸载器（winget）失败（0x8a150057）；未删除任何文件。可在终端运行
-winget uninstall，或到「设置 → 应用」里卸载。」日志与历史记录里仍是原始英文错误，便于核对。
+页面显示「官方卸载器（winget）失败（0x8a150057）；未删除任何文件。可在终端运行带 --force
+的 winget uninstall 强制卸载。」日志与历史记录里仍是原始英文错误，便于核对。
+
+这条文案曾经指向「设置 → 应用」，那是错的：ARP 的 `UninstallString` 就是同一条
+`winget uninstall --product-code GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe`，
+用户照做只会再失败一次。现在测试同时断言文案里不出现「设置/Settings」。
 
 ## Verification
 

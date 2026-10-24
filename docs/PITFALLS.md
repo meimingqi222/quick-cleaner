@@ -1047,5 +1047,5 @@ Note: `2026-10-25-uninstall-failure-notice.md`
 
 - **症状**：卸载失败只显示一行英文 `Capability step failed: uninstaller exited abnormally: exit code: 0x8a150057`，中文界面对着一句英文和十六进制码，既不知道有没有删东西，也不知道下一步做什么。
 - **根因**：`apps.go` 用 `core.SameText(err.Error())` 直接把错误原文当展示文案；真实原因（winget 便携包哈希与 ARP 登记不一致，`0x8A150057`）只在 winget 日志里。
-- **防护**：`core` 把已知失败类型化成 `UninstallerExitError`/`ErrUninstallNotSettled`/`StillRegisteredError`，`uninstallFailureNotice` 据此产出双语提示：说明是官方卸载器失败、未删除任何文件、给出终端 `winget uninstall` 或「设置 → 应用」的下一步，并保留退出码；未分类错误仍用原文。回归见 Note。
-- **禁止回退**：不能把 `err.Error()` 直接塞进 Notice（会再次出现整句英文）；不能为了本地化丢掉退出码（报障需要它）；不能在卸载失败后改用删除文件兜底（会绕过官方卸载器的校验）；不能给未分类错误编翻译。
+- **防护**：`core` 把已知失败类型化成 `UninstallerExitError`/`ErrUninstallNotSettled`/`StillRegisteredError`，`uninstallFailureNotice` 据此产出双语提示：说明是官方卸载器失败、未删除任何文件、给出带 `--force` 的 `winget uninstall` 作为下一步，并保留退出码；未分类错误仍用原文。回归见 Note。
+- **禁止回退**：不能把 `err.Error()` 直接塞进 Notice（会再次出现整句英文）；不能为了本地化丢掉退出码（报障需要它）；不能在卸载失败后改用删除文件兜底（会绕过官方卸载器的校验）；不能给未分类错误编翻译；**不能把用户指到「设置 → 应用」**——winget 包的 ARP `UninstallString` 就是同一条 `winget uninstall` 命令，照做只会同样失败。

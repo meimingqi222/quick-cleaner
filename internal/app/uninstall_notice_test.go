@@ -18,8 +18,15 @@ func TestUninstallFailureNoticeExplainsAndKeepsTheCode(t *testing.T) {
 	if !strings.Contains(winget.Get(core.Chinese), "未删除") {
 		t.Fatalf("winget notice does not say nothing was deleted: %q", winget.Get(core.Chinese))
 	}
-	if !strings.Contains(winget.Get(core.English), "0x8a150057") || !strings.Contains(winget.Get(core.English), "Settings") {
+	// winget 的 UninstallString 与「设置 → 应用」是同一条命令，指过去只会再失败一次，
+	// 所以提示必须给 --force（跳过哈希校验），而不是那个入口。
+	if !strings.Contains(winget.Get(core.English), "0x8a150057") || !strings.Contains(winget.Get(core.English), "--force") {
 		t.Fatalf("english winget notice = %q", winget.Get(core.English))
+	}
+	for _, text := range []string{winget.Get(core.Chinese), winget.Get(core.English)} {
+		if strings.Contains(text, "设置") || strings.Contains(text, "Settings") {
+			t.Fatalf("winget notice points at the same failing command: %q", text)
+		}
 	}
 
 	other := uninstallFailureNotice(&core.UninstallerExitError{Code: 0x2})

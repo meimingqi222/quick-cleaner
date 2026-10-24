@@ -22,15 +22,17 @@ func uninstallFailureNotice(err error) core.Text {
 		code := fmt.Sprintf("%#x", exited.Code)
 		if exited.Code&wingetCodeMask == wingetCodeFamily {
 			return core.NewText(
-				fmt.Sprintf("官方卸载器（winget）异常退出（%s）；未删除任何文件。可在终端运行 winget uninstall，或到「设置 → 应用」里卸载。", code),
-				fmt.Sprintf("The official uninstaller (winget) failed (%s); nothing was deleted. Run winget uninstall in a terminal, or uninstall from Settings → Apps.", code),
+				fmt.Sprintf("官方卸载器（winget）异常退出（%s）；未删除任何文件。可在终端运行带 --force 的 winget uninstall 强制卸载。", code),
+				fmt.Sprintf("The official uninstaller (winget) failed (%s); nothing was deleted. Run winget uninstall with --force in a terminal to override it.", code),
 			)
 		}
 		return core.NewText(
-			fmt.Sprintf("官方卸载器异常退出（%s）；未删除任何文件。请用应用自带的卸载入口，或到「设置 → 应用」里重试。", code),
-			fmt.Sprintf("The official uninstaller failed (%s); nothing was deleted. Use the app's own uninstaller, or retry from Settings → Apps.", code),
+			fmt.Sprintf("官方卸载器异常退出（%s）；未删除任何文件。请用应用自带的卸载入口重试。", code),
+			fmt.Sprintf("The official uninstaller failed (%s); nothing was deleted. Retry from the app's own uninstaller.", code),
 		)
 	}
+	// winget 指令不能指给「设置 → 应用」：它的 UninstallString 就是同一条
+	// `winget uninstall` 命令，指过去只会再撞一次同样的拒绝。
 	if errors.Is(err, core.ErrUninstallNotSettled) {
 		return core.NewText(
 			"卸载器已退出，但安装没有落定；文件可能仍被占用。请退出该应用后重试。",
