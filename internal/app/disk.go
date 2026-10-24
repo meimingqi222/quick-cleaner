@@ -278,10 +278,10 @@ func (r *Root) requestDiskDelete(paths []string) {
 		}
 		targets = append(targets, target)
 	}
-	r.requestArbitraryClean("disk", targets, func() { r.disk.Loaded = false; r.diskSelected.Clear(); r.scanDisk() })
+	r.requestArbitraryClean("disk", targets, func(core.CleanReport) { r.disk.Loaded = false; r.diskSelected.Clear(); r.scanDisk() })
 }
 
-func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarget, finish func()) {
+func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarget, finish func(core.CleanReport)) {
 	if len(targets) == 0 || r.job != nil {
 		return
 	}
@@ -353,7 +353,7 @@ func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarg
 					r.declutter.Scanned = false
 					return
 				}
-				finish()
+				finish(report)
 			}
 		})
 	})

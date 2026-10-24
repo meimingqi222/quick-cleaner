@@ -1,0 +1,17 @@
+== restored: 冗余整理按失败清单剪枝 + 残留清理免二次确认 ==
+$ go test -count=1 -run 'TestDeclutterRowLeavesListOnlyWhenReallyGone|TestPruneDeclutterKeepsFailedRows|TestResidualCleanStartsWithoutConfirmation|TestResidualCleanProbesOnlyAfterTheUserStartsIt' ./internal/app -v
+=== RUN   TestDeclutterRowLeavesListOnlyWhenReallyGone
+--- PASS: TestDeclutterRowLeavesListOnlyWhenReallyGone (0.00s)
+=== RUN   TestPruneDeclutterKeepsFailedRows
+--- PASS: TestPruneDeclutterKeepsFailedRows (0.00s)
+=== RUN   TestResidualCleanProbesOnlyAfterTheUserStartsIt
+--- PASS: TestResidualCleanProbesOnlyAfterTheUserStartsIt (0.00s)
+=== RUN   TestResidualCleanStartsWithoutConfirmation
+--- PASS: TestResidualCleanStartsWithoutConfirmation (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	1.298s
+exit=0
+$ go test -count=1 ./internal/app ./internal/ui
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	2.187s
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	3.609s
+exit=0

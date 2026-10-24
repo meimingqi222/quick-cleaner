@@ -94,7 +94,7 @@ func TestSearchIndexesMissingVolumesWithoutChangingDiskNavigation(t *testing.T) 
 	}
 }
 
-func TestResidualAbsenceIsCheckedOnlyAfterExplicitConsent(t *testing.T) {
+func TestResidualCleanProbesOnlyAfterTheUserStartsIt(t *testing.T) {
 	r, q := testRoot(t)
 	path := filepath.Join(t.TempDir(), "retain")
 	if err := os.WriteFile(path, []byte("live app data"), 0600); err != nil {
@@ -109,20 +109,18 @@ func TestResidualAbsenceIsCheckedOnlyAfterExplicitConsent(t *testing.T) {
 	r.residualAuthority = func(_ context.Context, reviewed core.InstalledApp, items []core.ResidualItem) bool {
 		probes++
 		if reviewed.ID != app.ID || len(items) != 1 || items[0].Kind.Path != path {
-			t.Error("authority gate did not receive exactly the confirmed app and selected targets")
+			t.Error("authority gate did not receive exactly the reviewed app and selected targets")
 		}
 		return false
 	}
-	r.requestResidualClean()
-	if probes != 0 || !r.confirming {
-		t.Fatal("absence/disposal occurred without consent")
-	}
-	r.resolveConfirmation(r.confirmation.ID, false)
+	// 勾选并按下清理是显式同意：没有二次确认框，但在此之前不得探测或删除任何东西。
 	if probes != 0 {
-		t.Fatal("cancellation probed or removed")
+		t.Fatal("authority probed before the user acted")
 	}
 	r.requestResidualClean()
-	r.resolveConfirmation(r.confirmation.ID, true)
+	if r.confirming {
+		t.Fatal("residual clean still opens a second confirmation")
+	}
 	dispatchNext(t, q)
 	if probes != 1 || r.apps.Cleaning || r.apps.Notice.Get(core.English) == "" {
 		t.Fatal("unknown absence did not refuse batch")

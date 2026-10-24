@@ -94,50 +94,51 @@ func (r *Root) requestResidualClean() {
 		return
 	}
 	app, scope := r.residualApp, r.residual.Scope
-	r.ask(r.tr("清理选中的残留？", "Clean selected residuals?"), targetDetails(labels)+"\n\n"+r.tr("文件移至回收站；登记项与系统操作无法撤销。应用移除或所选安装范围的归属、占用证据未通过时整批拒绝。", "Files go to Trash; registration and system operations cannot be undone. The batch is refused unless application removal or the selected installation's live ownership and vacancy are verified."), func() {
-		r.apps.Cleaning = true
-		p := core.NewCleanProgress(0, 0)
-		r.start(true, p, func(ctx context.Context) func() {
-			allowed := false
-			if scope == core.ResidualScopeOrphanLeftovers {
-				allowed = orphanAbsent(ctx, items)
-			} else if app != nil {
-				allowed = r.residualAuthority(ctx, *app, items)
-			}
-			if !allowed || ctx.Err() != nil || p.Cancelled() {
-				return func() {
-					r.apps.Cleaning = false
-					r.apps.Notice = core.NewText("残留清理授权无法验证；未清理任何残留。", "Residual cleanup authority could not be verified; no residuals were cleaned.")
-					r.record("clean_residuals", labels, 0, uint(len(items)), 0, 0)
-				}
-			}
-			report := cleanResiduals(ctx, slices.Clone(items), p)
-			// Verification is limited to reviewed candidates, never a fresh discovery.
-			remaining, err := verifyResiduals(ctx, items)
+	// Rust cleans the reviewed selection directly: ticking rows and pressing the button
+	// already is the confirmation, and the extra dialog only delayed it. The batch is
+	// still refused unless ownership, occupancy and absence evidence verify.
+	r.apps.Cleaning = true
+	p := core.NewCleanProgress(0, 0)
+	r.start(true, p, func(ctx context.Context) func() {
+		allowed := false
+		if scope == core.ResidualScopeOrphanLeftovers {
+			allowed = orphanAbsent(ctx, items)
+		} else if app != nil {
+			allowed = r.residualAuthority(ctx, *app, items)
+		}
+		if !allowed || ctx.Err() != nil || p.Cancelled() {
 			return func() {
 				r.apps.Cleaning = false
-				r.finishCleanup("clean_residuals", labels, report, p)
-				if p.Cancelled() {
-					return
-				}
-				if err != nil {
-					r.apps.Notice = core.SameText(err.Error())
-					return
-				}
-				// Keep unselected candidates alongside selected candidates that survived.
-				selected := map[string]bool{}
-				for _, item := range items {
-					selected[item.DisplayLabel()] = true
-				}
-				for _, item := range r.residual.Items {
-					if !selected[item.DisplayLabel()] {
-						remaining = append(remaining, item)
-					}
-				}
-				result := r.residual
-				result.Items = remaining
-				r.showResiduals(result, app)
+				r.apps.Notice = core.NewText("残留清理授权无法验证；未清理任何残留。", "Residual cleanup authority could not be verified; no residuals were cleaned.")
+				r.record("clean_residuals", labels, 0, uint(len(items)), 0, 0)
 			}
-		})
+		}
+		report := cleanResiduals(ctx, slices.Clone(items), p)
+		// Verification is limited to reviewed candidates, never a fresh discovery.
+		remaining, err := verifyResiduals(ctx, items)
+		return func() {
+			r.apps.Cleaning = false
+			r.finishCleanup("clean_residuals", labels, report, p)
+			if p.Cancelled() {
+				return
+			}
+			if err != nil {
+				r.apps.Notice = core.SameText(err.Error())
+				return
+			}
+			// Keep unselected candidates alongside selected candidates that survived.
+			selected := map[string]bool{}
+			for _, item := range items {
+				selected[item.DisplayLabel()] = true
+			}
+			for _, item := range r.residual.Items {
+				if !selected[item.DisplayLabel()] {
+					remaining = append(remaining, item)
+				}
+			}
+			result := r.residual
+			result.Items = remaining
+			r.showResiduals(result, app)
+		}
 	})
 }

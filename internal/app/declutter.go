@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"slices"
 	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
@@ -244,5 +246,68 @@ func (r *Root) requestDeclutterClean(tab view.DeclutterTab) {
 		targets = append(targets, t)
 	}
 	// Frozen authority is never recreated at acceptance, even if a file was replaced.
-	r.requestArbitraryClean("declutter", targets, func() { r.declutter.Scanned = false; r.scanDeclutter() })
+	// Rust prunes only what really left the disk; a rescan would re-list failed items as
+	// if they were fresh results, which is what made a failed clean reappear once.
+	r.requestArbitraryClean("declutter", targets, func(report core.CleanReport) { r.pruneDeclutter(tab, report) })
+}
+
+// pruneDeclutter drops the entries this clean really moved, keeping everything else so
+// the list still shows what failed and the user can retry. Mirrors
+// prune_cleaned_declutter_items in src/ui/actions/declutter.rs.
+func (r *Root) pruneDeclutter(tab view.DeclutterTab, report core.CleanReport) {
+	failed := make([]string, 0, len(report.Failed)+len(report.Manual))
+	for _, f := range report.Failed {
+		failed = append(failed, f.Path)
+	}
+	for _, f := range report.Manual {
+		failed = append(failed, f.Path)
+	}
+	gone := func(path string, selected bool) bool { return declutterItemIsGone(path, selected, failed) }
+	switch tab {
+	case view.DeclutterDownloads:
+		r.declutter.Downloads = slices.DeleteFunc(r.declutter.Downloads, func(i core.DownloadItem) bool {
+			return gone(i.Path, i.Selected)
+		})
+	case view.DeclutterLargeFiles:
+		r.declutter.LargeFiles = slices.DeleteFunc(r.declutter.LargeFiles, func(i core.LargeFileItem) bool {
+			return gone(i.Path, i.Selected)
+		})
+		r.filterLarge()
+	case view.DeclutterDuplicates:
+		kept := r.declutter.Duplicates[:0]
+		for _, g := range r.declutter.Duplicates {
+			g.Files = slices.DeleteFunc(g.Files, func(f core.DuplicateFileItem) bool {
+				return gone(f.Path, f.Selected)
+			})
+			if len(g.Files) >= 2 {
+				kept = append(kept, g)
+			}
+		}
+		r.declutter.Duplicates = kept
+	case view.DeclutterSimilarPhotos:
+		kept := r.declutter.Photos[:0]
+		for _, g := range r.declutter.Photos {
+			g.Photos = slices.DeleteFunc(g.Photos, func(p core.PhotoItem) bool {
+				return gone(p.Path, p.Selected)
+			})
+			if len(g.Photos) >= 2 {
+				kept = append(kept, g)
+			}
+		}
+		r.declutter.Photos = kept
+		// Group indices moved, so expanded rows would point at the wrong group.
+		r.declutter.ExpandedPhotoGroups = nil
+	}
+}
+
+// declutterItemIsGone reports whether a row may leave the list. All three conditions
+// matter: a row that was not selected was never touched, a row the report failed is
+// still on disk, and a row reported OK may still be there (a delete that lied about
+// success). Trusting the report alone would hide files that remain.
+func declutterItemIsGone(path string, selected bool, failed []string) bool {
+	if !selected || slices.Contains(failed, path) {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err != nil
 }

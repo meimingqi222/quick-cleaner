@@ -1,0 +1,8 @@
+== manufactured red: 只撤掉「路径确实不在了」这条核验，focused ==
+$ go test -count=1 -run 'TestDeclutterRowLeavesListOnlyWhenReallyGone|TestPruneDeclutterKeepsFailedRows' ./internal/app
+--- FAIL: TestDeclutterRowLeavesListOnlyWhenReallyGone (0.00s)
+    declutter_prune_test.go:25: a file still on disk left the list
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.234s
+FAIL
+exit=1

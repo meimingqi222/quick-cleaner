@@ -137,7 +137,7 @@ func TestCleanupCancellationDoesNotDeleteAndReplacementIsRetained(t *testing.T) 
 	if frozen.Identity == nil {
 		t.Fatal("fixture identity missing")
 	}
-	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func() {})
+	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func(core.CleanReport) {})
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("request mutated path before confirmation", err)
 	}
@@ -153,7 +153,7 @@ func TestCleanupCancellationDoesNotDeleteAndReplacementIsRetained(t *testing.T) 
 	}
 	var successes uint
 	r.record = func(_ string, _ []string, ok, _, _ uint, _ uint64) { successes = ok }
-	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func() {})
+	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func(core.CleanReport) {})
 	r.resolveConfirmation(r.confirmation.ID, true)
 	dispatchNext(t, q)
 	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
@@ -311,5 +311,22 @@ func TestMonitoringHistoriesFollowSelectionAndNativeReadings(t *testing.T) {
 	r.updateStatus(s)
 	if r.status.SelectedPID != nil || len(r.status.SelectedCPUHistory) != 0 || r.status.SelectedGPU != "idle" {
 		t.Fatal("vanished process/GPU retained stale selection")
+	}
+}
+
+// 残留清理是用户勾选后主动发起的动作：选中即确认。Rust 也不再弹二次确认框，
+// 额外一层确认只是拖慢这个已经明确的动作。
+func TestResidualCleanStartsWithoutConfirmation(t *testing.T) {
+	r, _ := testRoot(t)
+	r.residual = core.ResidualScanResult{Items: []core.ResidualItem{
+		core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: filepath.Join(t.TempDir(), "leftover"), Bytes: 4}, core.ResidualOther),
+	}}
+	r.apps.Residuals = []view.AppsPageResidual{{Selected: true}}
+	r.requestResidualClean()
+	if r.confirming {
+		t.Fatal("residual clean still opens a confirmation dialog")
+	}
+	if !r.apps.Cleaning {
+		t.Fatal("residual clean did not start")
 	}
 }

@@ -57,7 +57,7 @@ were modified during verification.
 - `internal/core/discovered_residual_test.go::TestDiscoveredResidualAuthority`
 - `internal/core/discovered_residual_test.go::TestDiscoveredResidualUnknownAndCancelled`
 - `internal/core/discovered_residual_portable_test.go::TestPortableResidualAuthority`
-- `internal/app/integration_test.go::TestResidualAbsenceIsCheckedOnlyAfterExplicitConsent`
+- `internal/app/integration_test.go::TestResidualCleanProbesOnlyAfterTheUserStartsIt`
 
 Proved: manufactured red — removing only the live ProgramPaths membership check
 made the focused authority test fail with `late shared owner accepted`, using a
