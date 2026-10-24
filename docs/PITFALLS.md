@@ -976,4 +976,13 @@ Note: `2026-10-25-single-instance.md`
 - **症状**：重复打开会多开；或者每次重复打开都先弹 UAC；或者普通权限的启动看不到管理员实例，又开出一个。
 - **根因**：管理员进程创建的内核对象默认带 High 完整性标签，普通进程无法打开或写入；MyGo 的单实例套接字放在临时目录，提权到另一个管理员账户时目录也不同；检测放在提权之后就会先弹 UAC。
 - **防护**：会话级 `Local\` 互斥量和唤醒事件，SDDL 授予已认证用户同步与发信号权限，并把完整性标签降为 Medium；句柄不可继承；`main` 在 `RelaunchAsAdminIfNeeded` 之前调用 `InstanceRunning`，提权后再 `AcquireInstance`，抢锁失败也只唤醒。回归见 Note。
-- **禁止回退**：不能在 Windows 上改用 MyGo 的套接字锁；不能去掉 SDDL 里的 `S:(ML;;NW;;;ME)`；不能把检测挪到提权之后；不能让互斥量句柄可继承；不能改成 `Global\`。
+- **禁止回退**：不能在 Windows 上改用 MyGo 的套接字锁；不能去掉 SDDL 里的 `S:(ML;;NW;;;ME)`；不能把检测挪到提权之后；不能让互斥量句柄可继承；不能改成 `Global\\`。
+
+## P79 路径断言不能比较 8.3 短名与长名
+
+Note: `2026-10-25-shortcut-83-name.md`
+
+- **症状**：`TestAppShortcutNativeReadOnly` 在启用 8.3 短名的卷上必红，失败信息里 `ok=true` 但路径被判不等；同一份代码在 windows-latest 上却是绿的，于是本地红灯容易被当成环境噪声忽略。
+- **根因**：`t.TempDir()` 返回 `MEIMIN~1` 形式的短名（本机 `D:\code\QUICK-~1\...`），而 `IShellLink::GetPath` 与 `CanonicalAppPath`（`GetFinalPathNameByHandle`）返回长名，`strings.EqualFold` 比较两者永远不等。
+- **防护**：测试改用 `sameAppPath`，两侧都过 `CanonicalAppPath` 后再比，取不到 canonical 形式时退回字面比较；`8.3 short path` 子用例用 `windows.GetShortPathName` 显式构造短名场景。回归见 Note。
+- **禁止回退**：不能把 `sameAppPath` 改回直接 `strings.EqualFold` 比较原路径；不能因为 CI 不红就删掉 `8.3 short path` 子用例；不能改 `CanonicalAppPath` 去返回短名形式（会把卷设置泄漏进应用清单匹配）。

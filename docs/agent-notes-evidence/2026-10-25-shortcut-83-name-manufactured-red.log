@@ -1,0 +1,11 @@
+== manufactured red: 8.3 归一化被撤掉，只跑 focused ==
+$ go test -count=1 -run TestAppShortcutNativeReadOnly ./internal/platform
+--- FAIL: TestAppShortcutNativeReadOnly (0.21s)
+    --- FAIL: TestAppShortcutNativeReadOnly/long_path (0.17s)
+        apps_shortcut_windows_test.go:40: target="C:\\Users\\<user>\\AppData\\Local\\Temp\\TestAppShortcutNativeReadOnlylong_path4001092446\\001\\literal target.exe" ok=true
+    --- FAIL: TestAppShortcutNativeReadOnly/8.3_short_path (0.04s)
+        apps_shortcut_windows_test.go:40: target="C:\\Users\\<user>\\AppData\\Local\\Temp\\TestAppShortcutNativeReadOnly8.3_short_path1796481254\\001\\literal target.exe" ok=true
+FAIL
+FAIL	github.com/<user>/quick-cleaner/internal/platform	1.049s
+FAIL
+exit=1

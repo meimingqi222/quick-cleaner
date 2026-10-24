@@ -1,0 +1,14 @@
+== restored: focused run ==
+$ go test -count=1 -run TestAppShortcutNativeReadOnly ./internal/platform -v
+=== RUN   TestAppShortcutNativeReadOnly
+=== RUN   TestAppShortcutNativeReadOnly/long_path
+=== RUN   TestAppShortcutNativeReadOnly/8.3_short_path
+--- PASS: TestAppShortcutNativeReadOnly (0.24s)
+    --- PASS: TestAppShortcutNativeReadOnly/long_path (0.18s)
+    --- PASS: TestAppShortcutNativeReadOnly/8.3_short_path (0.06s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/platform	1.218s
+exit=0
+$ go test -count=1 ./internal/platform
+ok  	github.com/<user>/quick-cleaner/internal/platform	6.892s
+exit=0
