@@ -1,0 +1,4 @@
+=== RUN   TestAppDiscoveryVendorLauncherBelongsToRegisteredApp
+--- PASS: TestAppDiscoveryVendorLauncherBelongsToRegisteredApp (0.01s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/core	1.484s

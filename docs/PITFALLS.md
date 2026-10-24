@@ -1050,6 +1050,14 @@ Note: `2026-10-25-uninstall-failure-notice.md`
 - **防护**：`core` 把已知失败类型化成 `UninstallerExitError`/`ErrUninstallNotSettled`/`StillRegisteredError`；**可恢复的 winget 拒绝（`0x8A150057` 便携包哈希漂移）自动追加 `--force` 重试一次**，形态与既有 `0x8A15007D` 桌面用户重试一致；`uninstallFailureNotice` 产出双语提示，说明未删除任何文件、保留退出码，`Forced` 为真时如实说「已自动加 --force 重试」；未分类错误仍用原文。回归见 Note。
 - **禁止回退**：不能把 `err.Error()` 直接塞进 Notice（会再次出现整句英文）；不能为了本地化丢掉退出码（报障需要它）；不能在卸载失败后改用删除文件兜底（会绕过官方卸载器的校验）；不能给未分类错误编翻译；**不能把用户指到「设置 → 应用」**——winget 包的 ARP `UninstallString` 就是同一条 `winget uninstall` 命令，照做只会同样失败；**不能把 `--force` 重试退回成提示用户自己跑**——那是程序能做的恢复动作；已带 `--force` 的命令不能重复追加。
 
+## P87 厂商启动器不在登记安装目录下，不能再列成未登记应用
+
+Note: `2026-10-25-vendor-launcher-dedup.md`
+
+- **症状**：Qoder、Qoder CN 各出现两次：一条是登记的 `Qoder 0.4.11`，另一条是约 115 KB 的「未登记 · 无官方卸载入口」。
+- **根因**：快捷方式指向 `%LOCALAPPDATA%\Qoder\Qoder Launcher\Qoder Launcher.exe`，不在登记安装目录 `%LOCALAPPDATA%\Programs\Qoder` 之下，子树覆盖判断漏掉了它。
+- **防护**：`discoverAppCandidates` 只在两条同时成立时不列这个快捷方式候选：快捷方式名等于去掉版本号的登记名；目标的某一级祖先目录与安装目录同名。只隐藏条目，不授予删除权。回归见 Note。
+- **禁止回退**：不能只凭快捷方式名或只凭目录名认领（同名便携版会消失）；不能用前缀或包含匹配（`Qoder` 会认领 `Qoder CN`）；不能借此把启动器目录当成登记应用的卸载范围（P14）。
 ## P88 面板专属的说明不能塞进共享的 Notice 字段
 
 Note: `2026-10-25-residual-notice-leak.md`
