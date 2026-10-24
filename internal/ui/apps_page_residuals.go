@@ -28,6 +28,9 @@ func (s AppsPage) residualReview(c *ui.Context, a AppsPageActions, t appsPageCop
 			}
 			ui.Text(c, title).FontSize(18).Bold()
 			ui.Text(c, description).FontSize(12).TextColor(muted)
+			if notice := s.ResidualNotice.Get(s.Language); notice != "" {
+				ui.Text(c, notice).FontSize(12).Padding(12).Background(cautionContainer).TextColor(caution).Radius(8)
+			}
 			if notice := s.Notice.Get(s.Language); notice != "" {
 				ui.Text(c, notice).FontSize(12).Padding(12).Background(cautionContainer).TextColor(caution).Radius(8)
 			}

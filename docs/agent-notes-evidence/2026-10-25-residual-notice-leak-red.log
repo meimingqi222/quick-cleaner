@@ -1,0 +1,12 @@
+== manufactured red: 撤掉两处保护（关闭不清理说明 + 正文渲染说明），focused ==
+$ go test -count=1 -run 'TestResidualNoticeStaysInThePanel|TestClosingResidualReviewDropsOnlyItsOwnExplanation' ./internal/ui ./internal/app
+--- FAIL: TestResidualNoticeStaysInThePanel (0.02s)
+    apps_page_test.go:473: panel explanation painted on the page body: [Applications Manager Analyze disk usage and thoroughly clean residual files Desktop Apps Dev Environments Each selected item is checked again before deletion. Total Estimated Size 2 GB Installed Applications 1 Apps Rarely Used (>90 days) 1 Apps Presets: All Apps Large Apps (>500MB) Rarely Used (>90d) Invalid Uninstaller 1 apps Search apps by name or publisher… Name & Version (1 apps) Publisher Last Used Installed Date Size ▼ Actions A Alpha v1.2 Acme 2026-10-20 2026-09-01 2 GB Uninstall Force Clean ··· ··· Displaying 1 apps (Total 1 installed) Total Size: 2 GB]
+FAIL
+FAIL	github.com/<user>/quick-cleaner/internal/ui	1.459s
+--- FAIL: TestClosingResidualReviewDropsOnlyItsOwnExplanation (0.00s)
+    root_test.go:369: explanation outlived the panel: "勾选的项目在删除前会再确认一次：应用确实已卸载、文件没有被替换、当前没被占用；任一项不通过就整批不删。"
+FAIL
+FAIL	github.com/<user>/quick-cleaner/internal/app	1.258s
+FAIL
+exit=1

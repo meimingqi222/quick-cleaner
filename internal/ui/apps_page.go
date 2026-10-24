@@ -79,7 +79,10 @@ type AppsPage struct {
 	// The controller supplies bilingual payloads; an empty notice is not a success.
 	// Occupancy is explanatory scan evidence, not a deletion gate.
 	ResidualTitle, ResidualDescription, Notice core.Text
-	Occupancy                                  core.ResidualOccupancy
+	// ResidualNotice explains what the review guarantees. It belongs to the panel:
+	// rendering it on the page body left it behind as a stray banner after closing.
+	ResidualNotice core.Text
+	Occupancy      core.ResidualOccupancy
 }
 
 type AppsPageActions struct {

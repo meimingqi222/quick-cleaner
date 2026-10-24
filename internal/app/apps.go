@@ -193,11 +193,11 @@ func (r *Root) appsActions() view.AppsPageActions {
 		RenderDevEnvironments: func(c *ui.Context) { r.dev.RenderContent(c, r.devActions()) },
 		ScanOrphanLeftovers:   r.scanOrphanResiduals, CleanSelectedResiduals: r.requestResidualClean,
 		OpenSystemExtensionSettings: func() { go func() { err := platform.OpenLoginItemsSettings(); r.publish(func() { r.failure(err) }) }() },
-		CloseResiduals: func() {
-			if !r.busy() {
-				r.apps.ResidualsOpen = false
-			}
-		},
+	CloseResiduals: func() {
+		if !r.busy() {
+			r.closeResiduals()
+		}
+	},
 		SelectRecommended: func() { r.selectResiduals(1) }, SelectAllResiduals: func() { r.selectResiduals(2) }, ClearResidualSelection: func() { r.selectResiduals(0) },
 		SetResidualSelected: func(id string, selected bool) {
 			if r.busy() {

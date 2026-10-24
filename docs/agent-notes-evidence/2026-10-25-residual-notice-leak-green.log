@@ -1,0 +1,16 @@
+== restored: 面板说明只在面板内，关闭时一并清理 ==
+$ go test -count=1 -run 'TestResidualNoticeStaysInThePanel|TestClosingResidualReviewDropsOnlyItsOwnExplanation' ./internal/ui ./internal/app -v
+=== RUN   TestResidualNoticeStaysInThePanel
+--- PASS: TestResidualNoticeStaysInThePanel (0.02s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/ui	1.482s
+=== RUN   TestClosingResidualReviewDropsOnlyItsOwnExplanation
+--- PASS: TestClosingResidualReviewDropsOnlyItsOwnExplanation (0.00s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/app	1.478s
+exit=0
+$ go test -count=1 ./internal/ui ./internal/app ./internal/core
+ok  	github.com/<user>/quick-cleaner/internal/ui	3.805s
+ok  	github.com/<user>/quick-cleaner/internal/app	2.259s
+ok  	github.com/<user>/quick-cleaner/internal/core	51.351s
+exit=0

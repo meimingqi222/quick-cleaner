@@ -25,10 +25,27 @@ func (r *Root) showResiduals(result core.ResidualScanResult, app *core.Installed
 	r.apps.ResidualSize = core.FmtSize(total)
 	r.residualSummary()
 	r.apps.Occupancy = result.Occupancy
-	r.apps.Notice = core.NewText("仅清理单独确认的残留；删除前重新验证应用不存在、目标身份及占用。", "Only separately confirmed residuals can be removed; application absence, target identity and occupancy are revalidated before disposal.")
+	// 说人话：勾选不等于一定会删，删除前还会再核一次，任一项不通过就整批不删。
+	r.apps.ResidualNotice = core.NewText(
+		"勾选的项目在删除前会再确认一次：应用确实已卸载、文件没有被替换、当前没被占用；任一项不通过就整批不删。",
+		"Before deleting, each selected item is checked again: the app is really gone, the file has not been replaced, and nothing is using it. If any check fails, nothing is deleted.",
+	)
 	if app != nil && app.Discovery != nil {
-		r.apps.Notice = core.NewText("来源安装仅允许清理冻结范围内、实时归属与占用复核通过的所选残留。", "Source-install cleanup is limited to selected frozen targets whose live ownership and vacancy are verified.")
+		r.apps.ResidualNotice = core.NewText(
+			"这是来源安装扫描出的项目：只清理扫描时冻结、且归属与占用复核通过的所选项目。",
+			"These came from a source-install scan: only selected targets frozen at scan time that pass the live ownership and occupancy checks are cleaned.",
+		)
 	}
+}
+
+// closeResiduals drops the review and its explanation together. The explanation
+// describes the panel, so keeping it painted an unrelated banner on the page body.
+func (r *Root) closeResiduals() {
+	r.apps.ResidualsOpen = false
+	r.apps.Residuals = nil
+	r.apps.ResidualSize, r.apps.SelectedSize = "0 B", "0 B"
+	r.apps.Occupancy = core.ResidualOccupancy{}
+	r.apps.ResidualNotice = core.Text{}
 }
 
 func (r *Root) residualSummary() {
@@ -130,10 +147,7 @@ func (r *Root) requestResidualClean() {
 			// cannot be deleted, so reopening turns one clean into one popup per click.
 			// The counts are reported above and the scan entry can list leftovers again.
 			r.residual.Items = remaining
-			r.apps.ResidualsOpen = false
-			r.apps.Residuals = nil
-			r.apps.ResidualSize, r.apps.SelectedSize = "0 B", "0 B"
-			r.apps.Occupancy = core.ResidualOccupancy{}
+			r.closeResiduals()
 		}
 	})
 }

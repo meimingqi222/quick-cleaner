@@ -1049,3 +1049,13 @@ Note: `2026-10-25-uninstall-failure-notice.md`
 - **根因**：`apps.go` 用 `core.SameText(err.Error())` 直接把错误原文当展示文案；真实原因（winget 便携包哈希与 ARP 登记不一致，`0x8A150057`）只在 winget 日志里。
 - **防护**：`core` 把已知失败类型化成 `UninstallerExitError`/`ErrUninstallNotSettled`/`StillRegisteredError`；**可恢复的 winget 拒绝（`0x8A150057` 便携包哈希漂移）自动追加 `--force` 重试一次**，形态与既有 `0x8A15007D` 桌面用户重试一致；`uninstallFailureNotice` 产出双语提示，说明未删除任何文件、保留退出码，`Forced` 为真时如实说「已自动加 --force 重试」；未分类错误仍用原文。回归见 Note。
 - **禁止回退**：不能把 `err.Error()` 直接塞进 Notice（会再次出现整句英文）；不能为了本地化丢掉退出码（报障需要它）；不能在卸载失败后改用删除文件兜底（会绕过官方卸载器的校验）；不能给未分类错误编翻译；**不能把用户指到「设置 → 应用」**——winget 包的 ARP `UninstallString` 就是同一条 `winget uninstall` 命令，照做只会同样失败；**不能把 `--force` 重试退回成提示用户自己跑**——那是程序能做的恢复动作；已带 `--force` 的命令不能重复追加。
+
+## P88 面板专属的说明不能塞进共享的 Notice 字段
+
+Note: `2026-10-25-residual-notice-leak.md`
+
+- **症状**：关掉残留面板后，应用页正文顶部一直挂着一条橙色横幅「仅清理单独确认的残留；删除前重新验证应用不存在、目标身份及占用。」，下面跟着统计卡片，看起来像页面级的警告。
+- **根因**：`showResiduals` 把面板说明写进 `r.apps.Notice`，而 `Notice` 同时在面板内和页面正文两处渲染；关闭面板只置 `ResidualsOpen = false`，全仓库唯一的清空点在应用列表重扫完成时，于是说明留在正文。文案本身也混用了 `目标身份`/`占用` 这类内部术语。
+- **防护**：拆出 `AppsPage.ResidualNotice` 只供面板渲染，`Notice` 继续承担真实错误提示；新增 `closeResiduals()` 统一关闭面板并清说明，`CloseResiduals` 动作与清理收尾都走它。回归见 Note。
+- **禁止回退**：不能把面板说明写回 `Notice`（会重新泄漏到正文）；不能在关闭时直接清空 `Notice`（会连真正的失败提示一起抹掉）；不能让面板状态有多个关闭入口，绕过 `closeResiduals`；文案不能再出现「目标身份」「占用」这类用户读不懂的词。
+

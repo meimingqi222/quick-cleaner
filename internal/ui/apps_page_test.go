@@ -462,3 +462,20 @@ func TestAppsTableHeadersAlignWithTheirCells(t *testing.T) {
 		t.Fatalf("Size title ends %.0fpx from its cells", d)
 	}
 }
+
+// 面板说明属于面板：面板关着的时候不能画在页面正文里（那会变成一条没有上下文的横幅）。
+func TestResidualNoticeStaysInThePanel(t *testing.T) {
+	const text = "Each selected item is checked again before deletion."
+	s := appsPageFixture()
+	s.ResidualNotice = core.NewText("勾选的项目在删除前会再确认一次。", text)
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderContent(c, AppsPageActions{}) }, 1280, 800)
+	if tt.HasText(text) {
+		t.Fatalf("panel explanation painted on the page body: %v", tt.Texts())
+	}
+	s.ResidualsOpen = true
+	s.Residuals = []AppsPageResidual{{ID: "cache", Path: "p", Size: "1 MB", Confidence: core.Certain, Source: core.ResidualCacheDir, Kind: core.ResidualDirectory, Selected: true}}
+	tt.Frame()
+	if !tt.HasText(text) {
+		t.Fatalf("panel lost its explanation: %v", tt.Texts())
+	}
+}

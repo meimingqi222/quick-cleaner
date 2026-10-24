@@ -349,3 +349,29 @@ func TestResidualCleanDoesNotReopenTheReviewPanel(t *testing.T) {
 		t.Fatal("cleaning reopened the residual review panel")
 	}
 }
+
+// 关闭残留面板要带走面板说明，但不能把真正的失败提示一起清掉——两者原本共用一个
+// Notice 字段，这正是文案泄漏到页面正文的根因。
+func TestClosingResidualReviewDropsOnlyItsOwnExplanation(t *testing.T) {
+	r, _ := testRoot(t)
+	app := core.InstalledApp{ID: "example", Name: "Example"}
+	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: "p"}, core.ResidualCacheDir)
+	r.showResiduals(core.ResidualScanResult{AppName: app.Name, Items: []core.ResidualItem{item}}, &app)
+	if r.apps.ResidualNotice.Get(core.Chinese) == "" {
+		t.Fatal("panel has no explanation")
+	}
+	if !r.apps.ResidualsOpen {
+		t.Fatal("panel did not open")
+	}
+	r.apps.Notice = core.NewText("授权失败", "authority failed")
+	r.closeResiduals()
+	if r.apps.ResidualNotice.Get(core.Chinese) != "" {
+		t.Fatalf("explanation outlived the panel: %q", r.apps.ResidualNotice.Get(core.Chinese))
+	}
+	if r.apps.Notice.Get(core.Chinese) != "授权失败" {
+		t.Fatal("closing the review cleared a real failure notice")
+	}
+	if r.apps.ResidualsOpen || len(r.apps.Residuals) != 0 {
+		t.Fatal("review state survived the close")
+	}
+}
