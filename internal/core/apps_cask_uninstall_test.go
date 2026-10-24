@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
@@ -49,6 +50,9 @@ func newCaskFixture(t *testing.T) caskFixture {
 func (f caskFixture) metadata(string) (*string, *string) { return &f.app.RegistrySubpath, nil }
 
 func TestAppCaskUninstallerReceiptBoundContract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew cask fixture; macOS product path")
+	}
 	for _, scenario := range []string{"no-owner", "other-copy", "multi-app", "unsupported-tap", "old-token", "ruby", "corrupt", "invalid-utf8", "missing", "mismatch-id", "changed-receipt", "nonzero", "timeout", "app-remains", "receipt-remains", "definition-remains", "success"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newCaskFixture(t)
@@ -144,6 +148,9 @@ func TestAppCaskUninstallerReceiptBoundContract(t *testing.T) {
 }
 
 func TestAppCaskUninstallerMultipleOwnersAndLatestDefinition(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew cask fixture; macOS product path")
+	}
 	f := newCaskFixture(t)
 	newer := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(f.definition))), "20261016100000", "Casks", "renamed.json")
 	caskWrite(t, newer, []byte(`{"artifacts":[{"app":["Selected.app"]},{"app":["Companion.app"]}]}`))

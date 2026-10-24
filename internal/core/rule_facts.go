@@ -230,11 +230,23 @@ func jsonPointer(v any, p string) (any, bool) {
 	}
 	return v, true
 }
-func ConfinedRuleFile(root, target string) (bool, error) { return confinedRulePath(root, target, true) }
-func ConfinedRulePath(root, target string) (bool, error) {
-	return confinedRulePath(root, target, false)
+
+// ruleLstat is the default ancestor probe; tests count calls through it.
+var ruleLstat = os.Lstat
+
+func ConfinedRuleFile(root, target string) (bool, error) {
+	return confinedRulePath(root, target, true, nil, nil)
 }
-func confinedRulePath(root, target string, fileOnly bool) (bool, error) {
+func ConfinedRulePath(root, target string) (bool, error) {
+	return confinedRulePath(root, target, false, nil, nil)
+}
+func confinedRulePath(root, target string, fileOnly bool, lstat func(string) (os.FileInfo, error), eval func(string) (string, error)) (bool, error) {
+	if lstat == nil {
+		lstat = ruleLstat
+	}
+	if eval == nil {
+		eval = filepath.EvalSymlinks
+	}
 	if strings.HasPrefix(target, root+string(filepath.Separator)) {
 		for _, part := range strings.Split(strings.TrimPrefix(target, root+string(filepath.Separator)), string(filepath.Separator)) {
 			if part == "." || part == ".." {
@@ -246,7 +258,7 @@ func confinedRulePath(root, target string, fileOnly bool) (bool, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return false, errors.New("evidence escapes root")
 	}
-	md, err := os.Lstat(root)
+	md, err := lstat(root)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -256,7 +268,7 @@ func confinedRulePath(root, target string, fileOnly bool) (bool, error) {
 	if ruleEvidenceLink(md) {
 		return false, errors.New("redirected evidence root")
 	}
-	real, err := filepath.EvalSymlinks(root)
+	real, err := eval(root)
 	if err != nil {
 		return false, err
 	}
@@ -266,7 +278,7 @@ func confinedRulePath(root, target string, fileOnly bool) (bool, error) {
 	parts := strings.Split(rel, string(filepath.Separator))
 	for i, p := range parts {
 		real = filepath.Join(real, p)
-		md, err = os.Lstat(real)
+		md, err = lstat(real)
 		if os.IsNotExist(err) {
 			return false, nil
 		}

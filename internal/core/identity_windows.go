@@ -10,8 +10,12 @@ func identityMetadata(id TargetIdentity, _ os.FileInfo) (TargetIdentity, bool) {
 	return id, true
 }
 
-func captureStable(id *TargetIdentity, path string) {
-	id.stable, id.hasStable = platform.ObjectID(path)
+func captureStable(id *TargetIdentity, path string, lstat func(string) (os.FileInfo, error)) {
+	if lstat == nil {
+		id.stable, id.hasStable = platform.ObjectID(path)
+		return
+	}
+	id.stable, id.hasStable = platform.ObjectIDUsing(path, lstat)
 }
 
 func (id TargetIdentity) recheckMetadata(path string, info os.FileInfo) bool {

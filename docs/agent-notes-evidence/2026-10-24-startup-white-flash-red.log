@@ -1,0 +1,5 @@
+--- FAIL: TestStartupWindowStaysCloakedUntilFirstFrame (0.00s)
+    startup_windows_test.go:60: before frame cloaks=[] shows=1
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.457s
+FAIL

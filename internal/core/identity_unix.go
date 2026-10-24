@@ -16,7 +16,7 @@ func identityMetadata(id TargetIdentity, info os.FileInfo) (TargetIdentity, bool
 	return id, true
 }
 
-func captureStable(_ *TargetIdentity, _ string) {}
+func captureStable(_ *TargetIdentity, _ string, _ func(string) (os.FileInfo, error)) {}
 
 func (id TargetIdentity) recheckMetadata(_ string, info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)

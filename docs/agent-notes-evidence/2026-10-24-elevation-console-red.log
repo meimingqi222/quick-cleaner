@@ -1,0 +1,5 @@
+--- FAIL: TestElevationShowCmdHidesOnlyConsolePrograms (0.00s)
+    security_test.go:10: console elevation shows a window
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.852s
+FAIL

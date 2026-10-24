@@ -114,7 +114,7 @@ pub fn occupants(path: &Path) -> Result<Vec<Occupant>, String> {
     }
     let mut owners = BTreeMap::new();
     for info in infos.into_iter().take(count as usize) {
-        if matches!(info.ApplicationType, RmService | RmCritical | RmExplorer) {
+        if [RmService, RmCritical, RmExplorer].contains(&info.ApplicationType) {
             return Err("service-or-critical-owner; manual-action-required".into());
         }
         let pid = info.Process.dwProcessId;

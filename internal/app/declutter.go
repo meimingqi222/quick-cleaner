@@ -67,6 +67,7 @@ func (r *Root) scanDeclutter() {
 				return
 			}
 			r.declutter.Scanned = true
+			r.declutter.Shown = nil
 			r.declutter.Downloads = downloads
 			r.declutter.LargeFiles = large
 			r.declutter.Duplicates = duplicates
@@ -89,7 +90,7 @@ func (r *Root) filterLarge() {
 }
 
 func (r *Root) declutterActions() view.DeclutterPageActions {
-	return view.DeclutterPageActions{SetTab: func(t view.DeclutterTab) { r.declutter.Tab = t }, Scan: r.scanDeclutter,
+	return view.DeclutterPageActions{SetTab: func(t view.DeclutterTab) { r.declutter.Tab = t }, Scan: r.scanDeclutter, ShowMore: r.declutter.ShowMore,
 		CycleSizeFilter: func() {
 			values := []uint64{0, 100000000, 500000000, 1000000000}
 			next := uint64(0)

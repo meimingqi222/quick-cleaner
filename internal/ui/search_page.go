@@ -76,7 +76,7 @@ func (s SearchPage) RenderContent(c *ui.Context, a SearchPageActions) {
 	t := searchPageStrings(s.Language)
 	ui.Column(c.Key("file-search-view")).Fill().MinWidth(0).MinHeight(0).Padding(20).Gap(16).Background(card).TextColor(text).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
-			ui.Text(c, t.heading).FontSize(20).Bold()
+			ui.Text(c, t.heading).FontSize(18).Bold()
 			ui.Text(c, t.subheading).FontSize(12).TextColor(muted)
 		})
 		ui.Row(c).FillWidth().Padding(12).Gap(12).Radius(12).Border(1, outlineVariant.Alpha(.5)).Children(func() {
@@ -129,36 +129,48 @@ func (s SearchPage) RenderContent(c *ui.Context, a SearchPageActions) {
 								label += " ▼"
 							}
 						}
-						button := appsPageButton(c, fmt.Sprintf("search-sort-%d", col), label, a.SortBy == nil, false, func() { a.SortBy(col) }).FillWidth().Justify(ui.Start).Padding(0).Border(0, ui.Transparent).Background(ui.Transparent).FontWeight(600)
-						if col == SearchSortSize {
-							button.Justify(ui.End)
-						}
-						if s.SortColumn == col {
-							button.TextColor(primary)
-						}
+						tableHeaderButton(c, fmt.Sprintf("search-sort-%d", col), label, s.SortColumn == col, col == SearchSortSize, func() {
+							if a.SortBy != nil {
+								a.SortBy(col)
+							}
+						})
 					})
 				}
 				ui.Text(c, t.columns[3]).Width(140).Shrink(0).FontSize(12).TextColor(muted).TextAlign(ui.Center)
 			})
 			if len(s.Results) == 0 {
-				ui.Box(c).Grow(1).MinHeight(0).FillWidth().Center().Children(func() { ui.Text(c, t.noResults).FontSize(14).TextColor(muted) })
+				title, hint := s.emptyCopy(t)
+				ui.Column(c).Grow(1).MinHeight(0).FillWidth().Center().Gap(8).Children(func() {
+					icon(c, Search, outline, 28)
+					ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(muted)
+					ui.Text(c, hint).FontSize(12).TextColor(outline)
+				})
 			} else {
 				ui.List(c.Key("search-results-rows"), nil, len(s.Results)).Grow(1).MinHeight(0).FillWidth().Gap(0).ItemKey(func(i int) any { return s.Results[i].Path }).Rows(func(row ui.ListRow) {
 					s.resultRow(row.Context, s.Results[row.Index], t, a)
 				})
 			}
-			format := t.matched
-			if strings.TrimSpace(s.Query) == "" {
-				format = t.top
-			}
+			// The count lives in the status chip above; the footer keeps the hints.
 			ui.Row(c).FillWidth().Padding(8, 20).Gap(16).Background(surfaceLow).Children(func() {
-				ui.Text(c, fmt.Sprintf(format, len(s.Results))).FontSize(12).TextColor(muted).Shrink(0)
 				ui.Spacer(c)
 				ui.Text(c, t.hint).MinWidth(0).SingleLine().FontSize(12).TextColor(muted)
 				ui.Text(c, t.limit).Shrink(0).FontSize(12).TextColor(outline)
 			})
 		})
 	})
+}
+
+// emptyCopy explains an empty table: no index yet, nothing typed yet, or a
+// query that matched nothing. Only the last is a "not found".
+func (s SearchPage) emptyCopy(t searchPageCopy) (string, string) {
+	switch {
+	case !s.Ready:
+		return t.notReadyTitle, t.notReadyHint
+	case strings.TrimSpace(s.Query) == "":
+		return t.startTitle, t.startHint
+	default:
+		return t.noResults, t.noMatchHint
+	}
 }
 
 func (s SearchPage) status(t searchPageCopy) (string, ui.Color) {
@@ -192,9 +204,7 @@ func searchColumn(c *ui.Context, i int) ui.Element {
 
 func (s SearchPage) resultRow(c *ui.Context, hit core.SearchHit, t searchPageCopy, a SearchPageActions) {
 	row := ui.Row(c.Key(hit.Path)).FillWidth().Height(34).Shrink(0).Padding(0, 20).Gap(12).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.2))
-	if row.Hovered() {
-		row.Background(surfaceLow)
-	}
+	interactiveRow(row, ui.Transparent, surfaceLow)
 	row.Children(func() {
 		searchColumn(c, 0).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).Tooltip(hit.Name).Children(func() {

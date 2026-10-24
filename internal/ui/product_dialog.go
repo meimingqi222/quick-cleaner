@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"time"
+
 	"fmt"
 	"math"
 	"strings"
@@ -43,14 +45,23 @@ type ConfirmationDialogActions struct {
 func productDialogFrame(c *ui.Context, key, title string, width, padding, gap float32, body func()) {
 	w, h := c.Size()
 	ui.Overlay(c.Key(key), func() {
-		back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().Background(ui.RGBA(0, 0, 0, .4)).Modal()
+		back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().Modal()
+		// The dialog fades in and grows from 96%; the overlay is new each
+		// time, so an Enter transition has no previous frame to start from.
+		// Keyframes play once on the first build; reduced motion ends at 1.
+		enter := back.Keyframes("qc-dialog-enter", dialogEnter)
+		back.Background(ui.RGBA(0, 0, 0, .4*enter))
 		// Swallow Escape without changing the caller's explicit open snapshot.
 		back.OverlayShortcut(0, ui.KeyEscape)
 		back.Children(func() {
-			ui.Column(c).Role(ui.RoleDialog).Label(title).Width(width).MaxWidth(max(float32(0), w-32)).MaxHeight(max(float32(0), h-32)).Padding(padding).Gap(gap).Radius(12).Background(card).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, .3)).Children(body)
+			scale := 0.96 + 0.04*enter
+			ui.Column(c).Role(ui.RoleDialog).Label(title).Width(width).MaxWidth(max(float32(0), w-32)).MaxHeight(max(float32(0), h-32)).Padding(padding).Gap(gap).Radius(12).Background(card).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, .3)).Opacity(enter).Scale(scale, scale).Children(body)
 		})
 	})
 }
+
+// dialogEnter is the 0→1 progress of a dialog appearing.
+var dialogEnter = []ui.Keyframe{{At: 0, Value: 0}, {At: 180 * time.Millisecond, Value: 1, Ease: ui.EaseOut}}
 
 func productDialogButton(c *ui.Context, key, label string, disabled, accent, danger bool, action func()) {
 	b := ui.Button(c.Key(key), label).Disabled(disabled || action == nil).FontSize(12).Padding(8, 12).Radius(8)

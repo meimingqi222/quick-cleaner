@@ -221,6 +221,12 @@ func (e *FSIndexEngine) MeasurePath(ctx context.Context, path string) (PathMeasu
 		idx, _ := e.tree.FindNodeByPath(path)
 		return PathMeasurement{Size: e.tree.SizeOf(idx), Files: e.tree.FileCountOf(idx)}, true
 	}
+	return measurePathShared(ctx, path, make(chan struct{}, max(1, runtime.GOMAXPROCS(0)-1)))
+}
+
+// measurePathShared lets concurrent callers share one fan-out budget, so N
+// parallel measurements do not each spawn GOMAXPROCS directory goroutines.
+func measurePathShared(ctx context.Context, path string, slots chan struct{}) (PathMeasurement, bool) {
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
 		return PathMeasurement{}, false
@@ -228,7 +234,7 @@ func (e *FSIndexEngine) MeasurePath(ctx context.Context, path string) (PathMeasu
 	if info.Mode().IsRegular() {
 		return PathMeasurement{allocatedBytes(info), 1, fileMtime(info)}, true
 	}
-	result := measureDirectory(ctx, path, 0, make(chan struct{}, max(1, runtime.GOMAXPROCS(0)-1)))
+	result := measureDirectory(ctx, path, 0, slots)
 	return result, ctx.Err() == nil
 }
 func mergeMeasurement(a, b PathMeasurement) PathMeasurement {

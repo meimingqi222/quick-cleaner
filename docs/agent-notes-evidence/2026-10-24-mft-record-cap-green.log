@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestMFTRecordCountFollowsRunsNotAFixedCap
+--- PASS: TestMFTRecordCountFollowsRunsNotAFixedCap (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.769s

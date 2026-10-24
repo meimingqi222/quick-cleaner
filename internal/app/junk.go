@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
@@ -22,6 +24,11 @@ func (r *Root) scanJunk() {
 		return
 	}
 	lastBrew := r.settings.BrewCleanupAt
+	// Snapshot indexes on the caller thread. The worker must not read them later.
+	// Unelevated Windows passes no acquire, so this scan cannot open $MFT.
+	indexes := volumeIndexes(r)
+	owner := r.diskOwner
+	elevated := runtime.GOOS == "windows" && platform.IsElevated()
 	r.junk.Scanning = true
 	r.message("正在扫描可清理内容…", "Scanning for cleanable content…")
 	r.start(false, nil, func(ctx context.Context) func() {
@@ -37,23 +44,74 @@ func (r *Root) scanJunk() {
 			targets = append(targets, core.MacOSSnapshotTargets(rules)...)
 			targets = append(targets, core.BrewScanTargets(rules, lastBrew)...)
 		}
-		cats := core.ScanFixed(ctx, targets, nil)
+		// Phase-1 targets only. Discovered build artifacts are not in this set.
+		busyPaths := make([]string, len(targets))
+		for i := range targets {
+			busyPaths[i] = targets[i].Path
+		}
+		busyDone := make(chan map[string]core.Busy, 1)
+		go func() { busyDone <- core.DetectInUse(busyPaths) }()
+		// Generation is captured on the main thread. The detector never reads it.
+		r.armJunkBusy(busyDone)
+		var acquire func(context.Context, core.VolumeID) (*core.SizeTree, error)
+		if elevated {
+			acquire = func(ctx context.Context, v core.VolumeID) (*core.SizeTree, error) {
+				var result *core.ScanResult
+				var err error
+				if owner != nil {
+					result, err = owner.Load(ctx, v)
+				} else {
+					result, err = scanNativeVolume(ctx, v)
+				}
+				if err != nil || result == nil {
+					return nil, err
+				}
+				return result.Tree, nil
+			}
+		}
+		plan := core.BeginJunkIndex(ctx, elevated, home, platform.ListVolumes(), indexes, targets, acquire)
+		cats := core.ScanFixed(ctx, targets, plan.Query)
 		var discovered []core.ScanItem
+		partial := false
 		if ctx.Err() == nil {
 			// Ownership of cats transfers to the main thread. Discovery returns a
 			// separate slice; no worker may merge into the published categories.
+			acquired := plan.Acquired
 			r.publish(func() {
 				if ctx.Err() != nil {
 					return
+				}
+				if acquired != nil {
+					mount := acquired.Volume().MountPoint()
+					if r.searchTrees[mount] == nil {
+						r.searchTrees[mount] = acquired
+					}
 				}
 				r.junk.Categories = cats
 				r.junk.Scanned = true
 				r.junk.Scanning, r.junk.Discovering = false, true
 				r.selectJunk(view.JunkRecommended)
 				r.junkSummary()
+				r.applyReadyJunkBusy()
 				r.message(fmt.Sprintf("系统垃圾扫描完成，共 %s；正在后台检索项目构建产物…", r.dashboard.Cleanable), fmt.Sprintf("System junk scanned — %s; still looking for build artifacts…", r.dashboard.Cleanable))
 			})
-			discovered = core.DiscoverBuildArtifacts(ctx, rules, core.CodeRoots(home, nil), nil)
+			discoverStarted := time.Now()
+			if !elevated {
+				log.Printf("未提权，发现式扫描走遍历通道（慢得多）")
+			}
+			discovered, partial = plan.DiscoverWithin(ctx, rules, core.DiscoveryBudget)
+			discovered = core.DropVanishedDiscovered(discovered)
+			channel := "MFT"
+			if !elevated {
+				channel = "遍历"
+			}
+			var discoveredBytes uint64
+			for _, item := range discovered {
+				discoveredBytes += item.Size
+			}
+			discoverElapsed := time.Since(discoverStarted)
+			log.Printf("发现式扫描走 %s 通道：%s，%d 条", channel, discoverElapsed, len(discovered))
+			log.Printf("阶段二 scan_discovered 完成：%s，%d 条，合计 %s", time.Since(discoverStarted), len(discovered), core.FmtSize(discoveredBytes))
 		}
 		cancelled := ctx.Err()
 		return func() {
@@ -62,16 +120,77 @@ func (r *Root) scanJunk() {
 				r.failure(cancelled)
 				return
 			}
-			core.MergeDiscovered(r.junk.Categories, discovered, false)
+			core.MergeDiscovered(r.junk.Categories, discovered, partial)
 			for _, item := range discovered {
 				if _, exists := r.junk.Selected[item.Path]; !exists {
 					r.junk.Selected[item.Path] = item.Recommended
 				}
 			}
 			r.junkSummary()
+			r.applyReadyJunkBusy()
 			r.message(fmt.Sprintf("扫描完成，共发现 %s 可清理", r.dashboard.Cleanable), fmt.Sprintf("Scan complete — %s cleanable", r.dashboard.Cleanable))
 		}
 	})
+}
+
+// armJunkBusy posts the occupancy result back to the main thread. The scan
+// generation is read there, after start has stored it.
+func (r *Root) armJunkBusy(busyDone <-chan map[string]core.Busy) {
+	r.publish(func() {
+		gen := r.generation
+		go func() {
+			busy := <-busyDone
+			r.publish(func() {
+				if gen != r.generation {
+					return
+				}
+				r.junkBusy = busy
+				r.junkBusyGen = gen
+				r.junkBusySet = true
+				if r.junk.Scanned {
+					r.applyJunkBusy(busy)
+				}
+			})
+		}()
+	})
+}
+
+func volumeIndexes(r *Root) []*core.SizeTree {
+	seen := map[*core.SizeTree]bool{}
+	var out []*core.SizeTree
+	add := func(tree *core.SizeTree) {
+		if tree == nil || seen[tree] {
+			return
+		}
+		seen[tree] = true
+		out = append(out, tree)
+	}
+	add(r.tree)
+	for _, tree := range r.searchTrees {
+		add(tree)
+	}
+	return out
+}
+
+func (r *Root) applyReadyJunkBusy() {
+	if r.junkBusySet && r.junkBusyGen == r.generation && r.junk.Scanned {
+		r.applyJunkBusy(r.junkBusy)
+	}
+}
+
+func (r *Root) applyJunkBusy(busy map[string]core.Busy) {
+	if !r.junk.Scanned {
+		return
+	}
+	wasRecommended := r.junk.RecommendedSelected
+	if core.ApplyBusy(r.junk.Categories, busy) == 0 {
+		return
+	}
+	if wasRecommended {
+		r.selectJunk(view.JunkRecommended)
+		return
+	}
+	r.junkSummary()
 }
 
 func pathUnder(path, root string) bool {

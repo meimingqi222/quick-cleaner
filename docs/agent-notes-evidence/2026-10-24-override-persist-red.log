@@ -1,0 +1,7 @@
+# guard removed: persist never takes the override-only path (linux test binary run under WSL)
+=== RUN   TestOverrideDeltaMatchesFullEncoderByteForByte
+--- PASS: TestOverrideDeltaMatchesFullEncoderByteForByte (0.09s)
+=== RUN   TestIncrementalPersistDoesNotCopyTheBase
+    disk_index_cache_overrides_test.go:101: incremental persist allocated 142370656 bytes for a 6589160-byte base
+--- FAIL: TestIncrementalPersistDoesNotCopyTheBase (0.70s)
+FAIL

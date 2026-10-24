@@ -292,6 +292,26 @@ func TestMFTScanFixtureExtensionFragmentsAndRecordIndexes(t *testing.T) {
 		t.Fatal("short physical read accepted")
 	}
 }
+
+// The volume's valid length can exceed both any fixed record count and the
+// allocated runs. Rust reads what the runs hold; a large NTFS volume must not
+// fail as corrupt.
+func TestMFTRecordCountFollowsRunsNotAFixedCap(t *testing.T) {
+	g := mftGeometry{Sector: 512, Cluster: 512, Record: 1024, Start: 10, Valid: 8 * 1024}
+	disk := make([]byte, 40*512)
+	first := mftTestRecord(0, false, mftTestData(0, g.Valid, []byte{0x11, 16, 10, 0}))
+	copy(disk[10*512:], mftTestProtect(first))
+	copy(disk[20*512:], mftTestProtect(mftTestRecord(0, true, mftTestName(5, ".", 1))))
+	g.Valid = 32 * 1024 * 1024 * 1024
+	res, err := mftScanReader(context.Background(), bytes.NewReader(disk), VolumeFromDriveLetter('D'), g)
+	if err != nil {
+		t.Fatalf("valid length beyond a fixed cap rejected: %v", err)
+	}
+	if len(res.Entries) != 8 || res.RecordsExpected != 8 || !res.Entries[5].IsDir {
+		t.Fatalf("records must follow the allocated runs: %d expected=%d", len(res.Entries), res.RecordsExpected)
+	}
+}
+
 func TestMFTArbitraryBytesNeverPanic(t *testing.T) {
 	r := rand.New(rand.NewSource(123))
 	for i := 0; i < 2000; i++ {

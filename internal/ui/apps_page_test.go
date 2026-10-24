@@ -263,6 +263,46 @@ func TestAppsPageBilingualOffscreenLayout(t *testing.T) {
 	}
 }
 
+func TestAppsRowsStayVisibleInsideShell(t *testing.T) {
+	s := appsPageFixture()
+	s.Language = Chinese
+	dash := Dashboard{Language: Chinese, Version: "v0.0.16", Freed: "0 B"}
+	tt := ui.NewTester(func(c *ui.Context) {
+		dash.RenderPage(c, Apps, DashboardActions{}, func() {
+			s.RenderContent(c, AppsPageActions{})
+		})
+	}, 1280, 880)
+	for _, label := range []string{"软件全生命周期管理", "Alpha", "v1.2"} {
+		r, ok := tt.Find(label)
+		if !ok || r.W <= 0 || r.H <= 0 || r.Y < 0 || r.Y+r.H > 880 {
+			t.Fatalf("%q not visible: ok=%v %+v", label, ok, r)
+		}
+	}
+}
+
+func TestAppsPageKeepsRowsWhileMeasuring(t *testing.T) {
+	s := appsPageFixture()
+	s.Scanning = true
+	uninstalls := 0
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.RenderContent(c, AppsPageActions{RequestUninstall: func(string) { uninstalls++ }})
+	}, 1280, 800)
+	if !tt.HasText("Alpha") || tt.HasText("Scanning installed applications…") {
+		t.Fatalf("measurement hid the rows: %v", tt.Texts())
+	}
+	if err := tt.Click("Uninstall"); err != nil {
+		t.Fatal(err)
+	}
+	if uninstalls != 0 {
+		t.Fatal("uninstall ran while sizes were still being measured")
+	}
+	s.Apps, s.View = nil, nil
+	tt.Frame()
+	if !tt.HasText("Scanning installed applications…") || tt.HasText("Alpha") {
+		t.Fatal("empty scan lost its loading state")
+	}
+}
+
 func TestAppsPageVirtualRowsAndStableActions(t *testing.T) {
 	s := appsPageFixture()
 	s.Apps, s.View = nil, nil
@@ -388,5 +428,29 @@ func TestAppsPageShellSizedBody(t *testing.T) {
 				t.Fatalf("%q outside shell-sized body: %+v", label, r)
 			}
 		}
+	}
+}
+
+// Column titles were bordered, centred buttons that did not line up with the
+// cells below them.
+func TestAppsTableHeadersAlignWithTheirCells(t *testing.T) {
+	s := appsPageFixture()
+	s.Apps[0].Size = "123.4 MB"
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderContent(c, AppsPageActions{}) }, 1440, 900)
+	find := func(label string) ui.Rect {
+		t.Helper()
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("missing %q: %v", label, tt.Texts())
+		}
+		return r
+	}
+	publisher, acme := find("Publisher"), find("Acme")
+	if d := publisher.X - acme.X; d > 8 || d < -8 {
+		t.Fatalf("Publisher title starts %.0fpx from its cells", d)
+	}
+	size, value := find("Size ▼"), find("123.4 MB")
+	if d := (size.X + size.W) - (value.X + value.W); d > 8 || d < -8 {
+		t.Fatalf("Size title ends %.0fpx from its cells", d)
 	}
 }

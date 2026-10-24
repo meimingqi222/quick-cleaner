@@ -1,0 +1,7 @@
+# guards restored
+=== RUN   TestSecondLaunchFindsAndWakesTheInstance
+--- PASS: TestSecondLaunchFindsAndWakesTheInstance (0.00s)
+=== RUN   TestInstanceObjectsAreReachableFromMediumIntegrity
+--- PASS: TestInstanceObjectsAreReachableFromMediumIntegrity (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.872s

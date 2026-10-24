@@ -56,19 +56,37 @@ type StatusPage struct {
 	SelectedGPU                                          string
 	FanMode                                              core.FanMode
 	FanApplying, FanControlSupported, FanHelperInstalled bool
-	Query                                                string
-	Filter                                               core.ProcFilterTab
-	CurrentUser                                          *string
-	Sort                                                 StatusSort
-	ExpandedGroups                                       map[string]bool
-	SelectedPID                                          *uint32
-	SelectedCPUHistory                                   []float32
-	SelectedMemHistory                                   []uint64
-	CommandCopied                                        bool
+	// FanStale means the highlighted mode has no keepalive after a failed restore.
+	FanStale           bool
+	Query              string
+	Filter             core.ProcFilterTab
+	CurrentUser        *string
+	Sort               StatusSort
+	ExpandedGroups     map[string]bool
+	SelectedPID        *uint32
+	SelectedCPUHistory []float32
+	SelectedMemHistory []uint64
+	CommandCopied      bool
 	// Icons must already be decoded by a controller; rendering never reads files.
 	Icons  map[string]*ui.Bitmap
 	list   ui.ListState
 	search statusSearchState
+	view   processViewCache
+}
+
+// processViewCache keeps the filtered, sorted and grouped process view
+// between frames. Pointer moves and hovers rebuild the page; only a new
+// snapshot or a changed query, filter, sort or expansion recomputes it, as
+// Rust's rebuild_proc_view does once per sample.
+type processViewCache struct {
+	snapshot    *core.StatusSnapshot
+	query, user string
+	filter      core.ProcFilterTab
+	sort        StatusSort
+	filtered    []core.ProcInfo
+	rowsReady   bool
+	expanded    string
+	rows        []statusProcessRow
 }
 
 // RequestQuit must ask for confirmation before terminating. ForceQuit is a
@@ -110,6 +128,37 @@ func (s *StatusPage) filteredProcesses() []core.ProcInfo {
 	if s.Snapshot == nil {
 		return nil
 	}
+	user := ""
+	if s.CurrentUser != nil {
+		user = *s.CurrentUser
+	}
+	v := &s.view
+	if v.snapshot == s.Snapshot && v.query == s.Query && v.user == user && v.filter == s.Filter && v.sort == s.Sort {
+		return v.filtered
+	}
+	*v = processViewCache{snapshot: s.Snapshot, query: s.Query, user: user, filter: s.Filter, sort: s.Sort, filtered: s.computeFilteredProcesses()}
+	return v.filtered
+}
+
+// cachedProcessRows groups the cached filtered view; expansion is part of
+// the key because ToggleGroup mutates ExpandedGroups in place.
+func (s *StatusPage) cachedProcessRows(filtered []core.ProcInfo) []statusProcessRow {
+	keys := make([]string, 0, len(s.ExpandedGroups))
+	for k, open := range s.ExpandedGroups {
+		if open {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	expanded := strings.Join(keys, "\x00")
+	v := &s.view
+	if !v.rowsReady || v.expanded != expanded {
+		v.rows, v.expanded, v.rowsReady = s.processRows(filtered), expanded, true
+	}
+	return v.rows
+}
+
+func (s *StatusPage) computeFilteredProcesses() []core.ProcInfo {
 	var out []core.ProcInfo
 	for _, p := range s.Snapshot.Processes {
 		if core.MatchesProcTab(p, s.Filter, s.CurrentUser) && core.MatchProcQuery(p, s.Query) {
@@ -160,13 +209,13 @@ func (s *StatusPage) compareProcesses(a, b core.ProcInfo) int {
 }
 
 func statusButton(c *ui.Context, key, label string, active, disabled bool, action func()) {
-	b := ui.ButtonBase(c.Key(key)).Padding(3, 8).Radius(6).Border(1, outlineVariant.Alpha(.7)).Background(surfaceLow).Disabled(disabled).Cursor(ui.CursorPointer)
+	b := ui.ButtonBase(c.Key(key)).Padding(3, 8).Radius(6).Border(1, outlineVariant.Alpha(.7)).Disabled(disabled).Cursor(ui.CursorPointer)
 	fg := muted
 	if active {
-		b.Background(primaryFixed)
+		interactive(b, primaryFixed, primary.Alpha(.2), primary.Alpha(.28), !disabled)
 		fg = primary
-	} else if b.Hovered() {
-		b.Background(surfaceHigh)
+	} else {
+		interactive(b, surfaceLow, surfaceHigh, surfaceHighest, !disabled)
 	}
 	if disabled {
 		fg = fg.Alpha(.5)

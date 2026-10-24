@@ -18,6 +18,5 @@ func trayFixture(shell appui.Dashboard, details bool) appui.TrayPopover {
 			}
 		}
 	}
-	s.Snapshot.Purging = shell.Cleaning
 	return s
 }

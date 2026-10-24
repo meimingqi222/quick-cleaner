@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -121,6 +122,7 @@ func (c *DiskIndexCache) load(volume VolumeID) (*LoadedDiskIndex, error) {
 	// and writes become overrides. A read-path fallback has no mapping to keep.
 	if mapErr == nil {
 		decoded.tree.attachMappedBase(mapped, b, int(cacheU32(b, 84)))
+		mapped.releasePages()
 	}
 	if err := restoreDiskIndexCoverage(base, b, decoded.tree, decoded.checksum, decoded.meta.LastEventID, false); err != nil {
 		if mapErr == nil {
@@ -184,15 +186,21 @@ func (c *DiskIndexCache) persist(volume VolumeID, tree *SizeTree, event uint64, 
 	if tree.volume.Mount != volume.Mount {
 		return result, fmt.Errorf("%w: volume mismatch", ErrDiskIndexCorrupt)
 	}
-	if err := validateDiskTree(tree, false); err != nil {
-		return result, err
-	}
 	if _, _, err := canonicalDiskIndexCoverage(volume.Mount, tree.blocked); err != nil {
 		return result, err
 	}
 	base, delta := c.Paths(volume)
 	if event < diskIndexWrites.watermarks[base] {
 		return result, ErrDiskIndexStale
+	}
+	// Before the whole-tree validation below: skipping it is the point.
+	if incremental {
+		if r, ok, err := c.persistOverrides(volume, tree, event, base, delta); ok {
+			return r, err
+		}
+	}
+	if err := validateDiskTree(tree, false); err != nil {
+		return result, err
 	}
 	previous, loadErr := c.load(volume)
 	if loadErr == nil && event < previous.LastEventID {
@@ -255,6 +263,11 @@ func publishDiskIndex(path string, b []byte) error {
 		return err
 	}
 	// Sync the directory on Unix so publication survives a power loss too.
+	// Windows cannot flush a directory handle opened by os.Open (Access is
+	// denied); its rename is already the publication point.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err

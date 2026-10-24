@@ -43,6 +43,8 @@ func scanOrphans(context.Context) (*core.ResidualScanResult, error) {
 func orphanAbsent(context.Context, []core.ResidualItem) bool { return false }
 func newDiskOwner(context.Context) (diskOwner, error)        { return nil, nil }
 func scanNativeVolume(ctx context.Context, v core.VolumeID) (*core.ScanResult, error) {
-	s, err := core.ScanVolume(ctx, v, 200)
+	// The directory ranking is only the CLI top-N list. Junk, disk and search
+	// do not read it, matching the Rust GUI scans that pass top_n 0.
+	s, err := core.ScanVolume(ctx, v, 0)
 	return &s, err
 }

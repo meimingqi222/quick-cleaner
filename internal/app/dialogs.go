@@ -53,10 +53,7 @@ func (r *Root) openFDASettings() {
 					return
 				}
 				if tick%4 == 0 && platform.HasFullDiskAccess() {
-					platform.HideFDADrop()
-					r.permission.Open = false
-					r.dashboard.FullDiskAccess = true
-					r.message("已确认完全磁盘访问权限。", "Full Disk Access confirmed.")
+					r.grantFullDiskAccess()
 					stop = true
 					return
 				}
@@ -91,8 +88,7 @@ func (r *Root) checkPermission() {
 			r.permission.Busy = false
 			r.dashboard.FullDiskAccess = access
 			if access {
-				r.permission.Status = core.NewText("已确认完全磁盘访问权限。", "Full Disk Access confirmed.")
-				r.permission.Open = false
+				r.grantFullDiskAccess()
 			} else {
 				r.permission.Status = core.NewText("尚未确认权限。设置后请再次检查。", "Access is not confirmed. Check again after changing settings.")
 			}
@@ -113,6 +109,7 @@ func (r *Root) startUpdates() {
 				r.publish(func() {
 					snapshot := u.Snapshot()
 					r.update = snapshot
+					r.refreshUpdateChrome()
 					// The controller mutex must never be held across a synchronous
 					// main-thread dispatch or a settings save.
 					p := snapshot.Preferences
@@ -141,6 +138,37 @@ func (r *Root) startUpdates() {
 	u.StartScheduler()
 }
 
+func (r *Root) grantFullDiskAccess() {
+	platform.HideFDADrop()
+	r.permission.Status = core.NewText("已确认完全磁盘访问权限。", "Full Disk Access confirmed.")
+	r.permission.Open = false
+	r.dashboard.FullDiskAccess = true
+	r.message("已确认完全磁盘访问权限。", "Full Disk Access confirmed.")
+	// A grant rescans even when an earlier scan already finished. A scan or
+	// clean that is already running is left alone.
+	if !r.busy() {
+		r.scanJunk()
+	}
+}
+
+func (r *Root) refreshUpdateChrome() {
+	r.dashboard.UpdateLabel, r.dashboard.UpdateAttention = view.UpdateSidebarLabel(r.settings.Language, Version, r.update.Status, r.update.Checking)
+}
+
+func (r *Root) onVersionClick() {
+	switch view.VersionClickKind(r.update.Status, r.update.Checking, platform.IsPackagedInstall()) {
+	case view.VersionClickInstall:
+		r.requestInstallUpdate()
+	case view.VersionClickOpen:
+		if r.updates != nil {
+			r.updates.OpenDialog()
+		}
+	case view.VersionClickCheck:
+		r.checkUpdates()
+		r.message("正在检查…", "Checking…")
+	}
+}
+
 func (r *Root) checkUpdates() {
 	if r.updates == nil {
 		r.unavailable()
@@ -149,17 +177,41 @@ func (r *Root) checkUpdates() {
 	r.updates.Check(true)
 }
 func (r *Root) requestInstallUpdate() {
-	if r.updates == nil || r.updates.Snapshot().Status.Kind != core.UpdateDownloaded {
+	if r.updates == nil || r.closed {
 		return
 	}
-	if r.busy() {
-		r.message("请先停止当前任务，再安装更新。", "Stop the current task before installing an update.")
+	// Idle: install immediately. A running scan or clean confirms once, because
+	// the helper quits this process. busy() is that task, not a second prompt.
+	if r.updates.Install(r.busy(), false) {
+		r.confirmInstallOverTask()
 		return
 	}
-	r.askKind(view.ConfirmInstallUpdate, r.tr("安装更新并重新启动？", "Install update and restart?"), r.tr("更新安装器将替换应用并重新启动。", "The update installer will replace the application and restart it."), func() {
-		r.updates.Install(false, true)
+	r.update = r.updates.Snapshot()
+	r.refreshUpdateChrome()
+	r.changed()
+}
+
+// confirmInstallOverTask opens while r.job is still current. It must not bump
+// generation: scan completion is dropped when generation changes.
+func (r *Root) confirmInstallOverTask() {
+	if r.closed || r.confirming {
+		return
+	}
+	r.confirming = true
+	r.confirmation = view.ConfirmationDialog{
+		Open: true, Language: r.settings.Language, ID: "update-install", Kind: view.ConfirmInstallUpdate,
+		Title: core.SameText(r.tr("打断当前任务并安装更新？", "Interrupt current work and install the update?")),
+		Body:  core.SameText(r.tr("扫描或清理仍在进行。安装更新会退出应用并中断这些任务。", "A scan or clean is still running. Installing will quit the app and interrupt that work.")),
+	}
+	r.accept = func() {
+		if r.updates == nil {
+			return
+		}
+		r.updates.Install(true, true)
 		r.update = r.updates.Snapshot()
-	})
+		r.refreshUpdateChrome()
+	}
+	r.changed()
 }
 
 func (r *Root) installMenu() {

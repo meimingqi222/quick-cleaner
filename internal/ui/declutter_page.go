@@ -38,6 +38,41 @@ type DeclutterPage struct {
 	Thumbnails map[string]*ui.Bitmap
 	// Platform controls reveal copy only: "windows", "macos", or generic.
 	Platform string
+	// Shown is how many rows or groups a tab lists; zero means its first
+	// page. Rust capped the lists outright, which hid the rest from review.
+	Shown map[DeclutterTab]int
+}
+
+// declutterPage is each tab's first page and the step of "show more".
+var declutterPage = map[DeclutterTab]int{DeclutterDownloads: 100, DeclutterLargeFiles: 100, DeclutterDuplicates: 50, DeclutterSimilarPhotos: 30}
+
+// limit is how many entries of tab the list shows now.
+func (s DeclutterPage) limit(tab DeclutterTab) int {
+	return max(s.Shown[tab], declutterPage[tab])
+}
+
+// ShowMore extends tab's list by one page. Controllers call it from the
+// ShowMore action; it is presentation state, not a selection.
+func (s *DeclutterPage) ShowMore(tab DeclutterTab) {
+	if s.Shown == nil {
+		s.Shown = map[DeclutterTab]int{}
+	}
+	s.Shown[tab] = s.limit(tab) + declutterPage[tab]
+}
+
+// showMore offers the next page when total exceeds what is listed.
+func (s DeclutterPage) showMore(c *ui.Context, a DeclutterPageActions, tab DeclutterTab, total int, groups bool) {
+	rest := total - s.limit(tab)
+	if rest <= 0 {
+		return
+	}
+	key := "showMore"
+	if groups {
+		key = "showMoreGroups"
+	}
+	ui.Row(c).FillWidth().Padding(8, 0).Justify(ui.Center).Children(func() {
+		s.button(c, fmt.Sprintf("show-more-%d", tab), fmt.Sprintf(s.tr(key), rest), func() { a.ShowMore(tab) }, a.ShowMore != nil)
+	})
 }
 
 // Callbacks dispatch events only. RequestRemoveSelected must open the shared
@@ -52,7 +87,7 @@ type DeclutterPageActions struct {
 	ToggleDuplicate, TogglePhoto                                  func(group, item int)
 	KeepNewestDuplicates, KeepOldestDuplicates, SmartSelectPhotos func()
 	KeepBestPhotos, KeepAllPhotos, TogglePhotoGroup               func(int)
-	ClearSelection, RequestRemoveSelected                         func(DeclutterTab)
+	ClearSelection, RequestRemoveSelected, ShowMore               func(DeclutterTab)
 	Reveal, Open, CopyPath                                        func(string)
 }
 
@@ -62,9 +97,7 @@ func (s DeclutterPage) button(c *ui.Context, key, label string, action func(), e
 	enabled = enabled && action != nil
 	button := ui.ButtonBase(c.Key("declutter-"+key)).Padding(5, 10).Radius(6).Border(1, outlineVariant.Alpha(.6)).Disabled(!enabled).Cursor(ui.CursorPointer)
 	fg := muted
-	if button.Hovered() {
-		button.Background(surfaceLow)
-	}
+	interactive(button, ui.Transparent, surfaceLow, surfaceHigh, enabled)
 	if !enabled {
 		fg = outline
 	}
@@ -114,7 +147,7 @@ func (s DeclutterPage) title(tab DeclutterTab) string { return s.tr(fmt.Sprintf(
 
 func (s DeclutterPage) heading(c *ui.Context, title, sub string) {
 	ui.Column(c).FillWidth().Padding(16).Gap(4).Radius(12).Background(card).Border(1, outlineVariant.Alpha(.4)).Children(func() {
-		ui.Text(c, title).FontSize(20).Bold().TextColor(text)
+		ui.Text(c, title).FontSize(18).Bold().TextColor(text)
 		if sub != "" {
 			ui.Text(c, sub).FontSize(12).TextColor(muted)
 		}

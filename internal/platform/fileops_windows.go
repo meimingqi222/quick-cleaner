@@ -129,8 +129,6 @@ func trashDirectories() []string {
 	return dirs
 }
 
-func TrashDirectories() []string { return trashDirectories() }
-
 func IsSystemTrash(path string) bool { return strings.Contains(strings.ToLower(path), "$recycle.bin") }
 
 // IsPerDriveTrash reports one drive's recycle bin for the original user.

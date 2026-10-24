@@ -50,3 +50,24 @@ func DetectInUse(paths []string) map[string]Busy {
 	}
 	return out
 }
+
+// ApplyBusy merges scan-time occupancy into items and clears recommended.
+// The previous recommendation is kept so cache release can still see it.
+// An empty observation is not occupancy. Returns the number of items changed.
+func ApplyBusy(categories []CategorySummary, busy map[string]Busy) int {
+	n := 0
+	for ci := range categories {
+		items := categories[ci].Items
+		for ii := range items {
+			b, ok := busy[items[ii].Path]
+			if !ok || b.IsEmpty() {
+				continue
+			}
+			b.RecommendedBeforeBusy = items[ii].Recommended || items[ii].Busy != nil && items[ii].Busy.RecommendedBeforeBusy
+			items[ii].Busy = &b
+			items[ii].Recommended = false
+			n++
+		}
+	}
+	return n
+}

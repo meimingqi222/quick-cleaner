@@ -4,14 +4,25 @@ import (
 	"context"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
 )
+
+// mftBuildTimes is the post-parse work on the Rust MFT log line.
+// Tree includes directory ranking when topN > 0. Product scans pass 0.
+type mftBuildTimes struct {
+	Merge, Aggregate, Tree time.Duration
+}
 
 // BuildMFTScanResult adapts raw record numbers to the shared root-zero tree.
 // Extra hard-link parents contribute directory totals, not invented filenames:
 // MFT's selected FILE_NAME alone supplies a navigable/deletable path.
 func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN int) (ScanResult, error) {
+	return buildMFTScanResult(ctx, raw, topN, nil)
+}
+
+func buildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN int, times *mftBuildTimes) (ScanResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
 	}
@@ -39,6 +50,7 @@ func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN in
 	for i, entry := range raw.Entries {
 		sizes[i] = entry.Size
 	}
+	merging := time.Now()
 	for i, entry := range raw.Entries {
 		if i%4096 == 0 && ctx.Err() != nil {
 			return ScanResult{}, ctx.Err()
@@ -52,10 +64,12 @@ func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN in
 			result.ExtDataMerged++
 		}
 	}
-	entries := make([]TreeIndexEntry, len(raw.Entries))
+	merged := time.Since(merging)
+	building := time.Now()
+	entries := make([]treeSlot, len(raw.Entries))
 	for i, entry := range raw.Entries {
 		used := entry.Used && entry.BaseRecord == 0
-		entries[mapRecord(uint64(i))] = TreeIndexEntry{
+		entries[mapRecord(uint64(i))].TreeIndexEntry = TreeIndexEntry{
 			Parent: mapRecord(entry.Parent), Name: entry.Name, IsDir: entry.IsDir,
 			Size: sizes[i], Used: used, Mtime: entry.Mtime,
 		}
@@ -70,9 +84,11 @@ func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN in
 		}
 	}
 	entries[0].Parent = 0
-	tree := NewSizeTree(raw.Volume, entries)
+	tree := newSizeTreeFromSlots(raw.Volume, entries)
 	tree.ntfs = true
+	built := time.Since(building)
 	result.Tree, result.TotalSize, result.FileCount = tree, result.UniqueSize, result.UniqueFiles
+	aggregating := time.Now()
 	seen := make(map[[2]uint64]struct{})
 	for i, entry := range raw.Entries {
 		if i%4096 == 0 && ctx.Err() != nil {
@@ -109,6 +125,8 @@ func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN in
 			})
 		}
 	}
+	aggregated := time.Since(aggregating)
+	ranking := time.Now()
 	if topN > 0 {
 		var ranked []uint32
 		for i := 0; i < tree.nodeCount(); i++ {
@@ -129,6 +147,11 @@ func BuildMFTScanResult(ctx context.Context, raw platform.MFTScanResult, topN in
 	}
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
+	}
+	if times != nil {
+		times.Merge = merged
+		times.Aggregate = aggregated
+		times.Tree = built + time.Since(ranking)
 	}
 	return result, nil
 }

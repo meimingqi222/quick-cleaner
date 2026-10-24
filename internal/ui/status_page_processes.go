@@ -72,7 +72,7 @@ var statusColumnKeys = []StatusSortKey{StatusSortName, StatusSortCPU, StatusSort
 func (s *StatusPage) renderProcesses(c *ui.Context, a StatusPageActions) {
 	snap := s.Snapshot
 	filtered := s.filteredProcesses()
-	rows := s.processRows(filtered)
+	rows := s.cachedProcessRows(filtered)
 	var threads uint64
 	for _, p := range snap.Processes {
 		threads += uint64(p.Threads)
@@ -173,22 +173,20 @@ func (s *StatusPage) renderProcessRow(c *ui.Context, row statusProcessRow, a Sta
 	p := row.process
 	b := ui.ButtonBase(c).Height(32).FillWidth().Padding(0, 16).Gap(0).Justify(ui.Start).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.35)).Cursor(ui.CursorPointer)
 	if row.group == "" && s.SelectedPID != nil && *s.SelectedPID == p.PID {
-		b.Background(primary.Alpha(.15))
-	} else if b.Hovered() {
-		b.Background(surfaceLow)
+		interactiveRow(b, primary.Alpha(.15), primary.Alpha(.15))
+	} else {
+		interactiveRow(b, ui.Transparent, surfaceLow)
 	}
 	b.Children(func() {
 		ui.Row(c).Grow(1).MinWidth(0).Clip().Gap(6).Children(func() {
-			mark := ""
-			if row.group != "" {
-				mark = "›"
-				if s.ExpandedGroups[row.group] {
-					mark = "⌄"
-				}
-			} else if row.child {
-				mark = "│"
+			switch {
+			case row.group != "":
+				ui.Box(c).Width(16).Shrink(0).Center().Children(func() { chevron(c, s.ExpandedGroups[row.group], outline, 12) })
+			case row.child:
+				ui.Text(c, "│").Width(16).Shrink(0).FontSize(12).TextColor(outline)
+			default:
+				ui.Box(c).Width(16).Shrink(0)
 			}
-			ui.Text(c, mark).Width(16).Shrink(0).FontSize(12).TextColor(outline)
 			s.processIcon(c, p, 18)
 			ui.Text(c, p.Name).Grow(1).MinWidth(0).Clip().FontSize(12).FontWeight(500).TextColor(text)
 			if row.group != "" {

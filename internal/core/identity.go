@@ -35,13 +35,20 @@ func IdentityFromMetadata(info os.FileInfo) (TargetIdentity, bool) {
 // CaptureIdentity uses Lstat: the final symlink itself is the target.
 // Unavailable Windows object IDs retain the metadata-only fallback.
 func CaptureIdentity(path string) (TargetIdentity, bool) {
-	info, err := os.Lstat(path)
+	return captureIdentityUsing(path, nil)
+}
+
+func captureIdentityUsing(path string, lstat func(string) (os.FileInfo, error)) (TargetIdentity, bool) {
+	if lstat == nil {
+		lstat = os.Lstat
+	}
+	info, err := lstat(path)
 	if err != nil {
 		return TargetIdentity{}, false
 	}
 	id, ok := IdentityFromMetadata(info)
 	if ok {
-		captureStable(&id, path)
+		captureStable(&id, path, lstat)
 	}
 	return id, ok
 }

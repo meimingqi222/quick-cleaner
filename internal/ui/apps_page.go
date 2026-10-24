@@ -119,7 +119,7 @@ func (s AppsPage) uninstallProgress(c *ui.Context, t appsPageCopy) {
 			row := ui.Row(c).Width(420).Height(36).Gap(12)
 			if i == phase {
 				row.Children(func() {
-					ui.Spinner(c).Size(24, 24)
+					loadingSpinner(c, 24)
 					ui.Text(c, label).FontSize(14).Bold().TextColor(fg)
 				})
 			} else if i < phase {
@@ -154,7 +154,7 @@ func (s AppsPage) RenderContent(c *ui.Context, actions AppsPageActions) {
 		ui.Column(c).Grow(1).MinHeight(0).FillWidth().Padding(20).Gap(16).Children(func() {
 			ui.Row(c).FillWidth().Gap(16).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					ui.Text(c, t.heading).FontSize(20).Bold()
+					ui.Text(c, t.heading).FontSize(18).Bold()
 					ui.Text(c, t.subheading).FontSize(12).TextColor(muted)
 				})
 				ui.Row(c).Padding(2).Gap(4).Radius(8).Background(surfaceHigh).Children(func() {
@@ -227,10 +227,10 @@ func appsPageButton(c *ui.Context, key, label string, disabled, accent bool, act
 	button := ui.ButtonBase(c.Key(key)).Padding(5, 10).Radius(6).Border(1, outlineVariant.Alpha(.6)).Disabled(disabled).Cursor(ui.CursorPointer)
 	fg := muted
 	if accent {
-		button.Background(primaryFixed)
+		interactive(button, primaryFixed, primary.Alpha(.2), primary.Alpha(.28), !disabled)
 		fg = primary
-	} else if button.Hovered() {
-		button.Background(surfaceLow)
+	} else {
+		interactive(button, ui.Transparent, surfaceLow, surfaceHigh, !disabled)
 	}
 	if disabled {
 		fg = outline
@@ -283,6 +283,27 @@ func (s AppsPage) column(c *ui.Context, i int) ui.Element {
 	return e.Width([]float32{0, 130, 110, 100, 95}[i])
 }
 
+// tableHeaderButton is a sortable column title: flat like the rows below it
+// and aligned with their content, end-aligned for numeric columns.
+func tableHeaderButton(c *ui.Context, key, label string, active, end bool, action func()) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).FillWidth().Padding(4, 6).Radius(6).Cursor(ui.CursorPointer)
+	if end {
+		b.Justify(ui.End)
+	} else {
+		b.Justify(ui.Start)
+	}
+	interactive(b, ui.Transparent, surfaceHigh, surfaceHighest, true)
+	fg := muted
+	if active {
+		fg = primary
+	}
+	b.Children(func() { ui.Text(c, label).FontSize(12).FixedLineHeight(16).FontWeight(600).TextColor(fg).SingleLine() })
+	if b.Clicked() && action != nil {
+		action()
+	}
+	return b
+}
+
 func (s AppsPage) table(c *ui.Context, a AppsPageActions, t appsPageCopy) {
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Gap(0).Border(1, outlineVariant.Alpha(.5)).Radius(12).Clip().Children(func() {
 		ui.Row(c).FillWidth().Padding(8, 20).Gap(12).Background(surfaceLow).Children(func() {
@@ -292,7 +313,7 @@ func (s AppsPage) table(c *ui.Context, a AppsPageActions, t appsPageCopy) {
 					if i == 0 {
 						label = fmt.Sprintf(t.name, len(s.View))
 					}
-					appsPageButton(c, "apps-sort-"+col.ID(), label+s.Sort.Indicator(col), false, s.Sort.Column == col, func() {
+					tableHeaderButton(c, "apps-sort-"+col.ID(), label+s.Sort.Indicator(col), s.Sort.Column == col, i == len(appsPageColumns)-1, func() {
 						if a.SortBy != nil {
 							a.SortBy(col)
 						}
@@ -301,7 +322,9 @@ func (s AppsPage) table(c *ui.Context, a AppsPageActions, t appsPageCopy) {
 			}
 			ui.Text(c, t.columns[5]).Width(s.actionsWidth()).Shrink(0).FontSize(12).TextColor(outline).TextAlign(ui.Center)
 		})
-		if s.Scanning || len(s.View) == 0 {
+		// Directory measurement keeps Scanning set. Rows already found stay
+		// visible; the placeholder is only for a list that is still empty.
+		if len(s.View) == 0 {
 			ui.Scroll(c.Key("apps-placeholder")).Grow(1).MinHeight(0).FillWidth().Children(func() {
 				ui.Column(c).FillWidth().Padding(48, 20).Center().Gap(8).Children(func() {
 					label := t.empty
@@ -352,7 +375,7 @@ func (s AppsPage) appRow(c *ui.Context, a AppsPageActions, t appsPageCopy, app A
 		if m.Item(t.open).Disabled(!app.HasLocation || a.OpenLocation == nil).Chosen() {
 			a.OpenLocation(app.ID)
 		}
-		if m.Item(t.standard).Disabled(!app.CanUninstall || s.busy() || a.RequestUninstall == nil).Chosen() {
+		if m.Item(t.standard).Disabled(!app.CanUninstall || s.busy() || s.Scanning || a.RequestUninstall == nil).Chosen() {
 			a.RequestUninstall(app.ID)
 		}
 		if !s.MacOS {
@@ -360,7 +383,7 @@ func (s AppsPage) appRow(c *ui.Context, a AppsPageActions, t appsPageCopy, app A
 			if app.Discovered {
 				label = t.removeMenu
 			}
-			if m.Item(label).Disabled(s.busy() || a.ScanResiduals == nil).Chosen() {
+			if m.Item(label).Disabled(s.busy() || s.Scanning || a.ScanResiduals == nil).Chosen() {
 				a.ScanResiduals(app.ID)
 			}
 		}
@@ -410,13 +433,13 @@ func (s AppsPage) appRow(c *ui.Context, a AppsPageActions, t appsPageCopy, app A
 			})
 		}
 		ui.Row(c).Width(s.actionsWidth()).Shrink(0).Gap(6).Justify(ui.End).Children(func() {
-			appsPageButton(c, "apps-uninstall-"+app.ID, t.uninstall, !app.CanUninstall || s.busy() || a.RequestUninstall == nil, false, func() { a.RequestUninstall(app.ID) }).Padding(4, 8)
+			appsPageButton(c, "apps-uninstall-"+app.ID, t.uninstall, !app.CanUninstall || s.busy() || s.Scanning || a.RequestUninstall == nil, false, func() { a.RequestUninstall(app.ID) }).Padding(4, 8)
 			if !s.MacOS {
 				label := t.force
 				if app.Discovered {
 					label = t.remove
 				}
-				appsPageButton(c, "apps-residual-"+app.ID, label, s.busy() || a.ScanResiduals == nil, true, func() { a.ScanResiduals(app.ID) }).Padding(4, 8)
+				appsPageButton(c, "apps-residual-"+app.ID, label, s.busy() || s.Scanning || a.ScanResiduals == nil, true, func() { a.ScanResiduals(app.ID) }).Padding(4, 8)
 			}
 			ui.ButtonBase(c.Key("apps-more-"+app.ID)).Size(24, 24).Padding(0).Radius(6).Border(1, outlineVariant.Alpha(.6)).Label("···").Menu(menu).Children(func() {
 				ui.Text(c, "···").FontSize(12).TextColor(muted)

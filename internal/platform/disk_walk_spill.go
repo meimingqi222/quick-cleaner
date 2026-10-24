@@ -2,7 +2,6 @@ package platform
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 )
 
@@ -89,12 +87,6 @@ func parseMacWalkSpillPID(name string) (int, bool) {
 		pid = pid*10 + int(c-'0')
 	}
 	return pid, pidText != ""
-}
-
-// kill(pid, 0) answers reachability. EPERM means another user's live process.
-func macWalkPIDAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func (s *macWalkSpill) create() error {

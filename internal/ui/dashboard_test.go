@@ -8,6 +8,42 @@ import (
 	appui "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
+func TestUpdateSidebarLabelAndClick(t *testing.T) {
+	label, attention := appui.UpdateSidebarLabel(appui.English, "0.0.16", core.UpdateStatus{Kind: core.UpdateDownloaded, LatestVersion: "0.0.17"}, false)
+	if label != "Restart to install 0.0.17" || !attention {
+		t.Fatalf("downloaded label = %q attention %v", label, attention)
+	}
+	label, attention = appui.UpdateSidebarLabel(appui.Chinese, "0.0.16", core.UpdateStatus{Kind: core.UpdateChecking}, false)
+	if label != "正在检查…" || attention {
+		t.Fatalf("checking label = %q attention %v", label, attention)
+	}
+	if appui.VersionClickKind(core.UpdateStatus{Kind: core.UpdateDownloaded}, false, false) != appui.VersionClickInstall {
+		t.Fatal("downloaded click")
+	}
+	if appui.VersionClickKind(core.UpdateStatus{Kind: core.UpdateAvailable, LatestVersion: "9"}, false, true) != appui.VersionClickOpen {
+		t.Fatal("available click")
+	}
+	if appui.VersionClickKind(core.UpdateStatus{Kind: core.UpdateIdle}, true, true) != appui.VersionClickIgnore {
+		t.Fatal("checking click")
+	}
+	if appui.VersionClickKind(core.UpdateStatus{Kind: core.UpdateIdle}, false, false) != appui.VersionClickIgnore {
+		t.Fatal("unpackaged click")
+	}
+	if appui.VersionClickKind(core.UpdateStatus{Kind: core.UpdateIdle}, false, true) != appui.VersionClickCheck {
+		t.Fatal("idle packaged click")
+	}
+	clicks := 0
+	s := appui.Dashboard{Language: appui.English, Version: "v0.0.16", UpdateLabel: label, UpdateAttention: true, Cleanable: "0 B", Freed: "0 B"}
+	s.UpdateLabel = "Restart to install 0.0.17"
+	tt := ui.NewTester(func(c *ui.Context) { s.Render(c, appui.DashboardActions{CheckUpdates: func() { clicks++ }}) }, 1280, 880)
+	if err := tt.Click("Restart to install 0.0.17"); err != nil {
+		t.Fatal(err)
+	}
+	if clicks != 1 {
+		t.Fatalf("version clicks = %d", clicks)
+	}
+}
+
 func TestDashboardActions(t *testing.T) {
 	for _, tc := range []struct {
 		name, circle string

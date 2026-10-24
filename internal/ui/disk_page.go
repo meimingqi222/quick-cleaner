@@ -76,8 +76,8 @@ func (s DiskPage) RenderContent(c *ui.Context, a DiskPageActions) {
 	t := diskStrings(s.Language)
 	ui.Column(c.Key("disk-page")).Grow(1).FillWidth().MinHeight(0).Padding(20).Gap(20).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
-			ui.Text(c, t.heading).FontSize(20).Bold()
-			ui.Text(c, t.subheading).FontSize(12).TextColor(outline)
+			ui.Text(c, t.heading).FontSize(18).Bold()
+			ui.Text(c, t.subheading).FontSize(12).TextColor(muted)
 		})
 		if s.Scanning {
 			s.message(c, fmt.Sprintf(t.loading, s.Volume.Display()), diskLoadingSub(s.Language, s.Windows))
@@ -143,7 +143,7 @@ func (s DiskPage) message(c *ui.Context, title, sub string) {
 	ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
 		fg := text
 		if s.Scanning {
-			ui.Spinner(c).Size(28, 28)
+			loadingSpinner(c, 28)
 		} else {
 			fg = ui.Hex("#ba1a1a")
 			ui.Box(c).Size(56, 56).Radius(999).Background(ui.Hex("#ffdad6")).Center().Children(func() { icon(c, Junk, fg, 24) })
@@ -227,9 +227,7 @@ func (s DiskPage) row(c *ui.Context, a DiskPageActions, r DiskPageRow) {
 	t := diskStrings(s.Language)
 	key := fmt.Sprintf("disk-row-%d", r.Node.Idx)
 	row := ui.Row(c.Key(key)).FillWidth().MinHeight(44).Shrink(0).Padding(8, 16).Gap(12).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.25))
-	if row.Hovered() {
-		row.Background(surfaceLow)
-	}
+	interactiveRow(row, ui.Transparent, surfaceLow)
 	row.Children(func() {
 		on := r.Selected
 		check := ui.Checkbox(c.Key(key+"-check"), &on, "").Label(fmt.Sprintf(t.selectItem, r.Node.Name)).Width(20).Shrink(0).Disabled(s.Cleaning || r.Protected || !r.CanSelect || a.ToggleSelected == nil)
@@ -242,14 +240,13 @@ func (s DiskPage) row(c *ui.Context, a DiskPageActions, r DiskPageRow) {
 		}
 		b := ui.ButtonBase(c.Key(key + "-name")).Grow(1).MinWidth(0).Padding(0).Justify(ui.Start).Gap(12).Tooltip(r.Path)
 		b.Children(func() {
-			kind := Disk
-			fg, bg := primary, primaryFixed
+			// Files show their type, as in Search; a trash can read as a delete
+			// button on rows that only open on click.
 			if r.Node.IsDir {
-				kind = Overview
-			} else if r.Node.Size >= 1<<30 {
-				kind, fg, bg = Junk, ui.Hex("#ba1a1a"), ui.Hex("#ffdad6")
+				ui.Box(c).Size(28, 28).Shrink(0).Radius(8).Background(primaryFixed).Center().Children(func() { icon(c, Overview, primary, 14) })
+			} else {
+				ui.Box(c).Size(28, 28).Shrink(0).Radius(8).Background(surfaceHigh).Center().Children(func() { FileKind(r.Node.Name, false).Render(c, 16) })
 			}
-			ui.Box(c).Size(28, 28).Shrink(0).Radius(8).Background(bg).Center().Children(func() { icon(c, kind, fg, 14) })
 			ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(0).Children(func() {
 				label := ui.Text(c, name).FillWidth().FontSize(14).SingleLine()
 				if r.Node.IsDir {

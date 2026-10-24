@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
@@ -42,6 +43,9 @@ func TestOldIdeTargetsUseRuleRoots(t *testing.T) {
 }
 
 func TestVolumeTrashOnlyMatchesCurrentUser(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/Volumes trash fixture; macOS product path")
+	}
 	own := filepath.Join("/Volumes/Backup/.Trashes", platform.CurrentUID())
 	if !platform.IsVolumeTrash(own) {
 		t.Fatal("current user's volume trash rejected", own)

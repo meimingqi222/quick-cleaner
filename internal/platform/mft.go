@@ -1,6 +1,9 @@
 package platform
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 const MFTRootRecord uint64 = 5
 
@@ -24,9 +27,17 @@ type MFTEntry struct {
 	LinkParents []uint64 // Distinct FILE_NAME parents, including the selected parent.
 }
 
+// MFTTimings matches the Rust volume-scan phases so the two logs can be compared.
+// Read and Parse are wall time of the chunk loop, not a sum across cores.
+type MFTTimings struct {
+	Open, Volume, First, Runs, Read, Parse time.Duration
+}
+
 type MFTScanResult struct {
 	Volume                                   VolumeID
 	RootRecord                               uint64
 	Entries                                  []MFTEntry
 	RecordsExpected, MFTRunBytes, ExtRecords uint64
+	BytesRead                                uint64
+	Timings                                  MFTTimings
 }

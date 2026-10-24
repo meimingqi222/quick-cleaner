@@ -129,7 +129,7 @@ func TestSearchStatesAndVirtualization(t *testing.T) {
 	s.Searching = false
 	s.Query = "missing"
 	tt.Frame()
-	if !tt.HasText("No matching files found") || !tt.HasText("Matched 0 items") {
+	if !tt.HasText("No matching files found") || !tt.HasText("Try another keyword, or widen it with * and ?") || tt.HasText("Matched 0 items") {
 		t.Fatal(tt.Texts())
 	}
 	for i := range 500 {
@@ -143,7 +143,27 @@ func TestSearchStatesAndVirtualization(t *testing.T) {
 	s.Language = Chinese
 	s.Searching = false
 	tt.Frame()
-	if !tt.HasText("文件搜索") || !tt.HasText("匹配到 500 个文件 / 文件夹") {
+	if !tt.HasText("文件搜索") || !tt.HasText("500 条结果") || tt.HasText("匹配到 500 个文件 / 文件夹") {
+		t.Fatal(tt.Texts())
+	}
+}
+
+// An empty table must say why it is empty; only a typed query that matched
+// nothing is a "not found".
+func TestSearchEmptyStatesExplainThemselves(t *testing.T) {
+	s := SearchPage{Language: English, Ready: true}
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderContent(c, SearchPageActions{}) }, 1090, 720)
+	if !tt.HasText("Type a keyword to search") || tt.HasText("No matching files found") {
+		t.Fatal("an empty query is not a failed search", tt.Texts())
+	}
+	s.Ready = false
+	tt.Frame()
+	if !tt.HasText("The search index is not ready") || tt.HasText("Type a keyword to search") {
+		t.Fatal(tt.Texts())
+	}
+	s.Ready, s.Query = true, "missing"
+	tt.Frame()
+	if !tt.HasText("No matching files found") || tt.HasText("Type a keyword to search") {
 		t.Fatal(tt.Texts())
 	}
 }

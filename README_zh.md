@@ -115,6 +115,18 @@ cargo build --release
 
 编译生成的可执行文件位于 `target/release/quick-cleaner.exe`。
 
+### Go 构建与发布包
+
+发布包由 Go 版产品构建（Go 1.27.1 或更高，不需要 cgo）：
+
+```bash
+go test ./...
+go run ./cmd/quick-cleaner --no-elevate      # 不是演练模式：确认后的操作照样会改动文件
+go run ./tools/winres                        # 修改 internal/app 的 Version 后重新生成 Windows 资源
+pwsh ./scripts/package-windows.ps1           # 生成 dist/quick-cleaner-windows-x86_64.zip
+./scripts/package-macos.sh dist universal    # 生成 dist/QuickCleaner.app（需在 macOS 上）
+```
+
 ### Windows `$MFT` 校验（仅开发用）
 
 不是产品入口，macOS 默认构建也不会编它。要对盘符和 WizTree 做对比时：

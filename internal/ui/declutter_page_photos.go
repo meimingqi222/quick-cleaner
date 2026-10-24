@@ -14,7 +14,8 @@ func (s DeclutterPage) photos(c *ui.Context, a DeclutterPageActions) {
 	if len(s.Photos) == 0 {
 		s.empty(c)
 	}
-	for gi, g := range s.Photos[:min(30, len(s.Photos))] {
+	defer s.showMore(c, a, DeclutterSimilarPhotos, len(s.Photos), true)
+	for gi, g := range s.Photos[:min(s.limit(DeclutterSimilarPhotos), len(s.Photos))] {
 		// This is the source's display fallback, not a selection policy: a group
 		// without a best marker still shows its first photo in the hero slot.
 		best := -1

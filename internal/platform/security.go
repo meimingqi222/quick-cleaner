@@ -29,6 +29,19 @@ func QuoteWindowsArgument(arg string) string {
 	return out.String()
 }
 
+// elevationShowCmd is the ShellExecute show value for an elevated relaunch.
+// A console program (subsystem 3) gets a terminal window before any code
+// runs; hiding that relaunch keeps the window off the desktop. The process
+// that draws the UI is started afterwards and does not inherit the flag.
+// A GUI program (subsystem 2) has no terminal, and this value is the real
+// window's startup state, so it stays shown.
+func elevationShowCmd(subsystem int) int {
+	if subsystem == 3 {
+		return 0
+	}
+	return 1
+}
+
 func elevationArgs(args []string, captured originalUser) []string {
 	out := append([]string(nil), args...)
 	has := func(flag string) bool {

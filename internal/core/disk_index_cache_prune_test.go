@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -100,7 +101,7 @@ func TestDiskIndexCachePruneStrictNamesAndNoLinks(t *testing.T) {
 	diskCacheWrite(t, outside, []byte("outside"))
 	linkedBase, _ := c.Paths(VolumeFromMountPoint(filepath.Join(diskCacheVolumeDir(t), "linked-base")))
 	if e = os.Symlink(outside, linkedBase); e != nil {
-		t.Fatal(e)
+		t.Skipf("symlinks unavailable: %v", e)
 	}
 	paired := diskPruneGroup(t, c, filepath.Join(diskCacheVolumeDir(t), "paired"), 90*24*time.Hour)
 	if e = os.Remove(paired[1]); e != nil {
@@ -181,6 +182,9 @@ func TestDiskIndexCachePruneDifferentDeviceIsNotCovered(t *testing.T) {
 }
 
 func TestDiskIndexCachePruneMountKeyValidation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mount-path fixture; the disk index cache is a macOS product path")
+	}
 	for _, mount := range []string{string(filepath.Separator), t.TempDir(), filepath.Join(t.TempDir(), "中文 mount")} {
 		name := "scan-index-" + hex.EncodeToString([]byte(mount)) + ".bin"
 		got, ok := diskIndexMountFromName(name)

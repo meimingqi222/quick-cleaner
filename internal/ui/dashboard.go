@@ -2,9 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"math"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/meimingqi222/quick-cleaner/assets"
@@ -33,6 +31,8 @@ type Dashboard struct {
 	AppCount, Categories                 int
 	MacOS, Elevated, FullDiskAccess      bool
 	Version, StatusText                  string
+	UpdateLabel                          string
+	UpdateAttention                      bool
 	StatusTab                            StatusTab
 	ProcessCount                         int
 	MonitoringPaused                     bool
@@ -74,12 +74,7 @@ func (s Dashboard) RenderPage(c *ui.Context, active View, actions DashboardActio
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().Gap(0).Background(card).Children(func() {
 				s.topbar(c, active, actions)
 				if s.Scanning {
-					phase := float64(c.Now().UnixNano()%int64(1600*time.Millisecond)) / float64(1600*time.Millisecond) * math.Pi / 2
-					left := -.18 + 1.36*(1-math.Cos(phase))
-					width := math.Max(.01, 1.36*(math.Sin(phase)+math.Cos(phase)-1))
-					ui.Box(c).FillWidth().Height(3).Shrink(0).Clip().Background(surfaceHighest).Children(func() {
-						ui.Box(c).Absolute().Top(0).Bottom(0).LeftPercent(float32(left * 100)).WidthPercent(float32(width * 100)).Radius(999).Background(primary)
-					})
+					scanBar(c)
 				}
 				content()
 			})
@@ -208,9 +203,9 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 					row := ui.ButtonBase(c.Key(fmt.Sprintf("nav-%d", v))).Height(34).Padding(0, 10).Gap(10).Justify(ui.Start).Radius(8).Cursor(ui.CursorPointer)
 					if v == active {
 						fg = primary
-						row.Background(primaryFixed)
-					} else if row.Hovered() {
-						row.Background(surfaceLow)
+						interactive(row, primaryFixed, primaryFixed, primary.Alpha(.22), true)
+					} else {
+						interactive(row, ui.Transparent, surfaceLow, surfaceHigh, true)
 					}
 					row.Children(func() {
 						ui.Box(c).Size(20, 20).Center().Children(func() { icon(c, v, fg, 15) })
@@ -257,12 +252,30 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 					}
 				})
 			})
-			version := ui.ButtonBase(c.Key("version")).Padding(8, 12).Justify(ui.Start).Radius(8).Cursor(ui.CursorPointer)
-			if version.Hovered() {
-				version.Background(surfaceHigh)
+			label := s.Version
+			if s.UpdateLabel != "" {
+				label = s.UpdateLabel
 			}
-			version.Children(func() { ui.Text(c, s.Version).FontSize(12).FixedLineHeight(16).TextColor(muted) })
-			if version.Clicked() && actions.CheckUpdates != nil {
+			// Checking replaces the version text and must not look clickable.
+			quiet := !s.UpdateAttention && (s.UpdateLabel == "" || s.UpdateLabel == s.Version)
+			version := ui.ButtonBase(c.Key("version")).FillWidth().Padding(8, 12).Justify(ui.SpaceBetween).Radius(8)
+			fg := muted
+			if s.UpdateAttention {
+				fg = primary
+				version.Background(primaryFixed).Cursor(ui.CursorPointer)
+			} else if quiet {
+				version.Cursor(ui.CursorPointer)
+				if version.Hovered() {
+					version.Background(surfaceHigh)
+				}
+			}
+			version.Children(func() {
+				ui.Text(c, label).FontSize(12).FixedLineHeight(16).TextColor(fg)
+				if s.UpdateAttention {
+					ui.Text(c, "›").FontSize(12).FixedLineHeight(16).TextColor(fg)
+				}
+			})
+			if (quiet || s.UpdateAttention) && version.Clicked() && actions.CheckUpdates != nil {
 				actions.CheckUpdates()
 			}
 		})
@@ -342,10 +355,10 @@ func (s Dashboard) topbar(c *ui.Context, active View, actions DashboardActions) 
 		}
 		button := ui.ButtonBase(c.Key("rescan")).Padding(4, 12).Radius(999).Border(1, outlineVariant).Disabled(s.Scanning || s.Cleaning).Cursor(ui.CursorPointer)
 		fg = muted
-		if button.Hovered() {
-			button.Background(surfaceLow)
+		if button.Hovered() && !s.Scanning && !s.Cleaning {
 			fg = primary
 		}
+		interactive(button, ui.Transparent, surfaceLow, surfaceHigh, !s.Scanning && !s.Cleaning)
 		button.Children(func() { ui.Text(c, label).FontSize(12).FixedLineHeight(16).TextColor(fg) })
 		if button.Clicked() && actions.Scan != nil {
 			actions.Scan()
@@ -378,12 +391,21 @@ func (s Dashboard) body(c *ui.Context, actions DashboardActions) {
 			ui.Box(c).Size(230, 230).Shrink(0).Center().Children(func() {
 				ui.Box(c).Absolute().Top(0).Left(0).Size(230, 230).Radius(999).Border(6, surfaceHighest).PassThrough()
 				if s.Scanning || s.Cleaning {
-					a := float64(c.Now().UnixNano()%int64(1500*time.Millisecond)) / float64(1500*time.Millisecond) * 2 * math.Pi
-					ui.Box(c).Absolute().Left(109+112*float32(math.Sin(a))).Top(109-112*float32(math.Cos(a))).Size(12, 12).Radius(999).Background(primaryBright).PassThrough()
-					c.After(time.Second / 60)
+					orbitDot(c, 230, 112, 12, primaryBright)
 				}
 				circle := ui.ButtonBase(c.Key("smart-scan")).Size(174, 174).Shrink(0).Radius(999).Gradient(primaryBright, primary, 150).
 					Shadow(0, 20, 25, -5, ui.RGBA(0, 0, 0, .1)).Shadow(0, 8, 10, -6, ui.RGBA(0, 0, 0, .1)).Cursor(ui.CursorPointer)
+				// The gradient stays; the circle lifts on hover and dips when
+				// pressed, moved in paint-only frames.
+				circleScale := float32(1)
+				if !s.Scanning && !s.Cleaning {
+					if circle.Pressed() {
+						circleScale = pressScale
+					} else if circle.Hovered() {
+						circleScale = 1.03
+					}
+				}
+				circle.AnimatePose(ui.Pose{Scale: circleScale}, ui.Snappy)
 				circle.Children(func() {
 					ui.Column(c).Fill().Center().Gap(6).Children(func() {
 						icon(c, Overview, card, 28)
@@ -422,10 +444,8 @@ func (s Dashboard) body(c *ui.Context, actions DashboardActions) {
 						sub = s.DiskSize
 					}
 					quick := ui.ButtonBase(c.Key(fmt.Sprintf("quick-%d", v))).Grow(1).Basis(0).MinWidth(0).Padding(12, 14).Gap(12).Justify(ui.Start).Radius(12).
-						Background(card).Border(1, outlineVariant.Alpha(.55)).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, .05)).Cursor(ui.CursorPointer)
-					if quick.Hovered() {
-						quick.Background(surfaceLow)
-					}
+						Border(1, outlineVariant.Alpha(.55)).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, .05)).Cursor(ui.CursorPointer)
+					interactive(quick, card, surfaceLow, surfaceHigh, true)
 					quick.Children(func() {
 						ui.Box(c).Size(30, 30).Shrink(0).Radius(12).Background(primaryFixed).Border(1, primary.Alpha(.4)).Center().Children(func() { icon(c, v, primary, 15) })
 						ui.Column(c).MinWidth(0).Gap(0).Children(func() {

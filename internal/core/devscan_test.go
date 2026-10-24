@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -141,6 +143,43 @@ func TestBuildDiscoveryRequiresProjectEvidenceInWalkAndIndex(t *testing.T) {
 	}
 }
 
+func TestIndexedDiscoveryReadsCacheDirTagOnlyWhenTreeNamesIt(t *testing.T) {
+	root := buildProjectFixture(t)
+	dir := filepath.Join(root, "hidden")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CACHEDIR.TAG"), []byte("Signature: 8a477f597d28d172789f06886806bc55\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := CurrentRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := []CodeRoot{{root, 10}}
+	tree := SizeTreeFromSnapshot(VolumeFromMountPoint(root), []TreeSnapshotEntry{
+		{Path: dir, IsDir: true},
+		{Path: filepath.Join(dir, "payload"), Size: 5},
+	})
+	for _, item := range DiscoverBuildArtifacts(context.Background(), rules, roots, tree) {
+		if item.Path == dir {
+			t.Fatal("indexed discovery opened CACHEDIR.TAG that the tree does not name")
+		}
+	}
+	found := false
+	for _, item := range DiscoverBuildArtifacts(context.Background(), rules, roots, nil) {
+		if item.Path == dir {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("walk discovery missed a signed CACHEDIR.TAG")
+	}
+}
+
 func TestCodeRootsAndDiscoveryDepth(t *testing.T) {
 	home := buildProjectFixture(t)
 	for _, path := range []string{"code/project/target", "nested/deep/project/target"} {
@@ -168,5 +207,46 @@ func TestCodeRootsAndDiscoveryDepth(t *testing.T) {
 	items := DiscoverBuildArtifacts(context.Background(), s, CodeRoots(home, nil), nil)
 	if len(items) != 1 || items[0].Path != filepath.Join(home, "code/project/target") {
 		t.Fatalf("bounded roots: %+v", items)
+	}
+}
+
+func TestWalkDiscoveryStatsEachDirectoryOnce(t *testing.T) {
+	root := buildProjectFixture(t)
+	parent := filepath.Join(root, "a", "b", "c", "d")
+	const dirs = 200
+	for i := range dirs {
+		if err := os.MkdirAll(filepath.Join(parent, "plain"+strconv.Itoa(i)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tagged := filepath.Join(parent, "tagged")
+	if err := os.MkdirAll(tagged, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tagged, "CACHEDIR.TAG"), []byte("Signature: 8a477f597d28d172789f06886806bc55\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tagged, "payload"), []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := CurrentRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int64
+	original := ruleLstat
+	ruleLstat = func(path string) (os.FileInfo, error) {
+		calls.Add(1)
+		return original(path)
+	}
+	t.Cleanup(func() { ruleLstat = original })
+	items := DiscoverBuildArtifacts(context.Background(), rules, []CodeRoot{{root, 10}}, nil)
+	if len(items) != 1 || items[0].Path != tagged {
+		t.Fatalf("walk discovery must still find the signed tag only: %+v", items)
+	}
+	// One probe per directory plus a bounded number for the hit itself. Each
+	// untagged directory used to confine its missing tag along the full chain.
+	if got := calls.Load(); got > 2*dirs {
+		t.Fatalf("walk discovery made %d ancestor probes for %d directories", got, dirs)
 	}
 }

@@ -17,7 +17,7 @@ type TrayPopover struct {
 
 // Bind these callbacks to the current host TraySession's emit/dismiss operations.
 // Emit uses OverviewAction's dismissal policy; content must not implement it.
-// In particular, memory release leaves the session open. No model or host handle
+// No model or host handle
 // crosses this boundary, and rendering never starts or stops a controller.
 type TrayPopoverActions struct {
 	Emit    func(OverviewAction)
@@ -39,9 +39,7 @@ func (s TrayPopover) Render(c *ui.Context, a TrayPopoverActions) {
 				ui.Text(c, t.title).FontSize(14).FixedLineHeight(20).FontWeight(600).TextColor(primary)
 			})
 			b := ui.ButtonBase(c.Key("tray-close")).Size(22, 22).Padding(4).Radius(6).Cursor(ui.CursorPointer).Label(t.close).Tooltip(t.close).Disabled(a.Dismiss == nil)
-			if b.Hovered() {
-				b.Background(muted.Alpha(.15))
-			}
+			interactive(b, ui.Transparent, muted.Alpha(.15), muted.Alpha(.25), a.Dismiss != nil)
 			b.Children(func() {
 				ui.Text(c, "×").FontSize(14).FixedLineHeight(14).Bold().TextColor(muted)
 			})
@@ -49,13 +47,16 @@ func (s TrayPopover) Render(c *ui.Context, a TrayPopoverActions) {
 				a.Dismiss()
 			}
 		})
-		ui.Scroll(c.Key("tray-content-viewport")).Grow(1).FillWidth().MinHeight(0).Padding(12, 12, 8, 12).Gap(8).Children(func() {
+		// Disks take their own height and hardware follows them; the slack
+		// goes above the quick actions, not between the two sections.
+		ui.Scroll(c.Key("tray-content-viewport")).Shrink(1).FillWidth().MinHeight(0).Padding(12, 12, 8, 12).Gap(8).Children(func() {
 			s.renderTrayDisks(c, a, t)
 		})
 		ui.Column(c.Key("tray-hardware")).FillWidth().Shrink(0).Padding(6, 12).Gap(4).Children(func() {
 			trayPopoverHeading(c, t.hardware)
 			s.renderTrayHardware(c, a, t)
 		})
+		ui.Spacer(c)
 		s.renderTrayActions(c, a, t)
 	})
 }
@@ -119,24 +120,20 @@ func (s TrayPopover) renderTrayDisk(c *ui.Context, a TrayPopoverActions, t trayP
 	} else {
 		b.FillWidth()
 	}
+	interactive(b, card, surfaceLow, surfaceHigh, a.Emit != nil)
 	if b.Hovered() {
-		b.Background(surfaceLow).BorderColor(primary)
+		b.BorderColor(primary)
 	}
 	b.Children(func() {
-		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).Gap(4).Children(func() {
-			ui.Row(c).MinWidth(0).Gap(6).Children(func() {
-				ui.Text(c, v.Label).FontSize(12).FixedLineHeight(16).Bold().TextColor(primary).Background(primary.Alpha(.12)).Radius(3).Padding(2, 6).SingleLine()
-				usage := fmt.Sprintf("%s / %s", core.FmtSize(used), core.FmtSize(v.TotalBytes))
-				if compact {
-					usage = core.FmtSize(v.FreeBytes)
-				}
-				ui.Text(c, usage).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
-			})
-			remaining := fmt.Sprintf("%.0f%%", math.Round(pct*100))
-			if !compact {
-				remaining = fmt.Sprintf(t.free, core.FmtSize(v.FreeBytes)) + " (" + remaining + ")"
+		// Only the label may truncate: sizes and the percentage are what the
+		// card is for, so they get lines of their own.
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
+			ui.Text(c, v.Label).MinWidth(0).Shrink(1).FontSize(12).FixedLineHeight(16).Bold().TextColor(primary).Background(primary.Alpha(.12)).Radius(3).Padding(2, 6).SingleLine().Tooltip(v.Label)
+			if compact {
+				ui.Text(c, core.FmtSize(v.FreeBytes)).Shrink(0).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
 			}
-			n := ui.Text(c, remaining).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
+			ui.Spacer(c)
+			n := ui.Text(c, fmt.Sprintf("%.0f%%", math.Round(pct*100))).Shrink(0).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
 			if pct > .90 {
 				n.TextColor(fg).Bold()
 			}
@@ -154,6 +151,10 @@ func (s TrayPopover) renderTrayDisk(c *ui.Context, a TrayPopoverActions, t trayP
 			}
 			ui.Text(c, "›").FontSize(10).FixedLineHeight(12).TextColor(primary)
 		})
+		if !compact {
+			usage := fmt.Sprintf("%s / %s · %s", core.FmtSize(used), core.FmtSize(v.TotalBytes), fmt.Sprintf(t.free, core.FmtSize(v.FreeBytes)))
+			ui.Text(c, usage).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
+		}
 	})
 	if b.Clicked() {
 		a.emit(OverviewAction{Kind: OverviewAnalyzeDisk, Path: v.Label})
@@ -168,40 +169,26 @@ func (s TrayPopover) renderTrayHardware(c *ui.Context, a TrayPopoverActions, t t
 	}
 	success := ui.Hex("#059669")
 	ui.Row(c).FillWidth().Gap(8).Children(func() {
-		ui.Column(c.Key("tray-memory")).Grow(1).MinWidth(0).Clip().Padding(8).Radius(8).Background(card).Border(1, outlineVariant.Alpha(.35)).Gap(6).Children(func() {
+		m := ui.ButtonBase(c.Key("tray-memory")).Grow(1).MinWidth(0).Clip().Padding(8).Radius(8).Border(1, outlineVariant.Alpha(.35)).Column().Gap(6).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+		interactive(m, card, surfaceLow, surfaceHigh, a.Emit != nil)
+		if m.Hovered() {
+			m.BorderColor(primary)
+		}
+		m.Children(func() {
 			ui.Row(c).Gap(6).Children(func() {
 				trayPopoverRAMIcon(c)
 				ui.Text(c, fmt.Sprintf(t.memory, uint64(memPct))).FontSize(12).FixedLineHeight(16).Bold()
 			})
 			ui.Text(c, core.FmtMem(state.MemoryUsed)+" / "+core.FmtMem(state.MemoryTotal)).FontSize(12).FixedLineHeight(16).TextColor(muted).SingleLine()
-			label, color, bg := t.purge, primary, primary.Alpha(.08)
-			border := primary.Alpha(.4)
-			if state.Purged {
-				color, bg, border = success, ui.Hex("#d1fae5"), success
-			}
-			switch {
-			case state.Purging:
-				label = t.purging
-			case state.PurgeFailed:
-				label = t.failed
-			case state.Purged:
-				label = t.purged
-			}
-			b := ui.ButtonBase(c.Key("tray-release-memory")).FillWidth().Height(24).Radius(6).Border(1, border).Background(bg).Center().Gap(4).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
-			if b.Hovered() {
-				b.Background(primary.Alpha(.16))
-			}
-			b.Children(func() {
-				trayPopoverBoltIcon(c, color)
-				ui.Text(c, label).FontSize(12).FixedLineHeight(16).FontWeight(500).TextColor(color)
-			})
-			if b.Clicked() {
-				a.emit(OverviewAction{Kind: OverviewReleaseMemory})
-			}
+			trayPopoverCardLink(c, t.topMemory)
 		})
-		b := ui.ButtonBase(c.Key("tray-cpu")).Grow(1).MinWidth(0).Clip().Padding(8).Radius(8).Background(card).Border(1, outlineVariant.Alpha(.35)).Column().Gap(6).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+		if m.Clicked() {
+			a.emit(OverviewAction{Kind: OverviewTopMemory})
+		}
+		b := ui.ButtonBase(c.Key("tray-cpu")).Grow(1).MinWidth(0).Clip().Padding(8).Radius(8).Border(1, outlineVariant.Alpha(.35)).Column().Gap(6).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+		interactive(b, card, surfaceLow, surfaceHigh, a.Emit != nil)
 		if b.Hovered() {
-			b.Background(surfaceLow).BorderColor(primary)
+			b.BorderColor(primary)
 		}
 		b.Children(func() {
 			ui.Row(c).Gap(6).Children(func() {
@@ -216,10 +203,7 @@ func (s TrayPopover) renderTrayHardware(c *ui.Context, a TrayPopoverActions, t t
 				}
 			}
 			ui.Text(c, label).FontSize(12).FixedLineHeight(16).TextColor(color).SingleLine()
-			ui.Row(c).FillWidth().Height(24).Radius(6).Background(surfaceHighest.Alpha(.5)).Center().Gap(4).Children(func() {
-				ui.Text(c, t.processes).FontSize(12).FixedLineHeight(16).TextColor(muted)
-				ui.Text(c, "›").FontSize(10).FixedLineHeight(12).TextColor(muted)
-			})
+			trayPopoverCardLink(c, t.processes)
 		})
 		if b.Clicked() {
 			a.emit(OverviewAction{Kind: OverviewOpenView, View: Status})
@@ -237,12 +221,10 @@ func trayPopoverRAMIcon(c *ui.Context) {
 	})
 }
 
-func trayPopoverBoltIcon(c *ui.Context, fg ui.Color) {
-	ui.Box(c).Size(12, 12).Shrink(0).Center().Children(func() {
-		ui.Box(c).Size(6.6, 10.2).Children(func() {
-			ui.Box(c).Absolute().Top(0).Left(6.6*.3).Size(6.6*.7, 10.2*.45).BorderWidth(2, 2, 0, 0).BorderColor(fg)
-			ui.Box(c).Absolute().Bottom(0).Left(0).Size(6.6*.7, 10.2*.55).BorderWidth(0, 0, 2, 2).BorderColor(fg)
-		})
+func trayPopoverCardLink(c *ui.Context, label string) {
+	ui.Row(c).FillWidth().Height(24).Radius(6).Background(surfaceHighest.Alpha(.5)).Center().Gap(4).Children(func() {
+		ui.Text(c, label).FontSize(12).FixedLineHeight(16).TextColor(muted)
+		ui.Text(c, "›").FontSize(10).FixedLineHeight(12).TextColor(muted)
 	})
 }
 
@@ -262,9 +244,10 @@ func (s TrayPopover) renderTrayActions(c *ui.Context, a TrayPopoverActions, t tr
 					{"tray-search", Search, OverviewAction{Kind: OverviewOpenView, View: Search}},
 					{"tray-declutter", Declutter, OverviewAction{Kind: OverviewOpenView, View: Declutter}},
 				} {
-					b := ui.ButtonBase(c.Key(item.key)).Grow(1).MinWidth(0).Padding(6, 4).Radius(6).Background(card).Border(1, outlineVariant.Alpha(.4)).Column().Center().Gap(4).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+					b := ui.ButtonBase(c.Key(item.key)).Grow(1).MinWidth(0).Padding(6, 4).Radius(6).Border(1, outlineVariant.Alpha(.4)).Column().Center().Gap(4).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+					interactive(b, card, surfaceLow, surfaceHigh, a.Emit != nil)
 					if b.Hovered() {
-						b.Background(surfaceLow).BorderColor(primary)
+						b.BorderColor(primary)
 					}
 					b.Children(func() {
 						icon(c, item.view, primary, 15)
@@ -276,10 +259,8 @@ func (s TrayPopover) renderTrayActions(c *ui.Context, a TrayPopoverActions, t tr
 				}
 			})
 		})
-		b := ui.ButtonBase(c.Key("tray-main")).FillWidth().Height(30).Radius(6).Background(primary).Center().Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
-		if b.Hovered() {
-			b.Background(primaryBright)
-		}
+		b := ui.ButtonBase(c.Key("tray-main")).FillWidth().Height(30).Radius(6).Center().Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+		interactive(b, primary, primaryBright, primary, a.Emit != nil)
 		b.Children(func() { ui.Text(c, t.main).FontSize(12).FixedLineHeight(16).FontWeight(600).TextColor(card) })
 		if b.Clicked() {
 			a.emit(OverviewAction{Kind: OverviewOpenMain})

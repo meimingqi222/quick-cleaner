@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func TestElevationShowCmdHidesOnlyConsolePrograms(t *testing.T) {
+	if elevationShowCmd(3) != 0 {
+		t.Fatal("console elevation shows a window")
+	}
+	if elevationShowCmd(2) != 1 {
+		t.Fatal("gui elevation is started hidden")
+	}
+}
+
 func TestQuoteWindowsArgumentMatchesReference(t *testing.T) {
 	for _, tc := range []struct{ arg, want string }{
 		{"", `""`}, {"hello", "hello"}, {"--no-elevate", "--no-elevate"},

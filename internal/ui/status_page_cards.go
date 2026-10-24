@@ -96,7 +96,7 @@ func (s *StatusPage) renderHardware(c *ui.Context, a StatusPageActions) {
 	cards = append(cards, func(c *ui.Context) { s.fanCard(c, a) })
 	ui.Scroll(c.Key("status-hardware")).Grow(1).MinHeight(0).FillWidth().Padding(20).Gap(16).Children(func() {
 		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, s.tr("overview")).FontSize(16).FixedLineHeight(24).Bold().TextColor(text)
+			ui.Text(c, s.tr("overview")).FontSize(18).FixedLineHeight(24).Bold().TextColor(text)
 			ui.Text(c, s.tr("overviewSub")).FontSize(12).FixedLineHeight(16).TextColor(muted)
 		})
 		for start := 0; start < len(cards); start += 4 {

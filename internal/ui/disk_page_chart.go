@@ -87,7 +87,8 @@ func (s DiskPage) breakdown() (string, uint64, string, []diskBreakdownItem) {
 	if remaining > topSum && remaining-topSum > threshold {
 		label := fmt.Sprintf(t.other, max(0, len(s.Rows)-len(items)))
 		if physical {
-			label = fmt.Sprintf(t.otherUsed, max(0, len(s.Rows)-len(items)))
+			// Also space no listed row accounts for; a row count would mislead.
+			label = t.otherUsed
 		}
 		items = append(items, diskBreakdownItem{name: label, size: remaining - topSum, ratio: min(float64(remaining-topSum)/float64(base), 1), color: diskColors[5]})
 	}
@@ -169,7 +170,11 @@ func (s DiskPage) lens(c *ui.Context, a DiskPageActions) {
 				ui.Column(c).Absolute().Top(18).Left(18).Size(140, 140).Radius(999).Background(card).Center().Padding(8).Gap(2).Children(func() {
 					ui.Text(c, title).MaxWidth(124).FontSize(12).Bold().TextColor(dominant).SingleLine().Tooltip(title)
 					ui.Text(c, core.FmtSize(size)).FontSize(20).Bold()
-					ui.Text(c, summary).MaxWidth(124).FontSize(12).TextColor(outline)
+					// One line per part: wrapped inside the ring, the size unit
+					// used to fall onto a line of its own.
+					for _, line := range strings.Split(summary, " · ") {
+						ui.Text(c, line).MaxWidth(124).FontSize(12).TextColor(outline).SingleLine().TextAlign(ui.Center)
+					}
 				})
 			})
 			ui.Column(c).FillWidth().Padding(0, 8).Gap(4).Children(func() {

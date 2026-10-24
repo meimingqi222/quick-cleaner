@@ -136,7 +136,7 @@ func TestDevEnvBusyAndBatchRequests(t *testing.T) {
 		a := DevEnvPageActions{ToggleSelected: func(string) { toggles++ }, RequestRemoveSelected: func() { batches++ }, SelectAll: func() { selections++ }}
 		tt := devEnvTester(&s, a)
 		tcopy := devEnvStrings(l)
-		if !tt.HasText(fmt.Sprintf(tcopy.selection, 2, "8.4 MB")) {
+		if !tt.HasText(fmt.Sprintf(tcopy.selection, 2, core.FmtSize(8<<20))) {
 			t.Fatalf("selection summary: %v", tt.Texts())
 		}
 		for _, label := range []string{fmt.Sprintf(tcopy.batchRemove, 2), tcopy.all} {

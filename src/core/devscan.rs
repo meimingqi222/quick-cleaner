@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn discovers_marked_dirs_and_skips_unmarked_lookalikes() {
-        let base = crate::core::testing::fixture("qc_devscan_test");
+        let base = crate::core::testing::project_fixture("qc_devscan_test");
         let _ = std::fs::remove_dir_all(&base);
 
         // 命中：有 Cargo.toml 旁证的 target
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn installation_dependencies_are_not_build_garbage() {
-        let base = crate::core::testing::fixture("qc_installation_build_boundary");
+        let base = crate::core::testing::project_fixture("qc_installation_build_boundary");
         let project = base.join("projects/demo");
         let installed = [
             base.join(".nvm/versions/node/v22/lib"),
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn build_candidates_require_project_and_environment_evidence() {
-        let base = crate::core::testing::fixture("qc_build_candidate_evidence");
+        let base = crate::core::testing::project_fixture("qc_build_candidate_evidence");
         let project = base.join("project");
         std::fs::create_dir_all(project.join("dist")).unwrap();
         std::fs::create_dir_all(project.join("src")).unwrap();
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn does_not_descend_into_a_matched_directory() {
-        let base = crate::core::testing::fixture("qc_devscan_nested");
+        let base = crate::core::testing::project_fixture("qc_devscan_nested");
         let _ = std::fs::remove_dir_all(&base);
 
         // node_modules 里往往还嵌着 node_modules，只应报告最外层那个

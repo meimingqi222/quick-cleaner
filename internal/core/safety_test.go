@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -85,7 +86,8 @@ func TestOwnershipAndManagedWorktrees(t *testing.T) {
 			t.Error(path)
 		}
 	}
-	base := t.TempDir()
+	// Windows TEMP is under AppData, which is an installation boundary.
+	base := buildProjectFixture(t)
 	child := filepath.Join(base, "project", "build")
 	if IsDevelopmentInstallationPath(child) {
 		t.Fatal("ordinary checkout")
@@ -115,6 +117,10 @@ func TestOwnershipAndManagedWorktrees(t *testing.T) {
 		t.Fatal("managed protection")
 	}
 	// A non-directory workspace makes marker lookup fail with ENOTDIR, not NotFound.
+	// Windows reports ERROR_PATH_NOT_FOUND there, which is a true absence.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	file := filepath.Join(base, "file")
 	if err := os.WriteFile(file, nil, 0600); err != nil {
 		t.Fatal(err)

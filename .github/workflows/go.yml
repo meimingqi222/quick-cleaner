@@ -2,9 +2,9 @@ name: Go migration
 
 on:
   push:
-    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", ".github/workflows/go.yml"]
+    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", "tools/**", ".github/workflows/go.yml"]
   pull_request:
-    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", ".github/workflows/go.yml"]
+    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", "tools/**", ".github/workflows/go.yml"]
 
 jobs:
   check:
@@ -20,7 +20,9 @@ jobs:
           cache: true
       - name: Formatting
         shell: bash
-        run: test -z "$(gofmt -l cmd internal assets rules)"
+        run: test -z "$(gofmt -l cmd internal assets rules tools)"
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
+      - name: Windows resources are current
+        run: go run ./tools/winres -check

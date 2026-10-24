@@ -192,3 +192,26 @@ func TestRulePathTargetsTrustedRootsAndMinimumAge(t *testing.T) {
 		t.Fatal("wrong-platform rule expanded")
 	}
 }
+
+// Merging runs on the main thread at the end of a scan; statting 1,300
+// discovered paths there froze the UI for about 260ms. Existence is checked
+// on the worker instead.
+func TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge(t *testing.T) {
+	root := t.TempDir()
+	alive, gone := filepath.Join(root, "alive"), filepath.Join(root, "gone")
+	if err := os.MkdirAll(alive, 0700); err != nil {
+		t.Fatal(err)
+	}
+	items := []ScanItem{{Path: alive, Category: DevBuild, Size: 1}, {Path: gone, Category: DevBuild, Size: 2}}
+	kept := DropVanishedDiscovered(items)
+	if len(kept) != 1 || kept[0].Path != alive {
+		t.Fatalf("worker kept %+v", kept)
+	}
+	cats := AggregateScanItems(nil)
+	MergeDiscovered(cats, items, false)
+	for _, cat := range cats {
+		if cat.Category == DevBuild && len(cat.Items) != 2 {
+			t.Fatalf("the main-thread merge consulted the filesystem: %+v", cat.Items)
+		}
+	}
+}

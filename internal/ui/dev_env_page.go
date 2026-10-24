@@ -167,9 +167,9 @@ func (s DevEnvPage) check(c *ui.Context, a DevEnvPageActions, item core.DevAsset
 func (s DevEnvPage) masterRow(c *ui.Context, a DevEnvPageActions, t devEnvCopy, item core.DevAssetItem) {
 	row := ui.ButtonBase(c.Key("dev-asset-" + item.ID)).FillWidth().Padding(8).Gap(6).Radius(8).Justify(ui.Start)
 	if item.ID == s.ActiveID {
-		row.Background(primaryFixed)
-	} else if row.Hovered() {
-		row.Background(surfaceLow)
+		interactiveRow(row, primaryFixed, primaryFixed)
+	} else {
+		interactiveRow(row, ui.Transparent, surfaceLow)
 	}
 	row.Children(func() {
 		s.check(c, a, item)
@@ -213,7 +213,7 @@ func (s DevEnvPage) masterRow(c *ui.Context, a DevEnvPageActions, t devEnvCopy, 
 		})
 		ui.Text(c, core.FmtSize(item.Size.ExclusiveReclaimableBytes)).Shrink(0).FontSize(12).TextColor(muted)
 		if item.ID == s.ActiveID {
-			ui.Text(c, "▸").FontSize(12).TextColor(primary)
+			chevron(c, false, primary, 12)
 		}
 	})
 	if (row.Clicked() || row.RightClicked()) && a.SelectAsset != nil {

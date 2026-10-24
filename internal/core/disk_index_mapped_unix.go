@@ -24,6 +24,17 @@ type mappedTreeBase struct {
 	entryOff int
 }
 
+// attachMappedBase drops the decoded heap copy and serves those nodes from the
+// mapped file. entryOff is the file offset of the first 24-byte record.
+func (t *SizeTree) attachMappedBase(mapped *mappedDiskIndex, file []byte, entryOff int) {
+	if t == nil || mapped == nil || entryOff < 0 || entryOff+len(t.entries)*24 > len(file) {
+		return
+	}
+	t.base = &mappedTreeBase{mapped: mapped, file: file, entryOff: entryOff}
+	t.baseCount = len(t.entries)
+	t.entries = nil
+}
+
 func (b *mappedTreeBase) slot(idx uint32) treeSlot {
 	record := b.file[b.entryOff+int(idx)*24:][:24]
 	slot, err := cacheReadRecord(record, b.pool())
@@ -31,6 +42,18 @@ func (b *mappedTreeBase) slot(idx uint32) treeSlot {
 		return treeSlot{}
 	}
 	return slot.slot
+}
+
+// header is the checksum-verified 128-byte v7 header of the mapped file.
+func (b *mappedTreeBase) header() []byte { return b.file[:128] }
+
+// bits and nameOff read one record's packed parent/flags word and name-pool
+// offset without decoding its name.
+func (b *mappedTreeBase) bits(idx uint32) uint32 {
+	return cacheU32(b.file, b.entryOff+int(idx)*24)
+}
+func (b *mappedTreeBase) nameOff(idx uint32) uint32 {
+	return cacheU32(b.file, b.entryOff+int(idx)*24+4)
 }
 
 func (b *mappedTreeBase) pool() []byte {
@@ -73,8 +96,22 @@ func mapSpillOutput(file *os.File, size int) ([]byte, error) {
 
 func unmapSpillOutput(buf []byte) {
 	if buf != nil {
+		// Like Rust's MmapOut: hand dirty pages back before unmapping, or the
+		// physical footprint stays at its peak. The data stays in the file.
+		_ = unix.Madvise(buf, unix.MADV_DONTNEED)
 		_ = unix.Munmap(buf)
 	}
+}
+
+// releasePages drops the pages a full decode touched, as Rust does after
+// validating its mapping. The view is read-only and file-backed, so later
+// reads fault them back in. Errors are ignored: this is only advice.
+func (m *mappedDiskIndex) releasePages() {
+	if m == nil || m.data == nil {
+		return
+	}
+	_ = unix.Madvise(m.data, unix.MADV_DONTNEED)
+	_ = unix.Madvise(m.data, unix.MADV_FREE)
 }
 
 func (m *mappedDiskIndex) close() {

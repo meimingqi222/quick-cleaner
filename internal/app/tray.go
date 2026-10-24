@@ -40,6 +40,9 @@ func (r *Root) showMain() {
 	}
 	if r.window != nil && !r.window.IsDestroyed() {
 		mygo.App.Show()
+		if r.window.IsMinimized() {
+			r.window.Restore()
+		}
 		r.window.Show()
 		r.window.Focus()
 	}
@@ -111,17 +114,41 @@ func (r *Root) routeOverview(a view.OverviewAction) {
 	case view.OverviewOpenView:
 		r.showMain()
 		r.Navigate(a.View)
+		// Sidebar starts Disk, Apps and Search only on their first quiet visit.
+		// The tray starts the page scan the way the Rust dispatcher does.
+		switch a.View {
+		case view.Junk:
+			r.scanJunk()
+		case view.Apps:
+			r.scanApps()
+		case view.Disk:
+			r.scanDisk()
+		case view.Search:
+			r.scanSearch()
+		case view.Declutter:
+			r.scanDeclutter()
+		}
+	case view.OverviewTopMemory:
+		r.showMain()
+		r.status.Sort = view.StatusSort{Key: view.StatusSortMemory}
+		r.Navigate(view.Status)
 	case view.OverviewAnalyzeDisk:
 		r.showMain()
-		r.Navigate(view.Disk)
-		if !r.busy() {
-			for _, v := range r.disk.Volumes {
-				if v.ID.Display() == a.Path {
-					r.diskActions().SwitchVolume(v.ID)
-					return
-				}
+		r.active = view.Disk
+		matched := false
+		for _, v := range r.disk.Volumes {
+			if v.ID.Display() == a.Path {
+				matched = true
+				r.diskActions().SwitchVolume(v.ID)
+				break
 			}
-			r.message("所选卷已不可用。", "The selected volume is no longer available.")
 		}
+		if !matched {
+			r.scanDisk()
+			if !r.disk.Scanning {
+				r.message("所选卷已不可用。", "The selected volume is no longer available.")
+			}
+		}
+		r.changed()
 	}
 }

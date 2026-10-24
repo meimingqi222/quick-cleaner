@@ -160,6 +160,13 @@ func (p safetyPolicy) protected(path string, contents bool) bool {
 	return false
 }
 func IsDevelopmentInstallationPath(path string) bool {
+	return developmentInstallationPath(path, os.Stat)
+}
+
+// developmentInstallationPath is the install-ownership check. stat is os.Stat
+// for callers, or a scan-local cache: one discovery walk otherwise stats the
+// same ancestor files once per candidate.
+func developmentInstallationPath(path string, stat func(string) (os.FileInfo, error)) bool {
 	n := strings.ReplaceAll(Norm(path), `\`, "/") + "/"
 	for _, part := range strings.Split(n, "/") {
 		if strings.HasSuffix(part, ".app") || part == "appdata" {
@@ -176,7 +183,8 @@ func IsDevelopmentInstallationPath(path string) bool {
 			return true
 		}
 		for _, m := range []string{"conda-meta", "pipx_metadata.json", "pyvenv.cfg"} {
-			if info, err := os.Stat(filepath.Join(a, m)); err == nil && ((m == "conda-meta" && info.IsDir()) || (m != "conda-meta" && info.Mode().IsRegular())) {
+			info, err := stat(filepath.Join(a, m))
+			if err == nil && ((m == "conda-meta" && info.IsDir()) || (m != "conda-meta" && info.Mode().IsRegular())) {
 				return true
 			}
 		}

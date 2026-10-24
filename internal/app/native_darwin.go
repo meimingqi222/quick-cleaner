@@ -33,6 +33,6 @@ func orphanAbsent(ctx context.Context, items []core.ResidualItem) bool {
 }
 func newDiskOwner(ctx context.Context) (diskOwner, error) { return core.NewMacDiskIndex(ctx) }
 func scanNativeVolume(ctx context.Context, v core.VolumeID) (*core.ScanResult, error) {
-	s, err := core.ScanVolume(ctx, v, 200)
+	s, err := core.ScanVolume(ctx, v, 0)
 	return &s, err
 }

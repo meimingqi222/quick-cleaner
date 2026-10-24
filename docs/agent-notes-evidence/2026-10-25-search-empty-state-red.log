@@ -1,0 +1,7 @@
+# guard removed: every empty search table says no matching files
+=== RUN   TestSearchEmptyStatesExplainThemselves
+    search_page_test.go:157: an empty query is not a failed search [File Search Full-disk index, instant file search Type a filename (supports * and ? wildcards)… Top 0 largest items · type to filter By Type Name Path Size ▼ Action No matching files found Try another keyword, or widen it with * and ? Double-click to open · Click header to sort Max 500 items]
+--- FAIL: TestSearchEmptyStatesExplainThemselves (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.189s
+FAIL

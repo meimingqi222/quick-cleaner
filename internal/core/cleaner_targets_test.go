@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+func TestLaunchAgentPlistPredicate(t *testing.T) {
+	home := "/var/lib/qc-home"
+	winHome := "D:" + `\fixture\a`
+	cases := []struct {
+		path, home string
+		want       bool
+	}{
+		{winHome + `\Library\LaunchAgents\com.example.broken.plist`, winHome, true},
+		{home + "/Library/LaunchAgents/com.example.broken.PLIST", home, true},
+		{"/Library/LaunchAgents/com.example.broken.plist", "", true},
+		{"/Library/LaunchAgents/com.example.broken.plist", home, true},
+		{home + "/Library/LaunchAgents/notes.txt", home, false},
+		{"/Library/LaunchDaemons/com.example.plist", home, false},
+		{"/Library/LaunchAgents/nested/com.example.plist", home, false},
+		{"/Library/LaunchAgents/../LaunchAgents/com.example.plist", home, false},
+		{home + "/Library/LaunchAgents/.plist", home, false},
+		{home + "/Library/LaunchAgents/com.example.plist", "", false},
+		{"com.example.plist", home, false},
+	}
+	for _, tc := range cases {
+		if got := launchAgentPlist(tc.path, tc.home); got != tc.want {
+			t.Errorf("launchAgentPlist(%q, %q) = %v, want %v", tc.path, tc.home, got, tc.want)
+		}
+	}
+}
+
 func TestSelectedScanTargetsCannotChangeDisposalOrIdentity(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "cache")

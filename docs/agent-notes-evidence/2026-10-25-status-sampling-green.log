@@ -1,0 +1,7 @@
+# guard restored
+=== RUN   TestStatusSamplingOnlyOnTheVisibleStatusPage
+--- PASS: TestStatusSamplingOnlyOnTheVisibleStatusPage (0.00s)
+=== RUN   TestStatusLoopSamplesOnlyWhenWantedOrAsked
+--- PASS: TestStatusLoopSamplesOnlyWhenWantedOrAsked (0.10s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	1.630s

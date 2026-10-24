@@ -4,6 +4,9 @@ import (
 	"context"
 	"io"
 	"math"
+	"runtime"
+	"sync"
+	"time"
 )
 
 type mftGeometry struct{ Sector, Cluster, Record, Start, Valid uint64 }
@@ -138,13 +141,16 @@ func mftScanReader(ctx context.Context, r io.ReaderAt, volume VolumeID, g mftGeo
 	if err := g.validate(); err != nil {
 		return result, err
 	}
+	started := time.Now()
 	first := make([]byte, int(g.Record))
 	if err := mftReadAt(ctx, r, first, g.Start*g.Cluster); err != nil {
 		return result, err
 	}
+	result.Timings.First = time.Since(started)
 	if err := mftFixup(first, g.Sector); err != nil {
 		return result, err
 	}
+	started = time.Now()
 	runs, err := mftDataRuns(first)
 	if err != nil {
 		return result, err
@@ -197,38 +203,82 @@ func mftScanReader(ctx context.Context, r io.ReaderAt, volume VolumeID, g mftGeo
 		}
 		pending = next
 	}
-	// Bound result allocation independently of a corrupt on-disk valid length.
-	const maxRecords = 16 * 1024 * 1024
-	count := g.Valid / g.Record
-	if count > maxRecords {
-		return result, ErrMFTCorrupt
-	}
-	result.RecordsExpected = count
+	result.Timings.Runs = time.Since(started)
 	for _, run := range runs {
 		if run.Clusters > (math.MaxUint64-result.MFTRunBytes)/g.Cluster {
 			return result, ErrMFTCorrupt
 		}
 		result.MFTRunBytes += run.Clusters * g.Cluster
 	}
+	// Like Rust, read up to the smaller of the valid length and the allocated
+	// runs; large volumes legitimately exceed any fixed record count. Tree
+	// indexes are uint32. Entries grow per chunk, so a corrupt run list fails
+	// on its first unreadable chunk instead of allocating its claimed size.
+	count := min(g.Valid, result.MFTRunBytes) / g.Record
+	if count > math.MaxUint32 {
+		return result, ErrMFTCorrupt
+	}
+	result.RecordsExpected = count
+	result.Entries = make([]MFTEntry, 0, min(count, 1<<22))
 	buf := make([]byte, 8*1024*1024)
+	recSize := int(g.Record)
 	for no := uint64(0); no < count; {
+		if err = ctx.Err(); err != nil {
+			return result, err
+		}
 		n := min(uint64(len(buf))/g.Record, count-no)
+		result.Entries = append(result.Entries, make([]MFTEntry, n)...)
 		chunk := buf[:int(n*g.Record)]
+		read := time.Now()
 		if err = mftReadStream(ctx, r, runs, g.Cluster, no*g.Record, chunk); err != nil {
 			return result, err
 		}
-		for i := uint64(0); i < n; i++ {
-			if err = ctx.Err(); err != nil {
-				return result, err
-			}
-			rec := chunk[int(i*g.Record):int((i+1)*g.Record)]
-			var entry MFTEntry
-			if mftFixup(rec, g.Sector) == nil {
-				entry, _ = mftDecodeRecord(rec)
-			}
-			result.Entries = append(result.Entries, entry)
-		}
+		result.Timings.Read += time.Since(read)
+		parsed := time.Now()
+		decodeMFTChunk(chunk, recSize, g.Sector, result.Entries[no:no+n])
+		result.Timings.Parse += time.Since(parsed)
+		result.BytesRead += uint64(len(chunk))
 		no += n
 	}
 	return result, nil
+}
+
+// decodeMFTChunk parses independent records in order. Rust splits the same
+// 8MiB chunk across cores; a single thread spends most of the scan here.
+func decodeMFTChunk(chunk []byte, recSize int, sector uint64, out []MFTEntry) {
+	n := len(out)
+	workers := runtime.GOMAXPROCS(0)
+	if workers > n {
+		workers = n
+	}
+	if workers < 2 || n < 128 {
+		decodeMFTRecords(chunk, recSize, sector, out, 0, n)
+		return
+	}
+	var wg sync.WaitGroup
+	span := (n + workers - 1) / workers
+	for w := 0; w < workers; w++ {
+		start := w * span
+		if start >= n {
+			break
+		}
+		end := min(start+span, n)
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			decodeMFTRecords(chunk, recSize, sector, out, start, end)
+		}(start, end)
+	}
+	wg.Wait()
+}
+
+func decodeMFTRecords(chunk []byte, recSize int, sector uint64, out []MFTEntry, start, end int) {
+	var scratch mftDecodeScratch
+	scratch.parents = make([]uint64, 0, end-start)
+	for i := start; i < end; i++ {
+		rec := chunk[i*recSize : (i+1)*recSize]
+		if mftFixup(rec, sector) == nil {
+			out[i], _ = mftDecodeRecordScratch(rec, &scratch)
+		}
+	}
 }

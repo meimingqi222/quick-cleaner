@@ -156,3 +156,31 @@ func TestJunkPageExclusionsFailuresAndLocalization(t *testing.T) {
 		t.Fatal("closed failure detail remained visible")
 	}
 }
+
+// A scan that found nothing must say so, not list zero-byte categories with
+// selection buttons that act on nothing.
+func TestJunkEmptyResultIsACleanState(t *testing.T) {
+	page := appui.JunkPage{
+		Language: appui.English, Scanned: true, RecommendedSelected: true,
+		Categories: []core.CategorySummary{{Category: core.UserCache}, {Category: core.BrowserCache}},
+		Expanded:   map[core.CategoryID]bool{core.UserCache: true},
+	}
+	selected := 0
+	tt := ui.NewTester(func(c *ui.Context) {
+		page.RenderContent(c, appui.JunkPageActions{Select: func(appui.JunkSelection) { selected++ }})
+	}, 1280, 800)
+	if !tt.HasText("Your system is clean") || tt.HasText("Nothing cleanable found in this category") {
+		t.Fatalf("empty result: %v", tt.Texts())
+	}
+	for _, label := range []string{"Recommended", "Select All", "Invert", "Clear All"} {
+		_ = tt.Click(label)
+	}
+	if selected != 0 {
+		t.Fatalf("%d selection buttons acted on an empty result", selected)
+	}
+	page.Discovering = true
+	tt.Frame()
+	if tt.HasText("Your system is clean") {
+		t.Fatal("the clean state appeared before discovery finished")
+	}
+}

@@ -5,8 +5,10 @@
 The repository now contains a Go product entry point, core/platform ports and
 MyGo pages. This is no longer only a dashboard prototype. **Full Rust feature,
 visual and performance parity is not established.** The Rust source remains the
-behavior reference and the release workflow still builds Rust. Nothing in this
-migration changes the published packages or authorizes deleting the reference.
+behavior reference; the release workflow now builds the Go product. Published
+asset names and archive layouts are unchanged, so installed Rust and Go
+updaters both accept the Go packages. This does not authorize deleting the
+reference.
 
 Preserve the existing product, not a redesign: navigation, layout, colors,
 icons, copy, themes, localization, selection and confirmation behavior come
@@ -82,13 +84,15 @@ are compared without regenerating expected baselines.
   FSEvents, FDA, privileged helpers and updater restart need native acceptance.
   The user deferred that acceptance; missing native runners is not a reason to
   stop source migration or weaken guards.
-- **Index scalability:** opening a macOS v7 base now maps the file instead of
-  reading a second full copy before decode. The live `SizeTree` is still
-  heap-owned: Rust spill collection, streamed construction, override-only
-  mutation and page discard are not preserved. Incremental persistence still
-  diffs the base in O(base-size) work/memory. Native blocked syscalls cannot
-  be forcibly interrupted.
-- **NTFS accounting:** MFT acquisition is sequential and record-count bounded.
+- **Index scalability:** a macOS walk spills to disk and streams into the v7
+  base; a loaded base stays mapped, and writes land in overrides. Incremental
+  persistence encodes only overrides and appended nodes, and falls back to the
+  full rewrite when a precondition is unknown. Pages are released after the
+  load decode and before the spill output is unmapped. Load itself still
+  decodes the whole base once. Native blocked syscalls cannot be forcibly
+  interrupted.
+- **NTFS accounting:** MFT acquisition reads chunks sequentially and decodes
+  them in parallel. The record count follows the allocated runs, as in Rust.
   Extra hard-link parents recorded at scan time are reapplied by
   `RecomputeAggregates`; they are still not separate navigable names.
   Hard links in macOS traversal are counted per path; file sizes use
@@ -117,9 +121,17 @@ are compared without regenerating expected baselines.
   five-region sampling above 2 MiB, not full-file equality. Stable Go candidate
   order can change ambiguous/capped photo grouping relative to Rust HashMap
   iteration. Native decoder/ARM64 arithmetic parity remains unverified.
-- **Packaging:** signing, Go bundles/installers and release-workflow switchover
-  remain undone. The Go updater must not be assumed compatible with the current
-  Rust release artifacts without native package validation.
+- **Packaging:** `.github/workflows/release.yml` builds Go with
+  `scripts/package-windows.ps1` and `scripts/package-macos.sh`. The Windows
+  executable is a GUI-subsystem binary with Rust's icon, version strings and
+  manifest from `cmd/quick-cleaner/rsrc_windows_amd64.syso`; regenerate it
+  with `go run ./tools/winres` after changing `internal/app.Version` (CI runs
+  `-check`). The macOS bundle keeps Rust's identifier, executable name and
+  `assets/icon.icns`. Authenticode, Developer ID and notarization run only when
+  their secrets exist; otherwise Windows is unsigned and macOS is ad-hoc, as
+  before. The Windows package was accepted by both updaters' extraction and
+  checksum code. A notarized bundle and an end-to-end update on real
+  machines have not been run.
 
 Do not call this a complete Rust replacement while these gates remain. Do not
 claim improved build speed from comparing a partial port with the full product;

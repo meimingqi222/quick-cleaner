@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestProcessViewIsComputedOncePerInputs
+--- PASS: TestProcessViewIsComputedOncePerInputs (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.344s

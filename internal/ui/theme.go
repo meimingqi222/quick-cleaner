@@ -2,9 +2,13 @@ package ui
 
 import "github.com/egoist/mygo/ui"
 
+// ShellBackground is the shell fill from src/ui/theme.rs. The native window
+// uses it for any gap before the first frame; the frame itself is the same color.
+const ShellBackground = "#f9f9f9"
+
 // Values come from src/ui/theme.rs; do not substitute MyGo's default palette.
 var (
-	background       = ui.Hex("#f9f9f9")
+	background       = ui.Hex(ShellBackground)
 	card             = ui.Hex("#ffffff")
 	surfaceLow       = ui.Hex("#f3f3f3")
 	surfaceHigh      = ui.Hex("#e8e8e8")

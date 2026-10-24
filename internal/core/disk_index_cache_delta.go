@@ -21,13 +21,6 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 			overrides = append(overrides, i)
 		}
 	}
-	n := t.nodeCount() - bn
-	pool := []byte{}
-	names := map[string]uint32{}
-	offs := make([]uint32, n)
-	for i := 0; i < n; i++ {
-		offs[i] = cacheIntern(&pool, names, t.slot(uint32(bn+i)).Name)
-	}
 	extra := map[uint32][]uint32{}
 	// Rust overlays replace a parent's complete child slice, including its live
 	// base children. Only parents with appended live nodes need an overlay.
@@ -45,6 +38,19 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 			}
 		}
 	}
+	return writeDiskIndexDelta(t, bn, base.checksum, meta, overrides, func(idx int) uint32 { return base.records[idx].nameOff }, extra)
+}
+
+// writeDiskIndexDelta lays out a cumulative delta. overrides must be ascending
+// and each extra child list ascending; both persistence paths share this writer.
+func writeDiskIndexDelta(t *SizeTree, bn int, checksum uint64, meta DiskIndexMetadata, overrides []int, nameOff func(int) uint32, extra map[uint32][]uint32) ([]byte, int, error) {
+	n := t.nodeCount() - bn
+	pool := []byte{}
+	names := map[string]uint32{}
+	offs := make([]uint32, n)
+	for i := 0; i < n; i++ {
+		offs[i] = cacheIntern(&pool, names, t.slot(uint32(bn+i)).Name)
+	}
 	parents := make([]uint32, 0, len(extra))
 	count := n + len(overrides)
 	length := 128 + n*24 + len(pool) + len(overrides)*28
@@ -57,7 +63,7 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 	b := make([]byte, length)
 	copy(b, "QCDLTV01")
 	cachePut32(b, 8, 1)
-	for off, val := range map[int]uint64{12: base.checksum, 20: meta.LastEventID, 28: meta.ScannedAt, 36: meta.FileCount, 44: meta.DirCount, 52: meta.TotalSize, 60: uint64(n), 68: uint64(len(pool)), 76: uint64(len(overrides)), 84: uint64(len(extra)), 92: uint64(length - 128)} {
+	for off, val := range map[int]uint64{12: checksum, 20: meta.LastEventID, 28: meta.ScannedAt, 36: meta.FileCount, 44: meta.DirCount, 52: meta.TotalSize, 60: uint64(n), 68: uint64(len(pool)), 76: uint64(len(overrides)), 84: uint64(len(extra)), 92: uint64(length - 128)} {
 		cachePut64(b, off, val)
 	}
 	cur := 128
@@ -69,7 +75,7 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 	cur += len(pool)
 	for _, idx := range overrides {
 		cachePut32(b, cur, uint32(idx))
-		cacheWriteRecord(b[cur+4:cur+28], t.slot(uint32(idx)), base.records[idx].nameOff)
+		cacheWriteRecord(b[cur+4:cur+28], t.slot(uint32(idx)), nameOff(idx))
 		cur += 28
 	}
 	for _, p := range parents {

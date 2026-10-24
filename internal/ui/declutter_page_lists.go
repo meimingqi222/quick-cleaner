@@ -136,10 +136,11 @@ func (s DeclutterPage) downloads(c *ui.Context, a DeclutterPageActions) {
 		if len(s.Downloads) == 0 {
 			s.empty(c)
 		}
-		for i, f := range s.Downloads[:min(100, len(s.Downloads))] {
+		for i, f := range s.Downloads[:min(s.limit(DeclutterDownloads), len(s.Downloads))] {
 			s.fileRow(c, a, fmt.Sprintf("declutter-down-%d", i), f.Filename, f.Path, f.Path, f.Kind.Get(s.Language), f.DownloadedAtStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleDownload(i) }, a.ToggleDownload != nil)
 		}
 	})
+	s.showMore(c, a, DeclutterDownloads, len(s.Downloads), false)
 }
 
 func (s DeclutterPage) largeFiles(c *ui.Context, a DeclutterPageActions) {
@@ -179,18 +180,19 @@ func (s DeclutterPage) largeFiles(c *ui.Context, a DeclutterPageActions) {
 		if len(indices) == 0 {
 			s.empty(c)
 		}
-		for _, i := range indices[:min(100, len(indices))] {
+		for _, i := range indices[:min(s.limit(DeclutterLargeFiles), len(indices))] {
 			f := s.LargeFiles[i]
 			s.fileRow(c, a, fmt.Sprintf("declutter-large-%d", i), f.Filename, f.Path, f.PathDisplay, f.Kind.Get(s.Language), f.LastAccessedStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleLargeFile(i) }, a.ToggleLargeFile != nil)
 		}
 	})
+	s.showMore(c, a, DeclutterLargeFiles, len(indices), false)
 }
 
 func (s DeclutterPage) duplicates(c *ui.Context, a DeclutterPageActions) {
 	ui.Row(c).FillWidth().Gap(8).Children(func() {
 		label := fmt.Sprintf(s.tr("dupSummary"), len(s.Duplicates))
-		if len(s.Duplicates) > 50 {
-			label += s.tr("dupCap")
+		if shown := s.limit(DeclutterDuplicates); len(s.Duplicates) > shown {
+			label += fmt.Sprintf(s.tr("dupCap"), shown)
 		}
 		ui.Text(c, label).Grow(1).FontSize(12).TextColor(muted)
 		s.button(c, "newest", s.tr("newest"), a.KeepNewestDuplicates, !s.busy())
@@ -199,7 +201,8 @@ func (s DeclutterPage) duplicates(c *ui.Context, a DeclutterPageActions) {
 	if len(s.Duplicates) == 0 {
 		s.empty(c)
 	}
-	for gi, g := range s.Duplicates[:min(50, len(s.Duplicates))] {
+	defer s.showMore(c, a, DeclutterDuplicates, len(s.Duplicates), true)
+	for gi, g := range s.Duplicates[:min(s.limit(DeclutterDuplicates), len(s.Duplicates))] {
 		ui.Column(c).FillWidth().Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
 			ui.Row(c).FillWidth().Padding(12, 16).Background(surfaceLow).Gap(12).Children(func() {
 				ui.Box(c).Size(32, 32).Shrink(0).Radius(8).Background(ui.Hex("#efdbff")).Center().Children(func() { declutterIcon(c, DeclutterDuplicates, ui.Hex("#7547ab"), 18) })
@@ -248,7 +251,7 @@ func (s DeclutterPage) overview(c *ui.Context, a DeclutterPageActions) {
 			} else if s.ScanElapsedSecs != nil {
 				ui.Text(c, fmt.Sprintf(s.tr("elapsed"), *s.ScanElapsedSecs)).FontSize(12).TextColor(primary)
 			}
-			ui.Text(c, s.tr("heading0")).FontSize(24).Bold()
+			ui.Text(c, s.tr("heading0")).FontSize(18).Bold()
 			ui.Text(c, s.tr("sub0")).FontSize(12).TextColor(muted)
 		})
 		ui.Column(c).Width(260).Gap(8).Children(func() {
@@ -297,12 +300,12 @@ func (s DeclutterPage) overview(c *ui.Context, a DeclutterPageActions) {
 						case DeclutterDownloads:
 							ui.Row(c).FillWidth().Gap(24).Children(func() {
 								ui.Column(c).Grow(1).Gap(4).Children(func() {
-									ui.Text(c, s.tr("potential")).FontSize(12).TextColor(muted)
+									ui.Text(c, s.tr("potential")).FontSize(12).Bold().TextColor(outline)
 									label := s.tr("pendingShort")
 									if s.Scanned {
 										label = core.FmtSize(downloads)
 									}
-									ui.Text(c, label).FontSize(28).Bold().TextColor(primary)
+									ui.Text(c, label).FontSize(18).Bold().TextColor(primary)
 								})
 								ui.Row(c).Gap(16).AlignItems(ui.End).Children(func() {
 									for i, ext := range []string{".DMG", ".ZIP", ".PKG"} {

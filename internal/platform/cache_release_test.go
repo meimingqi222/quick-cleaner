@@ -3,10 +3,14 @@ package platform
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestCacheReleaseLsofAllOwnersAndPathBoundaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("lsof fixture; macOS product path")
+	}
 	root := filepath.Join(t.TempDir(), "cache")
 	data := []byte("p40\x00\nn" + filepath.Join(root, "a") + "\x00\nn" + filepath.Join(root, "b") + "\x00\np41\x00\nn" + filepath.Join(root, "c") + "\x00\np42\x00\nn" + root + "-other/x\x00\n")
 	owners, err := parseCacheLsof(data, root)

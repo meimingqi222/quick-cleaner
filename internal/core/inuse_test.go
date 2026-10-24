@@ -78,3 +78,31 @@ func TestBusyBadgePolicy(t *testing.T) {
 		t.Fatal("unknown badge")
 	}
 }
+
+func TestApplyBusyDowngradesRecommended(t *testing.T) {
+	item := func(path string) ScanItem {
+		return ScanItem{Path: path, Recommended: true, Category: UserTemp, Label: SameText("x"), Size: 1}
+	}
+	cats := []CategorySummary{{Category: UserTemp, TotalSize: 2, Items: []ScanItem{item("/a"), item("/b")}}}
+	busy := map[string]Busy{"/a": {App: "A"}}
+	if n := ApplyBusy(cats, busy); n != 1 {
+		t.Fatalf("affected = %d", n)
+	}
+	got := cats[0].Items[0]
+	if got.Busy == nil || got.Recommended || !got.Busy.RecommendedBeforeBusy || got.Busy.App != "A" {
+		t.Fatalf("downgrade = %+v busy=%+v", got, got.Busy)
+	}
+	if ApplyBusy(cats, busy) != 1 || !cats[0].Items[0].Busy.RecommendedBeforeBusy || cats[0].Items[0].Recommended {
+		t.Fatal("second apply lost the earlier recommendation")
+	}
+	if cats[0].Items[1].Busy != nil || !cats[0].Items[1].Recommended {
+		t.Fatal("clear item changed")
+	}
+	unknown := []CategorySummary{{Items: []ScanItem{item("/c")}}}
+	if ApplyBusy(unknown, map[string]Busy{"/c": {Unknown: true}}) != 1 || unknown[0].Items[0].Recommended || unknown[0].Items[0].Busy == nil || !unknown[0].Items[0].Busy.RecommendedBeforeBusy {
+		t.Fatal("unknown must downgrade and keep the earlier recommendation")
+	}
+	if ApplyBusy(cats, map[string]Busy{"/a": {}}) != 0 {
+		t.Fatal("empty observation is not occupancy")
+	}
+}

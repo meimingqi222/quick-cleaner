@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 )
 
 func TestFullDiskAccessNeedsReadableProbeAndPreservesPriority(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Full Disk Access permission-bit fixture; macOS product path")
+	}
 	for _, mode := range []string{"missing", "database", "denied-database", "mail", "safari", "unreadable-first"} {
 		t.Run(mode, func(t *testing.T) {
 			home := t.TempDir()

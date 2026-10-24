@@ -425,6 +425,18 @@ func (r *Root) scanSearch() {
 	if r.busy() {
 		return
 	}
+	// Unelevated Windows cannot read $MFT. An index that already exists stays
+	// searchable; with none, say why instead of reporting a failed scan.
+	if runtime.GOOS == "windows" && !platform.IsElevated() {
+		if len(r.searchTrees) == 0 {
+			r.message("文件搜索需要管理员权限才能读取 $MFT，请以管理员身份重新运行", "File search requires administrator privileges to read $MFT. Please relaunch as admin")
+			return
+		}
+		r.search.Ready = true
+		r.message("搜索索引就绪", "Search index ready")
+		r.setSearchQuery(r.search.Query)
+		return
+	}
 	var volumes []core.VolumeID
 	for _, row := range r.disk.Volumes {
 		if runtime.GOOS == "darwin" || r.searchTrees[row.ID.Mount] == nil {

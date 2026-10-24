@@ -1,0 +1,6 @@
+# guard restored (linux test binary run under WSL)
+=== RUN   TestOverrideDeltaMatchesFullEncoderByteForByte
+--- PASS: TestOverrideDeltaMatchesFullEncoderByteForByte (0.14s)
+=== RUN   TestIncrementalPersistDoesNotCopyTheBase
+--- PASS: TestIncrementalPersistDoesNotCopyTheBase (0.19s)
+PASS

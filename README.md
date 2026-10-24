@@ -118,6 +118,18 @@ cargo build --release
 
 The compiled binary will be located at `target/release/quick-cleaner.exe`.
 
+### Go build and release packages
+
+Release packages are built from the Go product (Go 1.27.1 or newer, no cgo):
+
+```bash
+go test ./...
+go run ./cmd/quick-cleaner --no-elevate      # not a dry run: actions still modify files
+go run ./tools/winres                        # after changing internal/app Version
+pwsh ./scripts/package-windows.ps1           # dist/quick-cleaner-windows-x86_64.zip
+./scripts/package-macos.sh dist universal    # dist/QuickCleaner.app (on macOS)
+```
+
 ### Windows `$MFT` verification (dev only)
 
 Not a product binary, and not built on macOS. Enable the `mftscan` feature to compare a volume against WizTree:

@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -59,6 +60,9 @@ func diskCacheWrite(t *testing.T, path string, b []byte) {
 }
 
 func TestLoadedIndexKeepsMappedBaseAndOverrides(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mapped index is darwin/linux only; Windows decodes into the heap")
+	}
 	c, v, tree := diskCacheFixture(t)
 	if _, e := c.Save(v, tree, 1); e != nil {
 		t.Fatal(e)
@@ -438,6 +442,9 @@ func TestDiskIndexCacheCompactsLargeDeltaAndForwardParents(t *testing.T) {
 // Fixtures constructed directly from the documented Rust ABIs, independent of
 // the Go writers, including trailing names and a cumulative override/append.
 func TestDiskIndexCacheReadsRustTrailingNamesLayout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mount-path fixture; the disk index cache is a macOS product path")
+	}
 	c, e := NewDiskIndexCache(t.TempDir())
 	if e != nil {
 		t.Fatal(e)
@@ -512,6 +519,9 @@ func TestDiskIndexCacheReadsRustTrailingNamesLayout(t *testing.T) {
 }
 
 func TestDiskIndexCacheRootOnlyTrailingNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mount-path fixture; the disk index cache is a macOS product path")
+	}
 	c, e := NewDiskIndexCache(t.TempDir())
 	if e != nil {
 		t.Fatal(e)
@@ -537,6 +547,9 @@ func TestDiskIndexCacheRootOnlyTrailingNames(t *testing.T) {
 }
 
 func TestDiskIndexCacheHealsAPFSMirror(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("APFS mirror fixture; macOS product path")
+	}
 	c, e := NewDiskIndexCache(t.TempDir())
 	if e != nil {
 		t.Fatal(e)

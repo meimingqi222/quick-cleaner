@@ -1,0 +1,7 @@
+# guard removed: the ring summary is one wrapped line again
+=== RUN   TestDiskPageEventsAreControllerRequests
+    disk_page_test.go:63: ring summary line "Used 75%" missing: [QuickCleaner Fast Disk & App Cleaner Overview Status Smart Clean Apps Disk Lens Declutter File Search Space Freed  Language 中文 Engl
+--- FAIL: TestDiskPageEventsAreControllerRequests (0.02s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.251s
+FAIL

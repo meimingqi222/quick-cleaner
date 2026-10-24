@@ -47,6 +47,14 @@ type JunkPageActions struct {
 var junkError = ui.Hex("#ba1a1a")
 var junkErrorContainer = ui.Hex("#ffdad6")
 
+func (s *JunkPage) itemCount() int {
+	n := 0
+	for _, category := range s.Categories {
+		n += len(category.Items)
+	}
+	return n
+}
+
 func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 	t := junkStrings(s.Language)
 	ui.Column(c).Fill().Gap(0).Children(func() {
@@ -55,7 +63,7 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 				ui.Row(c).Gap(16).Children(func() {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 						ui.Text(c, dashboardStrings(s.Language).nav[Junk]).FontSize(18).Bold()
-						ui.Text(c, t.headingSub).FontSize(12).TextColor(outline)
+						ui.Text(c, t.headingSub).FontSize(12).TextColor(muted)
 					})
 					if junkButton(c.Key("exclusions-toggle"), fmt.Sprintf(t.exclusions, len(s.Exclusions)), true, s.ShowExclusions) && actions.ToggleExclusions != nil {
 						actions.ToggleExclusions()
@@ -88,9 +96,15 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 				}
 				if s.Scanning {
 					ui.Column(c).FillWidth().Padding(48).Gap(12).AlignItems(ui.Center).Children(func() {
-						ui.Spinner(c).Size(28, 28)
+						loadingSpinner(c, 28)
 						ui.Text(c, t.loadingTitle).FontSize(16).Bold()
 						ui.Text(c, t.loadingSub).FontSize(12).TextColor(outline)
+					})
+				} else if s.Scanned && !s.Discovering && s.itemCount() == 0 {
+					ui.Column(c.Key("junk-clean")).FillWidth().Padding(48).Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(56, 56).Radius(999).Background(primaryFixed).Center().Children(func() { icon(c, Junk, primary, 24) })
+						ui.Text(c, t.cleanTitle).FontSize(16).Bold()
+						ui.Text(c, t.cleanSub).FontSize(12).TextColor(outline)
 					})
 				} else {
 					ui.Column(c).FillWidth().Gap(8).Padding(0, 0, 80, 0).Children(func() {
@@ -155,11 +169,7 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 					color = outline
 				}
 				ui.Text(c, size).Shrink(0).FontSize(14).Bold().TextColor(color)
-				arrow := "▸"
-				if s.Expanded[id] {
-					arrow = "▾"
-				}
-				ui.Text(c, arrow).Width(14).FontSize(12).Bold().TextColor(outline)
+				chevron(c, s.Expanded[id], outline, 14)
 			})
 			if head.Clicked() && actions.ToggleExpanded != nil {
 				actions.ToggleExpanded(id)
@@ -169,7 +179,7 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 			return
 		}
 		if len(category.Items) == 0 {
-			ui.Text(c, t.empty).FillWidth().Padding(16, 20).FontSize(12).TextColor(outline).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.3))
+			ui.Text(c.Key("items-empty"), t.empty).FillWidth().Padding(16, 20).FontSize(12).TextColor(outline).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.3)).Transition(disclosure)
 			return
 		}
 		if s.lists == nil {
@@ -182,7 +192,7 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 		}
 		state.Key = func(i int) any { return category.Items[i].Path }
 		ui.List(c.Key("items"), state, len(category.Items), func(i int) { s.item(c.Key(category.Items[i].Path), category.Items[i], actions) }).
-			FillWidth().Height(float32(min(len(category.Items)*50, 380))).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.4))
+			FillWidth().Height(float32(min(len(category.Items)*50, 380))).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.4)).Transition(disclosure)
 	})
 }
 
@@ -190,9 +200,7 @@ func (s *JunkPage) item(c *ui.Context, item core.ScanItem, actions JunkPageActio
 	t := junkStrings(s.Language)
 	ui.Row(c).Height(50).FillWidth().Padding(8, 16).Gap(12).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.25)).Children(func() {
 		row := ui.ButtonBase(c.Key("toggle")).Grow(1).MinWidth(0).FillHeight().Padding(0).Gap(12).Justify(ui.Start).Cursor(ui.CursorPointer)
-		if row.Hovered() {
-			row.Background(surfaceLow)
-		}
+		interactiveRow(row, ui.Transparent, surfaceLow)
 		row.Children(func() {
 			check := core.Off
 			if s.Selected[item.Path] {
@@ -268,17 +276,20 @@ func (s *JunkPage) failures(c *ui.Context, actions JunkPageActions) {
 	if s.ShowFailedDetails {
 		toggle = t.hideDetails
 	}
-	ui.Column(c).FillWidth().Padding(16).Gap(8).Radius(12).Background(junkErrorContainer).Border(1, junkError.Alpha(.4)).Children(func() {
-		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).Children(func() {
-			ui.Text(c, heading).FontSize(14).Bold().TextColor(junkError)
+	// A tint, not a slab: the heading carries the alarm, and the details stay
+	// readable in body text.
+	ui.Column(c).FillWidth().Padding(14, 16).Gap(8).Radius(12).Background(junkErrorContainer.Alpha(.35)).Border(1, junkError.Alpha(.22)).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			ui.Box(c).Size(8, 8).Shrink(0).Radius(999).Background(junkError)
+			ui.Text(c, heading).Grow(1).MinWidth(0).FontSize(14).Bold().TextColor(junkError)
 			if junkButton(c.Key("failed-details"), toggle, true, false) && actions.ToggleFailedDetails != nil {
 				actions.ToggleFailedDetails()
 			}
 		})
 		if s.ShowFailedDetails {
-			ui.Column(c).FillWidth().Padding(8).Gap(4).Radius(6).Background(card.Alpha(.6)).Children(func() {
+			ui.Column(c.Key("failed-list")).FillWidth().Padding(8, 10).Gap(4).Radius(8).Background(card).Transition(disclosure).Children(func() {
 				for _, detail := range s.FailedDetails[:min(20, len(s.FailedDetails))] {
-					ui.Text(c, core.Truncate(detail, 120)).FontSize(12).TextColor(junkError)
+					ui.Text(c, core.Truncate(detail, 120)).FontSize(12).TextColor(text)
 				}
 			})
 		}
@@ -309,9 +320,12 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 			})
 			ui.Row(c).Gap(8).Children(func() {
 				ui.Box(c).Width(1).Height(24).Background(outlineVariant.Alpha(.7))
-				active := [4]bool{s.RecommendedSelected, picked == total && total > 0, false, picked == 0}
+				// With nothing found there is nothing to select: no button is
+				// enabled or shown as the current selection.
+				found := total > 0
+				active := [4]bool{s.RecommendedSelected && found, picked == total && found, false, picked == 0 && found}
 				for i, label := range t.batch {
-					if junkButton(c.Key(fmt.Sprint("select-", i)), label, s.Scanned && !s.Cleaning, active[i]) && actions.Select != nil {
+					if junkButton(c.Key(fmt.Sprint("select-", i)), label, s.Scanned && !s.Cleaning && found, active[i]) && actions.Select != nil {
 						actions.Select(JunkSelection(i))
 					}
 				}
@@ -322,7 +336,8 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 				label = dashboardStrings(s.Language).cleaning
 			}
 			enabled := s.Scanned && !s.Cleaning && !s.Scanning && picked > 0
-			button := ui.ButtonBase(c.Key("clean-now")).Padding(12, 20).Radius(999).Background(junkError).Disabled(!enabled).Cursor(ui.CursorPointer)
+			button := ui.ButtonBase(c.Key("clean-now")).Padding(12, 20).Radius(999).Disabled(!enabled).Cursor(ui.CursorPointer)
+			interactive(button, junkError, ui.Hex("#a3161a"), ui.Hex("#8c1014"), enabled)
 			button.Children(func() { ui.Text(c, label).FontSize(14).Bold().TextColor(card) })
 			if button.Clicked() && actions.RequestClean != nil {
 				actions.RequestClean()
@@ -332,13 +347,16 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 }
 
 func junkButton(c *ui.Context, label string, enabled, active bool) bool {
-	b := ui.ButtonBase(c).Padding(4, 12).Radius(6).Background(surfaceLow).Disabled(!enabled).Cursor(ui.CursorPointer)
+	b := ui.ButtonBase(c).Padding(4, 12).Radius(6).Disabled(!enabled).Cursor(ui.CursorPointer)
 	fg := muted
 	if active {
-		b.Background(primaryFixed)
+		interactive(b, primaryFixed, primary.Alpha(.2), primary.Alpha(.28), enabled)
 		fg = primary
-	} else if b.Hovered() {
-		b.Background(surfaceHigh)
+	} else {
+		interactive(b, surfaceLow, surfaceHigh, surfaceHighest, enabled)
+	}
+	if !enabled {
+		fg = outline.Alpha(.6)
 	}
 	b.Children(func() { ui.Text(c, label).FontSize(12).FixedLineHeight(16).FontWeight(500).TextColor(fg) })
 	return b.Clicked()

@@ -3,11 +3,15 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func TestBrokenLoginItemRequiresMissingAbsoluteExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("LaunchAgents login item fixture; macOS product path")
+	}
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	agents := filepath.Join(home, "Library", "LaunchAgents")

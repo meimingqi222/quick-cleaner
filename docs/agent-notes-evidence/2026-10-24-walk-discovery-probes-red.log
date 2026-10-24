@@ -1,0 +1,7 @@
+# guard removed: hasCacheDirectoryTag confines CACHEDIR.TAG before opening it
+=== RUN   TestWalkDiscoveryStatsEachDirectoryOnce
+    devscan_test.go:250: walk discovery made 1643 ancestor probes for 200 directories
+--- FAIL: TestWalkDiscoveryStatsEachDirectoryOnce (0.38s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.622s
+FAIL

@@ -284,7 +284,7 @@ func TestDiskIndexCacheCoverageLegacyAndLinksFailClosed(t *testing.T) {
 		t.Fatal(e)
 	}
 	if e = os.Symlink(outside, covPath); e != nil {
-		t.Fatal(e)
+		t.Skipf("symlinks unavailable: %v", e)
 	}
 	if _, e = c.Load(v); !errors.Is(e, ErrDiskIndexIncomplete) {
 		t.Fatal("coverage symlink followed", e)

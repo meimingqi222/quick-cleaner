@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"log"
+	"runtime"
+	"strings"
 
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
 )
@@ -133,6 +135,20 @@ func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 			}
 			continue
 		}
+		// Broken login items stay recoverable: Trash them even when the rule
+		// disposal is permanent. Only a direct child of the two LaunchAgents
+		// directories qualifies, and only after the occupancy gate above.
+		if runtime.GOOS == "darwin" {
+			home, _ := platform.UserHome()
+			if launchAgentPlist(t.Path, home) {
+				if !RootIdentityHolds(t.Path, t.Identity) {
+					report.Record(t.Path, p.fail(t.Path, FailChanged))
+					continue
+				}
+				report.Record(t.Path, recyclePathWith(t.Path, p, platform.MoveToTrash))
+				continue
+			}
+		}
 		var plan *CleanupPlan
 		if len(t.Plans) > 0 {
 			plan = t.Plans[0]
@@ -220,4 +236,29 @@ func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 	snapshot := p.Snapshot()
 	log.Printf("[删除] 完成：目标 ok=%d skipped=%d failed=%d；文件 %d 个 / %s，失败 %d 个", report.OK, report.Skipped, len(report.Failed), snapshot.Files, FmtSize(snapshot.Bytes), snapshot.Failed)
 	return report
+}
+
+// launchAgentPlist reports a broken-login plist. The extension match is
+// case-insensitive; `..` is not resolved, so a path cannot climb into the
+// directory. home may be empty when the original user directory is unknown.
+func launchAgentPlist(path, home string) bool {
+	slash := strings.TrimRight(strings.ReplaceAll(path, `\`, "/"), "/")
+	cut := strings.LastIndex(slash, "/")
+	if cut <= 0 {
+		return false
+	}
+	base := slash[cut+1:]
+	dot := strings.LastIndex(base, ".")
+	if dot <= 0 || !strings.EqualFold(base[dot:], ".plist") {
+		return false
+	}
+	parent := slash[:cut]
+	if parent == "/Library/LaunchAgents" {
+		return true
+	}
+	if home == "" {
+		return false
+	}
+	root := strings.TrimRight(strings.ReplaceAll(home, `\`, "/"), "/")
+	return parent == root+"/Library/LaunchAgents"
 }

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/meimingqi222/quick-cleaner/internal/core"
@@ -106,7 +107,7 @@ func TestDeclutterSelectionRequestsContextAndBusy(t *testing.T) {
 			if tt.HasText("hidden.iso") {
 				t.Fatal("filter ignored")
 			}
-			if !tt.HasText("1 items selected • 200.0 MB total") {
+			if !tt.HasText("1 items selected • " + core.FmtSize(200_000_000) + " total") {
 				t.Fatal("large-file summary must reflect filtered selection", tt.Texts())
 			}
 		case DeclutterDuplicates:
@@ -253,7 +254,7 @@ func TestDeclutterDisplayCapsDoNotTruncateSelectedSummary(t *testing.T) {
 		s.Downloads = append(s.Downloads, core.DownloadItem{Filename: fmt.Sprintf("download-%d", i), Selected: true, Size: 1000})
 	}
 	tt := declutterTester(&s, DeclutterPageActions{})
-	if tt.HasText("download-100") || !tt.HasText("101 items selected • 101 KB total") {
+	if tt.HasText("download-100") || !tt.HasText("101 items selected • "+core.FmtSize(101_000)+" total") {
 		t.Fatal(tt.Texts())
 	}
 	s.Tab = DeclutterDuplicates
@@ -261,7 +262,7 @@ func TestDeclutterDisplayCapsDoNotTruncateSelectedSummary(t *testing.T) {
 		s.Duplicates = append(s.Duplicates, core.DuplicateGroup{Filename: fmt.Sprintf("group-%d", i), SizePerCopy: 1000, Files: []core.DuplicateFileItem{{Selected: true}}})
 	}
 	tt.Frame()
-	if tt.HasText("group-50") || !tt.HasText("51 items selected • 51 KB total") {
+	if tt.HasText("group-50") || !tt.HasText("51 items selected • "+core.FmtSize(51_000)+" total") {
 		t.Fatal(tt.Texts())
 	}
 	s.Tab = DeclutterSimilarPhotos
@@ -269,7 +270,51 @@ func TestDeclutterDisplayCapsDoNotTruncateSelectedSummary(t *testing.T) {
 		s.Photos = append(s.Photos, core.PhotoGroup{Title: core.NewText("组", fmt.Sprintf("photos-%d", i)), Photos: []core.PhotoItem{{IsBestShot: true}, {Filename: "copy", Selected: true, Size: 1000}}})
 	}
 	tt.Frame()
-	if tt.HasText("photos-30") || !tt.HasText("31 items selected • 31 KB total") {
+	if tt.HasText("photos-30") || !tt.HasText("31 items selected • "+core.FmtSize(31_000)+" total") {
 		t.Fatal(tt.Texts())
+	}
+}
+
+// Rust hid everything past the first page; every entry must stay reachable
+// for review.
+func TestDeclutterListsShowMoreInsteadOfHidingTheRest(t *testing.T) {
+	s := DeclutterPage{Language: English, Tab: DeclutterDownloads}
+	for i := range 101 {
+		s.Downloads = append(s.Downloads, core.DownloadItem{Filename: fmt.Sprintf("download-%d", i), Size: 1000})
+	}
+	tt := declutterTester(&s, DeclutterPageActions{ShowMore: s.ShowMore})
+	if tt.HasText("download-100") || !tt.HasText("Show more (1 remaining)") {
+		t.Fatal("first page", tt.Texts())
+	}
+	// The button follows the first page, below the fold.
+	tt.Wheel(550, 425, 0, 100000)
+	tt.Advance(2 * time.Second)
+	tt.Frame()
+	if err := tt.Click("Show more (1 remaining)"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("download-100") || tt.HasText("Show more (1 remaining)") {
+		t.Fatal("after show more", tt.Texts())
+	}
+
+	s = DeclutterPage{Language: English, Tab: DeclutterDuplicates}
+	for i := range 51 {
+		s.Duplicates = append(s.Duplicates, core.DuplicateGroup{Filename: fmt.Sprintf("group-%d", i), SizePerCopy: 1000, Files: []core.DuplicateFileItem{{Path: fmt.Sprintf("/a/%d", i), IsOriginal: true}, {Path: fmt.Sprintf("/b/%d", i)}}})
+	}
+	tt = declutterTester(&s, DeclutterPageActions{ShowMore: s.ShowMore})
+	if tt.HasText("group-50") || !tt.HasText("Show more (1 groups remaining)") {
+		t.Fatal("duplicate first page", tt.Texts())
+	}
+	// The button follows the first page, below the fold.
+	tt.Wheel(550, 425, 0, 100000)
+	tt.Advance(2 * time.Second)
+	tt.Frame()
+	if err := tt.Click("Show more (1 groups remaining)"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("group-50") {
+		t.Fatal("the 51st duplicate group stayed hidden")
 	}
 }

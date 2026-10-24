@@ -65,3 +65,61 @@ func dashboardFoundBlurb(l Language, categories int, size string) string {
 	}
 	return fmt.Sprintf(dashboardStrings(l).foundBlurb, categories, size)
 }
+
+func updateText(lang Language, zh, en string) string {
+	if lang == English {
+		return en
+	}
+	return zh
+}
+
+// UpdateSidebarLabel is the sidebar version row. Attention is true only when
+// the status wants a highlighted action. Checking is a quiet label.
+func UpdateSidebarLabel(lang Language, version string, status core.UpdateStatus, checking bool) (string, bool) {
+	switch status.Kind {
+	case core.UpdateAvailable:
+		return updateText(lang, "有新版本", "Update available") + " " + status.LatestVersion, true
+	case core.UpdateDownloading:
+		return updateText(lang, "正在下载…", "Downloading…"), true
+	case core.UpdateVerifying:
+		return updateText(lang, "正在校验…", "Verifying…"), true
+	case core.UpdateDownloaded:
+		return updateText(lang, "重启安装", "Restart to install") + " " + status.LatestVersion, true
+	case core.UpdateInstalling:
+		return updateText(lang, "正在安装…", "Installing…"), true
+	case core.UpdateError:
+		return updateText(lang, "更新失败", "Update failed"), true
+	}
+	if checking || status.Kind == core.UpdateChecking {
+		return updateText(lang, "正在检查…", "Checking…"), false
+	}
+	return "v" + version, false
+}
+
+type VersionClick uint8
+
+const (
+	VersionClickIgnore VersionClick = iota
+	VersionClickCheck
+	VersionClickOpen
+	VersionClickInstall
+)
+
+// VersionClickKind routes the sidebar version row. A downloaded update installs
+// immediately. Other attention opens the dialog. An idle packaged install checks
+// without a dialog. Checking and unpackaged builds ignore the click.
+func VersionClickKind(status core.UpdateStatus, checking, packaged bool) VersionClick {
+	if status.WantsAttention() {
+		if status.Kind == core.UpdateDownloaded {
+			return VersionClickInstall
+		}
+		return VersionClickOpen
+	}
+	if checking || status.Kind == core.UpdateChecking {
+		return VersionClickIgnore
+	}
+	if !packaged {
+		return VersionClickIgnore
+	}
+	return VersionClickCheck
+}

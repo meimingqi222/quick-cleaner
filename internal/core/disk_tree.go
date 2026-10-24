@@ -79,6 +79,10 @@ type SizeTree struct {
 	base      *mappedTreeBase
 	baseCount int
 	overrides map[uint32]treeSlot
+	// ancestorStamp is reused by every aggregate walk. A fresh map per file
+	// dominated Windows MFT tree builds.
+	ancestorStamp []uint32
+	ancestorGen   uint32
 }
 
 func saturatingAdd(a, b uint64) uint64 {
@@ -94,16 +98,37 @@ func saturatingSub(a, b uint64) uint64 {
 	return a - b
 }
 func NewSizeTree(volume VolumeID, entries []TreeIndexEntry) *SizeTree {
-	t := &SizeTree{volume: volume, childNames: make(map[uint32]map[string]uint32)}
 	if len(entries) == 0 {
 		entries = []TreeIndexEntry{{Name: volume.Label, IsDir: true, Used: true}}
 	}
-	for _, e := range entries {
-		t.entries = append(t.entries, treeSlot{TreeIndexEntry: e})
+	slots := make([]treeSlot, len(entries))
+	for i := range entries {
+		slots[i].TreeIndexEntry = entries[i]
 	}
+	return newSizeTreeFromSlots(volume, slots)
+}
+
+// newSizeTreeFromSlots takes ownership of slots. The MFT build fills them
+// directly; an intermediate []TreeIndexEntry was a second multi-million copy.
+func newSizeTreeFromSlots(volume VolumeID, slots []treeSlot) *SizeTree {
+	if len(slots) == 0 {
+		slots = []treeSlot{{TreeIndexEntry: TreeIndexEntry{Name: volume.Label, IsDir: true, Used: true}}}
+	}
+	t := &SizeTree{volume: volume, childNames: make(map[uint32]map[string]uint32), entries: slots}
 	t.RebuildChildArrays()
 	t.RecomputeAggregates()
 	return t
+}
+
+// heapEdge is the parent link a heap node contributes through: a used node
+// under a different, used directory. Child arrays and aggregates share it.
+func heapEdge(entries []treeSlot, i int) (uint32, bool) {
+	e := &entries[i]
+	p := e.Parent
+	if i == 0 || !e.Used || p == uint32(i) || int(p) >= len(entries) || !entries[p].Used || !entries[p].IsDir {
+		return 0, false
+	}
+	return p, true
 }
 
 // Clone owns independent mutable slots, edges and coverage metadata.
@@ -164,18 +189,6 @@ func (t *SizeTree) slot(idx uint32) treeSlot {
 		return t.base.slot(idx)
 	}
 	return t.entries[int(idx)-t.baseCount]
-}
-
-// attachMappedBase drops the decoded heap copy and serves those nodes from the
-// mapped file. entryOff is the file offset of the first 24-byte record; the
-// name pool stays mapped because slot reads resolve names from it.
-func (t *SizeTree) attachMappedBase(mapped *mappedDiskIndex, file []byte, entryOff int) {
-	if t == nil || mapped == nil || entryOff < 0 || entryOff+len(t.entries)*24 > len(file) {
-		return
-	}
-	t.base = &mappedTreeBase{mapped: mapped, file: file, entryOff: entryOff}
-	t.baseCount = len(t.entries)
-	t.entries = nil
 }
 
 // setSlot writes one node. A mapped base node becomes an override so the shared
@@ -382,16 +395,59 @@ func (t *SizeTree) Children(idx uint32) []Node {
 	return out
 }
 func (t *SizeTree) ancestors(idx uint32, fn func(*treeSlot)) {
-	seen := make(map[uint32]bool)
-	for t.Valid(idx) && !seen[idx] {
-		seen[idx] = true
+	n := t.nodeCount()
+	if n == 0 {
+		return
+	}
+	if cap(t.ancestorStamp) < n {
+		t.ancestorStamp = make([]uint32, n)
+	} else if len(t.ancestorStamp) != n {
+		t.ancestorStamp = t.ancestorStamp[:n]
+	}
+	t.ancestorGen++
+	if t.ancestorGen == 0 {
+		clear(t.ancestorStamp)
+		t.ancestorGen = 1
+	}
+	gen := t.ancestorGen
+	// 256 matches the MFT parent walk. The stamp stops a cycle without a map.
+	// Unmapped nodes are the MFT build. Copying the slot per file dominated it.
+	// fn must not grow t.entries; the pointer would then address a stale array.
+	if t.baseCount == 0 {
+		entries := t.entries
+		for depth := 0; depth <= 256 && int(idx) < len(entries) && entries[idx].Used; depth++ {
+			if int(idx) >= len(t.ancestorStamp) || t.ancestorStamp[idx] == gen {
+				return
+			}
+			t.ancestorStamp[idx] = gen
+			fn(&entries[idx])
+			if idx == 0 {
+				return
+			}
+			next := entries[idx].Parent
+			if next == idx {
+				return
+			}
+			idx = next
+		}
+		return
+	}
+	for depth := 0; depth <= 256 && t.Valid(idx); depth++ {
+		if int(idx) >= len(t.ancestorStamp) || t.ancestorStamp[idx] == gen {
+			return
+		}
+		t.ancestorStamp[idx] = gen
 		slot := t.slot(idx)
 		fn(&slot)
 		t.setSlot(idx, slot)
 		if idx == 0 {
-			break
+			return
 		}
-		idx = slot.Parent
+		next := slot.Parent
+		if next == idx {
+			return
+		}
+		idx = next
 	}
 }
 func cloneExtraParents(in map[uint32][]uint32) map[uint32][]uint32 {
@@ -421,6 +477,10 @@ func (t *SizeTree) NoteExtraParent(file, parent uint32) {
 }
 
 func (t *SizeTree) RecomputeAggregates() {
+	if t.baseCount == 0 {
+		t.recomputeHeapAggregates()
+		return
+	}
 	for i := 0; i < t.nodeCount(); i++ {
 		slot := t.slot(uint32(i))
 		if slot.IsDir {
@@ -441,6 +501,102 @@ func (t *SizeTree) RecomputeAggregates() {
 			}
 			t.ancestors(parent, func(p *treeSlot) { p.Size = saturatingAdd(p.Size, e.Size); p.files = saturatingAdd(p.files, 1) })
 		}
+	}
+}
+
+// recomputeHeapAggregates rolls file sizes up in place. A closure per file
+// allocated millions of times on an MFT tree; Rust updates the arrays directly.
+//
+// Each edge is visited once: files add to their directory, and a directory
+// adds its total to its parent after all of its child directories have. A
+// per-file ancestor walk was O(files × depth) and most of the MFT tree build.
+// Directories in a cycle never drain, so a cycle stays local instead of
+// reaching the root. Extra hard-link parents still walk their ancestors.
+func (t *SizeTree) recomputeHeapAggregates() {
+	entries := t.entries
+	for i := range entries {
+		if entries[i].IsDir {
+			entries[i].Size = 0
+			entries[i].files = 0
+		}
+	}
+	n := len(entries)
+	pending := make([]uint32, n)
+	for i := range entries {
+		p, ok := heapEdge(entries, i)
+		if !ok {
+			continue
+		}
+		if entries[i].IsDir {
+			pending[p]++
+		} else {
+			entries[p].Size = saturatingAdd(entries[p].Size, entries[i].Size)
+			entries[p].files = saturatingAdd(entries[p].files, 1)
+		}
+	}
+	var ready []uint32
+	for i := range entries {
+		if entries[i].Used && entries[i].IsDir && pending[i] == 0 {
+			ready = append(ready, uint32(i))
+		}
+	}
+	for len(ready) > 0 {
+		d := ready[len(ready)-1]
+		ready = ready[:len(ready)-1]
+		p, ok := heapEdge(entries, int(d))
+		if !ok {
+			continue
+		}
+		entries[p].Size = saturatingAdd(entries[p].Size, entries[d].Size)
+		entries[p].files = saturatingAdd(entries[p].files, entries[d].files)
+		if pending[p]--; pending[p] == 0 {
+			ready = append(ready, p)
+		}
+	}
+	if len(t.extraParents) == 0 {
+		return
+	}
+	if cap(t.ancestorStamp) < n {
+		t.ancestorStamp = make([]uint32, n)
+	} else if len(t.ancestorStamp) != n {
+		t.ancestorStamp = t.ancestorStamp[:n]
+	}
+	for i := range entries {
+		e := &entries[i]
+		if !e.Used || e.IsDir {
+			continue
+		}
+		for _, parent := range t.extraParents[uint32(i)] {
+			if parent == e.Parent || int(parent) >= n || !entries[parent].Used {
+				continue
+			}
+			t.addHeapAncestors(entries, parent, e.Size)
+		}
+	}
+}
+
+func (t *SizeTree) addHeapAncestors(entries []treeSlot, idx uint32, size uint64) {
+	t.ancestorGen++
+	if t.ancestorGen == 0 {
+		clear(t.ancestorStamp)
+		t.ancestorGen = 1
+	}
+	gen := t.ancestorGen
+	for depth := 0; depth <= 256 && int(idx) < len(entries) && entries[idx].Used; depth++ {
+		if int(idx) >= len(t.ancestorStamp) || t.ancestorStamp[idx] == gen {
+			return
+		}
+		t.ancestorStamp[idx] = gen
+		entries[idx].Size = saturatingAdd(entries[idx].Size, size)
+		entries[idx].files = saturatingAdd(entries[idx].files, 1)
+		if idx == 0 {
+			return
+		}
+		next := entries[idx].Parent
+		if next == idx {
+			return
+		}
+		idx = next
 	}
 }
 func (t *SizeTree) SetDirTotals(idx uint32, size, files uint64) {
@@ -579,11 +735,39 @@ func (t *SizeTree) AppendSubtree(parent uint32, subtree *SizeTree, rootName stri
 }
 func (t *SizeTree) RebuildChildArrays() {
 	t.childNames = make(map[uint32]map[string]uint32)
-	t.children = make([][]uint32, t.nodeCount())
-	for i := 0; i < t.nodeCount(); i++ {
+	n := t.nodeCount()
+	// Heap trees read slots in place; slot() copies one per call.
+	edge := func(i int) (uint32, bool) {
+		if t.baseCount == 0 {
+			return heapEdge(t.entries, i)
+		}
 		e := t.slot(uint32(i))
-		if i != 0 && e.Used && t.IsDir(e.Parent) && e.Parent != uint32(i) {
-			t.children[e.Parent] = append(t.children[e.Parent], uint32(i))
+		return e.Parent, e.Used && t.IsDir(e.Parent) && e.Parent != uint32(i)
+	}
+	counts := make([]uint32, n)
+	var total uint32
+	for i := 1; i < n; i++ {
+		if p, ok := edge(i); ok {
+			counts[p]++
+			total++
+		}
+	}
+	// One backing array, like Rust's child_at. A slice per directory made the
+	// MFT tree build allocate once for every directory on the volume.
+	backing := make([]uint32, total)
+	t.children = make([][]uint32, n)
+	var cursor uint32
+	for i, c := range counts {
+		if c == 0 {
+			continue
+		}
+		start := cursor
+		cursor += c
+		t.children[i] = backing[start:start:cursor]
+	}
+	for i := 1; i < n; i++ {
+		if p, ok := edge(i); ok {
+			t.children[p] = append(t.children[p], uint32(i))
 		}
 	}
 }

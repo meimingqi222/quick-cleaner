@@ -11,12 +11,10 @@ import (
 )
 
 type trayOverviewFixture struct {
-	samples, purges, volumes atomic.Int32
-	mu                       sync.Mutex
-	thermal                  []bool
-	accountRelease           chan struct{}
-	purgeRelease             chan struct{}
-	purgeSuccess             atomic.Bool
+	samples, volumes atomic.Int32
+	mu               sync.Mutex
+	thermal          []bool
+	accountRelease   chan struct{}
 }
 
 func (f *trayOverviewFixture) NewSampler(context.Context) (trayOverviewSampler, error) { return f, nil }
@@ -40,14 +38,6 @@ func (f *trayOverviewFixture) Volumes() []TrayVolumeInfo {
 	f.volumes.Add(1)
 	return []TrayVolumeInfo{{Label: "fixture", TotalBytes: 123, FreeBytes: 45}}
 }
-func (f *trayOverviewFixture) ReleaseMemory() bool {
-	f.purges.Add(1)
-	if f.purgeRelease != nil {
-		<-f.purgeRelease
-	}
-	return f.purgeSuccess.Load()
-}
-
 func awaitTrayOverview(t *testing.T, c *TrayOverviewController, match func(TrayOverviewSnapshot) bool) TrayOverviewSnapshot {
 	t.Helper()
 	timer := time.NewTimer(3 * time.Second)
@@ -102,45 +92,21 @@ func TestTrayOverviewRefreshDoesNotWaitForAccountsAndStopsOnClose(t *testing.T) 
 	}
 }
 
-func TestTrayOverviewReleaseMemoryStateAndActionRouting(t *testing.T) {
-	f := &trayOverviewFixture{purgeRelease: make(chan struct{})}
-	f.purgeSuccess.Store(true)
-	c := newTrayOverviewController(f)
-	c.feedback = 20 * time.Millisecond
+func TestTrayOverviewActionsDismissAndDispatch(t *testing.T) {
+	c := newTrayOverviewController(&trayOverviewFixture{})
 	t.Cleanup(c.Close)
 	c.Start()
 	var dispatched []OverviewAction
 	dispatch := func(a OverviewAction) { dispatched = append(dispatched, a) }
-	for _, kind := range []OverviewActionKind{OverviewOpenMain, OverviewScanJunk, OverviewOpenView, OverviewAnalyzeDisk, OverviewQuit} {
+	kinds := []OverviewActionKind{OverviewOpenMain, OverviewScanJunk, OverviewOpenView, OverviewAnalyzeDisk, OverviewTopMemory, OverviewQuit}
+	for _, kind := range kinds {
 		a := OverviewAction{Kind: kind, View: Disk, Path: "/fixture"}
 		if !a.DismissesPopover() {
 			t.Fatal("navigation must dismiss")
 		}
 		c.Handle(a, dispatch)
 	}
-	if len(dispatched) != 5 || dispatched[3].Path != "/fixture" {
+	if len(dispatched) != len(kinds) || dispatched[3].Path != "/fixture" || dispatched[4].Kind != OverviewTopMemory {
 		t.Fatal(dispatched)
-	}
-	release := OverviewAction{Kind: OverviewReleaseMemory}
-	if release.DismissesPopover() {
-		t.Fatal("memory release must keep popover open")
-	}
-	c.Handle(release, dispatch)
-	c.Handle(release, dispatch)
-	if state := c.Snapshot(); !state.Purging || state.Purged || state.PurgeFailed {
-		t.Fatal(state)
-	}
-	close(f.purgeRelease)
-	awaitTrayOverview(t, c, func(s TrayOverviewSnapshot) bool { return s.Purged })
-	c.Handle(release, dispatch)
-	if f.purges.Load() != 1 || len(dispatched) != 5 {
-		t.Fatal("duplicate purge or action dispatch")
-	}
-	awaitTrayOverview(t, c, func(s TrayOverviewSnapshot) bool { return !s.Purged })
-	f.purgeSuccess.Store(false)
-	c.Handle(release, dispatch)
-	awaitTrayOverview(t, c, func(s TrayOverviewSnapshot) bool { return s.PurgeFailed && !s.Purging })
-	if f.purges.Load() != 2 {
-		t.Fatal("failure not observed")
 	}
 }

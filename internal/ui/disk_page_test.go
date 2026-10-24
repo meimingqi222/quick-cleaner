@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -50,9 +51,16 @@ func TestDiskPageEventsAreControllerRequests(t *testing.T) {
 		SetTab:          func(tab DiskTab) { s.Tab = tab },
 	}
 	tt := diskPageTester(&s, a)
-	for _, label := range []string{"Disk Lens Analyzer", "System Protected", "Free Space", core.FmtSize(s.Space.Total) + " Total", "Used 75% · Free " + core.FmtSize(s.Space.Free), "Selected Disk Items"} {
+	for _, label := range []string{"Disk Lens Analyzer", "System Protected", "Free Space", core.FmtSize(s.Space.Total) + " Total", "Selected Disk Items"} {
 		if !tt.HasText(label) {
 			t.Fatalf("missing %q: %v", label, tt.Texts())
+		}
+	}
+	// The ring summary is two exact lines; wrapped as one, the unit fell
+	// onto a line of its own.
+	for _, line := range []string{"Used 75%", "Free " + core.FmtSize(s.Space.Free)} {
+		if !slices.Contains(tt.Texts(), line) {
+			t.Fatalf("ring summary line %q missing: %v", line, tt.Texts())
 		}
 	}
 	r, ok := tt.Find("Select current view")
@@ -154,7 +162,7 @@ func TestDiskPageBreadcrumbsAndVolumes(t *testing.T) {
 	if err := tt.ChooseMenuItem("Backup"); err != nil {
 		t.Fatal(err)
 	}
-	if s.Volume.Mount != "/Volumes/Backup" {
+	if s.Volume.Mount != core.VolumeFromMountPoint("/Volumes/Backup").Mount {
 		t.Fatal(s.Volume)
 	}
 }
@@ -232,6 +240,19 @@ func TestDiskPageBreakdownPhysicalApparentAndUnique(t *testing.T) {
 	if items[3].name != "Free Space" || items[3].color != diskColors[4] {
 		t.Fatal("free-space fixed color/index")
 	}
+	// Unlisted used space includes what no row accounts for; no item count.
+	one := s
+	one.Rows = s.Rows[2:3]
+	_, _, _, partial := one.breakdown()
+	other := ""
+	for _, item := range partial {
+		if strings.HasPrefix(item.name, "Other") {
+			other = item.name
+		}
+	}
+	if other != "Other used space" {
+		t.Fatalf("unlisted used space labelled %q", other)
+	}
 	s.AtRoot = false
 	_, size, _, items = s.breakdown()
 	if size != 640<<30 || items[0].ratio != .625 {
@@ -257,7 +278,7 @@ func TestDiskPagePromptAndResolvedSelection(t *testing.T) {
 	if err := tt.Click("Analyze Storage for Backup"); err != nil {
 		t.Fatal(err)
 	}
-	if started != 1 || s.Volume.Mount != "/Volumes/Backup" {
+	if started != 1 || s.Volume.Mount != core.VolumeFromMountPoint("/Volumes/Backup").Mount {
 		t.Fatal("prompt callback contract")
 	}
 

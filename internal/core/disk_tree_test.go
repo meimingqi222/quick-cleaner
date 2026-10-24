@@ -226,3 +226,34 @@ func TestSizeTreeAppendAndCompactRetainSearchSlotOrder(t *testing.T) {
 		t.Fatal(hits)
 	}
 }
+
+func TestHeapAggregatesRollUpOncePerEdge(t *testing.T) {
+	tree := NewSizeTree(VolumeFromDriveLetter('C'), []TreeIndexEntry{
+		{Name: "C:", IsDir: true, Used: true},
+		{Parent: 0, Name: "a", IsDir: true, Used: true},
+		{Parent: 1, Name: "b", IsDir: true, Used: true},
+		{Parent: 2, Name: "f", Size: 10, Used: true},
+		{Parent: 0, Name: "g", Size: 5, Used: true},
+		{Parent: 99, Name: "orphan", IsDir: true, Used: true},
+		{Parent: 5, Name: "h", Size: 7, Used: true},
+		{Parent: 8, Name: "c1", IsDir: true, Used: true},
+		{Parent: 7, Name: "c2", IsDir: true, Used: true},
+		{Parent: 7, Name: "k", Size: 3, Used: true},
+	})
+	for _, want := range []struct {
+		idx         uint32
+		size, files uint64
+	}{{0, 15, 2}, {1, 10, 1}, {2, 10, 1}, {5, 7, 1}} {
+		if tree.SizeOf(want.idx) != want.size || tree.FileCountOf(want.idx) != want.files {
+			t.Fatalf("node %d = %d bytes / %d files, want %d / %d", want.idx, tree.SizeOf(want.idx), tree.FileCountOf(want.idx), want.size, want.files)
+		}
+	}
+	if tree.SizeOf(7) < 3 {
+		t.Fatal("a directory in a cycle keeps its own files")
+	}
+	// Without hard-link parents the build must not walk any ancestor chain:
+	// that walk was O(files × depth) and most of the MFT tree time.
+	if tree.ancestorStamp != nil {
+		t.Fatal("aggregation walked per-file ancestor chains")
+	}
+}

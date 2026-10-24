@@ -871,3 +871,109 @@ Note: `2026-10-20-build-installation-boundary.md`
 - **根因**：只按 node_modules 名字识别，没有区分项目依赖与安装资产；停止占用者后原本不该删除的安装目录就可能被整删。
 - **防护与测试**：安装归属由 core safety 判断，三条发现通道共用候选验证；项目清单、环境凭据及 CACHEDIR.TAG 不覆盖安装归属。回归与红绿证据见 Note。
 - **禁止回退**：不能只增加 package.json 旁证后就放行全局包，不能递归把未验证依赖树里的子目录当项目，不能用结束进程绕过分类问题；全局工具仍走开发环境的生态卸载通道。
+
+## P67 Windows 主窗口在第一帧呈现前不能显示
+
+Note: `2026-10-24-startup-white-window.md`
+
+- **症状**：启动后先闪一个带标题栏的白窗口，客户区全白，然后主界面才画出来。
+- **根因**：`NewWindow` 在第一帧呈现前就 `ShowWindow`。`MyGoWindow` 客户区没有背景刷，表面子窗口盖住客户区且擦除时不填色，DWM 先合成白底。只设 `BackgroundColor` 填不到这块白。
+- **防护**：Windows 上先隐藏窗口，用 `DWMWA_CLOAK` 罩住后再显示，让表面能画；`OnReadyToShow`（第一帧已呈现）里 `DwmFlush` 后取消罩。两秒没有第一帧仍显示，避免永远看不见。回归与红绿证据见 Note。
+- **禁止回退**：不能去掉启动时的 `Hidden` 或 cloak-before-show；不能把 GUI 子系统的提权显示改成 `SW_HIDE`（那会把真窗口一起藏住）；不能只靠背景色认为白闪没了；隐藏着等 `OnReadyToShow` 而不先显示被罩住的窗口，内容窗口可能永远不画。
+
+## P68 控制台子系统提权不能弹出标题为 exe 路径的终端窗口
+
+Note: `2026-10-24-elevation-console-window.md`
+
+- **症状**：`go run` 或以管理员重启时，先闪一个小窗口，标题是 `go-build` 临时 exe 的完整路径，然后主窗口才出现。
+- **根因**：程序是控制台子系统。`ShellExecute` 提权的显示值是正常显示，Windows 终端会在进程代码运行前打开这个窗口。
+- **防护**：只有控制台子系统（值为 3）提权时用隐藏显示。GUI 子系统保持正常显示。回归见 Note。
+- **禁止回退**：不能把控制台提权改回显示值 1；不能让 GUI 子系统也用隐藏显示。
+
+## P69 索引发现不能对每个目录打开 CACHEDIR.TAG
+
+Note: `2026-10-24-indexed-cachedir-name.md`
+
+- **症状**：提权后的垃圾扫描，MFT 解析只要几秒，发现式扫描却要两分钟。Rust 同样两卷大约 5 秒。
+- **根因**：索引通道对每个目录都 `CreateFile` 一次 `CACHEDIR.TAG`。C: 约 53 万个目录、D: 约 22 万个，失败的打开加在一起就是这两分钟。
+- **防护**：树上没有这个文件名就不打开。遍历通道没有树，仍然读盘验签名。回归见 Note。
+- **禁止回退**：不能为了“树上可能过期”而在索引通道对每个目录打开 `CACHEDIR.TAG`；不能因为文件名在就跳过签名校验。
+
+## P70 遍历发现不能对每个目录先做祖先链约束再打开 CACHEDIR.TAG
+
+Note: `2026-10-24-walk-discovery-probes.md`
+
+- **症状**：未提权的垃圾扫描，同一批代码根 Rust 11–14 秒，Go 51–66 秒，结果完全一样（641 条）。
+- **根因**：没命中的目录都先对不存在的 `CACHEDIR.TAG` 做 `ConfinedRuleFile`（整条祖先链 Lstat + EvalSymlinks），失败后才打开；每进一层目录还不带缓存地重新约束一次自己；收集和称重全部串行。
+- **防护**：先打开，打开成功才约束，并要求句柄与约束后的路径是同一个文件；单根内祖先证据缓存，命中在称重前不带缓存再约束一次；根之间并行，命中共享一份扇出预算称重。回归与红绿证据见 Note。
+- **禁止回退**：不能为了“更安全”把顺序改回先约束后打开；不能去掉命中前的无缓存约束；不能让每个并行称重各自开 GOMAXPROCS 个目录协程。
+
+## P71 MFT 记录数不能用固定上限判损坏
+
+Note: `2026-10-24-mft-record-cap.md`
+
+- **症状**：记录数超过 1600 万的大 NTFS 卷整卷扫描失败，报 `invalid NTFS MFT metadata`。Rust 正常。
+- **根因**：为防损坏的有效长度触发超大预分配，Go 用固定 16M 条判损坏；Rust 读到有效长度和 run 实际字节数中较小的那个为止。
+- **防护**：记录数取 `min(有效长度, run 字节数) / 记录大小`，只保留 uint32 上限；`Entries` 按块增长，损坏的 run 在第一块读失败时就停，不会先按声称大小分配。回归见 Note。
+- **禁止回退**：不能重新加任何固定记录数上限；不能改回按记录数一次性预分配全部 `Entries`。
+
+## P72 增量索引落盘不能再整树校验、整 base 解码
+
+Note: `2026-10-24-override-only-persist.md`
+
+- **症状**：macOS 索引每次 FSEvents 刷新落盘，200 万节点要 2.85 秒、分配 1.29 GB；Rust 只看 overrides。
+- **根因**：映射树的改动只在 `overrides` 和追加节点里，但增量落盘仍然重新 load、再整份读入解码 base、两遍全树 `validateDiskTree`、全树计数；映射树每次 `slot()` 都要解码一个名字。
+- **防护**：`persistOverrides` 在全树校验之前运行，只校验和编码改动部分，计数从校验过的 base 头部增量调整；前提（同一 base、覆盖信息有效、delta 不更新、身份未变、父节点向前）任一不确定就走完整路径。两条路径共用 `writeDiskIndexDelta`，测试锁定字节一致。回归见 Note。
+- **禁止回退**：不能把 `validateDiskTree` 挪回快路径之前；不能为了“更稳”在快路径里重新读入或解码整个 base；不能让快路径在前提不确定时自行判定失败而不交给完整路径。
+
+## P73 发布资产名、包内结构与 Windows 资源不能随构建方式改动
+
+- **症状**：一旦改名或改包内结构，已安装用户的更新器找不到资产或载荷，静默停在旧版本；exe 少了资源，资源管理器、任务栏和窗口都退回默认图标，版本信息也是空的。
+- **根因**：Rust 与 Go 两套更新器都按固定资产名（`quick-cleaner-windows-x86_64.zip`、`quick-cleaner-macos-{universal,aarch64,x86_64}.zip` 及 `.sha256`）和 zip 内的 `quick-cleaner.exe` / `QuickCleaner.app` 认领更新。Go 没有 build.rs，图标、版本信息和清单全靠 `cmd/quick-cleaner/rsrc_windows_amd64.syso`；MyGo 的窗口类加载 ID 为 1 的图标资源。
+- **防护**：`scripts/package-windows.ps1` / `scripts/package-macos.sh` 保持 Rust 时期的名字、结构、bundle id 与图标；`tools/winres` 按 `internal/app` 的 `Version` 生成与 Rust `winres` 相同的资源，CI 与 release 都跑 `go run ./tools/winres -check`，release 还校验 tag 与 `Version` 一致。测试见 `tools/winres/main_test.go`。
+- **禁止回退**：不能改资产名、zip 内结构、bundle id 或可执行文件名；不能删除或不再生成 `.syso`；改版本号后不能跳过 `go run ./tools/winres`；不能换成 mygo 自带清单（缺 `asInvoker` 与 `longPathAware`）。
+
+## P74 托盘存在时，退出不能被“关闭即隐藏到托盘”吞掉
+
+Note: `2026-10-24-tray-quit.md`
+
+- **症状**：托盘菜单的“退出”、托盘面板里的退出按钮和 macOS 的 Cmd+Q 全都没反应，进程一直在。
+- **根因**：MyGo 的 `App.Quit` 先发 `OnBeforeQuit`，再逐个关闭窗口，任一 `OnClose` 拦截就放弃整个退出；主窗口的 `OnClose` 在托盘存在时总是拦截并隐藏。
+- **防护**：`onBeforeQuit` 放行后设 `quitting`，`onMainClose` 只在未退出时隐藏到托盘；有确认框、修改操作或正在安装更新时两处都拒绝并取消（共用 `quitBlocked`）。回归见 Note。
+- **禁止回退**：不能去掉 `!r.quitting` 判断；不能改用 `App.Exit` 绕过退出事件；不能只在托盘回调里设标记（Cmd+Q 与 `RoleQuit` 直接调 `App.Quit`）。
+
+## P75 加载动画不能在构建视图时读时钟
+
+Note: `2026-10-25-loading-animation-frames.md`
+
+- **症状**：扫描时顶部进度条一顿一顿，MFT 解析期间整段停住约 1.3 秒；鼠标一动它才动。
+- **根因**：在构建视图时用 `c.Now()` 算位置不会向 MyGo 请求下一帧，只有鼠标、状态采样或后台结果触发重绘时才挪一下；主线程其实是空闲的。
+- **防护**：`internal/ui/indicators.go` 的 `scanBar` / `loadingSpinner` 在 `Draw` 里读 `Painter.Now()` 并调用 `Painter.AnimationFrame()`，只重绘、不重建页面；测试用 `ui.Tester` 断言持续请求帧且画面在变。回归见 Note。
+- **禁止回退**：不能在构建函数里用 `c.Now()` 驱动持续动画；不能为了动起来改成每帧 `c.AnimationFrame()` 重建整页；概览环形扫描的圆点也走 `orbitDot`（见 `2026-10-25-overview-orbit-paint-only.md`），同样不能改回 `c.After`；新增加载指示器复用这些函数，不要再用内置 12 辐条 `ui.Spinner`。
+
+## P76 状态采样只在状态页可见时运行
+
+Note: `2026-10-25-status-sampling-visible-page.md`
+
+- **症状**：程序常驻托盘或停在别的页面时，仍每 2 秒枚举全部进程、读取硬件并让窗口重绘；点“暂停”也只是不显示。
+- **根因**：Go 移植把 Rust“离开状态页即退出”的采样任务改成了常驻循环。
+- **防护**：`syncStatusSampling` 按“状态页 + 窗口可见 + 未暂停”维护 `statusWanted`，`runStatusLoop` 不需要时跳过计时，变为需要时立即采样，手动刷新始终采样。回归见 Note。
+- **禁止回退**：不能让采样循环无条件按计时执行；不能用“暂停”只丢弃结果代替停止采样；新增使用采样结果的页面要同时更新 `syncStatusSampling` 的条件。
+
+## P77 主线程合并扫描结果时不能访问文件系统
+
+Note: `2026-10-25-discovered-merge-off-main.md`
+
+- **症状**：扫描结束那一刻界面卡顿约 260ms。
+- **根因**：`MergeDiscovered` 在主线程上对 1300 多个发现路径逐个 `os.Stat`，并在内层循环反复规范化路径。
+- **防护**：worker 先调 `DropVanishedDiscovered`；`MergeDiscovered` 只做内存里的白名单与重叠判断。回归见 Note。
+- **禁止回退**：不能把 `os.Stat` 等文件系统调用放回主线程的合并或任何 `publish` 回调里。
+
+## P78 Windows 单实例必须在提权前检测，且跨完整性级别可见
+
+Note: `2026-10-25-single-instance.md`
+
+- **症状**：重复打开会多开；或者每次重复打开都先弹 UAC；或者普通权限的启动看不到管理员实例，又开出一个。
+- **根因**：管理员进程创建的内核对象默认带 High 完整性标签，普通进程无法打开或写入；MyGo 的单实例套接字放在临时目录，提权到另一个管理员账户时目录也不同；检测放在提权之后就会先弹 UAC。
+- **防护**：会话级 `Local\` 互斥量和唤醒事件，SDDL 授予已认证用户同步与发信号权限，并把完整性标签降为 Medium；句柄不可继承；`main` 在 `RelaunchAsAdminIfNeeded` 之前调用 `InstanceRunning`，提权后再 `AcquireInstance`，抢锁失败也只唤醒。回归见 Note。
+- **禁止回退**：不能在 Windows 上改用 MyGo 的套接字锁；不能去掉 SDDL 里的 `S:(ML;;NW;;;ME)`；不能把检测挪到提权之后；不能让互斥量句柄可继承；不能改成 `Global\`。

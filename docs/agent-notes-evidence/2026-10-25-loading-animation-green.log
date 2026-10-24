@@ -1,0 +1,7 @@
+# guard restored
+=== RUN   TestScanBarKeepsAnimatingOnItsOwn
+--- PASS: TestScanBarKeepsAnimatingOnItsOwn (0.01s)
+=== RUN   TestLoadingSpinnerKeepsAnimatingOnItsOwn
+--- PASS: TestLoadingSpinnerKeepsAnimatingOnItsOwn (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.710s

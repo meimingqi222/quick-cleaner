@@ -16,7 +16,7 @@ const (
 	OverviewScanJunk
 	OverviewOpenView
 	OverviewAnalyzeDisk
-	OverviewReleaseMemory
+	OverviewTopMemory
 	OverviewQuit
 )
 
@@ -26,7 +26,9 @@ type OverviewAction struct {
 	Path string
 }
 
-func (a OverviewAction) DismissesPopover() bool { return a.Kind != OverviewReleaseMemory }
+// Every current action hands off to the main window. An in-place action would
+// return false here and be handled by the controller instead of dispatched.
+func (a OverviewAction) DismissesPopover() bool { return true }
 
 type TrayVolumeInfo struct {
 	Label                 string
@@ -35,9 +37,8 @@ type TrayVolumeInfo struct {
 
 type TrayOverviewSnapshot struct {
 	core.TraySnapshot
-	Volumes                      []TrayVolumeInfo
-	Accounts                     []core.LocalAccount
-	Purged, Purging, PurgeFailed bool
+	Volumes  []TrayVolumeInfo
+	Accounts []core.LocalAccount
 }
 
 type trayOverviewSampler interface {
@@ -48,7 +49,6 @@ type trayOverviewSource interface {
 	NewSampler(context.Context) (trayOverviewSampler, error)
 	Volumes() []TrayVolumeInfo
 	Accounts() []core.LocalAccount
-	ReleaseMemory() bool
 }
 
 type nativeTrayOverviewSource struct{}
@@ -57,7 +57,6 @@ func (nativeTrayOverviewSource) NewSampler(ctx context.Context) (trayOverviewSam
 	return core.NewTraySampler(ctx)
 }
 func (nativeTrayOverviewSource) Accounts() []core.LocalAccount { return core.ListLocalAccounts() }
-func (nativeTrayOverviewSource) ReleaseMemory() bool           { return platform.ReleaseMemory() }
 func (nativeTrayOverviewSource) Volumes() []TrayVolumeInfo {
 	var volumes []TrayVolumeInfo
 	for _, volume := range platform.ListVolumes() {
@@ -72,14 +71,14 @@ func (nativeTrayOverviewSource) Volumes() []TrayVolumeInfo {
 // mount/removal, not rendering or reachability of an old presentation snapshot.
 // The host observes Changes and reads Snapshot on its UI thread.
 type TrayOverviewController struct {
-	mu                       sync.Mutex
-	state                    TrayOverviewSnapshot
-	source                   trayOverviewSource
-	ctx                      context.Context
-	cancel                   context.CancelFunc
-	started                  bool
-	changes                  chan struct{}
-	warmup, period, feedback time.Duration
+	mu             sync.Mutex
+	state          TrayOverviewSnapshot
+	source         trayOverviewSource
+	ctx            context.Context
+	cancel         context.CancelFunc
+	started        bool
+	changes        chan struct{}
+	warmup, period time.Duration
 }
 
 func NewTrayOverviewController() *TrayOverviewController {
@@ -88,7 +87,7 @@ func NewTrayOverviewController() *TrayOverviewController {
 
 func newTrayOverviewController(source trayOverviewSource) *TrayOverviewController {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &TrayOverviewController{source: source, ctx: ctx, cancel: cancel, changes: make(chan struct{}, 1), warmup: 200 * time.Millisecond, period: 2 * time.Second, feedback: 1500 * time.Millisecond}
+	return &TrayOverviewController{source: source, ctx: ctx, cancel: cancel, changes: make(chan struct{}, 1), warmup: 200 * time.Millisecond, period: 2 * time.Second}
 }
 
 func (c *TrayOverviewController) Changes() <-chan struct{} { return c.changes }
@@ -200,49 +199,7 @@ func (c *TrayOverviewController) Close() {
 // The tray host handles dismissal from the action contract; content never
 // directly closes windows, starts workers, or mutates this model.
 func (c *TrayOverviewController) Handle(action OverviewAction, dispatch func(OverviewAction)) {
-	if action.Kind == OverviewReleaseMemory {
-		c.TriggerPurgeMemory()
-		return
-	}
 	if dispatch != nil {
 		dispatch(action)
 	}
-}
-
-func (c *TrayOverviewController) TriggerPurgeMemory() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.started || c.ctx.Err() != nil || c.state.Purging || c.state.Purged {
-		return
-	}
-	c.state.Purging, c.state.PurgeFailed = true, false
-	c.notifyLocked()
-	go func() {
-		if c.ctx.Err() != nil {
-			return
-		}
-		success := c.source.ReleaseMemory()
-		c.mu.Lock()
-		if c.ctx.Err() != nil {
-			c.mu.Unlock()
-			return
-		}
-		c.state.Purging, c.state.Purged, c.state.PurgeFailed = false, success, !success
-		c.notifyLocked()
-		c.mu.Unlock()
-		timer := time.NewTimer(c.feedback)
-		defer timer.Stop()
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-timer.C:
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.ctx.Err() != nil {
-			return
-		}
-		c.state.Purged = false
-		c.notifyLocked()
-	}()
 }

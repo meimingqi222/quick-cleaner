@@ -12,6 +12,19 @@ const objectReadAttributes = 0x0080 // FILE_READ_ATTRIBUTES (absent from syscall
 // ObjectID returns the volume serial and file index. Unlike core's weak
 // metadata fallback this API refuses reparse points anywhere along the path.
 func ObjectID(path string) ([2]uint64, bool) {
+	return objectID(path, os.Lstat)
+}
+
+// ObjectIDUsing is ObjectID with a caller-supplied Lstat. A discovery scan
+// passes a cache so shared ancestors are not stated again. nil uses os.Lstat.
+func ObjectIDUsing(path string, lstat func(string) (os.FileInfo, error)) ([2]uint64, bool) {
+	if lstat == nil {
+		lstat = os.Lstat
+	}
+	return objectID(path, lstat)
+}
+
+func objectID(path string, lstat func(string) (os.FileInfo, error)) ([2]uint64, bool) {
 	var none [2]uint64
 	// Rust's ancestors iterator ends relative paths with the empty path;
 	// symlink_metadata("") fails, so they cannot yield a stable identity.
@@ -42,7 +55,7 @@ func ObjectID(path string) ([2]uint64, bool) {
 		}
 	}
 	for _, ancestor := range ancestors {
-		info, err := os.Lstat(ancestor)
+		info, err := lstat(ancestor)
 		if err != nil {
 			return none, false
 		}

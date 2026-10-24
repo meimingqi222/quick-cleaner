@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -18,22 +19,26 @@ func (r *Root) scanApps() {
 		return
 	}
 	r.apps.Scanning = true
+	r.appIconGen++
+	r.appIconTried = map[string]bool{}
+	r.appIcons = map[string]*ui.Bitmap{}
 	r.message("正在智能检索已安装软件与空间占用…", "Discovering installed apps and their disk usage…")
 	r.start(false, nil, func(ctx context.Context) func() {
-		apps, err := core.ListInstalledApps(ctx)
-		icons := map[string]*ui.Bitmap{}
-		if err == nil {
-			for _, a := range apps {
-				if ctx.Err() != nil {
-					break
+		apps, err := core.ListInstalledAppsProgress(ctx, func(partial []core.InstalledApp) {
+			snapshot := partial
+			r.publish(func() {
+				if r.closed || r.job == nil {
+					return
 				}
-				if path, ok := a.IconCacheKey(); ok {
-					if data := platform.AppIconPNG(path); len(data) != 0 {
-						icons[a.ID], _ = ui.DecodeBitmap(data)
-					}
-				}
-			}
-		}
+				r.installed = snapshot
+				r.appsLoaded = true
+				r.dashboard.AppsScanned = true
+				r.dashboard.AppCount = len(snapshot)
+				r.rebuildApps()
+				r.kickAppIcons(snapshot)
+				r.message(fmt.Sprintf("已列出 %d 款软件，正在测算占用…", len(snapshot)), fmt.Sprintf("Listed %d apps, measuring disk usage…", len(snapshot)))
+			})
+		})
 		return func() {
 			r.apps.Scanning = false
 			if err != nil {
@@ -42,17 +47,93 @@ func (r *Root) scanApps() {
 				return
 			}
 			r.installed = apps
-			r.appIcons = icons
 			r.appsLoaded = true
 			r.dashboard.AppsScanned = true
 			r.dashboard.AppCount = len(apps)
 			r.rebuildApps()
+			r.kickAppIcons(apps)
 			r.message(fmt.Sprintf("已加载 %d 款软件，估算总占用 %s", len(apps), r.apps.TotalSize), fmt.Sprintf("Loaded %d apps, about %s in total", len(apps), r.apps.TotalSize))
 			if !r.apps.ResidualsOpen {
 				r.apps.Notice = core.Text{}
 			}
 		}
 	})
+}
+
+func (r *Root) kickAppIcons(apps []core.InstalledApp) {
+	if r.appIconTried == nil {
+		r.appIconTried = map[string]bool{}
+	}
+	type iconJob struct{ id, path string }
+	var jobs []iconJob
+	for _, app := range apps {
+		if r.appIconTried[app.ID] {
+			continue
+		}
+		r.appIconTried[app.ID] = true
+		path, ok := app.IconCacheKey()
+		if !ok {
+			continue
+		}
+		jobs = append(jobs, iconJob{app.ID, path})
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	gen := r.appIconGen
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				core.LogPanic("app-icons", rec, debug.Stack())
+			}
+		}()
+		pending := map[string]*ui.Bitmap{}
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+			got := pending
+			pending = map[string]*ui.Bitmap{}
+			r.publish(func() {
+				if r.closed || gen != r.appIconGen {
+					return
+				}
+				r.mergeAppIcons(got)
+			})
+		}
+		for _, job := range jobs {
+			if r.ctx.Err() != nil {
+				break
+			}
+			data := platform.AppIconPNG(job.path)
+			if len(data) == 0 {
+				continue
+			}
+			bitmap, err := ui.DecodeBitmap(data)
+			if err != nil || bitmap == nil {
+				continue
+			}
+			pending[job.id] = bitmap
+			if len(pending) >= 12 {
+				flush()
+			}
+		}
+		flush()
+	}()
+}
+
+func (r *Root) mergeAppIcons(batch map[string]*ui.Bitmap) {
+	if r.appIcons == nil {
+		r.appIcons = map[string]*ui.Bitmap{}
+	}
+	for id, bitmap := range batch {
+		r.appIcons[id] = bitmap
+	}
+	for i := range r.apps.Apps {
+		if bitmap, ok := batch[r.apps.Apps[i].ID]; ok {
+			r.apps.Apps[i].Icon = bitmap
+		}
+	}
 }
 
 func (r *Root) rebuildApps() {

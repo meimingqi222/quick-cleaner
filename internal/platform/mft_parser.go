@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
-	"unicode/utf16"
+	"unicode/utf8"
 )
 
 var mftLE = binary.LittleEndian
@@ -91,51 +91,66 @@ type mftAttribute struct {
 }
 
 func mftAttributes(rec []byte) ([]mftAttribute, error) {
+	var out []mftAttribute
+	err := mftEachAttr(rec, func(a mftAttribute) error {
+		out = append(out, a)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// mftEachAttr walks one record without allocating the attribute slice. The
+// scan used to allocate that slice once per file.
+func mftEachAttr(rec []byte, fn func(mftAttribute) error) error {
 	if len(rec) < 0x30 || string(rec[:4]) != "FILE" {
-		return nil, ErrMFTCorrupt
+		return ErrMFTCorrupt
 	}
 	pos := int(mftLE.Uint16(rec[0x14:]))
 	if pos < 0x30 || pos > len(rec)-4 {
-		return nil, ErrMFTCorrupt
+		return ErrMFTCorrupt
 	}
-	var out []mftAttribute
 	for pos <= len(rec)-4 {
 		typ := mftLE.Uint32(rec[pos:])
 		if typ == 0xffffffff {
-			return out, nil
+			return nil
 		}
 		if pos > len(rec)-16 {
-			return nil, ErrMFTCorrupt
+			return ErrMFTCorrupt
 		}
 		a := rec[pos:]
 		size := uint64(mftLE.Uint32(a[4:]))
 		min := uint64(24)
 		if a[8] > 1 {
-			return nil, ErrMFTCorrupt
+			return ErrMFTCorrupt
 		}
 		if a[8] == 1 {
 			min = 64
 		}
 		if size < min || size > uint64(len(a)) {
-			return nil, ErrMFTCorrupt
+			return ErrMFTCorrupt
 		}
 		a = a[:int(size)]
 		if a[9] > 0 {
 			o := uint64(mftLE.Uint16(a[10:]))
 			if o < min || o+uint64(a[9])*2 > size {
-				return nil, ErrMFTCorrupt
+				return ErrMFTCorrupt
 			}
 		}
 		if a[8] == 0 {
 			o, l := uint64(mftLE.Uint16(a[20:])), uint64(mftLE.Uint32(a[16:]))
 			if o < min || o+l > size {
-				return nil, ErrMFTCorrupt
+				return ErrMFTCorrupt
 			}
 		}
-		out = append(out, mftAttribute{typ, a[8] == 1, a[9] != 0, a})
+		if err := fn(mftAttribute{typ, a[8] == 1, a[9] != 0, a}); err != nil {
+			return err
+		}
 		pos += int(size)
 	}
-	return nil, ErrMFTCorrupt
+	return ErrMFTCorrupt
 }
 func (a mftAttribute) value() []byte {
 	o, l := int(mftLE.Uint16(a.b[20:])), int(mftLE.Uint32(a.b[16:]))
@@ -201,21 +216,36 @@ func mftListRecords(b []byte) ([]uint64, error) {
 	}
 	return out, nil
 }
+
+// mftDecodeScratch reuses the UTF-16 scratch and the parent arena across a
+// chunk. LinkParents subslices set cap to len so a later append cannot
+// overwrite the next record's parents.
+type mftDecodeScratch struct {
+	parents []uint64
+	batch   []uint64
+	name    []byte
+}
+
 func mftDecodeRecord(rec []byte) (MFTEntry, error) {
-	var e MFTEntry
-	attrs, err := mftAttributes(rec)
-	if err != nil {
-		return e, err
+	var scratch mftDecodeScratch
+	return mftDecodeRecordScratch(rec, &scratch)
+}
+
+func mftDecodeRecordScratch(rec []byte, scratch *mftDecodeScratch) (MFTEntry, error) {
+	if err := mftEachAttr(rec, func(mftAttribute) error { return nil }); err != nil {
+		return MFTEntry{}, err
 	}
 	flags := mftLE.Uint16(rec[22:])
 	if flags&1 == 0 {
-		return e, nil
+		return MFTEntry{}, nil
 	}
+	var e MFTEntry
 	e.IsDir = flags&2 != 0
 	e.BaseRecord = mftLE.Uint64(rec[32:]) & mftRefMask
 	best := 4
 	got := false
-	for _, a := range attrs {
+	scratch.batch = scratch.batch[:0]
+	err := mftEachAttr(rec, func(a mftAttribute) error {
 		switch {
 		case a.typ == 0x10 && !a.nonresident:
 			v := a.value()
@@ -228,17 +258,17 @@ func mftDecodeRecord(rec []byte) (MFTEntry, error) {
 		case a.typ == 0x30 && !a.nonresident:
 			v := a.value()
 			if len(v) < 66 || int(v[64])*2 > len(v)-66 {
-				return MFTEntry{}, ErrMFTCorrupt
+				return ErrMFTCorrupt
 			}
 			parent := mftLE.Uint64(v) & mftRefMask
 			found := false
-			for _, p := range e.LinkParents {
+			for _, p := range scratch.batch {
 				if p == parent {
 					found = true
 				}
 			}
 			if !found {
-				e.LinkParents = append(e.LinkParents, parent)
+				scratch.batch = append(scratch.batch, parent)
 			}
 			rank := 3
 			switch v[65] {
@@ -252,11 +282,9 @@ func mftDecodeRecord(rec []byte) (MFTEntry, error) {
 			if rank < best {
 				best = rank
 				e.Parent = parent
-				units := make([]uint16, int(v[64]))
-				for i := range units {
-					units[i] = mftLE.Uint16(v[66+i*2:])
-				}
-				e.Name = string(utf16.Decode(units))
+				units := int(v[64])
+				scratch.name = mftAppendUTF16(scratch.name[:0], v[66:66+units*2])
+				e.Name = string(scratch.name)
 				got = true
 			}
 		case a.typ == 0x80 && !a.named:
@@ -268,6 +296,16 @@ func mftDecodeRecord(rec []byte) (MFTEntry, error) {
 				e.Size = uint64(len(a.value()))
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return MFTEntry{}, err
+	}
+	if len(scratch.batch) > 0 {
+		start := len(scratch.parents)
+		scratch.parents = append(scratch.parents, scratch.batch...)
+		end := len(scratch.parents)
+		e.LinkParents = scratch.parents[start:end:end]
 	}
 	if e.BaseRecord != 0 {
 		return e, nil
@@ -280,4 +318,22 @@ func mftDecodeRecord(rec []byte) (MFTEntry, error) {
 		e.Size = 0
 	}
 	return e, nil
+}
+
+func mftAppendUTF16(dst, raw []byte) []byte {
+	for i := 0; i+1 < len(raw); {
+		u := uint16(raw[i]) | uint16(raw[i+1])<<8
+		i += 2
+		if u >= 0xD800 && u <= 0xDBFF && i+1 < len(raw) {
+			u2 := uint16(raw[i]) | uint16(raw[i+1])<<8
+			if u2 >= 0xDC00 && u2 <= 0xDFFF {
+				r := 0x10000 + (uint32(u)-0xD800)<<10 + (uint32(u2) - 0xDC00)
+				dst = utf8.AppendRune(dst, rune(r))
+				i += 2
+				continue
+			}
+		}
+		dst = utf8.AppendRune(dst, rune(u))
+	}
+	return dst
 }

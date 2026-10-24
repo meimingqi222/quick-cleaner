@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -35,6 +37,7 @@ type Root struct {
 	closed, confirming    bool
 	job                   *work
 	generation            uint64
+	fanGeneration         atomic.Uint64
 	statusRefresh         chan struct{}
 	settings              core.Settings
 	save                  func(core.Settings)
@@ -55,6 +58,8 @@ type Root struct {
 	search                view.SearchPage
 	installed             []core.InstalledApp
 	appIcons              map[string]*ui.Bitmap
+	appIconGen            uint64
+	appIconTried          map[string]bool
 	residual              core.ResidualScanResult
 	residualApp           *core.InstalledApp
 	residualAuthority     func(context.Context, core.InstalledApp, []core.ResidualItem) bool
@@ -67,7 +72,22 @@ type Root struct {
 	declutterAuthority    map[string]core.ArbitraryTarget
 	searchCancel          context.CancelFunc
 	searchGeneration      uint64
+	junkBusy              map[string]core.Busy
+	junkBusyGen           uint64
+	junkBusySet           bool
 	freed                 uint64
+
+	// quitting is set once a quit passes OnBeforeQuit. MyGo then closes every
+	// window and abandons the quit if one refuses; the main window must not
+	// hide to the tray then.
+	quitting bool
+
+	// windowHidden tracks the main window being hidden or minimized. The
+	// status sampler runs only while statusWanted (Status page, window shown,
+	// not paused); statusWake starts a sample when that becomes true.
+	windowHidden bool
+	statusWanted atomic.Bool
+	statusWake   chan struct{}
 }
 
 type work struct {
@@ -142,18 +162,34 @@ func (r *Root) start(mutation bool, progress *core.CleanProgress, run func(conte
 	gen := r.generation
 	r.job = &work{cancel: cancel, progress: progress, mutation: mutation}
 	go func() {
-		finish := run(ctx)
+		var finish func()
+		var panicked any
+		var stack []byte
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					panicked = rec
+					stack = debug.Stack()
+				}
+			}()
+			finish = run(ctx)
+		}()
+		if panicked != nil {
+			core.LogPanic("worker", panicked, stack)
+		}
 		r.publish(func() {
 			if gen != r.generation {
 				return
 			}
 			r.job = nil
+			if panicked != nil {
+				r.clearScanFlags()
+				r.failure(fmt.Errorf("internal error: %v", panicked))
+				cancel()
+				return
+			}
 			if !mutation && ctx.Err() != nil {
-				r.junk.Scanning, r.junk.Discovering = false, false
-				r.apps.Scanning, r.apps.ResidualScanning = false, false
-				r.dev.Scanning, r.dev.LoadingSite = false, ""
-				r.disk.Scanning, r.search.Indexing = false, false
-				r.declutter.Scanning = false
+				r.clearScanFlags()
 				r.failure(ctx.Err())
 				cancel()
 				return
@@ -166,6 +202,14 @@ func (r *Root) start(mutation bool, progress *core.CleanProgress, run func(conte
 	}()
 	r.changed()
 	return true
+}
+
+func (r *Root) clearScanFlags() {
+	r.junk.Scanning, r.junk.Discovering = false, false
+	r.apps.Scanning, r.apps.ResidualScanning = false, false
+	r.dev.Scanning, r.dev.LoadingSite = false, ""
+	r.disk.Scanning, r.search.Indexing = false, false
+	r.declutter.Scanning = false
 }
 
 func (r *Root) Cancel() {
@@ -187,6 +231,7 @@ func (r *Root) Close() {
 	if r.closed {
 		return
 	}
+	r.fanGeneration.Add(1)
 	r.closed = true
 	r.cancel()
 	if r.job != nil {
@@ -257,6 +302,10 @@ func (r *Root) Navigate(v view.View) {
 		if !r.appsLoaded && !r.busy() {
 			r.scanApps()
 		}
+	case view.Disk:
+		if !r.disk.Loaded && r.disk.Error == "" && !r.busy() {
+			r.scanDisk()
+		}
 	case view.Search:
 		if !r.busy() {
 			r.scanSearch()
@@ -292,6 +341,7 @@ func (r *Root) Scan() {
 }
 
 func (r *Root) Render(c *ui.Context) {
+	r.syncStatusSampling()
 	defer r.renderDialogs(c)
 	l := r.settings.Language
 	r.dashboard.Language = l
@@ -305,9 +355,16 @@ func (r *Root) Render(c *ui.Context) {
 	}
 	r.dashboard.StatusTab = r.status.Tab
 	r.junk.Language, r.apps.Language, r.dev.Language, r.status.Language, r.disk.Language, r.declutter.Language, r.search.Language = l, l, l, l, l, l, l
-	a := view.DashboardActions{Navigate: r.Navigate, Scan: r.Scan, SetLanguage: func(l view.Language) { r.settings.Language = l; r.save(r.settings); r.installMenu(); r.changed() }, OpenPermissions: r.permissions, CheckUpdates: r.checkUpdates,
+	a := view.DashboardActions{Navigate: r.Navigate, Scan: r.Scan, SetLanguage: func(l view.Language) {
+		r.settings.Language = l
+		r.save(r.settings)
+		r.installMenu()
+		r.refreshUpdateChrome()
+		r.changed()
+	}, OpenPermissions: r.permissions, CheckUpdates: r.onVersionClick,
 		SetStatusTab: func(t view.StatusTab) { r.status.Tab = t }, ToggleMonitoring: func() {
 			r.dashboard.MonitoringPaused = !r.dashboard.MonitoringPaused
+			r.syncStatusSampling()
 			if !r.dashboard.MonitoringPaused {
 				r.refreshStatus()
 			}

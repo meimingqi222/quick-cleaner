@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
+	"github.com/meimingqi222/quick-cleaner/internal/platform"
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
@@ -40,6 +42,23 @@ func (f *volumesDiskOwner) Load(_ context.Context, v core.VolumeID) (*core.ScanR
 	return &core.ScanResult{Tree: f.trees[v.Mount]}, nil
 }
 
+func TestUnelevatedSearchWithoutAnIndexAsksForAdmin(t *testing.T) {
+	if runtime.GOOS != "windows" || platform.IsElevated() {
+		t.Skip()
+	}
+	r, q := testRoot(t)
+	r.disk.Volumes = []view.DiskPageVolume{{ID: core.VolumeFromMountPoint(`C:\`)}}
+	r.scanSearch()
+	select {
+	case fn := <-q:
+		t.Fatalf("unelevated search published work: %T", fn)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if r.search.Indexing || r.search.Ready || !strings.Contains(r.dashboard.StatusText, "$MFT") {
+		t.Fatalf("status %q indexing %v ready %v", r.dashboard.StatusText, r.search.Indexing, r.search.Ready)
+	}
+}
+
 func TestSearchIndexesMissingVolumesWithoutChangingDiskNavigation(t *testing.T) {
 	r, q := testRoot(t)
 	owner := &volumesDiskOwner{trees: map[string]*core.SizeTree{}}
@@ -56,6 +75,14 @@ func TestSearchIndexesMissingVolumesWithoutChangingDiskNavigation(t *testing.T) 
 	diskTree := r.tree
 	r.search.Query = "needle"
 	r.scanSearch()
+	if runtime.GOOS == "windows" && !platform.IsElevated() {
+		// $MFT stays unread. The index that already exists is still searched.
+		dispatchNext(t, q)
+		if len(owner.calls) != 0 || !r.search.Ready || r.tree != diskTree || len(r.search.Results) == 0 {
+			t.Fatalf("unelevated search: calls=%v ready=%v hits=%d", owner.calls, r.search.Ready, len(r.search.Results))
+		}
+		return
+	}
 	dispatchNext(t, q)
 	dispatchNext(t, q)
 	expectedCalls := 1

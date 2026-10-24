@@ -130,7 +130,7 @@ func fdaContent(bundle string, text FDADropText) objc.ID {
 		bg := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 0.16, 0.16, 0.17, 0.98)
 		layer.Send(objc.RegisterName("setBackgroundColor:"), bg.Send(objc.RegisterName("CGColor")))
 	}
-	chip := fdaDragClass().Send(objc.RegisterName("alloc"))
+	chip := objc.ID(fdaDragClass()).Send(objc.RegisterName("alloc"))
 	chip = objc.Send[objc.ID](chip, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{28, 34}, Size: cgSize{220, 64}})
 	setDragPath(chip, bundle)
 	chip.Send(objc.RegisterName("setWantsLayer:"), true)

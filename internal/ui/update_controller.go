@@ -309,6 +309,20 @@ func (c *UpdateController) startDownloadLocked() {
 	}()
 }
 
+// PrepareDownloaded records a payload the way a finished download does.
+// Product clicks reach Install only after that download; tests adopt a local
+// payload so the click can be driven without the network.
+func (c *UpdateController) PrepareDownloaded(latest, payload string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ctx.Err() != nil {
+		return
+	}
+	current := c.state.Status.CurrentVersion
+	c.state.Status = core.UpdateStatus{Kind: core.UpdateDownloaded, CurrentVersion: current, LatestVersion: latest, Payload: payload}
+	c.notifyLocked()
+}
+
 // Install returns true when the existing busy-work confirmation must be shown.
 // Confirmation is per click, not retained after a failed install or a retry.
 func (c *UpdateController) Install(busy, confirmed bool) (needsConfirmation bool) {

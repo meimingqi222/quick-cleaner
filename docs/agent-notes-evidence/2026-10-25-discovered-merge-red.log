@@ -1,0 +1,7 @@
+# guard removed: MergeDiscovered stats every discovered path on the main thread again
+=== RUN   TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge
+    scanner_test.go:214: the main-thread merge consulted the filesystem: [{Plans:[] Operation:{Kind: Registration: Reference: Name: Native: Identifier:} Disposal: Rule:{snapshot:<nil> origin:<nil> id: scope: contributors:[] blocked: observation:{RuleID: RuleVersion:0 Schema:0 Sequence:0 Scope: Variables:map[] Facts:map[] Detected: ProviderKey: ProviderPolicy:<nil> VersionGuard:<nil>}} Path:C:\Users\meimingqi222\AppData\Local\Temp\TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge1775679480\001\alive Label:{zh: en:} Size:1 FileCount:0 LastModified:0 Category:DevBuild Recommended:false Busy:<nil> Identity:<nil>}]
+--- FAIL: TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.326s
+FAIL

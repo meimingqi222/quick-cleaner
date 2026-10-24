@@ -2,10 +2,14 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 )
 
 type ScanItem struct {
@@ -41,10 +45,12 @@ type CategorySummary struct {
 // Indexed and live scans freeze the same identity independently of weighing.
 // A failed identity probe is not authorization to clean a filesystem target.
 func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) []CategorySummary {
+	started := time.Now()
 	if query == nil {
 		query = NewFSIndexEngine(nil)
 	}
 	items := make([]*ScanItem, len(targets))
+	elapsed := make([]time.Duration, len(targets))
 	work := make(chan int)
 	var workers sync.WaitGroup
 	for range min(len(targets), max(1, runtime.GOMAXPROCS(0))) {
@@ -53,8 +59,10 @@ func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) 
 				if ctx.Err() != nil {
 					continue
 				}
+				targetStarted := time.Now()
 				t := targets[i]
 				if IsWhitelisted(t.Path) {
+					elapsed[i] = time.Since(targetStarted)
 					continue
 				}
 				item := ScanItem{Rule: t.Rule, Operation: t.Operation.ForScannedPath(t.Path), Disposal: t.Disposal, Path: t.Path, Label: t.Label, Category: t.Category, Recommended: t.Recommended && !HasWhitelistEntryUnder(t.Path)}
@@ -65,14 +73,17 @@ func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) 
 				} else {
 					md, err := os.Lstat(t.Path)
 					if err != nil || ruleEvidenceLink(md) {
+						elapsed[i] = time.Since(targetStarted)
 						continue
 					}
 					identity, ok := CaptureIdentity(t.Path)
 					if !ok {
+						elapsed[i] = time.Since(targetStarted)
 						continue
 					}
 					measurement, ok := query.MeasurePath(ctx, t.Path)
 					if !ok {
+						elapsed[i] = time.Since(targetStarted)
 						continue
 					}
 					item.Identity = &identity
@@ -80,6 +91,7 @@ func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) 
 				}
 				frozen := item.FreezePlan()
 				items[i] = &frozen
+				elapsed[i] = time.Since(targetStarted)
 			}
 		})
 	}
@@ -91,12 +103,30 @@ func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) 
 	}
 	close(work)
 	workers.Wait()
-	var results []ScanItem
-	for _, item := range items {
-		if item != nil {
-			results = append(results, *item)
-		}
+	type timedScanItem struct {
+		item    ScanItem
+		elapsed time.Duration
 	}
+	var results []ScanItem
+	timed := make([]timedScanItem, 0, len(items))
+	var total uint64
+	for i, item := range items {
+		if item == nil {
+			continue
+		}
+		results = append(results, *item)
+		timed = append(timed, timedScanItem{*item, elapsed[i]})
+		total = saturatingAdd(total, item.Size)
+	}
+	sort.SliceStable(timed, func(i, j int) bool { return timed[i].elapsed > timed[j].elapsed })
+	if len(timed) > 5 {
+		timed = timed[:5]
+	}
+	slow := make([]string, len(timed))
+	for i, item := range timed {
+		slow[i] = fmt.Sprintf("%s %s %s", item.elapsed, FmtSize(item.item.Size), item.item.Path)
+	}
+	log.Printf("阶段一 scan_fixed 完成：%s，%d/%d 个目标命中，合计 %s；最慢 5 个：%s", time.Since(started), len(results), len(targets), FmtSize(total), strings.Join(slow, " | "))
 	return AggregateScanItems(results)
 }
 
@@ -118,6 +148,22 @@ func AggregateScanItems(items []ScanItem) []CategorySummary {
 	return out
 }
 
+// DropVanishedDiscovered removes discovered paths that no longer exist. It
+// stats every item, so it runs on the discovery worker, not the main thread:
+// phase two can take long enough for the user to delete some of them.
+func DropVanishedDiscovered(items []ScanItem) []ScanItem {
+	kept := items[:0:0]
+	for _, item := range items {
+		if _, err := os.Stat(item.Path); err == nil {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
+// MergeDiscovered runs on the main thread and touches no filesystem: pass
+// items through DropVanishedDiscovered first. Whitelist and overlap checks
+// stay here because exclusions and fixed targets can change meanwhile.
 func MergeDiscovered(cats []CategorySummary, items []ScanItem, partial bool) {
 	var fixed []string
 	for _, cat := range cats {
@@ -127,12 +173,13 @@ func MergeDiscovered(cats []CategorySummary, items []ScanItem, partial bool) {
 	}
 	byCategory := map[CategoryID][]ScanItem{}
 	for _, item := range items {
-		if _, err := os.Stat(item.Path); err != nil || IsWhitelisted(item.Path) {
+		if IsWhitelisted(item.Path) {
 			continue
 		}
+		norm := Norm(item.Path)
 		overlap := false
 		for _, path := range fixed {
-			if atOrUnder(path, Norm(item.Path)) || atOrUnder(Norm(item.Path), path) {
+			if atOrUnder(path, norm) || atOrUnder(norm, path) {
 				overlap = true
 				break
 			}
