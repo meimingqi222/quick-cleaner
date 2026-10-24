@@ -85,6 +85,21 @@ func prepareAppUninstallCommand(command string, app InstalledApp) string {
 	return out
 }
 
+// wingetForceCommand returns command with --force appended, or "" when the command
+// is not winget's or already carries the flag. --force is winget's documented
+// override for non-security blocks such as the portable hash check.
+func wingetForceCommand(command string) string {
+	if appCommandStem(command) != "winget" {
+		return ""
+	}
+	for _, token := range strings.Fields(asciiLower(command)) {
+		if token == "--force" {
+			return ""
+		}
+	}
+	return strings.TrimSpace(command) + " --force"
+}
+
 type registeredUninstallRuntime struct {
 	shell         func(string, bool, bool) (uint32, error)
 	executable    func(string, []string) (uint32, error)
@@ -141,10 +156,21 @@ func runRegisteredAppUninstaller(app InstalledApp, r registeredUninstallRuntime)
 	unelevated := app.RegistryRoot == AppHKCU && (stem == "winget" || stem == "scoop" || stem == "choco" || stem == "chocolatey")
 	var code uint32
 	var err error
+	forced := false
 	if appCommandNeedsShell(command) {
 		code, err = r.shell(command, appHiddenShell(command), unelevated)
 		if err == nil && code == platform.WingetAdminContextProhibited && !unelevated && r.elevated() {
 			code, err = r.shell(command, appHiddenShell(command), true)
+		}
+		// winget refuses a portable package whose files drifted from their recorded
+		// hash. That is its own self-protection check, not a failed uninstall, and
+		// --force is its documented override; retry here instead of asking the user
+		// to run the same command by hand.
+		if err == nil && code == platform.WingetHashMismatch {
+			if forcedCommand := wingetForceCommand(command); forcedCommand != "" {
+				forced = true
+				code, err = r.shell(forcedCommand, appHiddenShell(forcedCommand), unelevated)
+			}
 		}
 	} else {
 		exe, args := SplitCommand(command)
@@ -172,7 +198,7 @@ func runRegisteredAppUninstaller(app InstalledApp, r registeredUninstallRuntime)
 		return errors.New("winget refused administrator context after desktop-user retry")
 	}
 	if code != 0 {
-		return &UninstallerExitError{Code: code}
+		return &UninstallerExitError{Code: code, Forced: forced}
 	}
 	if !r.registered(app) {
 		return ErrUninstallNotSettled
@@ -181,8 +207,13 @@ func runRegisteredAppUninstaller(app InstalledApp, r registeredUninstallRuntime)
 }
 
 // UninstallerExitError is the official uninstaller's own failure. The exit code is
-// kept typed so the UI can explain it instead of printing raw English.
-type UninstallerExitError struct{ Code uint32 }
+// kept typed so the UI can explain it instead of printing raw English. Forced
+// records that a winget --force retry was already attempted, so the notice can stop
+// suggesting what the product just tried.
+type UninstallerExitError struct {
+	Code   uint32
+	Forced bool
+}
 
 func (e *UninstallerExitError) Error() string {
 	return fmt.Sprintf("uninstaller exited abnormally: exit code: %#x", e.Code)

@@ -1,0 +1,15 @@
+== restored: winget 哈希不匹配时自动加 --force 重试 ==
+$ go test -count=1 -run 'TestRegisteredUninstallRetriesWingetHashMismatchWithForce|TestRegisteredUninstallForceRetryMarksTheFailure|TestWingetForceCommandDoesNotDoubleTheFlag' ./internal/core -v
+=== RUN   TestRegisteredUninstallRetriesWingetHashMismatchWithForce
+--- PASS: TestRegisteredUninstallRetriesWingetHashMismatchWithForce (0.01s)
+=== RUN   TestRegisteredUninstallForceRetryMarksTheFailure
+--- PASS: TestRegisteredUninstallForceRetryMarksTheFailure (0.01s)
+=== RUN   TestWingetForceCommandDoesNotDoubleTheFlag
+--- PASS: TestWingetForceCommandDoesNotDoubleTheFlag (0.00s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/core	1.396s
+exit=0
+$ go test -count=1 ./internal/core ./internal/app
+ok  	github.com/<user>/quick-cleaner/internal/core	50.847s
+ok  	github.com/<user>/quick-cleaner/internal/app	2.224s
+exit=0

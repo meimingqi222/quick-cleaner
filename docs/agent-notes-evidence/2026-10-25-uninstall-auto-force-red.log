@@ -1,0 +1,10 @@
+== manufactured red: 只撤掉 winget 哈希不匹配的自动 --force 重试，focused ==
+$ go test -count=1 -run 'TestRegisteredUninstallRetriesWingetHashMismatchWithForce|TestRegisteredUninstallForceRetryMarksTheFailure' ./internal/core
+--- FAIL: TestRegisteredUninstallRetriesWingetHashMismatchWithForce (0.01s)
+    apps_uninstall_registered_test.go:222: force retry did not recover: uninstaller exited abnormally: exit code: 0x8a150057
+--- FAIL: TestRegisteredUninstallForceRetryMarksTheFailure (0.01s)
+    apps_uninstall_registered_test.go:247: err=uninstaller exited abnormally: exit code: 0x8a150057, want a forced UninstallerExitError
+FAIL
+FAIL	github.com/<user>/quick-cleaner/internal/core	1.285s
+FAIL
+exit=1

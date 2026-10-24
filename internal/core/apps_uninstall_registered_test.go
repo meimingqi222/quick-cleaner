@@ -200,3 +200,66 @@ func TestRegisteredUninstallReportsDependenciesAndVerification(t *testing.T) {
 		})
 	}
 }
+
+// winget 因便携包哈希漂移而拒绝（0x8A150057）时，产品应自己加 --force 重试，
+// 而不是让用户复制命令去终端里跑。两条路径都要覆盖：重试成功、重试后仍失败。
+func TestRegisteredUninstallRetriesWingetHashMismatchWithForce(t *testing.T) {
+	app, r, _ := registeredAppFixture(t)
+	command := "winget uninstall --id Foo"
+	app.UninstallString = &command
+	var commands []string
+	settled := false
+	r.shell = func(cmd string, _, _ bool) (uint32, error) {
+		commands = append(commands, cmd)
+		if len(commands) == 1 {
+			return platform.WingetHashMismatch, nil
+		}
+		settled = true
+		return 0, nil
+	}
+	r.registered = func(InstalledApp) bool { return !settled }
+	if err := runRegisteredAppUninstaller(app, r); err != nil {
+		t.Fatalf("force retry did not recover: %v", err)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands=%v", commands)
+	}
+	if !strings.HasSuffix(commands[1], " --force") {
+		t.Fatalf("retry did not add --force: %q", commands[1])
+	}
+	if strings.Contains(commands[0], "--force") {
+		t.Fatalf("first attempt already forced: %q", commands[0])
+	}
+}
+
+func TestRegisteredUninstallForceRetryMarksTheFailure(t *testing.T) {
+	app, r, _ := registeredAppFixture(t)
+	command := "winget uninstall --id Foo"
+	app.UninstallString = &command
+	attempts := 0
+	r.shell = func(string, bool, bool) (uint32, error) {
+		attempts++
+		return platform.WingetHashMismatch, nil
+	}
+	err := runRegisteredAppUninstaller(app, r)
+	var exited *UninstallerExitError
+	if !errors.As(err, &exited) || !exited.Forced {
+		t.Fatalf("err=%v, want a forced UninstallerExitError", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts=%d, want 2 (original + --force)", attempts)
+	}
+}
+
+// 已经带 --force 的命令不再重复追加。
+func TestWingetForceCommandDoesNotDoubleTheFlag(t *testing.T) {
+	if got := wingetForceCommand("winget uninstall --id Foo"); got != "winget uninstall --id Foo --force" {
+		t.Fatalf("got %q", got)
+	}
+	if got := wingetForceCommand("winget uninstall --id Foo --force"); got != "" {
+		t.Fatalf("already forced: %q", got)
+	}
+	if got := wingetForceCommand("choco uninstall Foo"); got != "" {
+		t.Fatalf("non-winget command was forced: %q", got)
+	}
+}

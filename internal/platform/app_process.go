@@ -14,6 +14,12 @@ import (
 
 const WingetAdminContextProhibited uint32 = 0x8A15007D
 
+// WingetHashMismatch is winget refusing a portable package whose files no longer
+// match the hash recorded at install time (PortableFlow's own check). It is a
+// self-protection refusal rather than a failed uninstall, and --force is winget's
+// documented override for non-security blocks.
+const WingetHashMismatch uint32 = 0x8A150057
+
 type AppRunningProcess struct {
 	PID         uint32
 	Name, Image string

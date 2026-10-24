@@ -18,15 +18,27 @@ func TestUninstallFailureNoticeExplainsAndKeepsTheCode(t *testing.T) {
 	if !strings.Contains(winget.Get(core.Chinese), "未删除") {
 		t.Fatalf("winget notice does not say nothing was deleted: %q", winget.Get(core.Chinese))
 	}
-	// winget 的 UninstallString 与「设置 → 应用」是同一条命令，指过去只会再失败一次，
-	// 所以提示必须给 --force（跳过哈希校验），而不是那个入口。
-	if !strings.Contains(winget.Get(core.English), "0x8a150057") || !strings.Contains(winget.Get(core.English), "--force") {
-		t.Fatalf("english winget notice = %q", winget.Get(core.English))
+	// 产品自己会加 --force 重试，所以提示不该再让用户手动执行 --force
+	// （那是在把程序该做的事推给人）；也不该指向「设置 → 应用」——那是同一条命令。
+	if !strings.Contains(winget.Get(core.English), "0x8a150057") {
+		t.Fatalf("english winget notice lost the code: %q", winget.Get(core.English))
 	}
 	for _, text := range []string{winget.Get(core.Chinese), winget.Get(core.English)} {
 		if strings.Contains(text, "设置") || strings.Contains(text, "Settings") {
 			t.Fatalf("winget notice points at the same failing command: %q", text)
 		}
+		if strings.Contains(text, "--force") {
+			t.Fatalf("unforced notice tells the user to do what the product retries: %q", text)
+		}
+	}
+
+	// 已经自动 --force 重试过仍失败时，要如实说明「已重试」，不能再提示去加 --force。
+	forced := uninstallFailureNotice(&core.UninstallerExitError{Code: 0x8a150057, Forced: true})
+	if !strings.Contains(forced.Get(core.Chinese), "已自动加 --force 重试") {
+		t.Fatalf("forced notice does not admit the retry: %q", forced.Get(core.Chinese))
+	}
+	if !strings.Contains(forced.Get(core.Chinese), "0x8a150057") {
+		t.Fatalf("forced notice lost the code: %q", forced.Get(core.Chinese))
 	}
 
 	other := uninstallFailureNotice(&core.UninstallerExitError{Code: 0x2})

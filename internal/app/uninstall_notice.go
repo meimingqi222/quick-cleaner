@@ -21,9 +21,17 @@ func uninstallFailureNotice(err error) core.Text {
 	if errors.As(err, &exited) {
 		code := fmt.Sprintf("%#x", exited.Code)
 		if exited.Code&wingetCodeMask == wingetCodeFamily {
+			if exited.Forced {
+				// The product already retried with --force; suggesting it again would be
+				// advice the user cannot act on.
+				return core.NewText(
+					fmt.Sprintf("已自动加 --force 重试，官方卸载器（winget）仍然失败（%s）；未删除任何文件。可在终端运行 winget uninstall 查看详细原因。", code),
+					fmt.Sprintf("Retried with --force and the official uninstaller (winget) still failed (%s); nothing was deleted. Run winget uninstall in a terminal for the detailed reason.", code),
+				)
+			}
 			return core.NewText(
-				fmt.Sprintf("官方卸载器（winget）异常退出（%s）；未删除任何文件。可在终端运行带 --force 的 winget uninstall 强制卸载。", code),
-				fmt.Sprintf("The official uninstaller (winget) failed (%s); nothing was deleted. Run winget uninstall with --force in a terminal to override it.", code),
+				fmt.Sprintf("官方卸载器（winget）异常退出（%s）；未删除任何文件。可在终端运行 winget uninstall 查看详细原因。", code),
+				fmt.Sprintf("The official uninstaller (winget) failed (%s); nothing was deleted. Run winget uninstall in a terminal for the detailed reason.", code),
 			)
 		}
 		return core.NewText(
