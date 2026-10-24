@@ -126,19 +126,14 @@ func (r *Root) requestResidualClean() {
 				r.apps.Notice = core.SameText(err.Error())
 				return
 			}
-			// Keep unselected candidates alongside selected candidates that survived.
-			selected := map[string]bool{}
-			for _, item := range items {
-				selected[item.DisplayLabel()] = true
-			}
-			for _, item := range r.residual.Items {
-				if !selected[item.DisplayLabel()] {
-					remaining = append(remaining, item)
-				}
-			}
-			result := r.residual
-			result.Items = remaining
-			r.showResiduals(result, app)
+			// Rust keeps the review closed after a clean: what survived is usually what
+			// cannot be deleted, so reopening turns one clean into one popup per click.
+			// The counts are reported above and the scan entry can list leftovers again.
+			r.residual.Items = remaining
+			r.apps.ResidualsOpen = false
+			r.apps.Residuals = nil
+			r.apps.ResidualSize, r.apps.SelectedSize = "0 B", "0 B"
+			r.apps.Occupancy = core.ResidualOccupancy{}
 		}
 	})
 }

@@ -330,3 +330,22 @@ func TestResidualCleanStartsWithoutConfirmation(t *testing.T) {
 		t.Fatal("residual clean did not start")
 	}
 }
+
+// Rust 清理后不重开残留面板（residual.result = None）：删不掉的多半一直删不掉，
+// 重开就变成「点一次弹一次」。状态栏/提示报失败计数，残留入口可再扫。
+func TestResidualCleanDoesNotReopenTheReviewPanel(t *testing.T) {
+	r, q := testRoot(t)
+	gone := filepath.Join(t.TempDir(), "already-gone")
+	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: gone}, core.ResidualCacheDir)
+	app := core.InstalledApp{ID: "example", Name: "Example"}
+	r.showResiduals(core.ResidualScanResult{AppName: app.Name, Items: []core.ResidualItem{item}}, &app)
+	if !r.apps.ResidualsOpen {
+		t.Fatal("fixture did not open the residual panel")
+	}
+	r.residualAuthority = func(context.Context, core.InstalledApp, []core.ResidualItem) bool { return true }
+	r.requestResidualClean()
+	dispatchNext(t, q)
+	if r.apps.ResidualsOpen {
+		t.Fatal("cleaning reopened the residual review panel")
+	}
+}

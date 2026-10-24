@@ -1031,3 +1031,12 @@ Note: `2026-10-25-declutter-prune-and-residual-confirm.md`
 - **根因**：Go 端在 `requestResidualClean` 里加了 `r.ask("清理选中的残留？")`，而 Rust 的 `clean_selected_residuals` 直接执行——勾选并按下按钮就是显式同意。
 - **防护**：去掉确认框，直接进入清理；归属、占用、撤离证据的核验与「未知归属整批拒绝」保持原样。回归见 Note。
 - **禁止回退**：不能把确认框加回来（与参照不一致且被用户明确否掉）；不能因为去掉确认框就跳过 `residualAuthority`/`orphanAbsent` 的核验或允许部分删除；未知归属时仍必须整批拒绝并如实报告未清理。
+
+## P85 清理残留后不能自动重开残留面板
+
+Note: `2026-10-25-residual-clean-keeps-review-closed.md`
+
+- **症状**：清理残留后，面板又弹一次——全清掉时显示「0 项关联残留」，有失败项时重开的还是那批删不掉的条目，看起来像「点一次弹一次」。
+- **根因**：`requestResidualClean` 的收尾无条件调用 `showResiduals(result, app)` 重开面板；Rust 在同样位置写的是 `this.residual.result = None`，注释说明「删不掉的多半会一直删不掉」。
+- **防护**：收尾改为关闭面板（`ResidualsOpen=false`、`Residuals=nil`、尺寸与 `Occupancy` 清空），只把幸存条目留在 `r.residual.Items`；计数交给 `finishCleanup` 的提示与历史记录。回归见 Note。
+- **禁止回退**：不能在清理后重新打开残留面板；不能只在有剩余项时才重开（同样是点一次弹一次）；不能把剩余项合并进下次扫描结果；卸载流程里「卸载后立刻看残留」的那次展示不属于本约束。
