@@ -33,11 +33,6 @@ func Run() error {
 			}
 		})
 		opts := mygo.WindowOptions{Title: "QuickCleaner", Width: 1280, Height: 880, Content: ui.View(r.Render)}
-		// Windows and Linux draw the application menu inside the window, so the
-		// app's single "QuickCleaner" menu repeated the caption as a second title
-		// bar. Keep the menu (its toggles have no page control yet) but show it
-		// only on Alt/F10. macOS keeps it in the system menu bar.
-		opts.AutoHideMenuBar = runtime.GOOS != "darwin"
 		prepareStartupWindow(&opts)
 		window = mygo.NewWindow(opts)
 		r.window = window

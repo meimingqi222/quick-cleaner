@@ -354,6 +354,7 @@ func (r *Root) Render(c *ui.Context) {
 		r.dashboard.CleanProgress = &snap
 	}
 	r.dashboard.StatusTab = r.status.Tab
+	r.dashboard.AutoCheck = r.settings.AutoCheckUpdates
 	r.junk.Language, r.apps.Language, r.dev.Language, r.status.Language, r.disk.Language, r.declutter.Language, r.search.Language = l, l, l, l, l, l, l
 	a := view.DashboardActions{Navigate: r.Navigate, Scan: r.Scan, SetLanguage: func(l view.Language) {
 		r.settings.Language = l
@@ -368,6 +369,13 @@ func (r *Root) Render(c *ui.Context) {
 			if !r.dashboard.MonitoringPaused {
 				r.refreshStatus()
 			}
+		}, SetAutoCheck: func(v bool) {
+			r.settings.AutoCheckUpdates = v
+			if r.updates != nil {
+				r.updates.SetAutoCheck(v)
+			}
+			r.save(r.settings)
+			r.changed()
 		}}
 	if r.active == view.Overview {
 		r.dashboard.Render(c, a)

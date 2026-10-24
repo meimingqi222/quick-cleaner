@@ -221,20 +221,18 @@ func (r *Root) installMenu() {
 	item := func(zh, en string, fn func()) *mygo.MenuItem {
 		return &mygo.MenuItem{Label: r.tr(zh, en), Click: func(*mygo.MenuItem, *mygo.Window) { fn() }}
 	}
-	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Label: "QuickCleaner", Submenu: []*mygo.MenuItem{
-		item("扫描当前页面", "Scan current page", r.Scan), item("停止当前任务", "Stop current task", r.Cancel),
-		{Label: r.tr("删除到回收站", "Delete to Recycle Bin / Trash"), Type: mygo.MenuItemCheckbox, Checked: r.settings.DeleteToRecycleBin, Click: func(i *mygo.MenuItem, _ *mygo.Window) {
-			if r.busy() {
-				i.SetChecked(r.settings.DeleteToRecycleBin)
-				return
-			}
-			r.settings.DeleteToRecycleBin = i.Checked
-			r.disk.ToRecycleBin = i.Checked
-			r.save(r.settings)
-		}},
-		{Label: r.tr("自动检查更新", "Automatically check for updates"), Type: mygo.MenuItemCheckbox, Checked: r.settings.AutoCheckUpdates, Click: func(i *mygo.MenuItem, _ *mygo.Window) { r.updates.SetAutoCheck(i.Checked) }},
-		item("检查更新", "Check for updates", r.checkUpdates), item("权限", "Permissions", r.permissions), mygo.Separator(), {Role: mygo.RoleQuit},
-	}}}))
+	// The app menu is the macOS idiom (系统菜单栏 + Cmd+Q). Windows and Linux draw an
+	// application menu inside the window, which repeated the native caption as a second
+	// title bar; those platforms reach every action from the page or the tray instead.
+	if runtime.GOOS == "darwin" {
+		// The recycle-bin and auto-check switches live on the Disk Lens page and in the
+		// sidebar settings area; keeping them here too would be a second source of truth.
+		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Label: "QuickCleaner", Submenu: []*mygo.MenuItem{
+			item("扫描当前页面", "Scan current page", r.Scan), item("停止当前任务", "Stop current task", r.Cancel),
+			item("检查更新", "Check for updates", r.checkUpdates), item("权限", "Permissions", r.permissions),
+			mygo.Separator(), {Role: mygo.RoleQuit},
+		}}}))
+	}
 	if r.tray != nil && runtime.GOOS == "linux" {
 		r.tray.SetMenu(r.trayMenu())
 	}

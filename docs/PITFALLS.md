@@ -1004,3 +1004,12 @@ Note: `2026-10-25-residual-versioned-display-name.md`
 - **根因**：`Name` 取 Windows 的 `DisplayName`，常把版本写进名字（`MiniMax Code 3.0.74` → `minimaxcode3074`，15 字符）；候选目录 `MiniMax`（7 字符）走「应用名包含候选」的反向包含规则，要求 `7*2 >= 15`，不成立即被拒。Rust 的 `norm`/`name_matches` 同源，所以两边都有这个盲区。
 - **防护**：`windowsResidualShortName` 剥掉尾部纯数字版本段（含 `v` 前缀）后再匹配，精确目录也再试一次短名 token；剥完不足 3 字符或本身就是通用名（`App 2` → `App`）则保留原名。回归见 Note。
 - **禁止回退**：不能为了命中短名就把反向包含的比例（`size*2 >= 名字长度`）整体放宽；不能改成按发布者目录匹配（`Google`/`Tencent` 会跨产品误报）；不能只改 Rust 或只改 Go 让两个版本分叉。
+
+## P82 只有菜单能改的设置必须有页面入口，应用菜单只留 macOS
+
+Note: `2026-10-25-auto-check-toggle-in-sidebar.md`
+
+- **症状**：Windows 原生标题栏下面又出现一条写着「QuickCleaner」的菜单栏；一旦去掉菜单，「自动检查更新」就再也没有入口。
+- **根因**：`installMenu` 在所有平台都装了 macOS 风格的应用菜单（`Label: "QuickCleaner"`），MyGo 在 Windows/Linux 把它画进客户区；而这个菜单同时是该设置唯一的修改途径。
+- **防护**：自动检查更新放进侧栏底部的常驻设置区（语言、版本旁），动作写 settings 并同步控制器；`installMenu` 只在 `darwin` 执行，菜单里不再保留已移到页面的开关；`AutoHideMenuBar` 随之撤掉。回归见 Note。
+- **禁止回退**：不能把应用菜单重新装回 Windows/Linux（会再出现重复标题栏）；不能让同一设置同时存在于菜单和页面（两个来源会漂移）；不能只删菜单而不给页面入口；`删除到回收站` 的唯一入口是磁盘透视页的 `disk-recycle` 复选框。

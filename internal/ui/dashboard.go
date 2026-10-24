@@ -33,9 +33,12 @@ type Dashboard struct {
 	Version, StatusText                  string
 	UpdateLabel                          string
 	UpdateAttention                      bool
-	StatusTab                            StatusTab
-	ProcessCount                         int
-	MonitoringPaused                     bool
+	// AutoCheck is the persisted "check for updates automatically" setting, shown
+	// in the sidebar settings area (the app menu is macOS-only).
+	AutoCheck        bool
+	StatusTab        StatusTab
+	ProcessCount     int
+	MonitoringPaused bool
 	// CleanProgress is the live mutation snapshot. Nil means no docked bar.
 	CleanProgress *core.CleanSnapshot
 	Stop          func()
@@ -49,6 +52,8 @@ type DashboardActions struct {
 	OpenPermissions  func()
 	SetStatusTab     func(StatusTab)
 	ToggleMonitoring func()
+	// SetAutoCheck persists the "check for updates automatically" switch.
+	SetAutoCheck func(bool)
 }
 
 var logo = func() *ui.Bitmap {
@@ -252,6 +257,11 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 					}
 				})
 			})
+			on := s.AutoCheck
+			check := ui.Checkbox(c.Key("auto-check-updates"), &on, t.autoCheck).Disabled(actions.SetAutoCheck == nil)
+			if check.Changed() && actions.SetAutoCheck != nil {
+				actions.SetAutoCheck(on)
+			}
 			label := s.Version
 			if s.UpdateLabel != "" {
 				label = s.UpdateLabel

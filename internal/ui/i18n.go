@@ -15,20 +15,23 @@ const (
 
 type dashboardCopy struct {
 	subtitle, freed, language, ready, standard, admin, fdaGranted, fdaLimited string
-	nav                                                                       [7]string
-	rescan, scanning, cleaning, found, clean, noJunk, start                   string
-	scanningSub, cleaningSub, scanningBlurb, cleanBlurb, idleBlurb, review    string
-	quick                                                                     [4]string
-	appsFound, foundBlurb, freedPill                                          string
-	statusHardware, statusProcesses, statusLive, statusPaused                 string
+	// autoCheck labels the settings switch that used to live only in the app menu.
+	autoCheck                                                              string
+	nav                                                                    [7]string
+	rescan, scanning, cleaning, found, clean, noJunk, start                string
+	scanningSub, cleaningSub, scanningBlurb, cleanBlurb, idleBlurb, review string
+	quick                                                                  [4]string
+	appsFound, foundBlurb, freedPill                                       string
+	statusHardware, statusProcesses, statusLive, statusPaused              string
 }
 
 // Copy is ported verbatim from src/ui/i18n/{mod,views}.rs.
 var dashboardChinese = dashboardCopy{
 	subtitle: "极速磁盘与软件清理", freed: "本次已释放空间", language: "界面语言", ready: "就绪",
 	standard: "普通模式", admin: "管理员模式", fdaGranted: "完全磁盘访问", fdaLimited: "磁盘受限 (点击配置)",
-	nav:    [7]string{"概览扫描", "状态监控", "智能清理", "软件管理", "磁盘透镜", "冗余整理", "文件搜索"},
-	rescan: "重新扫描", scanning: "扫描中…", cleaning: "清理中…", found: "发现可清理内容",
+	autoCheck: "自动检查更新",
+	nav:       [7]string{"概览扫描", "状态监控", "智能清理", "软件管理", "磁盘透镜", "冗余整理", "文件搜索"},
+	rescan:    "重新扫描", scanning: "扫描中…", cleaning: "清理中…", found: "发现可清理内容",
 	clean: "系统很干净", noJunk: "暂无可清理垃圾", start: "点击开始一键智能扫描",
 	scanningSub: "正在检查系统缓存与开发环境残留", cleaningSub: "正在彻底移除选中垃圾",
 	scanningBlurb: "正在扫描系统缓存、应用日志、开发依赖产物与临时文件…",
@@ -41,8 +44,9 @@ var dashboardChinese = dashboardCopy{
 var dashboardEnglish = dashboardCopy{
 	subtitle: "Fast Disk & App Cleaner", freed: "Space Freed", language: "Language", ready: "Ready",
 	standard: "Standard user", admin: "Administrator", fdaGranted: "Full Disk Access", fdaLimited: "Limited Access (Configure)",
-	nav:    [7]string{"Overview", "Status", "Smart Clean", "Apps", "Disk Lens", "Declutter", "File Search"},
-	rescan: "Rescan", scanning: "Scanning…", cleaning: "Cleaning…", found: "Cleanable Found",
+	autoCheck: "Check for updates automatically",
+	nav:       [7]string{"Overview", "Status", "Smart Clean", "Apps", "Disk Lens", "Declutter", "File Search"},
+	rescan:    "Rescan", scanning: "Scanning…", cleaning: "Cleaning…", found: "Cleanable Found",
 	clean: "System is Clean", noJunk: "No Junk Found", start: "Click to Start Smart Scan",
 	scanningSub: "Checking system caches and dev leftovers", cleaningSub: "Permanently removing selected items",
 	scanningBlurb: "Scanning system caches, application logs, build artifacts, and temp files…",

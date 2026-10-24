@@ -219,3 +219,29 @@ func TestDashboardStatusHeaderRouting(t *testing.T) {
 		}
 	}
 }
+
+// 侧栏底部是常驻的设置区（语言、版本都在这里）。自动检查更新原本只有应用菜单
+// 能改，Windows 移除菜单后必须有页面入口。
+func TestSidebarOffersAutoUpdateToggle(t *testing.T) {
+	var events []bool
+	s := appui.Dashboard{Language: appui.English, Version: "v0.0.16"}
+	a := appui.DashboardActions{SetAutoCheck: func(v bool) { events = append(events, v) }}
+	tt := ui.NewTester(func(c *ui.Context) { s.Render(c, a) }, 1280, 800)
+	if !tt.HasText("Check for updates automatically") {
+		t.Fatalf("settings area has no auto-update toggle: %v", tt.Texts())
+	}
+	if err := tt.Click("Check for updates automatically"); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || !events[0] {
+		t.Fatalf("toggle events=%v, want one true", events)
+	}
+	s.AutoCheck = true
+	tt.Frame()
+	if err := tt.Click("Check for updates automatically"); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1] {
+		t.Fatalf("toggle events=%v, want a second false", events)
+	}
+}
