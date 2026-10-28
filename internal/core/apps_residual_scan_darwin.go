@@ -31,8 +31,9 @@ func ScanAppResiduals(ctx context.Context, app InstalledApp) (ResidualScanResult
 	}
 	evidence.extensions, _ = listMacSystemExtensions(ctx)
 	cache, _ := platform.DarwinUserCacheDir()
+	temp, _ := platform.DarwinUserTempDir()
 	result, err := scanMacAppResidualsIn(ctx, app, macResidualRoots{
-		home: home, systemLibrary: "/Library", receipts: "/private/var/db/receipts", darwinCache: cache, applications: "/Applications",
+		home: home, systemLibrary: "/Library", receipts: "/private/var/db/receipts", darwinCache: cache, darwinTemp: temp, applications: "/Applications",
 	}, evidence, snapshot)
 	if err == nil {
 		result.Occupancy = DetectAppResidualOccupancy(ctx, app)

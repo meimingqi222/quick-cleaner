@@ -7,6 +7,7 @@ type junkCopy struct {
 	headingSub, found, exclusions, exclusionsHint, exclusionsEmpty, remove string
 	loadingTitle, loadingSub, empty, manual, partial, discovering          string
 	cleanTitle, cleanSub                                                   string
+	unscannedTitle, startScan                                              string
 	selected, items, selectedItems, clean, exclude, release, files         string
 	failed, showDetails, hideDetails                                       string
 	batch                                                                  [4]string
@@ -21,6 +22,7 @@ func junkStrings(l Language) junkCopy {
 			loadingTitle: "Scanning system junk files…", loadingSub: "Safely checking system temp, caches, logs and Recycle Bin",
 			empty: "Nothing cleanable found in this category", manual: "Manual Select", partial: "Partial", discovering: "Scanning…",
 			cleanTitle: "Your system is clean", cleanSub: "Nothing cleanable was found. Scan again later to check.",
+			unscannedTitle: "System Junk Not Scanned Yet", startScan: "Start Full Scan",
 			selected: "Selected for Cleaning", items: "%d items", selectedItems: "(%d items)", clean: "Clean Now", exclude: "Exclude", release: "Quit apps and clean", files: "%s files",
 			failed: "%d targets still have leftovers after last clean", showDetails: "Show details ▾", hideDetails: "Hide details ▴",
 			batch: [4]string{"Recommended", "Select All", "Invert", "Clear All"},
@@ -33,6 +35,7 @@ func junkStrings(l Language) junkCopy {
 		loadingTitle: "正在全面扫描系统冗余垃圾", loadingSub: "安全检索系统临时缓存、应用日志与回收站，准备释放空间",
 		empty: "此类别未发现可清理内容", manual: "需手动勾选", partial: "部分统计", discovering: "检索中…",
 		cleanTitle: "系统很干净", cleanSub: "没有发现可清理的内容，可以稍后再扫描一次。",
+		unscannedTitle: "尚未扫描系统冗余垃圾", startScan: "开始全面扫描",
 		selected: "已选择清理", items: "共 %d 项", selectedItems: "(%d 项)", clean: "立即清理", exclude: "排除", release: "退出应用后清理", files: "%s 个文件",
 		failed: "上次清理有 %d 个目标仍有残留", showDetails: "查看详情 ▾", hideDetails: "收起详情 ▴",
 		batch: [4]string{"推荐选中", "全选", "反选", "清空选中"},

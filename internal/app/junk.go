@@ -27,6 +27,16 @@ func (r *Root) scanJunk() {
 	// Snapshot indexes on the caller thread. The worker must not read them later.
 	// Unelevated Windows passes no acquire, so this scan cannot open $MFT.
 	indexes := volumeIndexes(r)
+	// macOS junk scans share the persistent disk index with the disk lens and
+	// file search: it builds once and every menu reuses it. Owner creation is
+	// cheap (opens the cache directory); the scan walks live if it fails.
+	if runtime.GOOS == "darwin" && r.diskOwner == nil {
+		if owner, err := newDiskOwner(r.ctx); err == nil {
+			r.diskOwner = owner
+		} else {
+			log.Printf("磁盘索引不可用，垃圾扫描退回遍历通道：%v", err)
+		}
+	}
 	owner := r.diskOwner
 	elevated := runtime.GOOS == "windows" && platform.IsElevated()
 	r.junk.Scanning = true
@@ -36,22 +46,39 @@ func (r *Root) scanJunk() {
 		if err != nil {
 			return func() { r.junk.Scanning = false; r.failure(err) }
 		}
+		providers := []func() []core.ScanTarget{func() []core.ScanTarget { return core.DockerScanTargets(rules) }}
+		if runtime.GOOS == "darwin" {
+			providers = append(providers, func() []core.ScanTarget { return core.MacOSSnapshotTargets(rules) }, func() []core.ScanTarget { return core.BrewScanTargets(rules, lastBrew) })
+		}
+		finishNative := startJunkProviders(ctx, providers...)
 		targets := core.FilesystemScanTargets(rules, core.UserRuleRoots(home), platformName())
-		if ctx.Err() == nil {
-			targets = append(targets, core.DockerScanTargets(rules)...)
+		// macOS：先加载/构建整盘共享索引，阶段一在树上查表，阶段二走索引 DFS。
+		// 索引同时交给 searchTrees，磁盘透镜与文件搜索复用同一份，不再重扫。
+		// Load 有持久化缓存 + FSEvents 增量，已有索引时只是回放增量。
+		volumes := platform.ListVolumes()
+		var acquiredTree *core.SizeTree
+		if runtime.GOOS == "darwin" && owner != nil {
+			root := core.VolumeFromMountPoint("/")
+			for _, v := range volumes {
+				if v.MountPoint() == "/" {
+					root = v
+					break
+				}
+			}
+			if result, err := owner.Load(ctx, root); err != nil {
+				log.Printf("整盘索引加载失败，本次垃圾扫描退回遍历通道：%v", err)
+			} else if result != nil && result.Tree != nil {
+				acquiredTree = result.Tree
+				indexes = prioritizeJunkIndex(indexes, acquiredTree)
+			}
 		}
-		if runtime.GOOS == "darwin" && ctx.Err() == nil {
-			targets = append(targets, core.MacOSSnapshotTargets(rules)...)
-			targets = append(targets, core.BrewScanTargets(rules, lastBrew)...)
-		}
-		// Phase-1 targets only. Discovered build artifacts are not in this set.
+		targets = append(targets, finishNative()...)
 		busyPaths := make([]string, len(targets))
 		for i := range targets {
 			busyPaths[i] = targets[i].Path
 		}
 		busyDone := make(chan map[string]core.Busy, 1)
 		go func() { busyDone <- core.DetectInUse(busyPaths) }()
-		// Generation is captured on the main thread. The detector never reads it.
 		r.armJunkBusy(busyDone)
 		var acquire func(context.Context, core.VolumeID) (*core.SizeTree, error)
 		if elevated {
@@ -69,7 +96,10 @@ func (r *Root) scanJunk() {
 				return result.Tree, nil
 			}
 		}
-		plan := core.BeginJunkIndex(ctx, elevated, home, platform.ListVolumes(), indexes, targets, acquire)
+		plan := core.BeginJunkIndex(ctx, elevated, home, volumes, indexes, targets, acquire)
+		if plan.Acquired == nil && acquiredTree != nil {
+			plan.Acquired = acquiredTree
+		}
 		cats := core.ScanFixed(ctx, targets, plan.Query)
 		var discovered []core.ScanItem
 		partial := false
@@ -82,10 +112,7 @@ func (r *Root) scanJunk() {
 					return
 				}
 				if acquired != nil {
-					mount := acquired.Volume().MountPoint()
-					if r.searchTrees[mount] == nil {
-						r.searchTrees[mount] = acquired
-					}
+					r.rememberJunkIndex(acquired)
 				}
 				r.junk.Categories = cats
 				r.junk.Scanned = true
@@ -96,13 +123,13 @@ func (r *Root) scanJunk() {
 				r.message(fmt.Sprintf("系统垃圾扫描完成，共 %s；正在后台检索项目构建产物…", r.dashboard.Cleanable), fmt.Sprintf("System junk scanned — %s; still looking for build artifacts…", r.dashboard.Cleanable))
 			})
 			discoverStarted := time.Now()
-			if !elevated {
-				log.Printf("未提权，发现式扫描走遍历通道（慢得多）")
+			if plan.Query == nil {
+				log.Printf("没有可用索引，发现式扫描走遍历通道（慢得多）")
 			}
 			discovered, partial = plan.DiscoverWithin(ctx, rules, core.DiscoveryBudget)
 			discovered = core.DropVanishedDiscovered(discovered)
-			channel := "MFT"
-			if !elevated {
+			channel := "索引"
+			if plan.Query == nil {
 				channel = "遍历"
 			}
 			var discoveredBytes uint64
@@ -277,6 +304,7 @@ func (r *Root) selectJunk(mode view.JunkSelection) {
 
 func (r *Root) junkActions() view.JunkPageActions {
 	return view.JunkPageActions{
+		Rescan:         r.scanJunk,
 		ToggleExpanded: func(id core.CategoryID) { r.junk.Expanded[id] = !r.junk.Expanded[id] },
 		ToggleCategory: func(id core.CategoryID) {
 			if r.busy() {

@@ -127,9 +127,17 @@ func caskInventory(prefix, home, id string) ([]caskInstallation, error) {
 			continue
 		}
 		install := caskInstallation{Prefix: prefix, Token: token, Receipt: filepath.Join(metadata, "INSTALL_RECEIPT.json")}
-		receipt, err := caskJSON(root, install.Receipt, &install.Files)
-		if err != nil {
-			return nil, err
+		// Homebrew 早期版本只写 .metadata/<version>/<timestamp>/Casks 清单，不写收据。
+		// 收据缺失表示「更早的安装」，不是记录损坏：按空收据继续盘点，让这条记录
+		// 照常凭清单里的 app artifact 认领归属，但没有 source 证据时 Supported 恒为
+		// false，永不授权卸载。把缺失当错误会让 Caskroom 里任意一条旧记录拦住所有
+		// 应用的卸载——包括根本不是 Homebrew 装的。
+		receipt := map[string]any{}
+		if !caskAbsent(install.Receipt) {
+			receipt, err = caskJSON(root, install.Receipt, &install.Files)
+			if err != nil {
+				return nil, err
+			}
 		}
 		config, err := caskJSON(root, filepath.Join(metadata, "config.json"), &install.Files)
 		if err != nil {
@@ -268,11 +276,26 @@ func runAppCaskUninstaller(ctx context.Context, app InstalledApp, home string, p
 	if !ok {
 		return true, errors.New("application identity unavailable")
 	}
-	brew, err := filepath.EvalSymlinks(filepath.Join(install.Prefix, "bin", "brew"))
+	brewPath := filepath.Join(install.Prefix, "bin", "brew")
+	confined, err := ConfinedRuleFile(install.Prefix, brewPath)
 	if err != nil {
 		return true, err
 	}
-	confined, err := ConfinedRuleFile(install.Prefix, brew)
+	if !confined {
+		return true, errors.New("Homebrew executable outside installation")
+	}
+	brew, err := filepath.EvalSymlinks(brewPath)
+	if err != nil {
+		return true, err
+	}
+	// 上面那次已经拒绝了 prefix 以下任何一跳链接；这里只用真实路径复核一次是否仍
+	// 落在 prefix 里。根必须同时换成真实路径：macOS 的 /var → /private/var 这类
+	// 别名会让「真实目标 vs 别名根」的文本前缀比较误判成越界。
+	prefix, err := filepath.EvalSymlinks(install.Prefix)
+	if err != nil {
+		return true, err
+	}
+	confined, err = ConfinedRuleFile(prefix, brew)
 	if err != nil {
 		return true, err
 	}

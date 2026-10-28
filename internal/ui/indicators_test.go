@@ -92,6 +92,36 @@ func TestLoadingSpinnerKeepsAnimatingOnItsOwn(t *testing.T) {
 	}
 }
 
+func TestOrbitSpinnerKeepsAnimatingOnItsOwn(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Background(card).Children(func() { orbitSpinner(c, 64) })
+	}, 80, 80)
+	tt.Advance(200 * time.Millisecond)
+	tt.Frame()
+	if !tt.FramePending() {
+		t.Fatal("the orbit spinner asked for no next frame")
+	}
+	before := tt.Image()
+	snapshot := image.NewRGBA(before.Rect)
+	copy(snapshot.Pix, before.Pix)
+	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+	after := tt.Image()
+	if primaryPixels(snapshot) == 0 {
+		t.Fatal("the orbit spinner drew no pixels")
+	}
+	same := true
+	for i := range snapshot.Pix {
+		if snapshot.Pix[i] != after.Pix[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("the orbit spinner did not move")
+	}
+}
+
 func TestIndicatorGeometryStaysInRange(t *testing.T) {
 	for i := 0; i <= 100; i++ {
 		tail, head := scanBarSpan(float64(i) / 100)

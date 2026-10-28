@@ -42,6 +42,12 @@ type fseventContext struct {
 	Info, Retain, Release, CopyDescription uintptr
 }
 
+// fseventSink receives one delivered event at a time from the stream callback.
+// The history collector and the directory watcher both consume through it.
+type fseventSink interface {
+	add(path string, flags uint32, id uint64)
+}
+
 var fseventHandles sync.Map
 var fseventSequence atomic.Uint64
 
@@ -110,7 +116,7 @@ func receiveFSEvents(_ uintptr, handle uintptr, count uintptr, paths unsafe.Poin
 	if !ok || paths == nil || flags == nil {
 		return
 	}
-	collector := value.(*fseventCollector)
+	collector := value.(fseventSink)
 	pathValues := unsafe.Slice((**byte)(paths), count)
 	flagValues := unsafe.Slice(flags, count)
 	var idValues []uint64
@@ -212,4 +218,107 @@ func ReadFSEventChanges(ctx context.Context, root string, since uint64, cacheDir
 		return collector.changes(since, latest, cacheDir, children, fseventSystem.current())
 	}
 	return collector.changes(since, latest, cacheDir, nil, 0)
+}
+
+type fseventForwarder struct {
+	out chan []string
+}
+
+func (f *fseventForwarder) add(path string, _ uint32, _ uint64) {
+	if path == "" {
+		return
+	}
+	select {
+	case f.out <- []string{path}:
+	default:
+	}
+}
+
+// WatchDirectories starts one FSEvents stream on a dedicated run loop for each
+// path. Event batches carry raw delivered paths; the caller debounces and
+// re-reads the directories, so a dropped path is only a missed wake-up, not a
+// missed change. Close stops the stream; Events is never closed.
+func WatchDirectories(paths []string) (*FSDirWatch, error) {
+	if err := loadFSEvents(); err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("watch needs at least one path")
+	}
+	for _, path := range paths {
+		if strings.ContainsRune(path, 0) {
+			return nil, errors.New("watch path contains NUL")
+		}
+	}
+	out := make(chan []string, 64)
+	watch := &FSDirWatch{Events: out, done: make(chan struct{})}
+	ready := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		cfPaths := fseventSystem.arrayCreate(0, int64(len(paths)), fseventSystem.arrayCallbacks)
+		if cfPaths == 0 {
+			ready <- errors.New("FSEvents path array unavailable")
+			return
+		}
+		defer fseventSystem.release(cfPaths)
+		var strings_ []uintptr
+		for _, path := range paths {
+			s := fseventSystem.stringCreate(0, path, 0x08000100)
+			if s == 0 {
+				for _, s := range strings_ {
+					fseventSystem.release(s)
+				}
+				ready <- errors.New("FSEvents path string unavailable")
+				return
+			}
+			strings_ = append(strings_, s)
+			fseventSystem.arrayAppend(cfPaths, s)
+		}
+		defer func() {
+			for _, s := range strings_ {
+				fseventSystem.release(s)
+			}
+		}()
+		mode := fseventSystem.stringCreate(0, "kCFRunLoopDefaultMode", 0x08000100)
+		if mode == 0 {
+			ready <- errors.New("FSEvents run-loop mode unavailable")
+			return
+		}
+		defer fseventSystem.release(mode)
+		sink := &fseventForwarder{out: out}
+		handle := uintptr(fseventSequence.Add(1))
+		fseventHandles.Store(handle, sink)
+		defer fseventHandles.Delete(handle)
+		streamContext := fseventContext{Info: handle}
+		stream := fseventSystem.create(0, fseventSystem.callback, &streamContext, cfPaths, fseventSinceNow, 0.5, 0x10|0x02)
+		if stream == 0 {
+			ready <- errors.New("FSEvents stream creation failed")
+			return
+		}
+		defer fseventSystem.streamRelease(stream)
+		defer fseventSystem.invalidate(stream)
+		fseventSystem.schedule(stream, fseventSystem.runLoop(), mode)
+		if !fseventSystem.start(stream) {
+			ready <- errors.New("FSEvents stream start failed")
+			return
+		}
+		defer fseventSystem.stop(stream)
+		ready <- nil
+		for {
+			select {
+			case <-watch.done:
+				return
+			default:
+			}
+			// 100ms turns bound the Close latency; the stream keeps its own
+			// 500ms latency budget for event batching.
+			fseventSystem.run(mode, 0.1, true)
+		}
+	}()
+	if err := <-ready; err != nil {
+		close(watch.done)
+		return nil, err
+	}
+	return watch, nil
 }

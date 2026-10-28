@@ -1,0 +1,6 @@
+--- FAIL: TestResidualAndAppSizesUseOnlyCoveredIndexes (0.00s)
+    size_indexes_test.go:22: residual walked instead of using covered index: 4096
+    size_indexes_test.go:25: app walked instead of using covered index: 12
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.666s
+FAIL

@@ -86,3 +86,21 @@ cargo clippy --all-targets -- -D warnings 均通过；cargo test --lib 为 811 p
 并增加 WebKit/Other 的显式配置断言后，完整套件转绿。cargo run --example rules -- check
 通过（schema=11、13 rules）。严格 notes 校验、PITFALLS 指针、UI 组件边界和本地化
 守卫通过；PITFALLS 的 7 个无 Note 指针警告为已有项。
+
+
+2026-10-28 卫星匹配边界补充：六位字母数字的随机后缀只在带前导点的隐藏
+临时文件形态下匹配，包括已声明 helper 后缀后的临时文件。普通
+`com.example.app.editor`、`com.example.app.client.plist`、
+`com.example.app.helper.editor` 不能借此被当成本应用的 Certain 残留。
+Go 与 Rust 共同遵守该边界；完整 ID、封闭 helper 与 UUID 匹配保持。
+
+- `internal/core/apps_residual_scan_test.go::TestMacAtomicTempSuffixDoesNotClaimSiblingProducts`
+- `src/platform/macos/residuals.rs::atomic_temp_suffix_does_not_claim_sibling_products`
+
+Proved: 修复前 Go 测试实际列出三个 sibling product claimed 错误，Rust 测试在
+`com.example.app.editor` 断言失败。见
+`docs/agent-notes-evidence/2026-10-28-atomic-sibling-red.log` 与
+`docs/agent-notes-evidence/2026-10-28-atomic-sibling-rust-red.log`。
+恢复隐藏文件限制后，同 focused 绿跑见
+`docs/agent-notes-evidence/2026-10-28-atomic-sibling-green.log` 与
+`docs/agent-notes-evidence/2026-10-28-atomic-sibling-rust-green.log`。

@@ -1,0 +1,5 @@
+--- FAIL: TestMacSpotlightInstallationFiltersOtherVolumes (0.00s)
+    apps_bundle_test.go:385: Spotlight mounted-volume copy counted as an installation
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.065s
+FAIL

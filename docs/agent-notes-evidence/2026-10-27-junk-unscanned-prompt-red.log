@@ -1,0 +1,6 @@
+=== RUN   TestJunkPageUnscannedStateRendersStartScanPrompt
+    junk_test.go:202: unscanned page did not show prompt: [智能清理 可重建的应用、浏览器、包管理与应用更新包缓存默认已勾选；临时数据与开发产物需手动勾选 排除清单 (0) 发现可清理内容 —]
+--- FAIL: TestJunkPageUnscannedStateRendersStartScanPrompt (0.03s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.430s
+FAIL

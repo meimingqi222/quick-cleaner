@@ -104,6 +104,9 @@ func lowerBundleIDs(ids map[string]struct{}) map[string]struct{} {
 }
 
 func allocatedResidualSize(ctx context.Context, root string) uint64 {
+	if size, ok := indexedDirectorySize(ctx, root); ok {
+		return size
+	}
 	var size uint64
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if ctx.Err() != nil {

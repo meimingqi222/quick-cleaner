@@ -258,20 +258,32 @@ func appLastUsed(app InstalledApp, activity platform.AppActivityIndex, shortcuts
 }
 
 func measureAppDirectory(ctx context.Context, root string) (size, newest uint64) {
+	indexed, known := indexedDirectorySize(ctx, root)
+	if known {
+		size = indexed
+	}
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil || !entry.Type().IsRegular() {
+		if err != nil {
+			return nil
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if known && entry.IsDir() && relErr == nil && relative != "." && strings.Count(relative, string(filepath.Separator)) >= 1 {
+			return filepath.SkipDir
+		}
+		if !entry.Type().IsRegular() {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil || !info.Mode().IsRegular() {
 			return nil
 		}
-		size += uint64(info.Size())
-		relative, err := filepath.Rel(root, path)
-		if err == nil && (relative == "." || strings.Count(relative, string(filepath.Separator))+1 <= 2) {
+		if !known {
+			size += uint64(info.Size())
+		}
+		if relErr == nil && (relative == "." || strings.Count(relative, string(filepath.Separator))+1 <= 2) {
 			_, accessed := platform.AppFileTimes(info)
 			if accessed.Unix() > 0 {
 				newest = max(newest, uint64(accessed.Unix()))

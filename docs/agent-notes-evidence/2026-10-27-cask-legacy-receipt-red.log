@@ -1,0 +1,7 @@
+$ go test ./internal/core/ -run TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks -v
+=== RUN   TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks
+    apps_cask_uninstall_test.go:188: receipt-less legacy cask blocked the inventory: Homebrew evidence missing: /var/folders/<redacted>/T/TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks1794968489/001/brew/Caskroom/legacy/.metadata/INSTALL_RECEIPT.json
+--- FAIL: TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.244s
+FAIL

@@ -1,0 +1,7 @@
+$ go test ./internal/platform/ -run TestMacRegisteredLiveIgnoresCachedBundleCopies -v  # 只撤「缓存副本不算安装」这一处防护
+=== RUN   TestMacRegisteredLiveIgnoresCachedBundleCopies
+    apps_bundle_test.go:364: cached bundle backup counted as a live installation: map[com.example.migrated:{}] true
+--- FAIL: TestMacRegisteredLiveIgnoresCachedBundleCopies (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.369s
+FAIL

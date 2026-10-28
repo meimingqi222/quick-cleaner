@@ -1,0 +1,51 @@
+$ go test ./internal/core/ -run TestAppCaskUninstaller -v
+=== RUN   TestAppCaskUninstallerRejectsRedirects
+=== RUN   TestAppCaskUninstallerRejectsRedirects/config
+=== RUN   TestAppCaskUninstallerRejectsRedirects/app
+=== RUN   TestAppCaskUninstallerRejectsRedirects/brew
+--- PASS: TestAppCaskUninstallerRejectsRedirects (0.01s)
+    --- PASS: TestAppCaskUninstallerRejectsRedirects/config (0.00s)
+    --- PASS: TestAppCaskUninstallerRejectsRedirects/app (0.00s)
+    --- PASS: TestAppCaskUninstallerRejectsRedirects/brew (0.00s)
+=== RUN   TestAppCaskUninstallerReceiptBoundContract
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/no-owner
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/other-copy
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/multi-app
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/unsupported-tap
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/old-token
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/ruby
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/corrupt
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/invalid-utf8
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/missing
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/mismatch-id
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/changed-receipt
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/nonzero
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/timeout
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/app-remains
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/receipt-remains
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/definition-remains
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/success
+--- PASS: TestAppCaskUninstallerReceiptBoundContract (0.06s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/no-owner (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/other-copy (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/multi-app (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/unsupported-tap (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/old-token (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/ruby (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/corrupt (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/invalid-utf8 (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/missing (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/mismatch-id (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/changed-receipt (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/nonzero (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/timeout (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/app-remains (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/receipt-remains (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/definition-remains (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/success (0.00s)
+=== RUN   TestAppCaskUninstallerMultipleOwnersAndLatestDefinition
+--- PASS: TestAppCaskUninstallerMultipleOwnersAndLatestDefinition (0.00s)
+=== RUN   TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks
+--- PASS: TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.321s

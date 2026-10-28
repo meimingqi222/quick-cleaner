@@ -15,9 +15,10 @@ func macResidualFixture(t *testing.T) (macResidualRoots, *RuleSnapshot) {
 	root := t.TempDir()
 	roots := macResidualRoots{
 		home: filepath.Join(root, "home"), systemLibrary: filepath.Join(root, "Library"),
-		receipts: filepath.Join(root, "receipts"), darwinCache: filepath.Join(root, "DarwinCache"), applications: filepath.Join(root, "Applications"),
+		receipts: filepath.Join(root, "receipts"), darwinCache: filepath.Join(root, "DarwinCache"),
+		darwinTemp: filepath.Join(root, "DarwinTemp"), applications: filepath.Join(root, "Applications"),
 	}
-	for _, path := range []string{roots.home, roots.systemLibrary, roots.receipts, roots.darwinCache, roots.applications} {
+	for _, path := range []string{roots.home, roots.systemLibrary, roots.receipts, roots.darwinCache, roots.darwinTemp, roots.applications} {
 		if err := os.MkdirAll(path, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -285,4 +286,52 @@ func TestMacResidualVerificationRetainsUnknownAndRefreshesIdentity(t *testing.T)
 			t.Fatalf("retain unknown evidence and capture the link itself, not its target: %+v %v", remaining, err)
 		}
 	})
+}
+
+func TestMacResidualScanDotAtomicTempFiles(t *testing.T) {
+	roots, snapshot := macResidualFixture(t)
+	app := InstalledApp{ID: "lobster", Name: "LobsterAI", RegistrySubpath: "com.lobsterai.app"}
+	dotCache := filepath.Join(roots.darwinCache, ".com.lobsterai.app.e08PpG")
+	if err := os.WriteFile(dotCache, []byte("cache chunk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dotTemp := filepath.Join(roots.darwinTemp, ".com.lobsterai.app.ixL6vL")
+	if err := os.WriteFile(dotTemp, []byte("temp chunk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(roots.darwinTemp, ".bun-501-c22f2ef692948d9e")
+	if err := os.WriteFile(unrelated, []byte("other app"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := scanMacAppResidualsIn(context.Background(), app, roots, macResidualEvidence{}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[string]bool)
+	for _, it := range result.Items {
+		paths[it.Kind.Path] = true
+	}
+	if !paths[dotCache] {
+		t.Fatalf("expected atomic temp file in darwinCache %q to be included in residuals", dotCache)
+	}
+	if !paths[dotTemp] {
+		t.Fatalf("expected atomic temp file in darwinTemp %q to be included in residuals", dotTemp)
+	}
+	if paths[unrelated] {
+		t.Fatalf("unrelated dotfile %q must not be included", unrelated)
+	}
+}
+
+func TestMacAtomicTempSuffixDoesNotClaimSiblingProducts(t *testing.T) {
+	for _, name := range []string{"com.example.app.editor", "com.example.app.client.plist", "com.example.app.helper.editor"} {
+		if macBundleSatellite(name, "com.example.app", []string{"helper"}) {
+			t.Errorf("sibling product claimed as atomic temp: %s", name)
+		}
+	}
+	for _, name := range []string{".com.example.app.e08PpG", ".com.example.app.helper.ixL6vL"} {
+		if !macBundleSatellite(name, "com.example.app", []string{"helper"}) {
+			t.Errorf("hidden atomic temp omitted: %s", name)
+		}
+	}
 }

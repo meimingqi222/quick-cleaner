@@ -68,3 +68,44 @@ func TestMacInventoryCommandCancellation(t *testing.T) {
 		t.Fatal("cancelled identity is known")
 	}
 }
+
+func TestBundleIsStillInstalledFastPathAbsence(t *testing.T) {
+	start := time.Now()
+	installed, known := BundleIsStillInstalled(context.Background(), "com.quickcleaner.definitely-not-installed-xyz")
+	duration := time.Since(start)
+	if !known {
+		t.Skip("spotlight index not usable in test environment")
+	}
+	if installed {
+		t.Fatal("non-existent bundle reported as installed")
+	}
+	// Calling full lsregister -dump takes 6+ seconds. The fast path must finish well under 2s.
+	if duration > 2*time.Second {
+		t.Fatalf("BundleIsStillInstalled took %v; expected fast path under 2s without full lsregister dump", duration)
+	}
+}
+
+func TestMacAppSizesUseIndexAndOnlyRunDUForMissingPaths(t *testing.T) {
+	calls := 0
+	run := func(_ context.Context, _ time.Duration, program string, args ...string) (ProcessResult, bool) {
+		calls++
+		if program != "/usr/bin/du" || len(args) != 2 || args[0] != "-sk" || args[1] != "/unindexed.app" {
+			t.Fatalf("wrong fallback: %s %v", program, args)
+		}
+		return ProcessResult{OK: true, Stdout: []byte("12\t/unindexed.app\n")}, true
+	}
+	size := func(_ context.Context, path string) (uint64, bool) {
+		if path == "/indexed.app" {
+			return 77, true
+		}
+		return 0, false
+	}
+	got := macAppSizes(context.Background(), []string{"/indexed.app", "/unindexed.app"}, size, run)
+	if calls != 1 || got["/indexed.app"] != 77 || got["/unindexed.app"] != 12*1024 {
+		t.Fatalf("wrong results: %v calls=%d", got, calls)
+	}
+	got = macAppSizes(context.Background(), []string{"/indexed.app"}, size, run)
+	if calls != 1 || got["/indexed.app"] != 77 {
+		t.Fatal("covered index should avoid du")
+	}
+}

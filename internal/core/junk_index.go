@@ -52,7 +52,7 @@ func BeginJunkIndex(ctx context.Context, elevated bool, home string, volumes []V
 		}
 	}
 	if len(plan.trees) > 0 {
-		plan.Query = indexQuery{trees: append([]*SizeTree(nil), plan.trees...)}
+		plan.Query = indexQuery{trees: append([]*SizeTree(nil), plan.trees...), slots: newMeasurementSlots()}
 	}
 	return plan
 }
@@ -163,12 +163,11 @@ func dominantJunkVolume(targets []ScanTarget, volumes []VolumeID) (VolumeID, boo
 }
 
 func volumeContaining(path string, volumes []VolumeID) (VolumeID, bool) {
-	needle := Norm(path)
 	var best VolumeID
 	bestLen := -1
 	for _, volume := range volumes {
 		mount := normMount(volume.MountPoint())
-		if mount == "" || !AtOrUnder(needle, mount) {
+		if mount == "" || !junkMountContains(mount, path) {
 			continue
 		}
 		if len(mount) > bestLen {
@@ -201,11 +200,23 @@ func junkIndexCovers(trees []*SizeTree, path string) bool {
 }
 
 func normMount(mount string) string {
-	mount = Norm(filepath.Clean(mount))
+	mount = filepath.Clean(mount)
+	// Norm trims trailing separators, which would erase the Unix root volume.
+	if mount == "/" {
+		return mount
+	}
+	mount = Norm(mount)
 	if mount == "" || mount == "." {
 		return ""
 	}
 	return mount
+}
+
+func junkMountContains(mount, path string) bool {
+	if mount == "/" {
+		return filepath.IsAbs(path)
+	}
+	return AtOrUnder(Norm(path), mount)
 }
 
 func sameMount(a, b string) bool {
@@ -215,10 +226,12 @@ func sameMount(a, b string) bool {
 
 // indexQuery measures a path from the longest indexed mount that contains it.
 // A path outside every index is measured from the live tree.
-type indexQuery struct{ trees []*SizeTree }
+type indexQuery struct {
+	trees []*SizeTree
+	slots chan struct{}
+}
 
 func (q indexQuery) treeFor(path string) *SizeTree {
-	needle := Norm(path)
 	var best *SizeTree
 	bestLen := -1
 	for _, tree := range q.trees {
@@ -226,7 +239,7 @@ func (q indexQuery) treeFor(path string) *SizeTree {
 			continue
 		}
 		mount := normMount(tree.Volume().MountPoint())
-		if mount == "" || !AtOrUnder(needle, mount) || len(mount) <= bestLen {
+		if mount == "" || !junkMountContains(mount, path) || len(mount) <= bestLen {
 			continue
 		}
 		best = tree
@@ -236,7 +249,7 @@ func (q indexQuery) treeFor(path string) *SizeTree {
 }
 
 func (q indexQuery) MeasurePath(ctx context.Context, path string) (PathMeasurement, bool) {
-	return NewFSIndexEngine(q.treeFor(path)).MeasurePath(ctx, path)
+	return (&FSIndexEngine{tree: q.treeFor(path), slots: q.slots}).MeasurePath(ctx, path)
 }
 
 func (q indexQuery) QueryFiles(ctx context.Context, f QueryFilter) []IndexedFile {

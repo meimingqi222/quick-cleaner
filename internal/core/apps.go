@@ -57,11 +57,11 @@ func (a InstalledApp) CanUninstall() bool {
 	if a.IsSystemComponent {
 		return false
 	}
-	if runtime.GOOS == "darwin" {
-		return true
-	}
 	if a.Discovery != nil {
 		return a.Discovery.Uninstaller != nil && !a.UninstallerMissing
+	}
+	if runtime.GOOS == "darwin" {
+		return true
 	}
 	return (a.UninstallString != nil || a.QuietUninstallString != nil) && !a.UninstallerMissing
 }

@@ -1,0 +1,4 @@
+=== RUN   TestBundleIsStillInstalledFastPathAbsence
+--- PASS: TestBundleIsStillInstalledFastPathAbsence (0.16s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.362s

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
@@ -10,6 +11,7 @@ import (
 )
 
 func (r *Root) showResiduals(result core.ResidualScanResult, app *core.InstalledApp) {
+	r.dismissLeftoverAlert()
 	r.residual, r.residualApp = result, app
 	r.apps.ResidualsOpen = true
 	r.apps.OrphanLeftovers = result.Scope == core.ResidualScopeOrphanLeftovers
@@ -41,6 +43,7 @@ func (r *Root) showResiduals(result core.ResidualScanResult, app *core.Installed
 // closeResiduals drops the review and its explanation together. The explanation
 // describes the panel, so keeping it painted an unrelated banner on the page body.
 func (r *Root) closeResiduals() {
+	log.Printf("残留复核：关闭面板")
 	r.apps.ResidualsOpen = false
 	r.apps.Residuals = nil
 	r.apps.ResidualSize, r.apps.SelectedSize = "0 B", "0 B"
@@ -77,7 +80,7 @@ func (r *Root) scanOrphanResiduals() {
 	}
 	r.apps.ResidualScanning = true
 	r.start(false, nil, func(ctx context.Context) func() {
-		result, err := scanOrphans(ctx)
+		result, err := r.orphanScan(ctx)
 		return func() {
 			r.apps.ResidualScanning = false
 			if err != nil {
@@ -100,22 +103,32 @@ func (r *Root) requestResidualClean() {
 	}
 	var items []core.ResidualItem
 	var labels []string
+	var totalBytes uint64
 	for i, row := range r.apps.Residuals {
 		if row.Selected && !row.Manual && i < len(r.residual.Items) {
 			item := r.residual.Items[i]
 			items = append(items, item)
 			labels = append(labels, item.DisplayLabelLang(r.settings.Language))
+			totalBytes += item.Size()
 		}
 	}
 	if len(items) == 0 {
 		return
 	}
 	app, scope := r.residualApp, r.residual.Scope
-	// Rust cleans the reviewed selection directly: ticking rows and pressing the button
-	// already is the confirmation, and the extra dialog only delayed it. The batch is
-	// still refused unless ownership, occupancy and absence evidence verify.
+	// Rust closes the review dialog immediately when cleanup begins, keeping the
+	// progress bar visible and unobscured in the main window. If authority fails
+	// before any bytes are removed, the dialog and selection are restored.
+	restoreResiduals := slices.Clone(r.apps.Residuals)
+	restoreResidualSize := r.apps.ResidualSize
+	restoreSelectedSize := r.apps.SelectedSize
+	restoreOccupancy := r.apps.Occupancy
+	restoreResidualNotice := r.apps.ResidualNotice
+	restoreItems := slices.Clone(r.residual.Items)
+	r.closeResiduals()
+
 	r.apps.Cleaning = true
-	p := core.NewCleanProgress(0, 0)
+	p := core.NewCleanProgress(uint64(len(items)), totalBytes)
 	r.start(true, p, func(ctx context.Context) func() {
 		allowed := false
 		if scope == core.ResidualScopeOrphanLeftovers {
@@ -126,6 +139,13 @@ func (r *Root) requestResidualClean() {
 		if !allowed || ctx.Err() != nil || p.Cancelled() {
 			return func() {
 				r.apps.Cleaning = false
+				r.apps.Residuals = restoreResiduals
+				r.apps.ResidualSize = restoreResidualSize
+				r.apps.SelectedSize = restoreSelectedSize
+				r.apps.Occupancy = restoreOccupancy
+				r.apps.ResidualNotice = restoreResidualNotice
+				r.residual.Items = restoreItems
+				r.apps.ResidualsOpen = true
 				r.apps.Notice = core.NewText("残留清理授权无法验证；未清理任何残留。", "Residual cleanup authority could not be verified; no residuals were cleaned.")
 				r.record("clean_residuals", labels, 0, uint(len(items)), 0, 0)
 			}
@@ -147,7 +167,7 @@ func (r *Root) requestResidualClean() {
 			// cannot be deleted, so reopening turns one clean into one popup per click.
 			// The counts are reported above and the scan entry can list leftovers again.
 			r.residual.Items = remaining
-			r.closeResiduals()
+			r.apps.Notice = core.Text{}
 		}
 	})
 }

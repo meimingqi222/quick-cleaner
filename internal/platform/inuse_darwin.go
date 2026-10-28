@@ -94,18 +94,21 @@ func inUseCanonical(path string) string {
 	}
 	return path
 }
+func inUseSpotCheckOptions(path string, isDir bool) ([]string, time.Duration) {
+	args := []string{"-F0n"}
+	timeout := 3 * time.Second
+	if isDir {
+		args = append(args, "+D")
+		timeout = 30 * time.Second
+	}
+	return append(args, path), timeout
+}
 func IsOpen(path string) (bool, bool) {
 	md, err := os.Lstat(path)
 	if err != nil || md.Mode()&os.ModeSymlink != 0 {
 		return false, false
 	}
-	args := []string{"-F0n"}
-	timeout := 3 * time.Second
-	if md.IsDir() {
-		args = append(args, "+D")
-		timeout = 30 * time.Second
-	}
-	args = append(args, path)
+	args, timeout := inUseSpotCheckOptions(path, md.IsDir())
 	r, ok := RunCommandTree(exec.Command("/usr/sbin/lsof", args...), timeout)
 	if !ok || r.ExitCode == nil || (*r.ExitCode != 0 && *r.ExitCode != 1) || len(bytes.TrimSpace(r.Stderr)) != 0 || !inUseComplete(r.Stdout) {
 		return false, false

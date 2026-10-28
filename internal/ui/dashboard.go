@@ -33,12 +33,9 @@ type Dashboard struct {
 	Version, StatusText                  string
 	UpdateLabel                          string
 	UpdateAttention                      bool
-	// AutoCheck is the persisted "check for updates automatically" setting, shown
-	// in the sidebar settings area (the app menu is macOS-only).
-	AutoCheck        bool
-	StatusTab        StatusTab
-	ProcessCount     int
-	MonitoringPaused bool
+	StatusTab                            StatusTab
+	ProcessCount                         int
+	MonitoringPaused                     bool
 	// CleanProgress is the live mutation snapshot. Nil means no docked bar.
 	CleanProgress *core.CleanSnapshot
 	Stop          func()
@@ -52,8 +49,6 @@ type DashboardActions struct {
 	OpenPermissions  func()
 	SetStatusTab     func(StatusTab)
 	ToggleMonitoring func()
-	// SetAutoCheck persists the "check for updates automatically" switch.
-	SetAutoCheck func(bool)
 }
 
 var logo = func() *ui.Bitmap {
@@ -91,7 +86,7 @@ func (s Dashboard) RenderPage(c *ui.Context, active View, actions DashboardActio
 		if status == "" {
 			status = t.ready
 		}
-		ui.Box(c).FillWidth().Padding(4, 32).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.6)).Children(func() {
+		ui.Box(c).FillWidth().Padding(6, 32).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.6)).Children(func() {
 			ui.Text(c, status).FontSize(12).FixedLineHeight(16).TextColor(muted)
 		})
 	})
@@ -205,7 +200,7 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 			ui.Column(c).Gap(2).Children(func() {
 				for v := Overview; v <= Search; v++ {
 					fg := muted
-					row := ui.ButtonBase(c.Key(fmt.Sprintf("nav-%d", v))).Height(34).Padding(0, 10).Gap(10).Justify(ui.Start).Radius(8).Cursor(ui.CursorPointer)
+					row := ui.ButtonBase(c.Key(fmt.Sprintf("nav-%d", v))).Height(36).Padding(0, 10).Gap(10).Justify(ui.Start).Radius(8).Cursor(ui.CursorPointer)
 					if v == active {
 						fg = primary
 						interactive(row, primaryFixed, primaryFixed, primary.Alpha(.22), true)
@@ -213,12 +208,12 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 						interactive(row, ui.Transparent, surfaceLow, surfaceHigh, true)
 					}
 					row.Children(func() {
-						ui.Box(c).Size(20, 20).Center().Children(func() { icon(c, v, fg, 15) })
+						ui.Box(c).Size(22, 22).Center().Children(func() { icon(c, v, fg, 17) })
 						weight := 500
 						if v == active {
 							weight = 600
 						}
-						ui.Text(c, t.nav[v]).FontSize(12).FixedLineHeight(16).FontWeight(weight).TextColor(fg)
+						ui.Text(c, t.nav[v]).FontSize(13).FixedLineHeight(18).FontWeight(weight).TextColor(fg)
 					})
 					if row.Clicked() && actions.Navigate != nil {
 						actions.Navigate(v)
@@ -229,10 +224,10 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 		ui.Spacer(c)
 		ui.Column(c).Padding(12).Gap(10).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.4)).Children(func() {
 			ui.Row(c).Padding(8, 10).Gap(10).Radius(8).Background(card).Border(1, outlineVariant.Alpha(.4)).Children(func() {
-				ui.Box(c).Size(26, 26).Shrink(0).Radius(6).Background(primaryFixed).Center().Children(func() { icon(c, Junk, primary, 13) })
+				ui.Box(c).Size(28, 28).Shrink(0).Radius(6).Background(primaryFixed).Center().Children(func() { icon(c, Junk, primary, 14) })
 				ui.Column(c).Gap(0).Children(func() {
 					ui.Text(c, t.freed).FontSize(12).FixedLineHeight(16).TextColor(muted)
-					ui.Text(c, s.Freed).FontSize(12).FixedLineHeight(16).Bold().TextColor(primary)
+					ui.Text(c, s.Freed).FontSize(13).FixedLineHeight(17).Bold().TextColor(primary)
 				})
 			})
 			ui.Row(c).Padding(0, 4).Justify(ui.SpaceBetween).Children(func() {
@@ -257,11 +252,6 @@ func (s Dashboard) sidebar(c *ui.Context, active View, actions DashboardActions)
 					}
 				})
 			})
-			on := s.AutoCheck
-			check := ui.Checkbox(c.Key("auto-check-updates"), &on, t.autoCheck).Disabled(actions.SetAutoCheck == nil)
-			if check.Changed() && actions.SetAutoCheck != nil {
-				actions.SetAutoCheck(on)
-			}
 			label := s.Version
 			if s.UpdateLabel != "" {
 				label = s.UpdateLabel

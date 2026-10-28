@@ -260,3 +260,136 @@ func TestMacBundleRegistrationEvidence(t *testing.T) {
 		t.Fatal("Trash symlink must preserve live target", live, ok)
 	}
 }
+
+// 从 DMG 拖进 Applications 之后，用户常把安装盘一直挂着。挂载卷里的那份副本
+// 会被 LaunchServices 登记，但它不是安装：把它当成「仍安装」，刚刚删掉主程序
+// 的用户就永远清不掉残留。判据是卷身份——系统数据卷以外的副本不算安装。
+func TestMacRegisteredLiveIgnoresBundlesOnOtherVolumes(t *testing.T) {
+	root := t.TempDir()
+	id := "com.example.Dmg"
+	app := macFixtureBundle(t, root, "Dmg.app")
+	records := map[string][]string{strings.ToLower(id): {app}}
+	trash := filepath.Join(root, ".Trash")
+	read := func(string) *string { return &id }
+
+	// 夹具在系统临时目录（数据卷），默认按安装计。
+	live, ok := macRegisteredLive(context.Background(), records, trash, read)
+	if !ok || len(live) != 1 {
+		t.Fatalf("same-volume bundle must stay live: %v %v", live, ok)
+	}
+
+	// 同一份记录，一旦卷身份说明它不在本机数据卷上，就不该再算安装。
+	sameVolume := func(string) (bool, bool) { return false, true }
+	live, ok = macRegisteredLive(context.Background(), records, trash, read, sameVolume)
+	if !ok || len(live) != 0 {
+		t.Fatalf("mounted image copy counted as an installation: %v %v", live, ok)
+	}
+	// 卷身份测不出时不能当作「不在本机」——那是 fail open，方向错在放行删除。
+	live, ok = macRegisteredLive(context.Background(), records, trash, read, func(string) (bool, bool) { return false, false })
+	if !ok || len(live) != 1 {
+		t.Fatalf("unknown volume identity must not grant removal: %v %v", live, ok)
+	}
+}
+
+// Spotlight 会索引不是安装的 bundle：应用做 bundle 迁移时会在
+// ~/Library/Caches/<id>.BundleMigration/backups/ 留一份完整的 `.backup.app`，
+// 它带着同一个 CFBundleIdentifier。把这份缓存当成「仍安装」，刚卸载完的应用
+// 就永远确认不了卸载完成，残留清理被永久拒绝。
+func TestMacInstalledLocationRejectsCachedBundleCopies(t *testing.T) {
+	home := t.TempDir()
+	installed := macFixtureBundle(t, filepath.Join(home, "Applications"), "App.app")
+	cached := macFixtureBundle(t,
+		filepath.Join(home, "Library", "Caches", "com.example.app.BundleMigration", "backups"),
+		"App-1.2.3.backup.app")
+	// 用户自己选的非标准安装位置不能被误伤。
+	odd := macFixtureBundle(t, filepath.Join(home, "Desktop", "便携版"), "App.app")
+
+	if !macInstalledLocation(installed, home) {
+		t.Fatal("Applications install rejected")
+	}
+	if macInstalledLocation(cached, home) {
+		t.Fatal("cached bundle copy counted as an installation")
+	}
+	if !macInstalledLocation(odd, home) {
+		t.Fatal("non-standard install location rejected")
+	}
+	// 不是 app bundle 的路径本来就不算安装。
+	if macInstalledLocation(filepath.Join(home, "Library", "Caches", "plain"), home) {
+		t.Fatal("non-bundle path accepted")
+	}
+	// 废纸篓里的 bundle 不是安装：Spotlight 滞后索引会把拖进废纸篓的 .app
+	// 继续报出来，不认掉它，「卸载残留检测」的复核就会把卸载当成没发生。
+	trashed := macFixtureBundle(t, filepath.Join(home, ".Trash"), "App.app")
+	if macInstalledLocation(trashed, home) {
+		t.Fatal("trashed bundle counted as an installation")
+	}
+	// 根目录都给不出时保持保守：无法判断就别宣称它不在本机。
+	if !macInstalledLocation(installed, "") {
+		t.Fatal("missing home must not reject a real bundle")
+	}
+}
+
+// mdfind 的输出里既有真安装也可能只有缓存副本：只挑能装应用的路径。
+func TestMacAnyInstallationSkipsCachedCopies(t *testing.T) {
+	home := t.TempDir()
+	installed := macFixtureBundle(t, filepath.Join(home, "Applications"), "App.app")
+	cached := macFixtureBundle(t,
+		filepath.Join(home, "Library", "Caches", "com.example.app.BundleMigration", "backups"),
+		"App-1.2.3.backup.app")
+
+	if !macAnyInstallation(installed, home) {
+		t.Fatal("real installation not recognised")
+	}
+	if macAnyInstallation(cached, home) {
+		t.Fatal("only a cached copy: the app must read as uninstalled")
+	}
+	if macAnyInstallation(installed+"\n"+cached, home) != true {
+		t.Fatal("one real installation is enough")
+	}
+	if macAnyInstallation("", home) {
+		t.Fatal("empty output is not an installation")
+	}
+}
+
+// LaunchServices 也会登记缓存里的 bundle 备份：应用迁移 bundle 时留下
+// `~/Library/Caches/<id>.BundleMigration/backups/*.backup.app`，它带着同一个
+// bundle id。把它当成「仍安装」，刚卸载完的应用永远确认不了卸载完成。
+func TestMacRegisteredLiveIgnoresCachedBundleCopies(t *testing.T) {
+	home := t.TempDir()
+	id := "com.example.migrated"
+	backup := macFixtureBundle(t,
+		filepath.Join(home, "Library", "Caches", "com.example.migrated.BundleMigration", "backups"),
+		"App-1.2.3.backup.app")
+	records := map[string][]string{id: {backup}}
+	trash := filepath.Join(home, ".Trash")
+	read := func(string) *string { return &id }
+	sameVolume := func(string) (bool, bool) { return true, true }
+
+	live, ok := macRegisteredLive(context.Background(), records, trash, read, sameVolume)
+	if !ok || len(live) != 0 {
+		t.Fatalf("cached bundle backup counted as a live installation: %v %v", live, ok)
+	}
+	// 真正装在 Applications 的那份仍然要算。
+	installed := macFixtureBundle(t, filepath.Join(home, "Applications"), "App.app")
+	records[id] = []string{installed}
+	live, ok = macRegisteredLive(context.Background(), records, trash, read, sameVolume)
+	if !ok || len(live) != 1 {
+		t.Fatalf("real installation lost: %v %v", live, ok)
+	}
+}
+
+func TestMacSpotlightInstallationFiltersOtherVolumes(t *testing.T) {
+	home := t.TempDir()
+	bundle := macFixtureBundle(t, home, "Mounted.app")
+	if macAnyInstallation(bundle, home, func(string) (bool, bool) { return false, true }) {
+		t.Fatal("Spotlight mounted-volume copy counted as an installation")
+	}
+	for _, probe := range []macVolumeProbe{
+		func(string) (bool, bool) { return true, true },
+		func(string) (bool, bool) { return false, false },
+	} {
+		if !macAnyInstallation(bundle, home, probe) {
+			t.Fatal("local or unknown-volume bundle must remain installed")
+		}
+	}
+}

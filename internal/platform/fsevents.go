@@ -129,3 +129,19 @@ func fseventDirectChildren(root string) []string {
 	}
 	return sortedFSEventPaths(paths)
 }
+
+// FSDirWatch is a live directory watcher. Unlike ReadFSEventChanges it keeps the
+// stream running and pushes every delivered event path until Close.
+type FSDirWatch struct {
+	Events <-chan []string
+	done   chan struct{}
+}
+
+// Close stops the watch. Events is never closed.
+func (w *FSDirWatch) Close() {
+	select {
+	case <-w.done:
+	default:
+		close(w.done)
+	}
+}

@@ -113,7 +113,7 @@ func macIndexWrite(t *testing.T, path string, n int) {
 
 func TestMacDiskIndexCheckpointReplayAndSharedSnapshot(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := diskCacheVolumeDir(t)
 	for _, rel := range []string{"direct.bin", "hot/sub/gone.bin", "hot/keep.bin", "hot-x/retain.bin", "deleted/d.bin"} {
 		macIndexWrite(t, filepath.Join(root, rel), 4096)
 	}
@@ -197,7 +197,7 @@ func TestMacDiskIndexCheckpointReplayAndSharedSnapshot(t *testing.T) {
 func TestMacDiskIndexBackgroundNeverRebuilds(t *testing.T) {
 	for _, failure := range []string{"unavailable", "wrapped", "root-rescan", "stale", "subtree-failure"} {
 		t.Run(failure, func(t *testing.T) {
-			root := t.TempDir()
+			root := diskCacheVolumeDir(t)
 			macIndexWrite(t, filepath.Join(root, "sub/data"), 4096)
 			cache, err := NewDiskIndexCache(t.TempDir())
 			if err != nil {
@@ -307,5 +307,53 @@ func TestMacDiskIndexRawCoverageAndMetadataErrors(t *testing.T) {
 	roots := coalesceMacIndexRoots([]string{filepath.Join(root, "a", "b"), filepath.Join(root, "a-x"), filepath.Join(root, "a")})
 	if len(roots) != 2 || !slices.Contains(roots, filepath.Join(root, "a")) || !slices.Contains(roots, filepath.Join(root, "a-x")) {
 		t.Fatalf("component-wise root collapse: %v", roots)
+	}
+}
+
+type readOnlyIndexSource struct{}
+
+func (readOnlyIndexSource) Current() (uint64, error) { panic("cached lookup read events") }
+func (readOnlyIndexSource) Changes(context.Context, string, uint64, string) (*platform.FSEventChanges, error) {
+	panic("cached lookup replayed events")
+}
+func (readOnlyIndexSource) Scan(context.Context, VolumeID, bool) (ScanResult, error) {
+	panic("cached lookup started a scan")
+}
+
+func TestMacDiskIndexCachedNeverStartsOrReplaysScan(t *testing.T) {
+	cache, volume, tree := diskCacheFixture(t)
+	if _, err := cache.Save(volume, tree, 37); err != nil {
+		t.Fatal(err)
+	}
+	owner := newMacDiskIndex(context.Background(), cache, readOnlyIndexSource{})
+	defer owner.Close()
+	if owner.Peek(volume) != nil {
+		t.Fatal("peek must not load a cold cache")
+	}
+	first, err := owner.Cached(context.Background(), volume)
+	if err != nil || first == nil || first.Tree == nil {
+		t.Fatalf("existing snapshot not loaded: %v", err)
+	}
+	if owner.Peek(volume) != first {
+		t.Fatal("peek missed the loaded snapshot")
+	}
+	owner.gate <- struct{}{}
+	if owner.Peek(volume) != nil {
+		t.Fatal("peek waited for a busy owner")
+	}
+	<-owner.gate
+	second, err := owner.Cached(context.Background(), volume)
+	if err != nil || second != first {
+		t.Fatalf("snapshot was not reused: %v", err)
+	}
+	missing := newMacDiskIndex(context.Background(), cache, readOnlyIndexSource{})
+	defer missing.Close()
+	if _, err := missing.Cached(context.Background(), VolumeFromMountPoint(filepath.Join(volume.Mount, "missing"))); err == nil {
+		t.Fatal("missing index did not report fallback")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := owner.Cached(ctx, volume); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lookup: %v", err)
 	}
 }

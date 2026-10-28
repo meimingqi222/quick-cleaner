@@ -6,7 +6,6 @@ import (
 	"math"
 	"os"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -111,7 +110,7 @@ func (t *SizeTree) validateOverrides(baseFiles, baseDirs uint64) ([]int, uint64,
 		if !e.Used {
 			return true
 		}
-		if i > 0 && (e.Name == "" || e.Name == "." || e.Name == ".." || strings.ContainsAny(e.Name, "/\\\x00")) {
+		if i > 0 && !validDiskIndexName(e.Name) {
 			return false
 		}
 		return i == 0 || (t.IsDir(e.Parent) && e.Parent != i)

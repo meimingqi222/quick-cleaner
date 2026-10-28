@@ -36,7 +36,7 @@ func (r *Root) loadVolumes() {
 				}
 			}
 			if r.active == view.Search && !r.busy() {
-				r.scanSearch()
+				r.scanSearch(false)
 			}
 		})
 	}()
@@ -419,9 +419,10 @@ func (r *Root) setSearchQuery(q string) {
 	}()
 }
 
-// Search owns all indexed volumes, not the currently displayed disk tab. macOS
-// revisits the shared owner to replay changes; Windows fills missing volumes.
-func (r *Root) scanSearch() {
+// Search owns all indexed volumes, not the currently displayed disk tab.
+// Entering the menu only fills volumes that have no index yet; force (the
+// Scan button) revisits the shared owner on macOS to replay changes.
+func (r *Root) scanSearch(force bool) {
 	if r.busy() {
 		return
 	}
@@ -439,7 +440,7 @@ func (r *Root) scanSearch() {
 	}
 	var volumes []core.VolumeID
 	for _, row := range r.disk.Volumes {
-		if runtime.GOOS == "darwin" || r.searchTrees[row.ID.Mount] == nil {
+		if r.searchTrees[row.ID.Mount] == nil || (force && runtime.GOOS == "darwin") {
 			volumes = append(volumes, row.ID)
 		}
 	}

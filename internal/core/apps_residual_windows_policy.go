@@ -167,6 +167,9 @@ func windowsResidualEntries(path string, limit int) []os.DirEntry {
 	return entries
 }
 func windowsResidualSize(ctx context.Context, path string) uint64 {
+	if size, ok := indexedDirectorySize(ctx, path); ok {
+		return size
+	}
 	var size uint64
 	_ = filepath.WalkDir(path, func(_ string, entry fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
@@ -276,6 +279,7 @@ func scanWindowsAppResiduals(ctx context.Context, app InstalledApp, reader windo
 }
 
 func verifyWindowsAppResiduals(ctx context.Context, items []ResidualItem, r windowsResidualReader, system string) ([]ResidualItem, error) {
+	ctx = withoutSizeIndexes(ctx)
 	out := make([]ResidualItem, 0, len(items))
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {

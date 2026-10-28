@@ -1,0 +1,5 @@
+$ go test ./internal/ui/ -run TestSidebarSettingsAreaMatchesTheRustReference -v
+=== RUN   TestSidebarSettingsAreaMatchesTheRustReference
+--- PASS: TestSidebarSettingsAreaMatchesTheRustReference (0.04s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	(cached)

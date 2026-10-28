@@ -46,6 +46,58 @@ func newMacDiskIndex(ctx context.Context, cache *DiskIndexCache, source macDiskI
 // native syscall. Load's caller context and the owner's lifetime both apply.
 func (m *MacDiskIndex) Close() { m.cancel() }
 
+// Peek returns only an already-loaded snapshot without waiting for a scan.
+func (m *MacDiskIndex) Peek(volume VolumeID) *ScanResult {
+	if m.ctx.Err() != nil {
+		return nil
+	}
+	select {
+	case m.gate <- struct{}{}:
+		defer func() { <-m.gate }()
+	default:
+		return nil
+	}
+	if m.cached != nil && m.cached.Volume.Mount == volume.Mount {
+		return m.cached
+	}
+	return nil
+}
+
+// Cached returns an existing snapshot for estimates without starting a scan or
+// replay. Only Load may initiate an interactive rebuild.
+func (m *MacDiskIndex) Cached(ctx context.Context, volume VolumeID) (*ScanResult, error) {
+	if err := m.ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.ctx, cancel)
+	defer cancel()
+	defer stop()
+	select {
+	case m.gate <- struct{}{}:
+		defer func() { <-m.gate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m.cached != nil && m.cached.Volume.Mount == volume.Mount {
+		m.startTicker()
+		return m.cached, nil
+	}
+	loaded, err := m.cache.Load(volume)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.cached, m.eventID = &loaded.Scan, loaded.LastEventID
+	m.startTicker()
+	return m.cached, nil
+}
+
 func (m *MacDiskIndex) Load(ctx context.Context, volume VolumeID) (*ScanResult, error) {
 	if err := m.ctx.Err(); err != nil {
 		return nil, err
@@ -84,6 +136,12 @@ func (m *MacDiskIndex) Load(ctx context.Context, volume VolumeID) (*ScanResult, 
 		return nil, err
 	}
 	m.cached, m.eventID = scan, event
+	m.startTicker()
+	return scan, nil
+}
+
+// Keep a cache-first owner eligible for the same background replay as Load.
+func (m *MacDiskIndex) startTicker() {
 	m.ticker.Do(func() {
 		go func() {
 			ticker := time.NewTicker(15 * time.Minute)
@@ -100,7 +158,6 @@ func (m *MacDiskIndex) Load(ctx context.Context, volume VolumeID) (*ScanResult, 
 			}
 		}()
 	})
-	return scan, nil
 }
 
 // Advance skips a busy owner or a never-loaded index. It never performs initial

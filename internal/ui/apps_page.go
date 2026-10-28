@@ -346,16 +346,13 @@ func (s AppsPage) table(c *ui.Context, a AppsPageActions, t appsPageCopy) {
 		// visible; the placeholder is only for a list that is still empty.
 		if len(s.View) == 0 {
 			ui.Scroll(c.Key("apps-placeholder")).Grow(1).MinHeight(0).FillWidth().Children(func() {
-				ui.Column(c).FillWidth().Padding(48, 20).Center().Gap(8).Children(func() {
-					label := t.empty
-					if s.Scanning {
-						label = t.loading
-					}
-					ui.Text(c, label).FontSize(14).TextColor(muted)
-					if s.Scanning {
-						ui.Text(c, t.loadingSub).FontSize(12).TextColor(outline)
-					}
-				})
+				if s.Scanning {
+					loadingState(c, t.loading, t.loadingSub)
+				} else {
+					ui.Column(c).FillWidth().Padding(48, 20).Center().Gap(8).Children(func() {
+						ui.Text(c, t.empty).FontSize(14).TextColor(muted)
+					})
+				}
 			})
 		} else {
 			ui.List(c.Key("apps-rows"), nil, len(s.View)).Grow(1).MinHeight(0).FillWidth().Gap(0).ItemKey(func(i int) any {

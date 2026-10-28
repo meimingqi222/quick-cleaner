@@ -1,0 +1,5 @@
+--- FAIL: TestResidualVerificationUsesLiveSize (0.00s)
+    size_indexes_test.go:60: verification trusted old index: [{Rule:<nil> Kind:{Type:1 Path:/var/folders/<redacted>/T/TestResidualVerificationUsesLiveSize3510624136/001/residual Bytes:424242 Root:0 Name: TeamID: BundleID:} Confidence:1 RequiresConfirmation:false Source:CacheDir Identity:0x61ee4fa87c0 OwnerBundleID:<nil>}] err=<nil>
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.896s
+FAIL

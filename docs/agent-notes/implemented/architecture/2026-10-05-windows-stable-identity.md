@@ -69,6 +69,9 @@ which still returns the "Scanned installation artifact changed" error.
 
 ## Verification
 
+- `internal/core/identity_test.go::TestIdentityInPlaceWrite`
+- `internal/core/identity_test.go::TestIdentityUnixDirectoryChurn`
+
 - `src/core/model.rs::identity_recheck_rejects_a_different_stable_object`
 - `src/core/model.rs::identity_recheck_passes_for_unchanged_file`
 - `src/core/model.rs::identity_recheck_fails_after_delete_and_recreate`

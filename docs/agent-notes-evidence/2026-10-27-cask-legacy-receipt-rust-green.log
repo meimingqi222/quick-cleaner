@@ -1,0 +1,11 @@
+$ cargo test --lib cask_
+    Finished `test` profile [unoptimized] target(s) in 0.65s
+     Running unittests src/lib.rs (target/debug/deps/quick_cleaner-369fa2c10ff71967)
+
+running 4 tests
+test core::cask::tests::installed_cask_scope_uses_persisted_appdir_and_exact_target ... ok
+test core::cask::tests::installed_cask_scope_refuses_companions_scripts_and_unknown_scope ... ok
+test platform::macos::apps::cask_uninstall::tests::receiptless_legacy_cask_stays_listed_without_uninstall_authority ... ok
+test platform::macos::apps::cask_uninstall::tests::cask_inventory_uses_installed_scope_and_rejects_corrupt_or_redirected_records ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 847 filtered out; finished in 0.03s

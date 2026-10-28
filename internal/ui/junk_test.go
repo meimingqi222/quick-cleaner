@@ -184,3 +184,27 @@ func TestJunkEmptyResultIsACleanState(t *testing.T) {
 		t.Fatal("the clean state appeared before discovery finished")
 	}
 }
+
+func TestJunkPageUnscannedStateRendersStartScanPrompt(t *testing.T) {
+	page := appui.JunkPage{
+		Language: appui.Chinese,
+		Scanned:  false,
+		Scanning: false,
+	}
+	scanned := 0
+	actions := appui.JunkPageActions{
+		Rescan: func() { scanned++ },
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		page.RenderContent(c, actions)
+	}, 1280, 800)
+	if !tt.HasText("尚未扫描系统冗余垃圾") {
+		t.Fatalf("unscanned page did not show prompt: %v", tt.Texts())
+	}
+	if err := tt.Click("开始全面扫描"); err != nil {
+		t.Fatalf("clicking start scan button failed: %v", err)
+	}
+	if scanned != 1 {
+		t.Fatalf("expected 1 rescan call, got %d", scanned)
+	}
+}

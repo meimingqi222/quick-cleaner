@@ -22,8 +22,12 @@ func (r *Root) scanApps() {
 	r.appIconGen++
 	r.appIconTried = map[string]bool{}
 	r.appIcons = map[string]*ui.Bitmap{}
-	r.message("正在智能检索已安装软件与空间占用…", "Discovering installed apps and their disk usage…")
+	if !r.apps.ResidualsOpen {
+		r.message("正在智能检索已安装软件与空间占用…", "Discovering installed apps and their disk usage…")
+	}
+	indexes, owner := volumeIndexes(r), r.diskOwner
 	r.start(false, nil, func(ctx context.Context) func() {
+		ctx = withCachedSizes(ctx, owner, indexes)
 		apps, err := core.ListInstalledAppsProgress(ctx, func(partial []core.InstalledApp) {
 			snapshot := partial
 			r.publish(func() {
@@ -36,7 +40,9 @@ func (r *Root) scanApps() {
 				r.dashboard.AppCount = len(snapshot)
 				r.rebuildApps()
 				r.kickAppIcons(snapshot)
-				r.message(fmt.Sprintf("已列出 %d 款软件，正在测算占用…", len(snapshot)), fmt.Sprintf("Listed %d apps, measuring disk usage…", len(snapshot)))
+				if !r.apps.ResidualsOpen {
+					r.message(fmt.Sprintf("已列出 %d 款软件，正在测算占用…", len(snapshot)), fmt.Sprintf("Listed %d apps, measuring disk usage…", len(snapshot)))
+				}
 			})
 		})
 		return func() {
@@ -52,8 +58,8 @@ func (r *Root) scanApps() {
 			r.dashboard.AppCount = len(apps)
 			r.rebuildApps()
 			r.kickAppIcons(apps)
-			r.message(fmt.Sprintf("已加载 %d 款软件，估算总占用 %s", len(apps), r.apps.TotalSize), fmt.Sprintf("Loaded %d apps, about %s in total", len(apps), r.apps.TotalSize))
 			if !r.apps.ResidualsOpen {
+				r.message(fmt.Sprintf("已加载 %d 款软件，估算总占用 %s", len(apps), r.apps.TotalSize), fmt.Sprintf("Loaded %d apps, about %s in total", len(apps), r.apps.TotalSize))
 				r.apps.Notice = core.Text{}
 			}
 		}
@@ -193,11 +199,11 @@ func (r *Root) appsActions() view.AppsPageActions {
 		RenderDevEnvironments: func(c *ui.Context) { r.dev.RenderContent(c, r.devActions()) },
 		ScanOrphanLeftovers:   r.scanOrphanResiduals, CleanSelectedResiduals: r.requestResidualClean,
 		OpenSystemExtensionSettings: func() { go func() { err := platform.OpenLoginItemsSettings(); r.publish(func() { r.failure(err) }) }() },
-	CloseResiduals: func() {
-		if !r.busy() {
+		CloseResiduals: func() {
+			// The review is read-only until Clean is pressed; closing it must
+			// not wait for an unrelated scan to finish.
 			r.closeResiduals()
-		}
-	},
+		},
 		SelectRecommended: func() { r.selectResiduals(1) }, SelectAllResiduals: func() { r.selectResiduals(2) }, ClearResidualSelection: func() { r.selectResiduals(0) },
 		SetResidualSelected: func(id string, selected bool) {
 			if r.busy() {
@@ -229,21 +235,42 @@ func (r *Root) requestUninstall(id string) {
 			identity = &v
 		}
 	}
-	detail := a.Name
-	if a.InstallLocation != nil {
-		detail += "\n" + *a.InstallLocation
+	sizeStr := ""
+	if a.EstimatedSize > 0 {
+		sizeStr = fmt.Sprintf(" (%s)", core.FmtSize(a.EstimatedSize))
+	}
+	title := core.NewText(fmt.Sprintf("确认卸载「%s」？", a.Name), fmt.Sprintf("Uninstall \"%s\"?", a.Name))
+	var body core.Text
+	if runtime.GOOS == "darwin" {
+		body = core.NewText(
+			fmt.Sprintf("将通过已核验的 Homebrew 卸载、自带卸载程序或废纸篓移除「%s」%s，完成后由你确认清理残留。不会自动执行 Homebrew zap；无法核验卸载范围时会停止。", a.Name, sizeStr),
+			fmt.Sprintf("Remove \"%s\"%s using verified Homebrew removal, its uninstaller or Trash, then review leftovers. Homebrew zap is never automatic; unverifiable removal scope stops the operation.", a.Name, sizeStr),
+		)
+	} else {
+		body = core.NewText(
+			fmt.Sprintf("将启动「%s」%s 官方卸载程序，完成后扫描卸载残留并由你确认清理。", a.Name, sizeStr),
+			fmt.Sprintf("This will launch the official uninstaller for \"%s\"%s, then scan leftovers for your review.", a.Name, sizeStr),
+		)
+	}
+	detail := core.NewText("卸载成功后会列出关联配置与缓存，仅清理你确认的项目。", "After a successful uninstall, only the leftover items you confirm will be cleaned.")
+	if a.Discovery != nil {
+		detail = core.NewText("未注册 · 卸载并清理", "Unregistered · Uninstall and clean")
 	}
 	if core.UninstallDeletesUserData(a) {
-		detail += "\n\n" + r.tr("官方卸载器也会删除用户数据。", "The official uninstaller also deletes user data.")
+		detail = core.NewText(
+			detail.Get(core.Chinese)+"\n官方卸载操作会删除用户数据。请备份需要保留的内容，例如词库、学习记录和配置，包括存放在自定义目录的数据；残留选择无法阻止该删除。",
+			detail.Get(core.English)+"\nThe official uninstall action deletes user data. Back up anything you need to retain, such as dictionaries, learning records and settings, including data in custom directories; leftover selection cannot prevent this deletion.",
+		)
 	}
-	detail += "\n\n" + r.tr("运行官方卸载路线。失败不会授权后备删除；残留必须另行审查。", "Runs the official uninstall route. Failure never authorizes fallback deletion; residuals require separate review.")
-	r.askKind(view.ConfirmUninstall, r.tr("确认卸载应用", "Uninstall application?"), detail, func() {
+	r.askConfirm(view.ConfirmUninstall, title, body, detail, func() {
 		r.apps.Uninstalling = true
 		r.apps.UninstallPhase = view.AppsPageDiscovering
 		r.apps.UninstallAppName = a.Name
+		r.markTrashSeen(a.ID)
+		indexes := volumeIndexes(r)
 		r.start(true, nil, func(ctx context.Context) func() {
 			// Freeze discovery before official removal destroys ownership evidence.
-			frozen, scanErr := scanAppResiduals(ctx, a)
+			frozen, scanErr := r.scanAppResiduals(core.WithSizeIndexes(ctx, indexes), a)
 			r.publish(func() {
 				if r.apps.Uninstalling {
 					r.apps.UninstallPhase = view.AppsPageRemoving
@@ -255,7 +282,7 @@ func (r *Root) requestUninstall(id string) {
 			} else if runtime.GOOS == "darwin" && a.InstallLocation != nil && (identity == nil || !identity.Recheck(*a.InstallLocation)) {
 				err = fmt.Errorf("application installation identity unavailable or changed")
 			} else {
-				err = uninstallApp(a)
+				err = r.uninstallApp(a)
 			}
 			r.publish(func() {
 				if r.apps.Uninstalling {
@@ -276,16 +303,38 @@ func (r *Root) requestUninstall(id string) {
 					return
 				}
 				r.record("uninstall", []string{a.Name}, 1, 0, 0, 0)
-				r.apps.Notice = core.NewText("官方卸载已验证；残留未自动删除。", "Official removal verified; residuals were not automatically deleted.")
+				r.apps.Notice = core.Text{}
 				if scanErr != nil {
 					r.apps.Notice = core.SameText("Removal verified; residual review unavailable: " + scanErr.Error())
 				}
+				// Drop the row instead of rescanning: leftover shortcuts and
+				// cache dirs let the inventory rediscover an uninstalled app,
+				// so a fresh list can resurrect it. Rust drop_app_from_list
+				// does the same and only invalidates the disk index.
+				r.installed = slices.DeleteFunc(r.installed, func(inst core.InstalledApp) bool { return inst.ID == a.ID })
+				r.dashboard.AppCount = len(r.installed)
+				r.rebuildApps()
+				r.tree = nil
+				r.searchTrees = map[string]*core.SizeTree{}
+				r.disk.Loaded = false
 				if !cancelled && scanErr == nil {
 					frozen.Items = remaining
+					var total uint64
+					for _, it := range remaining {
+						total += it.Size()
+					}
+					if len(remaining) > 0 {
+						r.message(
+							fmt.Sprintf("「%s」卸载程序已完成，复核后仍有 %d 项残留（%s）", a.Name, len(remaining), core.FmtSize(total)),
+							fmt.Sprintf("\"%s\" uninstaller finished — %d leftovers remain after verification (%s)", a.Name, len(remaining), core.FmtSize(total)),
+						)
+					} else {
+						r.message(
+							fmt.Sprintf("「%s」卸载程序已完成，未发现残留", a.Name),
+							fmt.Sprintf("\"%s\" uninstaller finished — no leftovers found", a.Name),
+						)
+					}
 					r.showResiduals(frozen, &a)
-				}
-				if !cancelled {
-					r.scanApps()
 				}
 			}
 		})
@@ -298,8 +347,9 @@ func (r *Root) scanResiduals(id string) {
 		return
 	}
 	r.apps.ResidualScanning = true
+	indexes := volumeIndexes(r)
 	r.start(false, nil, func(ctx context.Context) func() {
-		result, err := scanAppResiduals(ctx, a)
+		result, err := r.scanAppResiduals(core.WithSizeIndexes(ctx, indexes), a)
 		return func() {
 			r.apps.ResidualScanning = false
 			if err != nil {

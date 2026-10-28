@@ -336,7 +336,7 @@ func TestResidualCleanStartsWithoutConfirmation(t *testing.T) {
 func TestResidualCleanDoesNotReopenTheReviewPanel(t *testing.T) {
 	r, q := testRoot(t)
 	gone := filepath.Join(t.TempDir(), "already-gone")
-	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: gone}, core.ResidualCacheDir)
+	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: gone, Bytes: 1024}, core.ResidualCacheDir)
 	app := core.InstalledApp{ID: "example", Name: "Example"}
 	r.showResiduals(core.ResidualScanResult{AppName: app.Name, Items: []core.ResidualItem{item}}, &app)
 	if !r.apps.ResidualsOpen {
@@ -344,9 +344,39 @@ func TestResidualCleanDoesNotReopenTheReviewPanel(t *testing.T) {
 	}
 	r.residualAuthority = func(context.Context, core.InstalledApp, []core.ResidualItem) bool { return true }
 	r.requestResidualClean()
+	if r.apps.ResidualsOpen {
+		t.Fatal("review panel remained open while cleaning was in progress")
+	}
+	if r.job == nil || r.job.progress == nil || r.job.progress.TotalFiles.Load() != 1 || r.job.progress.TotalBytes.Load() != 1024 {
+		t.Fatalf("expected progress initialized with 1 file and 1024 bytes, got %+v", r.job)
+	}
 	dispatchNext(t, q)
 	if r.apps.ResidualsOpen {
 		t.Fatal("cleaning reopened the residual review panel")
+	}
+}
+
+// 授权未通过时，原样还原面板、选项与说明，以便用户查看失败原因。
+func TestResidualCleanRestoresReviewOnRefusal(t *testing.T) {
+	r, q := testRoot(t)
+	gone := filepath.Join(t.TempDir(), "already-gone")
+	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: gone, Bytes: 2048}, core.ResidualCacheDir)
+	app := core.InstalledApp{ID: "example", Name: "Example"}
+	r.showResiduals(core.ResidualScanResult{AppName: app.Name, Items: []core.ResidualItem{item}}, &app)
+	r.residualAuthority = func(context.Context, core.InstalledApp, []core.ResidualItem) bool { return false }
+	r.requestResidualClean()
+	if r.apps.ResidualsOpen {
+		t.Fatal("review panel should close immediately on start")
+	}
+	dispatchNext(t, q)
+	if !r.apps.ResidualsOpen {
+		t.Fatal("refused cleanup did not restore the review panel")
+	}
+	if len(r.apps.Residuals) != 1 || !r.apps.Residuals[0].Selected {
+		t.Fatal("refused cleanup did not restore residual selection")
+	}
+	if r.apps.Notice.Get(core.Chinese) == "" {
+		t.Fatal("refused cleanup did not set notice")
 	}
 }
 
@@ -374,4 +404,16 @@ func TestClosingResidualReviewDropsOnlyItsOwnExplanation(t *testing.T) {
 	if r.apps.ResidualsOpen || len(r.apps.Residuals) != 0 {
 		t.Fatal("review state survived the close")
 	}
+}
+
+func TestNavigateToJunkTriggersFirstScan(t *testing.T) {
+	r, _ := testRoot(t)
+	if r.junk.Scanning || r.junk.Scanned {
+		t.Fatal("fixture started with junk scanned or scanning")
+	}
+	r.Navigate(view.Junk)
+	if !r.junk.Scanning {
+		t.Fatal("navigating to junk did not trigger first scan")
+	}
+	r.Cancel()
 }

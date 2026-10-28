@@ -120,3 +120,95 @@ func orbitDot(c *ui.Context, size, radius, dot float32, color ui.Color) ui.Eleme
 		p.Fill(ui.Rect{X: cx - dot/2, Y: cy - dot/2, W: dot, H: dot}, color, dot/2)
 	})
 }
+
+// orbitDotSpecs returns opacity and diameter for the i-th dot (count=8) at phase.
+func orbitDotSpecs(phase, i, count int) (opacity float32, dot float32) {
+	shift := (phase + (count - i)) % count
+	switch shift {
+	case 0:
+		opacity = 1.0
+	case 1:
+		opacity = 0.85
+	case 2:
+		opacity = 0.65
+	case 3:
+		opacity = 0.45
+	case 4:
+		opacity = 0.30
+	case 5:
+		opacity = 0.20
+	case 6:
+		opacity = 0.12
+	default:
+		opacity = 0.06
+	}
+	if shift <= 1 {
+		dot = 8.0
+	} else if shift <= 3 {
+		dot = 7.0
+	} else {
+		dot = 6.0
+	}
+	return opacity, dot
+}
+
+// orbitSpinner renders an 8-dot rotating orbit with a breathing centre glow,
+// faithfully transcribing Rust's LoadingState spinner.
+func orbitSpinner(c *ui.Context, size float32) ui.Element {
+	still := c.Preferences().ReduceMotion
+	return ui.Box(c).Size(size, size).Shrink(0).Role(ui.RoleProgress).Draw(func(p *ui.Painter, r ui.Rect) {
+		const count = 8
+		radius := (r.W - 12.0) / 2.0
+		cx, cy := r.X+r.W/2, r.Y+r.H/2
+
+		phase := 0
+		if !still {
+			phase = int(p.Now().UnixNano()/int64(100*time.Millisecond)) % count
+			p.AnimationFrame()
+		}
+
+		pulse := float32(0.12)
+		if !still {
+			animPhase := int(p.Now().UnixNano() / int64(100*time.Millisecond))
+			pulse = float32(0.12 + 0.10*math.Sin(float64(animPhase%12)/12.0*math.Pi))
+		}
+		centreSize := float32(28.0) * (r.W / 64.0)
+		p.Fill(ui.Rect{X: cx - centreSize/2, Y: cy - centreSize/2, W: centreSize, H: centreSize}, primary.Alpha(pulse), centreSize/2)
+
+		for i := 0; i < count; i++ {
+			angle := float64(i) * (2.0 * math.Pi / float64(count))
+			x := cx + radius*float32(math.Cos(angle))
+			y := cy + radius*float32(math.Sin(angle))
+			opacity, dot := orbitDotSpecs(phase, i, count)
+			scaledDot := dot * (r.W / 64.0)
+			p.Fill(ui.Rect{X: x - scaledDot/2, Y: y - scaledDot/2, W: scaledDot, H: scaledDot}, primary.Alpha(opacity), scaledDot/2)
+		}
+	})
+}
+
+func loadingDots(now time.Time) string {
+	cycle := int(now.UnixNano()/int64(350*time.Millisecond)) % 4
+	switch cycle {
+	case 1:
+		return ".  "
+	case 2:
+		return ".. "
+	case 3:
+		return "..."
+	default:
+		return "   "
+	}
+}
+
+// loadingState provides a centered, standard loading view with the 72px orbit spinner,
+// 20px primary bold title with animated trailing dots, and 13px description.
+func loadingState(c *ui.Context, title, sub string) ui.Element {
+	dots := loadingDots(c.Now())
+	return ui.Column(c).FillWidth().Padding(56, 20).Gap(18).AlignItems(ui.Center).Children(func() {
+		orbitSpinner(c, 72)
+		ui.Text(c, title+dots).FontSize(20).Bold().TextColor(primary)
+		if sub != "" {
+			ui.Text(c, sub).FontSize(13).FixedLineHeight(18).TextColor(muted)
+		}
+	})
+}

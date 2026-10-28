@@ -10,7 +10,7 @@ func ListInstalledApps(ctx context.Context) ([]InstalledApp, error) {
 	if _, err := CurrentRules(); err != nil {
 		return nil, err
 	}
-	records := platform.ReadMacAppRecords(ctx)
+	records := platform.ReadMacAppRecordsSized(ctx, indexedDirectorySize)
 	apps := make([]InstalledApp, 0, len(records))
 	for _, record := range records {
 		if ctx.Err() != nil {

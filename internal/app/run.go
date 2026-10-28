@@ -72,6 +72,7 @@ func Run() error {
 			}
 		}
 		r.startTray()
+		r.startTrashWatch()
 		r.startMonitoring()
 		r.loadVolumes()
 		// After the close handlers exist. Windows stays cloaked until the first frame.

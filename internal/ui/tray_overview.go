@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/egoist/mygo/ui"
 	"github.com/meimingqi222/quick-cleaner/internal/core"
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
 )
@@ -18,6 +19,9 @@ const (
 	OverviewAnalyzeDisk
 	OverviewTopMemory
 	OverviewQuit
+	// OverviewReviewLeftovers opens the main window's residual review for a
+	// trashed app. It carries the leftover's ID in Path.
+	OverviewReviewLeftovers
 )
 
 type OverviewAction struct {
@@ -35,10 +39,38 @@ type TrayVolumeInfo struct {
 	TotalBytes, FreeBytes uint64
 }
 
+// TrayLeftoverItem is one selectable leftover inside an alert row. Name is
+// the item's short identity (file name), Path its location, Label the full
+// review label for tooltips and records.
+type TrayLeftoverItem struct {
+	Name, Path, Label, Size string
+	Bytes                   uint64
+	Selected                bool
+	Manual                  bool
+	// Confirm marks possible-confidence evidence; it is selectable like in
+	// the review panel, just not picked by default.
+	Confirm bool
+}
+
+// TrayLeftover is one manually uninstalled app whose leftovers wait for review.
+// Scanning marks a detection whose residual scan is still running: the alert
+// shows it right away so the report does not wait for the filesystem walk.
+// Cleaning marks an in-place cleanup in progress on this row.
+type TrayLeftover struct {
+	ID, Name string
+	Items    int
+	Size     string
+	Scanning bool
+	Cleaning bool
+	Icon     *ui.Bitmap
+	Entries  []TrayLeftoverItem
+}
+
 type TrayOverviewSnapshot struct {
 	core.TraySnapshot
-	Volumes  []TrayVolumeInfo
-	Accounts []core.LocalAccount
+	Volumes   []TrayVolumeInfo
+	Accounts  []core.LocalAccount
+	Leftovers []TrayLeftover
 }
 
 type trayOverviewSampler interface {
@@ -188,6 +220,16 @@ func (c *TrayOverviewController) refresh() {
 		c.mu.Unlock()
 		timer.Reset(c.period)
 	}
+}
+
+// SetLeftovers replaces the detected-uninstall section. The watcher lives on
+// the app root, not on this popover's lifetime, so leftovers can appear while
+// the popover is open and survive reopening it.
+func (c *TrayOverviewController) SetLeftovers(leftovers []TrayLeftover) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state.Leftovers = append([]TrayLeftover(nil), leftovers...)
+	c.notifyLocked()
 }
 
 func (c *TrayOverviewController) Close() {

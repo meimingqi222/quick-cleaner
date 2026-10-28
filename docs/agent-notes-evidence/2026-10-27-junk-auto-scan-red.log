@@ -1,0 +1,6 @@
+=== RUN   TestNavigateToJunkTriggersFirstScan
+    root_test.go:416: navigating to junk did not trigger first scan
+--- FAIL: TestNavigateToJunkTriggersFirstScan (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.451s
+FAIL

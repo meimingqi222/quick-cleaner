@@ -80,6 +80,14 @@ func cacheWriteRecord(b []byte, e treeSlot, off uint32) {
 	cachePut32(b, 20, uint32(e.files))
 }
 
+// A backslash is a filename character on Unix and a separator on Windows.
+// Base and delta validation must agree with the host's path reconstruction.
+func validDiskIndexName(name string) bool {
+	return name != "" && name != "." && name != ".." &&
+		!strings.ContainsAny(name, "/\x00") &&
+		(filepath.Separator != '\\' || !strings.ContainsRune(name, '\\'))
+}
+
 func validateDiskTree(t *SizeTree, ordered bool) error {
 	if t.nodeCount() == 0 || uint64(t.nodeCount()) > uint64(cacheParentMask)+1 || !t.IsDir(0) || t.slot(0).Parent != 0 {
 		return cacheInvalid("invalid root")
@@ -96,7 +104,7 @@ func validateDiskTree(t *SizeTree, ordered bool) error {
 		if !e.Used {
 			continue
 		}
-		if i > 0 && (e.Name == "" || e.Name == "." || e.Name == ".." || strings.ContainsAny(e.Name, "/\\\x00")) {
+		if i > 0 && !validDiskIndexName(e.Name) {
 			return cacheInvalid("unsafe name component")
 		}
 		if i > 0 && (!t.IsDir(e.Parent) || e.Parent == uint32(i) || (ordered && e.Parent >= uint32(i))) {

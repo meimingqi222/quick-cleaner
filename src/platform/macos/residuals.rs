@@ -51,6 +51,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
     };
 
     let darwin_cache = darwin_user_cache_dir();
+    let darwin_temp = darwin_user_temp_dir();
     scan_residuals_in(
         app,
         &ScanRoots {
@@ -58,6 +59,7 @@ pub fn scan_residuals(app: &InstalledApp) -> ResidualScanResult {
             system_library: Path::new("/Library"),
             receipts: Path::new("/private/var/db/receipts"),
             darwin_cache: darwin_cache.as_deref(),
+            darwin_temp: darwin_temp.as_deref(),
             applications: Path::new("/Applications"),
         },
     )
@@ -69,6 +71,7 @@ struct ScanRoots<'a> {
     system_library: &'a Path,
     receipts: &'a Path,
     darwin_cache: Option<&'a Path>,
+    darwin_temp: Option<&'a Path>,
     /// 真·已安装应用目录（`/Applications`）。点目录归属判定要拿「还装着
     /// 的别家软件」排除误收，测试必须能把它重定向成空目录，否则在这台
     /// 机器上真装了同厂商软件时（如 Karabiner-Elements）测试就不密闭。
@@ -125,6 +128,9 @@ fn scan_residuals_inner(app: &InstalledApp, roots: &ScanRoots<'_>) -> ResidualSc
         }
         if let Some(cache_root) = darwin_cache {
             add_bundle_satellites(&mut items, cache_root, id, ResidualSource::CacheDir, true);
+        }
+        if let Some(temp_root) = roots.darwin_temp {
+            add_bundle_satellites(&mut items, temp_root, id, ResidualSource::CacheDir, true);
         }
 
         add_named_entry(
@@ -511,6 +517,12 @@ static HELPER_ID_SUFFIXES: &crate::core::rules::RuleList = &crate::core::rules::
 /// 文件/目录名是不是本 Bundle ID 的卫星残留。
 ///
 /// 只认精确 ID，以及 ID 后面跟封闭后缀（可再跟本机 UUID）：
+fn is_atomic_temp_suffix(s: &str) -> bool {
+    s.len() == 6
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
 /// `com.augment.intent.ShipIt.{UUID}.plist` 是 Sparkle 更新器，确定；
 /// `org.cindori.SenseiMonitor`、`com.qoder.work.cn` 是另一个产品，不是卫星。
 fn is_bundle_satellite(name: &str, bundle_id: &str) -> bool {
@@ -532,6 +544,10 @@ fn is_bundle_satellite(name: &str, bundle_id: &str) -> bool {
             break;
         }
     }
+    let hidden = stem.starts_with('.');
+    if hidden {
+        stem = &stem[1..];
+    }
     let id = bundle_id.to_ascii_lowercase();
     if stem == id {
         return true;
@@ -539,10 +555,12 @@ fn is_bundle_satellite(name: &str, bundle_id: &str) -> bool {
     let Some(rest) = stem.strip_prefix(&id).and_then(|r| r.strip_prefix('.')) else {
         return false;
     };
-    is_uuid_like(rest) || helper_suffix_then_optional_uuid(rest)
+    is_uuid_like(rest)
+        || (hidden && is_atomic_temp_suffix(rest))
+        || helper_suffix_then_optional_uuid(rest, hidden)
 }
 
-fn helper_suffix_then_optional_uuid(rest: &str) -> bool {
+fn helper_suffix_then_optional_uuid(rest: &str, hidden: bool) -> bool {
     for suffix in HELPER_ID_SUFFIXES {
         let suffix = suffix.trim_start_matches('.');
         if rest == suffix {
@@ -550,7 +568,7 @@ fn helper_suffix_then_optional_uuid(rest: &str) -> bool {
         }
         if let Some(after) = rest.strip_prefix(suffix) {
             if let Some(uuid) = after.strip_prefix('.') {
-                if is_uuid_like(uuid) {
+                if is_uuid_like(uuid) || (hidden && is_atomic_temp_suffix(uuid)) {
                     return true;
                 }
             }
@@ -666,24 +684,26 @@ fn app_group_ids(app: &InstalledApp) -> Vec<String> {
     parse_application_groups(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn darwin_user_cache_dir() -> Option<PathBuf> {
-    let length = unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, std::ptr::null_mut(), 0) };
+fn darwin_confstr_dir(name: libc::c_int) -> Option<PathBuf> {
+    let length = unsafe { libc::confstr(name, std::ptr::null_mut(), 0) };
     if length == 0 {
         return None;
     }
     let mut buffer = vec![0u8; length];
-    let written = unsafe {
-        libc::confstr(
-            libc::_CS_DARWIN_USER_CACHE_DIR,
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-        )
-    };
+    let written = unsafe { libc::confstr(name, buffer.as_mut_ptr().cast(), buffer.len()) };
     if written == 0 {
         return None;
     }
     let value = std::ffi::CStr::from_bytes_until_nul(&buffer).ok()?;
     Some(PathBuf::from(value.to_string_lossy().into_owned()))
+}
+
+fn darwin_user_cache_dir() -> Option<PathBuf> {
+    darwin_confstr_dir(libc::_CS_DARWIN_USER_CACHE_DIR)
+}
+
+fn darwin_user_temp_dir() -> Option<PathBuf> {
+    darwin_confstr_dir(libc::_CS_DARWIN_USER_TEMP_DIR)
 }
 
 /// 在指定目录的直接子项中按 Bundle ID 不区分 ASCII 大小写匹配。
@@ -1702,6 +1722,7 @@ mod tests {
                 system_library: &root.join("system"),
                 receipts: &root.join("receipts"),
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("Applications"),
             },
         );
@@ -1789,6 +1810,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &root.join("receipts"),
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -1816,6 +1838,7 @@ mod tests {
             system_library: &root.join("system-library"),
             receipts: &root.join("receipts"),
             darwin_cache: None,
+            darwin_temp: None,
             applications: &root.join("applications"),
         };
         for (name, id, expected) in [
@@ -1982,6 +2005,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &root.join("receipts"),
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2050,6 +2074,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2137,6 +2162,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2222,6 +2248,7 @@ mod tests {
                 system_library: &system_library,
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2294,6 +2321,26 @@ mod tests {
     }
 
     #[test]
+    fn atomic_temp_suffix_does_not_claim_sibling_products() {
+        for name in [
+            "com.example.app.editor",
+            "com.example.app.client.plist",
+            "com.example.app.helper.editor",
+        ] {
+            assert!(
+                !is_bundle_satellite(name, "com.example.app"),
+                "sibling product claimed: {name}"
+            );
+        }
+        for name in [".com.example.app.e08PpG", ".com.example.app.helper.ixL6vL"] {
+            assert!(
+                is_bundle_satellite(name, "com.example.app"),
+                "hidden atomic temp omitted: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn bundle_satellite_is_this_app_not_a_sibling() {
         let id = "com.augment.intent";
         assert!(is_bundle_satellite("com.augment.intent", id));
@@ -2356,6 +2403,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &root.join("receipts"),
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2417,6 +2465,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2536,6 +2585,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );
@@ -2603,6 +2653,7 @@ mod tests {
                 system_library: &root.join("system-library"),
                 receipts: &receipts,
                 darwin_cache: None,
+                darwin_temp: None,
                 applications: &root.join("applications"),
             },
         );

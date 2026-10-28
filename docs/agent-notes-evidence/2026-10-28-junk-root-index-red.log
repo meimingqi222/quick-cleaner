@@ -1,0 +1,5 @@
+--- FAIL: TestJunkIndexRetainsUnixRootVolume (0.00s)
+    junk_index_root_test.go:22: root-volume index was discarded
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.610s
+FAIL

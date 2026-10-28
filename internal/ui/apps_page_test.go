@@ -479,3 +479,29 @@ func TestResidualNoticeStaysInThePanel(t *testing.T) {
 		t.Fatalf("panel lost its explanation: %v", tt.Texts())
 	}
 }
+
+// 常驻说明不是警告：它每个面板都在、内容固定，用橙色 caution 底色画出来就变成
+// 一条要用户处理的提示——三个「确定」项目上方挂着两条橙色横幅，看起来像有三件
+// 事没解决。Rust 参照的面板只在占用、系统扩展这类真需要提示时才出现橙色横幅。
+func TestResidualGuaranteeIsNotDrawnAsAWarning(t *testing.T) {
+	s := appsPageFixture()
+	s.ResidualsOpen = true
+	s.Residuals = []AppsPageResidual{
+		{ID: "a", Path: "/tmp/a", Size: "4 KB", Confidence: core.Certain, Source: core.ResidualCacheDir, Kind: core.ResidualFile, Selected: true},
+		{ID: "b", Path: "/tmp/b", Size: "1 MB", Confidence: core.Certain, Source: core.ResidualCacheDir, Kind: core.ResidualDirectory, Selected: true},
+	}
+	guarantee := "Before deleting, each selected item is checked again."
+	s.ResidualNotice = core.NewText("勾选的项目在删除前会再确认一次。", guarantee)
+	s.Notice = core.NewText("", "")
+	s.Occupancy = core.ResidualOccupancy{}
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderContent(c, AppsPageActions{}) }, 1280, 800)
+	rect, found := tt.Find(guarantee)
+	if !found {
+		t.Fatalf("review lost its guarantee: %v", tt.Texts())
+	}
+	// 灰色小字排在列表之后；警示横幅会被列表上方那一排占据。
+	list, _ := tt.Find("/tmp/a")
+	if rect.Y <= list.Y {
+		t.Fatalf("guarantee is drawn above the list as a banner: y=%.0f list=%.0f", rect.Y, list.Y)
+	}
+}

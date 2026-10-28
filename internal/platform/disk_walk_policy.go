@@ -22,6 +22,86 @@ type diskWalkState struct {
 	hung  sync.Map
 }
 
+// diskWalkDirRef is a directory entry as the worker prepared it: pos is its
+// index inside the batch (the coordinator turns it into the global index) and
+// reason marks children that are recorded but never queued.
+type diskWalkDirRef struct {
+	pos    int
+	path   string
+	reason MacWalkCoverageReason
+}
+
+// diskWalkPrepared is a worker-finished batch: entries carry the final Parent,
+// counts are pre-aggregated, and every string operation already ran on the
+// worker. The coordinator only assigns indexes and appends.
+type diskWalkPrepared struct {
+	entries    []MacWalkEntry
+	subdirs    []diskWalkDirRef // reason == "" means queue for enumeration
+	parentMeta bool             // a file had missing/errored attributes
+	dirs       uint64
+	files      uint64
+	others     uint64
+	allocated  uint64
+	mirrors    uint64
+	reason     MacWalkCoverageReason
+	err        error
+	fallback   bool
+}
+
+// diskWalkJoinPath joins a validated name under an absolute directory. It
+// skips filepath.Clean: names cannot contain "/" and dir never ends in one
+// except the root itself.
+func diskWalkJoinPath(dir, name string) string {
+	if dir == "/" {
+		return "/" + name
+	}
+	return dir + "/" + name
+}
+
+// diskWalkPrepare mirrors Rust's prepare_batch: filter the data-volume mirror,
+// classify each entry, aggregate counters, join subdirectory paths. Everything
+// per-entry runs on the worker so the coordinator's hot loop stays a memcpy.
+func diskWalkPrepare(dir string, parent uint64, batch diskWalkBatch) diskWalkPrepared {
+	p := diskWalkPrepared{reason: batch.reason, err: batch.err, fallback: batch.fallback}
+	p.entries = make([]MacWalkEntry, 0, len(batch.items))
+	for _, item := range batch.items {
+		e := item.MacWalkEntry
+		e.Parent = parent
+		e.Used = true
+		if e.IsDir {
+			path := diskWalkJoinPath(dir, e.Name)
+			if path == diskWalkMirror {
+				p.mirrors++
+				continue
+			}
+			e.Size = 0
+			p.dirs++
+			pos := len(p.entries)
+			switch {
+			case e.AttributeError != 0 || !item.flagsKnown:
+				p.subdirs = append(p.subdirs, diskWalkDirRef{pos: pos, path: path, reason: MacWalkMetadata})
+			case e.Flags&diskWalkDataless != 0:
+				p.subdirs = append(p.subdirs, diskWalkDirRef{pos: pos, path: path, reason: MacWalkDataless})
+			default:
+				p.subdirs = append(p.subdirs, diskWalkDirRef{pos: pos, path: path})
+			}
+		} else if e.IsRegular {
+			p.files++
+			p.allocated += e.Size
+			if e.AttributeError != 0 || !e.SizeKnown {
+				p.parentMeta = true
+			}
+		} else {
+			p.others++
+			if e.AttributeError != 0 {
+				p.parentMeta = true
+			}
+		}
+		p.entries = append(p.entries, e)
+	}
+	return p
+}
+
 var diskWalkProcess = diskWalkState{slots: make(chan struct{}, 8)}
 
 type diskWalkTask struct {
@@ -31,8 +111,8 @@ type diskWalkTask struct {
 	cancel  context.CancelFunc
 }
 type diskWalkCompletion struct {
-	id    uint64
-	batch diskWalkBatch
+	id       uint64
+	prepared diskWalkPrepared
 }
 
 // Hung native calls keep their process-wide slot until they actually return.
@@ -121,14 +201,17 @@ func diskWalkAcquire(ctx context.Context, volume VolumeID, progress func(MacWalk
 			jobctx, cancel := context.WithCancel(ctx)
 			task.cancel = cancel
 			active[id] = task
-			go func(path string, id uint64) {
+			go func(path string, id uint64, parent uint64) {
 				batch := enum(jobctx, path, soft)
+				// Release the enumeration slot before preparing so a hung or
+				// slow prepare cannot hold back kernel enumerations elsewhere.
 				<-state.slots
+				prepared := diskWalkPrepare(path, parent, batch)
 				select {
-				case done <- diskWalkCompletion{id, batch}:
+				case done <- diskWalkCompletion{id, prepared}:
 				case <-jobctx.Done():
 				}
-			}(task.path, id)
+			}(task.path, id, task.index)
 		}
 		if len(active) == 0 {
 			continue
@@ -153,58 +236,38 @@ func diskWalkAcquire(ctx context.Context, volume VolumeID, progress func(MacWalk
 			}
 			task.cancel()
 			delete(active, completed.id)
-			batch := completed.batch
+			batch := completed.prepared
 			if batch.fallback {
 				r.Counts.FallbackDirectories++
 			}
 			if batch.reason != "" {
 				addCoverage(task, batch.reason, batch.err)
 			}
-			for _, item := range batch.items {
-				if err := ctx.Err(); err != nil {
-					addCoverage(task, MacWalkCancelled, err)
-					break
-				}
-				if !diskWalkValidName(item.Name) {
-					addCoverage(task, MacWalkMalformed, ErrMacWalkMalformed)
-					continue
-				}
-				path := filepath.Join(task.path, item.Name)
-				if item.IsDir && path == diskWalkMirror {
-					r.Counts.ExcludedMirrors++
-					continue
-				}
-				e := item.MacWalkEntry
-				e.Parent = task.index
-				e.Used = true
-				if e.IsDir {
-					e.Size = 0
-					r.Counts.Directories++
-				} else if e.IsRegular {
-					r.Counts.Files++
-					r.Counts.AllocatedBytes += e.Size
+			if err := ctx.Err(); err != nil {
+				addCoverage(task, MacWalkCancelled, err)
+				continue
+			}
+			r.Counts.Directories += batch.dirs
+			r.Counts.Files += batch.files
+			r.Counts.OtherEntries += batch.others
+			r.Counts.AllocatedBytes += batch.allocated
+			r.Counts.ExcludedMirrors += batch.mirrors
+			if batch.parentMeta {
+				addCoverage(task, MacWalkMetadata, nil)
+			}
+			base := r.Counts.Entries
+			if err := spill.keepAll(batch.entries, &r); err != nil {
+				addCoverage(task, MacWalkUnreadable, err)
+				notify()
+				return r, err
+			}
+			r.Counts.Entries += uint64(len(batch.entries))
+			for _, sub := range batch.subdirs {
+				child := diskWalkTask{path: sub.path, index: base + uint64(sub.pos)}
+				if sub.reason != "" {
+					addCoverage(child, sub.reason, nil)
 				} else {
-					r.Counts.OtherEntries++
-				}
-				idx := r.Counts.Entries
-				if err := spill.keep(e, &r); err != nil {
-					addCoverage(task, MacWalkUnreadable, err)
-					notify()
-					return r, err
-				}
-				r.Counts.Entries++
-				child := diskWalkTask{path: path, index: idx}
-				if e.IsDir {
-					switch {
-					case e.AttributeError != 0 || !item.flagsKnown:
-						addCoverage(child, MacWalkMetadata, nil)
-					case e.Flags&diskWalkDataless != 0:
-						addCoverage(child, MacWalkDataless, nil)
-					default:
-						queue = append(queue, child)
-					}
-				} else if e.AttributeError != 0 || (e.IsRegular && !e.SizeKnown) {
-					addCoverage(task, MacWalkMetadata, nil)
+					queue = append(queue, child)
 				}
 			}
 			notify()
@@ -222,13 +285,14 @@ func diskWalkAcquire(ctx context.Context, volume VolumeID, progress func(MacWalk
 	return r, ctx.Err()
 }
 
-// keep appends an entry, spilling the whole scan once it crosses the Rust
-// threshold. The root stays in memory because coverage indexes point at it.
-func (s *macWalkSpill) keep(entry MacWalkEntry, r *MacWalkResult) error {
-	if s.file == nil && int(r.Counts.Entries)+1 > macWalkSpillThreshold {
+// keepAll appends a prepared batch, spilling the whole scan once it crosses
+// the Rust threshold. The root stays in memory because coverage indexes point
+// at it.
+func (s *macWalkSpill) keepAll(entries []MacWalkEntry, r *MacWalkResult) error {
+	if s.file == nil && int(r.Counts.Entries)+len(entries) > macWalkSpillThreshold {
 		if err := s.create(); err != nil {
 			// Rust keeps the memory path when the spill file cannot be created.
-			r.Entries = append(r.Entries, entry)
+			r.Entries = append(r.Entries, entries...)
 			return nil
 		}
 		for _, kept := range r.Entries[1:] {
@@ -240,13 +304,15 @@ func (s *macWalkSpill) keep(entry MacWalkEntry, r *MacWalkResult) error {
 		r.Entries = r.Entries[:1]
 	}
 	if s.file != nil {
-		if err := s.appendEntry(entry); err != nil {
-			s.failed = true
-			return err
+		for i := range entries {
+			if err := s.appendEntry(entries[i]); err != nil {
+				s.failed = true
+				return err
+			}
 		}
 		return nil
 	}
-	r.Entries = append(r.Entries, entry)
+	r.Entries = append(r.Entries, entries...)
 	return nil
 }
 

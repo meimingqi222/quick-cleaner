@@ -28,9 +28,6 @@ func (s AppsPage) residualReview(c *ui.Context, a AppsPageActions, t appsPageCop
 			}
 			ui.Text(c, title).FontSize(18).Bold()
 			ui.Text(c, description).FontSize(12).TextColor(muted)
-			if notice := s.ResidualNotice.Get(s.Language); notice != "" {
-				ui.Text(c, notice).FontSize(12).Padding(12).Background(cautionContainer).TextColor(caution).Radius(8)
-			}
 			if notice := s.Notice.Get(s.Language); notice != "" {
 				ui.Text(c, notice).FontSize(12).Padding(12).Background(cautionContainer).TextColor(caution).Radius(8)
 			}
@@ -68,10 +65,16 @@ func (s AppsPage) residualReview(c *ui.Context, a AppsPageActions, t appsPageCop
 					})
 				}
 			})
+			// 常驻说明不是警告：它每个面板都有、内容固定，用橙色 caution 画出来
+			// 就变成一条要用户处理的提示。放在列表下方用灰字小字，真正的失败
+			// 提示（s.Notice）和占用横幅仍然保持警示样式。
+			if notice := s.ResidualNotice.Get(s.Language); notice != "" && len(s.Residuals) > 0 {
+				ui.Text(c, notice).FontSize(11).TextColor(outline)
+			}
 			s.RenderActionBar(c, a)
 		})
 	})
-	if modal.Dismissed() && !s.busy() && a.CloseResiduals != nil {
+	if modal.Dismissed() && a.CloseResiduals != nil {
 		a.CloseResiduals()
 	}
 }
@@ -159,7 +162,7 @@ func (s AppsPage) RenderActionBar(c *ui.Context, a AppsPageActions) {
 		appsPageButton(c, "apps-select-all", t.all, s.busy(), false, a.SelectAllResiduals)
 		appsPageButton(c, "apps-select-none", t.clear, s.busy() || count == 0, false, a.ClearResidualSelection)
 		ui.Spacer(c)
-		appsPageButton(c, "apps-residual-cancel", t.cancel, s.busy(), false, a.CloseResiduals)
+		appsPageButton(c, "apps-residual-cancel", t.cancel, false, false, a.CloseResiduals)
 		appsPageButton(c, "apps-residual-clean", fmt.Sprintf(t.clean, count, s.SelectedSize), s.busy() || count == 0 || a.CleanSelectedResiduals == nil, true, a.CleanSelectedResiduals)
 	})
 }

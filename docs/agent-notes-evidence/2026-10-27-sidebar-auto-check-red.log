@@ -1,0 +1,7 @@
+$ go test ./internal/ui/ -run TestSidebarSettingsAreaMatchesTheRustReference -v
+=== RUN   TestSidebarSettingsAreaMatchesTheRustReference
+    dashboard_test.go:231: settings area grew a fourth control: [QuickCleaner Fast Disk & App Cleaner Overview Status Smart Clean Apps Disk Lens Declutter File Search Space Freed 0 B Language 中文 English Check for updates automatically v0.0.16 Overview Standard user Rescan Smart Scan Click to Start Smart Scan Quickly scan system caches, developer dependencies, and disk usage. Smart Clean Clean Junk Apps Uninstall Disk Lens Storage Declutter Duplicates/Photos Ready]
+--- FAIL: TestSidebarSettingsAreaMatchesTheRustReference (0.03s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.276s
+FAIL

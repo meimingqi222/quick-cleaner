@@ -1,0 +1,14 @@
+Read-only native macOS scan; each run performs live scan before indexed scan.
+OS cache warming and snapshot changes affect comparison; no cleanup was performed.
+Before shared sizing:
+index_load=2.41565325s entries=7231840
+live_apps=13.552455625s count=143 err=<nil>
+live_residual=3.738878584s items=17 bytes=1731579904 err=<nil>
+indexed_apps=6.097152s count=143 err=<nil>
+indexed_residual=1.309951542s items=17 bytes=1732296704 err=<nil>
+After shared sizing:
+index_load=2.243336083s entries=7232444
+live_apps=12.749564166s count=143 err=<nil>
+live_residual=4.702419792s items=17 bytes=1732874240 err=<nil>
+indexed_apps=997.871041ms count=143 err=<nil>
+indexed_residual=200.280292ms items=17 bytes=1732890624 err=<nil>

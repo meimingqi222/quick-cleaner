@@ -50,6 +50,7 @@ func (s TrayPopover) Render(c *ui.Context, a TrayPopoverActions) {
 		// Disks take their own height and hardware follows them; the slack
 		// goes above the quick actions, not between the two sections.
 		ui.Scroll(c.Key("tray-content-viewport")).Shrink(1).FillWidth().MinHeight(0).Padding(12, 12, 8, 12).Gap(8).Children(func() {
+			s.renderTrayLeftovers(c, a, t)
 			s.renderTrayDisks(c, a, t)
 		})
 		ui.Column(c.Key("tray-hardware")).FillWidth().Shrink(0).Padding(6, 12).Gap(4).Children(func() {
@@ -63,6 +64,33 @@ func (s TrayPopover) Render(c *ui.Context, a TrayPopoverActions) {
 
 func trayPopoverHeading(c *ui.Context, label string) {
 	ui.Text(c, label).FontSize(12).FixedLineHeight(16).Bold().TextColor(text.Alpha(.7))
+}
+
+// renderTrayLeftovers lists apps the trash watcher caught being uninstalled.
+// Tapping opens the standard residual review in the main window; the row
+// carries no cleanup of its own because deletion needs the review's gates.
+func (s TrayPopover) renderTrayLeftovers(c *ui.Context, a TrayPopoverActions, t trayPopoverCopy) {
+	if len(s.Snapshot.Leftovers) == 0 {
+		return
+	}
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		trayPopoverHeading(c, t.leftovers)
+		for i, l := range s.Snapshot.Leftovers {
+			entry := l
+			b := ui.ButtonBase(c.Key(fmt.Sprintf("tray-leftover-%d", i))).FillWidth().Padding(8).Radius(6).Background(card).Border(1, outlineVariant.Alpha(.35)).Row().Gap(8).Cursor(ui.CursorPointer).Disabled(a.Emit == nil)
+			interactive(b, card, surfaceLow, surfaceHigh, a.Emit != nil)
+			b.Children(func() {
+				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					ui.Text(c, entry.Name).MinWidth(0).Shrink(1).FontSize(12).FixedLineHeight(16).Bold().SingleLine().Tooltip(entry.Name)
+					ui.Text(c, fmt.Sprintf("%d · %s", entry.Items, entry.Size)).FontSize(11).FixedLineHeight(14).TextColor(muted).SingleLine()
+				})
+				ui.Text(c, t.review+" ›").Shrink(0).FontSize(12).FixedLineHeight(16).FontWeight(500).TextColor(primary)
+			})
+			if b.Clicked() {
+				a.emit(OverviewAction{Kind: OverviewReviewLeftovers, Path: entry.ID})
+			}
+		}
+	})
 }
 
 func (s TrayPopover) renderTrayDisks(c *ui.Context, a TrayPopoverActions, t trayPopoverCopy) {

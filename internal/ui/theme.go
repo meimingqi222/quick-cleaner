@@ -22,6 +22,8 @@ var (
 	primaryFixed     = ui.Hex("#d3e3ff")
 	caution          = ui.Hex("#974700")
 	cautionContainer = ui.Hex("#ffdbc8")
+	success          = ui.Hex("#059669")
+	successContainer = ui.Hex("#d1fae5")
 )
 
 func theme() *ui.Theme {

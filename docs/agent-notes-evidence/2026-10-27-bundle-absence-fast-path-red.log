@@ -1,0 +1,6 @@
+=== RUN   TestBundleIsStillInstalledFastPathAbsence
+    apps_inventory_darwin_test.go:84: BundleIsStillInstalled took 9.010542667s; expected fast path under 2s without full lsregister dump
+--- FAIL: TestBundleIsStillInstalledFastPathAbsence (9.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	9.358s
+FAIL

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/egoist/mygo"
@@ -17,7 +18,7 @@ import (
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
-const Version = "0.0.16"
+const Version = "0.0.17"
 
 type diskOwner interface {
 	Load(context.Context, core.VolumeID) (*core.ScanResult, error)
@@ -63,6 +64,10 @@ type Root struct {
 	residual              core.ResidualScanResult
 	residualApp           *core.InstalledApp
 	residualAuthority     func(context.Context, core.InstalledApp, []core.ResidualItem) bool
+	uninstallApp          func(core.InstalledApp) error
+	scanAppResiduals      func(context.Context, core.InstalledApp) (core.ResidualScanResult, error)
+	orphanScan            func(context.Context) (*core.ResidualScanResult, error)
+	bundleStillInstalled  func(context.Context, string) (bool, bool)
 	appsLoaded, devLoaded bool
 	tree                  *core.SizeTree
 	searchTrees           map[string]*core.SizeTree
@@ -76,6 +81,17 @@ type Root struct {
 	junkBusyGen           uint64
 	junkBusySet           bool
 	freed                 uint64
+
+	// Trash-watch leftovers (macOS): apps the user uninstalled by hand while
+	// the app was running, waiting for the user to open the residual review.
+	// leftoverAlert is the floating detection panel; leftoverAlertSnapshot is
+	// what its content draws.
+	trashWatch            *platform.FSDirWatch
+	trashSeenMu           sync.Mutex
+	trashSeen             map[string]bool
+	trashLeftovers        []trayLeftover
+	leftoverAlert         *mygo.Window
+	leftoverAlertSnapshot view.LeftoverAlert
 
 	// quitting is set once a quit passes OnBeforeQuit. MyGo then closes every
 	// window and abandons the quit if one refuses; the main window must not
@@ -104,7 +120,18 @@ func NewRoot(settings core.Settings, post func(func()), invalidate func()) *Root
 		save: func(s core.Settings) { s.Save() }, record: core.RecordHistory, diskSelected: core.NewDiskSelectionState(), declutterAuthority: map[string]core.ArbitraryTarget{}}
 	r.appIcons = map[string]*ui.Bitmap{}
 	r.searchTrees = map[string]*core.SizeTree{}
+	r.trashSeen = map[string]bool{}
 	r.residualAuthority = appResidualsAllowed
+	r.uninstallApp = uninstallApp
+	owner, _ := newDiskOwner(ctx)
+	r.diskOwner = owner
+	r.scanAppResiduals = func(ctx context.Context, app core.InstalledApp) (core.ResidualScanResult, error) {
+		return scanAppResiduals(withAvailableSizes(ctx, owner, nil), app)
+	}
+	r.orphanScan = func(ctx context.Context) (*core.ResidualScanResult, error) {
+		return scanOrphans(withAvailableSizes(ctx, owner, nil))
+	}
+	r.bundleStillInstalled = platform.BundleIsStillInstalled
 	r.dashboard = view.Dashboard{Language: settings.Language, MacOS: runtime.GOOS == "darwin", Elevated: platform.IsElevated(), Version: "v" + Version, Cleanable: "0 B", Freed: "0 B"}
 	r.junk = view.JunkPage{Selected: map[string]bool{}, Expanded: map[core.CategoryID]bool{}, ReleaseEligible: map[string]bool{}, Exclusions: append([]string(nil), settings.Whitelist...)}
 	r.apps = view.AppsPage{MacOS: runtime.GOOS == "darwin", Sort: core.DefaultAppSortState(), TotalSize: "0 B", FilteredSize: "0 B"}
@@ -243,6 +270,9 @@ func (r *Root) Close() {
 	if r.searchCancel != nil {
 		r.searchCancel()
 	}
+	if r.trashWatch != nil {
+		r.trashWatch.Close()
+	}
 	if r.diskOwner != nil {
 		r.diskOwner.Close()
 	}
@@ -258,6 +288,9 @@ func (r *Root) Close() {
 	if r.popover != nil {
 		r.popover.Destroy()
 	}
+	if r.leftoverAlert != nil {
+		r.leftoverAlert.Destroy()
+	}
 	if r.tray != nil {
 		r.tray.Destroy()
 	}
@@ -267,15 +300,27 @@ func (r *Root) ask(title, detail string, accept func()) {
 	r.askKind(view.ConfirmDelete, title, detail, accept)
 }
 
-func (r *Root) askKind(kind view.ConfirmationKind, title, detail string, accept func()) {
+func (r *Root) askConfirm(kind view.ConfirmationKind, title, body, detail core.Text, accept func()) {
 	if r.busy() {
 		return
 	}
 	r.confirming = true
 	r.generation++
-	r.confirmation = view.ConfirmationDialog{Open: true, Language: r.settings.Language, ID: fmt.Sprint(r.generation), Kind: kind, Title: core.SameText(title), Detail: core.SameText(detail)}
+	r.confirmation = view.ConfirmationDialog{
+		Open:     true,
+		Language: r.settings.Language,
+		ID:       fmt.Sprint(r.generation),
+		Kind:     kind,
+		Title:    title,
+		Body:     body,
+		Detail:   detail,
+	}
 	r.accept = accept
 	r.changed()
+}
+
+func (r *Root) askKind(kind view.ConfirmationKind, title, detail string, accept func()) {
+	r.askConfirm(kind, core.SameText(title), core.Text{}, core.SameText(detail), accept)
 }
 
 func (r *Root) resolveConfirmation(id string, accepted bool) {
@@ -298,6 +343,10 @@ func (r *Root) Navigate(v view.View) {
 	}
 	r.active = v
 	switch v {
+	case view.Junk:
+		if !r.junk.Scanned && !r.busy() {
+			r.scanJunk()
+		}
 	case view.Apps:
 		if !r.appsLoaded && !r.busy() {
 			r.scanApps()
@@ -308,7 +357,7 @@ func (r *Root) Navigate(v view.View) {
 		}
 	case view.Search:
 		if !r.busy() {
-			r.scanSearch()
+			r.scanSearch(false)
 		}
 	}
 	r.changed()
@@ -328,11 +377,12 @@ func (r *Root) Scan() {
 	case view.Disk:
 		r.scanDisk()
 	case view.Search:
-		// A refresh rebuilds every volume. Opening Search still fills only missing ones.
+		// A refresh reloads every volume through the shared owner (FSEvents
+		// replay on macOS). Windows drops its copies so all mounts reload.
 		if runtime.GOOS != "darwin" {
 			r.searchTrees = map[string]*core.SizeTree{}
 		}
-		r.scanSearch()
+		r.scanSearch(true)
 	case view.Declutter:
 		r.scanDeclutter()
 	default:
@@ -354,7 +404,6 @@ func (r *Root) Render(c *ui.Context) {
 		r.dashboard.CleanProgress = &snap
 	}
 	r.dashboard.StatusTab = r.status.Tab
-	r.dashboard.AutoCheck = r.settings.AutoCheckUpdates
 	r.junk.Language, r.apps.Language, r.dev.Language, r.status.Language, r.disk.Language, r.declutter.Language, r.search.Language = l, l, l, l, l, l, l
 	a := view.DashboardActions{Navigate: r.Navigate, Scan: r.Scan, SetLanguage: func(l view.Language) {
 		r.settings.Language = l
@@ -369,13 +418,6 @@ func (r *Root) Render(c *ui.Context) {
 			if !r.dashboard.MonitoringPaused {
 				r.refreshStatus()
 			}
-		}, SetAutoCheck: func(v bool) {
-			r.settings.AutoCheckUpdates = v
-			if r.updates != nil {
-				r.updates.SetAutoCheck(v)
-			}
-			r.save(r.settings)
-			r.changed()
 		}}
 	if r.active == view.Overview {
 		r.dashboard.Render(c, a)

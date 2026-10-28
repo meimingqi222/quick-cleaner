@@ -1,9 +1,14 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
 )
@@ -63,5 +68,149 @@ func TestUninstallFailureNoticeExplainsAndKeepsTheCode(t *testing.T) {
 	unknown := uninstallFailureNotice(errors.New("boom"))
 	if unknown.Get(core.Chinese) != "boom" || unknown.Get(core.English) != "boom" {
 		t.Fatalf("unknown error was rewritten: %q / %q", unknown.Get(core.Chinese), unknown.Get(core.English))
+	}
+}
+
+func TestUninstallConfirmationDialogMatchesRustReference(t *testing.T) {
+	r, _ := testRoot(t)
+	loc := "/Applications/Example.app"
+	uninstall := "example-uninstaller"
+	r.installed = []core.InstalledApp{{
+		ID:              "com.example.app",
+		Name:            "Example",
+		InstallLocation: &loc,
+		UninstallString: &uninstall,
+		EstimatedSize:   1024 * 1024 * 42,
+	}}
+	r.requestUninstall("com.example.app")
+	if !r.confirming {
+		t.Fatal("requestUninstall did not open confirmation dialog")
+	}
+	if r.confirmation.Kind != 2 /* ConfirmUninstall */ {
+		t.Fatalf("unexpected kind: %v", r.confirmation.Kind)
+	}
+	titleZh := r.confirmation.Title.Get(core.Chinese)
+	titleEn := r.confirmation.Title.Get(core.English)
+	if titleZh != "确认卸载「Example」？" {
+		t.Fatalf("titleZh does not match Rust reference: %q", titleZh)
+	}
+	if titleEn != "Uninstall \"Example\"?" {
+		t.Fatalf("titleEn does not match Rust reference: %q", titleEn)
+	}
+	bodyZh := r.confirmation.Body.Get(core.Chinese)
+	bodyEn := r.confirmation.Body.Get(core.English)
+	if bodyZh == "" || !strings.Contains(bodyZh, "Example") {
+		t.Fatalf("bodyZh empty or missing app name: %q", bodyZh)
+	}
+	if bodyEn == "" || !strings.Contains(bodyEn, "Example") {
+		t.Fatalf("bodyEn empty or missing app name: %q", bodyEn)
+	}
+	detailZh := r.confirmation.Detail.Get(core.Chinese)
+	if !strings.Contains(detailZh, "卸载成功后会列出关联配置与缓存") {
+		t.Fatalf("detailZh missing residual explanation: %q", detailZh)
+	}
+}
+
+func TestUninstallSuccessDoesNotLeaveResidualWarningBanner(t *testing.T) {
+	r, q := testRoot(t)
+	loc := filepath.Join(t.TempDir(), "Example.app")
+	uninstall := "example-uninstaller"
+	if err := os.Mkdir(loc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.installed = []core.InstalledApp{{
+		ID:              "com.example.app",
+		Name:            "Example",
+		InstallLocation: &loc,
+		UninstallString: &uninstall,
+	}}
+	r.uninstallApp = func(core.InstalledApp) error { return nil }
+	r.scanAppResiduals = func(context.Context, core.InstalledApp) (core.ResidualScanResult, error) {
+		return core.ResidualScanResult{AppName: "Example"}, nil
+	}
+	r.requestUninstall("com.example.app")
+	if !r.confirming {
+		t.Fatal("confirmation did not open")
+	}
+	r.resolveConfirmation(r.confirmation.ID, true)
+	if r.job == nil {
+		t.Fatalf("uninstall job never started (confirming=%v notice=%q)", r.confirming, r.apps.Notice.Get(core.Chinese))
+	}
+	// dispatch progress and completion
+	dispatchNext(t, q) // phase: removing
+	dispatchNext(t, q) // phase: verifying
+	dispatchNext(t, q) // completion
+	if r.apps.Notice.Get(core.Chinese) != "" {
+		t.Fatalf("uninstall success left a warning banner on AppsPage: %q", r.apps.Notice.Get(core.Chinese))
+	}
+	if !strings.Contains(r.dashboard.StatusText, "Example") || (!strings.Contains(r.dashboard.StatusText, "uninstaller finished") && !strings.Contains(r.dashboard.StatusText, "卸载程序已完成")) {
+		t.Fatalf("status text did not report uninstaller finished: %q", r.dashboard.StatusText)
+	}
+}
+
+func TestResidualCleanClearsNotice(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("native residual verification is only available on macOS and Windows")
+	}
+	r, q := testRoot(t)
+	app := core.InstalledApp{ID: "example", Name: "Example"}
+	gone := filepath.Join(t.TempDir(), "already-gone")
+	item := core.CertainResidual(core.ResidualKind{Type: core.ResidualFile, Path: gone}, core.ResidualCacheDir)
+	r.showResiduals(core.ResidualScanResult{AppName: app.Name, Items: []core.ResidualItem{item}}, &app)
+	r.residualAuthority = func(context.Context, core.InstalledApp, []core.ResidualItem) bool { return true }
+	r.apps.Notice = core.NewText("历史提示", "historical notice")
+	r.requestResidualClean()
+	dispatchNext(t, q)
+	if r.apps.Notice.Get(core.Chinese) != "" {
+		t.Fatalf("successful residual clean did not clear notice: %q", r.apps.Notice.Get(core.Chinese))
+	}
+}
+
+// 卸载成功直接从列表删行，不再重扫清单：残留的快捷方式/缓存目录会让
+// ListInstalledApps 把已卸载的应用重新「发现」回来，行必须靠移除消失。
+func TestSuccessfulUninstallDropsTheRowWithoutRescan(t *testing.T) {
+	r, q := testRoot(t)
+	loc := filepath.Join(t.TempDir(), "Example")
+	uninstall := "example-uninstaller"
+	if err := os.MkdirAll(loc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.installed = []core.InstalledApp{
+		{ID: "com.example.app", Name: "Example", InstallLocation: &loc, UninstallString: &uninstall},
+		{ID: "dev.other.app", Name: "Other"},
+	}
+	r.rebuildApps()
+	r.uninstallApp = func(core.InstalledApp) error { return nil }
+	r.scanAppResiduals = func(context.Context, core.InstalledApp) (core.ResidualScanResult, error) {
+		return core.ResidualScanResult{}, nil
+	}
+	r.requestUninstall("com.example.app")
+	if !r.confirming {
+		t.Fatal("confirmation did not open")
+	}
+	r.resolveConfirmation(r.confirmation.ID, true)
+	if r.job == nil {
+		t.Fatalf("uninstall job never started (confirming=%v notice=%q)", r.confirming, r.apps.Notice.Get(core.Chinese))
+	}
+	// 残留复核阶段的相位更新也要吐掉，最终 finish 才结算结果。
+	for i := 0; i < 8 && !r.apps.ResidualsOpen; i++ {
+		dispatchNext(t, q)
+	}
+	deadline := time.After(5 * time.Second)
+	for !r.apps.ResidualsOpen {
+		select {
+		case fn := <-q:
+			fn()
+		case <-deadline:
+			t.Fatal("residual review never opened")
+		}
+	}
+	for _, inst := range r.installed {
+		if inst.ID == "com.example.app" {
+			t.Fatal("uninstalled app survived in the list")
+		}
+	}
+	if len(r.installed) != 1 || r.dashboard.AppCount != 1 {
+		t.Fatalf("list = %v apps count = %d", r.installed, r.dashboard.AppCount)
 	}
 }

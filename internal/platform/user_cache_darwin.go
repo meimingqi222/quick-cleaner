@@ -12,8 +12,7 @@ var darwinCacheSystem struct {
 	confstr func(int32, []byte, uintptr) uintptr
 }
 
-// DarwinUserCacheDir reads _CS_DARWIN_USER_CACHE_DIR, not ~/Library/Caches.
-func DarwinUserCacheDir() (string, bool) {
+func confstrDir(name int32) (string, bool) {
 	darwinCacheSystem.Do(func() {
 		handle, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_NOW|purego.RTLD_LOCAL)
 		if err != nil {
@@ -27,13 +26,12 @@ func DarwinUserCacheDir() (string, bool) {
 	if darwinCacheSystem.confstr == nil {
 		return "", false
 	}
-	const csDarwinUserCacheDir = 65538
-	length := darwinCacheSystem.confstr(csDarwinUserCacheDir, nil, 0)
+	length := darwinCacheSystem.confstr(name, nil, 0)
 	if length == 0 || length > 1024*1024 {
 		return "", false
 	}
 	buffer := make([]byte, length)
-	written := darwinCacheSystem.confstr(csDarwinUserCacheDir, buffer, uintptr(len(buffer)))
+	written := darwinCacheSystem.confstr(name, buffer, uintptr(len(buffer)))
 	if written == 0 || written > uintptr(len(buffer)) {
 		return "", false
 	}
@@ -42,4 +40,16 @@ func DarwinUserCacheDir() (string, bool) {
 		return "", false
 	}
 	return string(buffer[:end]), true
+}
+
+// DarwinUserCacheDir reads _CS_DARWIN_USER_CACHE_DIR, not ~/Library/Caches.
+func DarwinUserCacheDir() (string, bool) {
+	const csDarwinUserCacheDir = 65538
+	return confstrDir(csDarwinUserCacheDir)
+}
+
+// DarwinUserTempDir reads _CS_DARWIN_USER_TEMP_DIR, not /tmp.
+func DarwinUserTempDir() (string, bool) {
+	const csDarwinUserTempDir = 65537
+	return confstrDir(csDarwinUserTempDir)
 }

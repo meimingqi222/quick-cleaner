@@ -103,6 +103,79 @@ func macRealBundle(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// macInstalledLocation reports whether an app bundle found by a Bundle ID query
+// is an actual installation rather than a copy that happens to carry the same
+// Info.plist.
+//
+// Spotlight happily indexes bundles that are not installs: an application that
+// migrates its bundle keeps a full `.backup.app` under
+// `~/Library/Caches/<id>.BundleMigration/backups/`, and that copy carries the
+// very same CFBundleIdentifier. Counting it as an installation means a finished
+// uninstall can never be confirmed — the leftover cache is reported as "the app
+// is still installed", so residual cleanup is refused forever.
+//
+// Only locations that cannot hold an installation are excluded. Anything else,
+// including paths this function cannot reason about, stays counted as installed:
+// wrongly treating a live app as gone is the one failure that deletes user data.
+func macInstalledLocation(path, home string, probes ...macVolumeProbe) bool {
+	if !macRealBundle(path) {
+		return false
+	}
+	sameVolume := macOnDataVolume
+	if len(probes) > 0 && probes[0] != nil {
+		sameVolume = probes[0]
+	}
+	if same, known := sameVolume(path); known && !same {
+		return false
+	}
+	if home == "" {
+		return true
+	}
+	// Caches never hold an installation, and the Trash is where installations
+	// go to die: Spotlight still indexes a trashed .app for a while, so a
+	// drag-to-Trash uninstall reads as "installed" unless Trash is excluded.
+	// Anything else — including paths this function cannot reason about —
+	// keeps counting as installed, because wrongly calling a live app gone is
+	// the failure that deletes user data.
+	return !macWithin(filepath.Join(home, "Library", "Caches"), path) &&
+		!macWithin(filepath.Join(home, ".Trash"), path)
+}
+
+// macAnyInstallation reports whether a Bundle ID query returned at least one
+// path that can hold an installation. The query already selects by identifier,
+// so this only drops the copies Spotlight also indexes (cached bundle backups).
+// Unreadable or unclassifiable paths still count: guessing "not installed" here
+// would authorize deleting a live app's configuration.
+func macAnyInstallation(stdout, home string, probes ...macVolumeProbe) bool {
+	for path := range strings.SplitSeq(strings.TrimSpace(stdout), "\n") {
+		if path = strings.TrimSpace(path); path != "" && macInstalledLocation(path, home, probes...) {
+			return true
+		}
+	}
+	return false
+}
+
+// macWithin reports whether path lies inside root. It compares resolved paths so
+// an aliased Library directory cannot smuggle a real install into the exception.
+func macWithin(root, path string) bool {
+	inside := func(root, path string) bool {
+		rel, err := filepath.Rel(root, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	if inside(root, path) {
+		return true
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return inside(resolvedRoot, resolvedPath)
+}
+
 func macMetadataValues(stdout []byte, count int) ([]string, bool) {
 	if !utf8.Valid(stdout) {
 		return nil, false
@@ -225,10 +298,25 @@ func macRegistrationRecords(text string) (map[string][]string, bool) {
 	return records, len(records) > 0
 }
 
-func macRegisteredLive(ctx context.Context, records map[string][]string, trash string, read func(string) *string) (map[string]struct{}, bool) {
+// macSameVolume reports whether path is on this machine's data volume. The
+// second result is false when the probe cannot tell — callers must then keep the
+// path counted as live, because "could not check" must never grant removal.
+type macVolumeProbe func(path string) (same bool, known bool)
+
+func macRegisteredLive(ctx context.Context, records map[string][]string, trash string, read func(string) *string, probes ...macVolumeProbe) (map[string]struct{}, bool) {
+	sameVolume := macOnDataVolume
+	if len(probes) > 0 && probes[0] != nil {
+		sameVolume = probes[0]
+	}
 	ids := make(map[string]struct{})
 	if resolved, err := filepath.EvalSymlinks(trash); err == nil {
 		trash = resolved
+	}
+	// Trash 与 Library 都是用户 HOME 的直接子项，从它的父目录推出 HOME。
+	// 推导不出来就不做缓存排除——少一层过滤只会更保守。
+	caches := ""
+	if home := filepath.Dir(trash); filepath.Base(trash) == ".Trash" && home != "/" {
+		caches = filepath.Join(home, "Library", "Caches")
 	}
 	for id, paths := range records {
 		for _, path := range paths {
@@ -253,6 +341,19 @@ func macRegisteredLive(ctx context.Context, records map[string][]string, trash s
 			}
 			rel, err := filepath.Rel(trash, resolved)
 			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			// 挂载卷（DMG、外接盘、网络卷）上的副本不是安装：LaunchServices
+			// 会登记安装盘里那份，把它当成「仍安装」会让刚删掉主程序的用户
+			// 永远清不掉残留。测不出卷身份时按安装计，绝不向放行删除的方向猜。
+			if same, known := sameVolume(resolved); known && !same {
+				continue
+			}
+			// 缓存里的 bundle 副本同理：应用做 bundle 迁移时会在
+			// `~/Library/Caches/<id>.BundleMigration/backups/` 留一份完整的
+			// `.backup.app`，它带着同一个 CFBundleIdentifier 并被 LaunchServices
+			// 登记。那份副本是卸载后本该清理的残留，不是「应用还在」。
+			if caches != "" && macWithin(caches, resolved) {
 				continue
 			}
 			ids[*actual] = struct{}{}

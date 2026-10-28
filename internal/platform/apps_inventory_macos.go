@@ -22,6 +22,11 @@ const macApplicationQuery = `kMDItemContentType == "com.apple.application-bundle
 // ReadMacAppRecords inventories ordinary bundles as HKCU, not unregistered apps.
 // Rule-owned uninstall routes are deliberately attached by core after this read.
 func ReadMacAppRecords(ctx context.Context) []AppRecord {
+	return ReadMacAppRecordsSized(ctx, nil)
+}
+
+// ReadMacAppRecordsSized uses estimates only for sizes; bundle identity stays live.
+func ReadMacAppRecordsSized(ctx context.Context, measure func(context.Context, string) (uint64, bool)) []AppRecord {
 	home, _ := UserHome()
 	var paths []macAppRoot
 	for _, root := range macAppRoots(home) {
@@ -66,11 +71,8 @@ func ReadMacAppRecords(ctx context.Context) []AppRecord {
 				}
 			}
 		}
-		out, complete = macInventoryCommand(ctx, 8*time.Second, "/usr/bin/du", append([]string{"-sk"}, names...)...)
-		if complete {
-			for path, size := range macParseDU(out.Stdout) {
-				sizes[path] = size
-			}
+		for path, size := range macAppSizes(ctx, names, measure, macInventoryCommand) {
+			sizes[path] = size
 		}
 	}
 	apps := make([]AppRecord, len(paths))
@@ -109,6 +111,32 @@ func ReadMacAppRecords(ctx context.Context) []AppRecord {
 	}
 	macSortAppRecords(result)
 	return result
+}
+
+func macAppSizes(ctx context.Context, paths []string, measure func(context.Context, string) (uint64, bool), run macBundleRunner) map[string]uint64 {
+	sizes := map[string]uint64{}
+	var unresolved []string
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return sizes
+		}
+		if measure != nil {
+			if size, ok := measure(ctx, path); ok {
+				sizes[path] = size
+				continue
+			}
+		}
+		unresolved = append(unresolved, path)
+	}
+	if len(unresolved) > 0 && ctx.Err() == nil {
+		out, complete := run(ctx, 8*time.Second, "/usr/bin/du", append([]string{"-sk"}, unresolved...)...)
+		if complete {
+			for path, size := range macParseDU(out.Stdout) {
+				sizes[path] = size
+			}
+		}
+	}
+	return sizes
 }
 
 func macParseApp(ctx context.Context, p macAppRoot, used macAppDate, size uint64) AppRecord {
@@ -281,7 +309,7 @@ func BundleIsStillInstalled(ctx context.Context, id string) (installed bool, kno
 	if !ok || !out.OK || strings.TrimSpace(string(out.Stderr)) != "" {
 		return false, false
 	}
-	if strings.TrimSpace(string(out.Stdout)) != "" {
+	if macAnyInstallation(string(out.Stdout), home) {
 		return true, true
 	}
 	out, ok = macInventoryCommand(ctx, 2*time.Second, "/usr/bin/mdfind", "-count", macApplicationQuery)
@@ -291,15 +319,6 @@ func BundleIsStillInstalled(ctx context.Context, id string) (installed bool, kno
 	count, err := strconv.ParseUint(strings.TrimSpace(string(out.Stdout)), 10, 64)
 	if err != nil || count == 0 {
 		return false, false
-	}
-	registered, ok := macRegistrationIDs(ctx)
-	if !ok {
-		return false, false
-	}
-	for actual := range registered {
-		if strings.EqualFold(actual, id) {
-			return true, true
-		}
 	}
 	paths, ok := macWorkspacePaths(ctx, id)
 	if !ok || home == "" {

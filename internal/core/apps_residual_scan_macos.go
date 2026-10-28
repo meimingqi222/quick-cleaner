@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -13,7 +14,7 @@ import (
 )
 
 type macResidualRoots struct {
-	home, systemLibrary, receipts, darwinCache, applications string
+	home, systemLibrary, receipts, darwinCache, darwinTemp, applications string
 }
 
 type macResidualEvidence struct {
@@ -53,6 +54,11 @@ func scanMacAppResidualsIn(ctx context.Context, app InstalledApp, roots macResid
 		}
 		if roots.darwinCache != "" {
 			s.entries(roots.darwinCache, ResidualCacheDir, Certain, func(name string) bool {
+				return macBundleSatellite(name, id, definition.Lists["helper_id_suffixes"])
+			})
+		}
+		if roots.darwinTemp != "" {
+			s.entries(roots.darwinTemp, ResidualCacheDir, Certain, func(name string) bool {
 				return macBundleSatellite(name, id, definition.Lists["helper_id_suffixes"])
 			})
 		}
@@ -148,6 +154,16 @@ func scanMacAppResidualsIn(ctx context.Context, app InstalledApp, roots macResid
 		return duplicate
 	})
 	result.Items = DedupeResiduals(s.items)
+	var directories []int
+	for i, item := range result.Items {
+		if item.Kind.Type == ResidualDirectory {
+			directories = append(directories, i)
+		}
+	}
+	boundedEach(ctx, len(directories), min(8, max(1, runtime.GOMAXPROCS(0))), func(i int) {
+		item := &result.Items[directories[i]]
+		item.Kind.Bytes = allocatedResidualSize(ctx, item.Kind.Path)
+	})
 	rule := NewRuleRef(snapshot, "residual-macos", "")
 	manualData := slices.Contains(definition.Lists["manual_app_support_bundle_ids"], app.RegistrySubpath)
 	for index := range result.Items {
@@ -172,9 +188,11 @@ func (s *macResidualScan) add(path string, source ResidualSource, confidence Con
 	if err != nil {
 		return
 	}
-	kind := ResidualKind{Type: ResidualFile, Path: path, Bytes: allocatedResidualSize(s.ctx, path)}
+	kind := ResidualKind{Type: ResidualFile, Path: path}
 	if info.IsDir() {
 		kind.Type = ResidualDirectory
+	} else {
+		kind.Bytes = allocatedResidualSize(s.ctx, path)
 	}
 	s.items = append(s.items, NewResidualItem(kind, source, confidence))
 }
@@ -195,6 +213,19 @@ func (s *macResidualScan) named(root, name string, source ResidualSource, confid
 	s.entries(root, source, confidence, func(value string) bool { return asciiLower(value) == asciiLower(name) })
 }
 
+func isAtomicTempSuffix(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
 func macBundleSatellite(name, bundleID string, suffixes []string) bool {
 	if !platform.ValidBundleID(bundleID) {
 		return false
@@ -206,6 +237,10 @@ func macBundleSatellite(name, bundleID string, suffixes []string) bool {
 			break
 		}
 	}
+	hidden := strings.HasPrefix(stem, ".")
+	if hidden {
+		stem = strings.TrimPrefix(stem, ".")
+	}
 	id := asciiLower(bundleID)
 	if stem == id {
 		return true
@@ -214,7 +249,7 @@ func macBundleSatellite(name, bundleID string, suffixes []string) bool {
 	if !ok {
 		return false
 	}
-	if isUUIDLike(rest) {
+	if isUUIDLike(rest) || (hidden && isAtomicTempSuffix(rest)) {
 		return true
 	}
 	for _, suffix := range suffixes {
@@ -222,7 +257,7 @@ func macBundleSatellite(name, bundleID string, suffixes []string) bool {
 		if rest == suffix {
 			return true
 		}
-		if uuid, ok := strings.CutPrefix(rest, suffix+"."); ok && isUUIDLike(uuid) {
+		if uuid, ok := strings.CutPrefix(rest, suffix+"."); ok && (isUUIDLike(uuid) || (hidden && isAtomicTempSuffix(uuid))) {
 			return true
 		}
 	}
@@ -475,6 +510,7 @@ func (s *macResidualScan) dotConfigs() {
 }
 
 func verifyMacResidualsWith(ctx context.Context, items []ResidualItem, extensions []ResidualKind, extensionsKnown bool) ([]ResidualItem, error) {
+	ctx = withoutSizeIndexes(ctx)
 	remaining := make([]ResidualItem, 0, len(items))
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {

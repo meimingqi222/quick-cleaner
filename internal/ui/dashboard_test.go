@@ -220,28 +220,19 @@ func TestDashboardStatusHeaderRouting(t *testing.T) {
 	}
 }
 
-// 侧栏底部是常驻的设置区（语言、版本都在这里）。自动检查更新原本只有应用菜单
-// 能改，Windows 移除菜单后必须有页面入口。
-func TestSidebarOffersAutoUpdateToggle(t *testing.T) {
-	var events []bool
-	s := appui.Dashboard{Language: appui.English, Version: "v0.0.16"}
-	a := appui.DashboardActions{SetAutoCheck: func(v bool) { events = append(events, v) }}
-	tt := ui.NewTester(func(c *ui.Context) { s.Render(c, a) }, 1280, 800)
-	if !tt.HasText("Check for updates automatically") {
-		t.Fatalf("settings area has no auto-update toggle: %v", tt.Texts())
+// 侧栏底部是常驻的设置区（语言、版本都在这里）——与 Rust 参照一致，就这三行：
+// 已释放空间、界面语言、版本号。Rust 的 `auto_check_updates` 只有持久化与读取，
+// 全仓库没有任何 UI 写入点，所以这里也不该长出第四个控件：它会把 190px 宽的
+// 底栏挤成截图里那样，语言胶囊被压到和标签重叠、版本号被顶出可视区。
+func TestSidebarSettingsAreaMatchesTheRustReference(t *testing.T) {
+	s := appui.Dashboard{Language: appui.English, Version: "v0.0.16", Freed: "0 B"}
+	tt := ui.NewTester(func(c *ui.Context) { s.Render(c, appui.DashboardActions{}) }, 1280, 800)
+	if tt.HasText("Check for updates automatically") || tt.HasText("自动检查更新") {
+		t.Fatalf("settings area grew a fourth control: %v", tt.Texts())
 	}
-	if err := tt.Click("Check for updates automatically"); err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 || !events[0] {
-		t.Fatalf("toggle events=%v, want one true", events)
-	}
-	s.AutoCheck = true
-	tt.Frame()
-	if err := tt.Click("Check for updates automatically"); err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 2 || events[1] {
-		t.Fatalf("toggle events=%v, want a second false", events)
+	for _, want := range []string{"Language", "v0.0.16"} {
+		if !tt.HasText(want) {
+			t.Fatalf("settings area lost %q: %v", want, tt.Texts())
+		}
 	}
 }

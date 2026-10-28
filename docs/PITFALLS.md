@@ -36,6 +36,8 @@ Note: `2026-10-05-unquoted-uninstall-strings.md`
 
 ## P2 隐形占位块必须和真卡片有一样的内边距与边框
 
+Note: `2026-10-28-status-card-placeholder.md`
+
 - **症状**：状态监控页 4×2 的卡片网格，**下排的卡片比上排明显宽**（真机
   实测上排四张各 235px、下排两张各 255px），两排边缘对不齐，像布局坏了。
 - **根因**：末行不足四张时用「空 div + `flex_1` + `min_w`」补位。flex 的
@@ -47,9 +49,9 @@ Note: `2026-10-05-unquoted-uninstall-strings.md`
   - 剩余空间四等分，每人拿到同样的增量，于是真卡片比占位块**恒定宽 42px**
   - 满行（四张真卡）时人人都有这 42px，所以只有不满的那一行会出问题
 - **防护**：
-  - [`card_rows`](../src/ui/views/status.rs) 的占位块必须写成
+  - [`card_rows`](../src/ui/views/status/cards.rs) 的占位块必须写成
     `div().flex_1().min_w(px(CARD_MIN_W)).p_5().border_1()`，和
-    [`status_card`](../src/ui/views/status.rs) 的盒子度量逐项对齐。
+    [`status_card`](../src/ui/views/status/cards.rs) 的盒子度量逐项对齐。
   - 卡片外壳只能从 `status_card()` 来，不要在各张卡里重抄一份
     `flex_1 / min_w / p_5`——抄一份就多一个和占位块跑偏的机会。
 - **改卡片网格时**：
@@ -409,17 +411,25 @@ Note: `2026-10-05-installation-stable-object-identity.md`、`2026-10-05-frozen-o
 
 ## P26 File Provider 的 `SF_DATALESS` 目录 `stat` 正常但 `readdir` 永久卡死
 
+Note: `2026-10-28-macos-index-incomplete-coverage.md`
+
 要靠 `getattrlistbulk` 的 `ATTR_CMN_FLAGS` 识别跳过，不能按路径名猜。
 
 ## P27 索引不含被跳过的子树
+
+Note: `2026-10-28-macos-index-incomplete-coverage.md`
 
 dataless / hang 集的缺项不能当成文件不存在——别把 SizeTree 的缺项当成文件不存在。
 
 ## P28 Unix 身份复核只认 dev+ino
 
+Note: `2026-10-05-windows-stable-identity.md`
+
 别把 mtime/len 加回去（会永久拒删活跃文件）。与 P19 的「Unix 仍用 dev/ino 复核」同一条约束。
 
 ## P29 `lsof +D` 复检目录批用独立的长超时
+
+Note: `2026-10-28-lsof-directory-timeout.md`
 
 不能和文件批共用 3 秒超时。
 
@@ -453,6 +463,8 @@ Note: `2026-10-05-live-database-crash-leftover-channel.md`
 伴随文件存在 ≠ 有活连接。
 
 ## P34 首次窗口绘制前不能同步生成清理目标
+
+Note: `2026-10-28-first-frame-scan-boundary.md`
 
 窗口级回调不能调用需要当前视图的 `request_animation_frame()`。
 
@@ -744,9 +756,11 @@ Note: `2026-10-11-search-threshold-completion.md`
 
 ## P55 本机工具链落后于 CI 的 stable 时，clippy / fmt 会「本地绿、CI 红」
 
+Note: `2026-10-28-ci-stable-toolchain.md`
+
 - **症状**：`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 在本机全绿，推送后 CI 立刻挂在 Clippy / Check formatting。
 - **根因**：CI 用 `dtolnay/rust-toolchain@stable`，随上游前进；本机 rustup 可能停在旧版本。新 clippy 会新增 lint（0.0.10 这轮是 1.99 的 `question_mark`），旧 rustfmt 的换行决策也可能不同。
-- **防护**：提交前用与 CI 同版本的 toolchain 复核，例如 `rustup toolchain install 1.99.0 --component clippy,rustfmt` 后跑 `cargo +1.99.0 clippy --all-targets -- -D warnings`；CI 报错里的行号与 lint 名是唯一权威。
+- **防护**：提交前确认 CI 当前 stable 版本，用相同版本的 rustfmt 与 clippy 复核；CI 报错里的行号与 lint 名提供具体诊断。
 - **禁止回退**：不能因为「本地过了」就断定 CI 会过；不能用 `#[allow]` 消掉新 lint，要按 lint 建议改写（这轮把比较符前缀拆成 `split_cmp_op`，行为不变）。
 
 ## P56 macOS 端口/线程枚举必须走 libproc，空表 stub 让 `:port` 搜索静默失效
@@ -928,6 +942,8 @@ Note: `2026-10-24-override-only-persist.md`
 
 ## P73 发布资产名、包内结构与 Windows 资源不能随构建方式改动
 
+Note: `2026-10-28-release-assets-resources.md`
+
 - **症状**：一旦改名或改包内结构，已安装用户的更新器找不到资产或载荷，静默停在旧版本；exe 少了资源，资源管理器、任务栏和窗口都退回默认图标，版本信息也是空的。
 - **根因**：Rust 与 Go 两套更新器都按固定资产名（`quick-cleaner-windows-x86_64.zip`、`quick-cleaner-macos-{universal,aarch64,x86_64}.zip` 及 `.sha256`）和 zip 内的 `quick-cleaner.exe` / `QuickCleaner.app` 认领更新。Go 没有 build.rs，图标、版本信息和清单全靠 `cmd/quick-cleaner/rsrc_windows_amd64.syso`；MyGo 的窗口类加载 ID 为 1 的图标资源。
 - **防护**：`scripts/package-windows.ps1` / `scripts/package-macos.sh` 保持 Rust 时期的名字、结构、bundle id 与图标；`tools/winres` 按 `internal/app` 的 `Version` 生成与 Rust `winres` 相同的资源，CI 与 release 都跑 `go run ./tools/winres -check`，release 还校验 tag 与 `Version` 一致。测试见 `tools/winres/main_test.go`。
@@ -1005,14 +1021,14 @@ Note: `2026-10-25-residual-versioned-display-name.md`
 - **防护**：`windowsResidualShortName` 剥掉尾部纯数字版本段（含 `v` 前缀）后再匹配，精确目录也再试一次短名 token；剥完不足 3 字符或本身就是通用名（`App 2` → `App`）则保留原名。回归见 Note。
 - **禁止回退**：不能为了命中短名就把反向包含的比例（`size*2 >= 名字长度`）整体放宽；不能改成按发布者目录匹配（`Google`/`Tencent` 会跨产品误报）；不能只改 Rust 或只改 Go 让两个版本分叉。
 
-## P82 只有菜单能改的设置必须有页面入口，应用菜单只留 macOS
+## P82 应用菜单只留 macOS，页面控件按 Rust 参照决定有没有
 
-Note: `2026-10-25-auto-check-toggle-in-sidebar.md`
+Note: `2026-10-27-sidebar-matches-rust-reference.md`
 
-- **症状**：Windows 原生标题栏下面又出现一条写着「QuickCleaner」的菜单栏；一旦去掉菜单，「自动检查更新」就再也没有入口。
-- **根因**：`installMenu` 在所有平台都装了 macOS 风格的应用菜单（`Label: "QuickCleaner"`），MyGo 在 Windows/Linux 把它画进客户区；而这个菜单同时是该设置唯一的修改途径。
-- **防护**：自动检查更新放进侧栏底部的常驻设置区（语言、版本旁），动作写 settings 并同步控制器；`installMenu` 只在 `darwin` 执行，菜单里不再保留已移到页面的开关；`AutoHideMenuBar` 随之撤掉。回归见 Note。
-- **禁止回退**：不能把应用菜单重新装回 Windows/Linux（会再出现重复标题栏）；不能让同一设置同时存在于菜单和页面（两个来源会漂移）；不能只删菜单而不给页面入口；`删除到回收站` 的唯一入口是磁盘透视页的 `disk-recycle` 复选框。
+- **症状**：Windows 原生标题栏下面又出现一条写着「QuickCleaner」的菜单栏；修完菜单后侧栏底栏又多出一个「自动检查更新」复选框，把 190px 宽的设置区挤到「English」胶囊贴边框、版本号被顶到边缘。
+- **根因**：`installMenu` 在所有平台都装了 macOS 风格的应用菜单（`Label: "QuickCleaner"`），MyGo 在 Windows/Linux 把它画进客户区。修这一点时**误判**了「菜单是该设置的唯一入口」——Rust 参照的 `auto_check_updates` 只有持久化与调度读取，全仓库没有任何 UI 写入点，侧栏底栏本来就只有三行（已释放空间、语言胶囊、版本）。于是补出来的控件本身就不该存在。
+- **防护**：`installMenu` 只在 `darwin` 执行，`AutoHideMenuBar` 撤掉；侧栏底栏与 `src/ui/shell/sidebar.rs` 逐行对齐，删掉 `Dashboard.AutoCheck`、`DashboardActions.SetAutoCheck` 与对应文案。`AutoCheckUpdates` 的持久化、`UpdateController` 的调度判断照旧保留，自动检查仍按设置生效。回归见 Note。
+- **禁止回退**：不能把应用菜单重新装回 Windows/Linux（会再出现重复标题栏）；**不能再用「某个设置会失去入口」当理由补 Rust 里不存在的页面控件**——先去参照树里确认有没有 UI 写入点；不能让同一设置同时存在于菜单和页面；`删除到回收站` 的唯一入口是磁盘透视页的 `disk-recycle` 复选框。
 
 ## P83 清理之后的列表要按失败清单剪枝，不能整页重扫
 
@@ -1058,6 +1074,7 @@ Note: `2026-10-25-vendor-launcher-dedup.md`
 - **根因**：快捷方式指向 `%LOCALAPPDATA%\Qoder\Qoder Launcher\Qoder Launcher.exe`，不在登记安装目录 `%LOCALAPPDATA%\Programs\Qoder` 之下，子树覆盖判断漏掉了它。
 - **防护**：`discoverAppCandidates` 只在两条同时成立时不列这个快捷方式候选：快捷方式名等于去掉版本号的登记名；目标的某一级祖先目录与安装目录同名。只隐藏条目，不授予删除权。回归见 Note。
 - **禁止回退**：不能只凭快捷方式名或只凭目录名认领（同名便携版会消失）；不能用前缀或包含匹配（`Qoder` 会认领 `Qoder CN`）；不能借此把启动器目录当成登记应用的卸载范围（P14）。
+
 ## P88 面板专属的说明不能塞进共享的 Notice 字段
 
 Note: `2026-10-25-residual-notice-leak.md`
@@ -1067,3 +1084,57 @@ Note: `2026-10-25-residual-notice-leak.md`
 - **防护**：拆出 `AppsPage.ResidualNotice` 只供面板渲染，`Notice` 继续承担真实错误提示；新增 `closeResiduals()` 统一关闭面板并清说明，`CloseResiduals` 动作与清理收尾都走它。回归见 Note。
 - **禁止回退**：不能把面板说明写回 `Notice`（会重新泄漏到正文）；不能在关闭时直接清空 `Notice`（会连真正的失败提示一起抹掉）；不能让面板状态有多个关闭入口，绕过 `closeResiduals`；文案不能再出现「目标身份」「占用」这类用户读不懂的词。
 
+
+## P89 Caskroom 里的旧式 cask 不能拦住所有应用的卸载
+
+Note: `2026-10-27-cask-legacy-receipt.md`
+
+- **症状**：卸载一个跟 Homebrew 毫无关系的应用，页面报「官方卸载未正常完成：Homebrew evidence missing: /opt/homebrew/Caskroom/<旧记录>/.metadata/INSTALL_RECEIPT.json」。
+- **根因**：归属盘点要遍历整个 `Caskroom` 找「谁拥有所选应用」，任何一条记录的收据缺失都被当成错误上抛，于是任意一条异常记录都会拦住全部卸载。现场的旧式 cask由 Homebrew 早期版本安装，只有清单、没有 `INSTALL_RECEIPT.json`。
+- **防护**：收据缺失按空收据继续盘点——记录仍然入表、仍然凭清单里的 `app` artifact 认领归属，但拿不到 `source` 证据时 `Supported` 恒为 false，永不授权卸载；收据存在却读不出（损坏、非法 UTF-8、被指向外部）仍然整条报错。处理器路径的封闭性判断两侧都用真实路径：先按原样做一次（拒绝 prefix 以下任何一跳链接），解成真实路径后再用规范化过的 prefix 复核一次，挡住 `/var → /private/var` 这类别名导致的「真实目标 vs 别名根」误判。回归见 Note。
+- **禁止回退**：不能跳过没有收据的 cask 目录（会让真正属于它的应用失去归属拦截）；不能把整个盘点错误降级成 warning 继续跑（等于放过被改坏的记录）；不能因为「旧记录无授权」就把 `Supported` 或 `Scope.Apps` 的判据放宽；不能直接删 Caskroom（P65）；不能用应用名或 Bundle ID 猜 token（P65）；不能只把处理器路径规范化而把根留在别名形态上。
+
+## P90 挂载卷（DMG）里的副本不是安装，常驻说明不是警告
+
+Note: `2026-10-27-dmg-volume-and-residual-banner.md`
+
+- **症状**：卸载应用后点「彻底清除所选」，面板原样不动，只剩一行「残留清理授权无法验证」；三个置信度「确定」的项目上方同时压着两条橙色横幅。
+- **根因**：①`BundleIsStillInstalled` 把 LaunchServices 登记也当成「仍安装」的肯定证据，而从 DMG 拖进应用程序后安装盘常常一直挂着，`/Volumes/Example/Example.app` 被登记成安装，于是刚删掉主程序的应用永远清不掉残留（Rust 参照只用 `mdfind` + 索引哨兵，不吃挂载卷副本）。②`ResidualNotice` 是每个面板都有的固定说明，却用橙色警示样式画在标题下方，看起来像待处理事项。
+- **防护**：判据收敛成「这个路径能不能装应用」——`macInstalledLocation` 排除 `~/Library/Caches` 下的 bundle 副本，卷身份比较目标与 `/`、`/System/Volumes/Data` 的设备号，系统数据卷以外的副本不计入；`mdfind` 与 LaunchServices 两条分支都要过同一套过滤。卷身份或用例测不出时保持原判断（fail closed）。常驻说明降为列表下方的灰字脚注，橙色只留给真实警示（`Notice`、占用、系统扩展）。回归见 Note。
+- **禁止回退**：不能用 `/Volumes/` 前缀排除代替卷身份判断（会漏外接盘/网络卷、误伤非标准卷的安装）；不能只在一处入口做排除（`mdfind`、`macRegisteredLive`、`macWorkspacePaths` 各走各的，漏一处就复发——缓存备份曾从登记分支漏回来）；不能在卷身份 `known=false` 时当作「不在本机」（那是放行删除的方向）；不能为此删掉 LaunchServices 登记这道证据；不能把常驻说明搬回标题下方的警示位。
+
+## P91 残留清理开始时必须立即收起弹窗，且单项复核不能跑全量 lsregister
+
+Note: `2026-10-27-residual-clean-speed-and-dialog-obscure.md`
+
+- **症状**：点击残留清理后，残留弹窗迟迟不关且按钮置灰，进度条被遮挡在弹窗背后底层显示 `0 个文件 / 0 B`；清理几 MB 的残留前置等待卡顿长达近 10 秒。
+- **根因**：①`requestResidualClean` 仅在清理完成的回调中才关闭弹窗，执行期间弹窗遮挡主窗口底栏进度条；且 `core.NewCleanProgress` 传入 `(0, 0)` 导致总量缺失。②`BundleIsStillInstalled` 对单一 ID 的卸载复核错误调用了全系统的 `macRegistrationIDs`（`lsregister -dump` 40 万行），导致删除前卡顿 6~9 秒。
+- **防护**：清理启动时立即调用 `closeResiduals()` 收起弹窗，备份现场以便未通过授权时完整恢复；正确统计选中项传入 `NewCleanProgress(len, bytes)`；单项 Bundle ID 卸载复核直接采用原生针对性 API `macWorkspacePaths` 结合卷过滤，剥离全系统 40 万行的全量转储调用。回归见 Note。
+- **禁止回退**：不能等到后台清理结束才关弹窗（会导致进度条在后台被遮挡）；不能在失败时丢弃面板状态与说明（用户需要看失败原因）；不能向进度条传入 0 统计；不能恢复 `BundleIsStillInstalled` 中的全量 `macRegistrationIDs` 调用。
+
+## P92 智能清理导航必须自动触发首扫并提供未扫兜底，页面占位必须保留粒子动画
+
+Note: `2026-10-27-junk-empty-scan-and-apps-spinner.md`
+
+- **症状**：初次进入「智能清理」页面时中间无内容呈空白，底栏留着 0B 的清理胶囊；「软件卸载」检索中占位呈静态灰字，无任何转动动效。
+- **根因**：①`Navigate(view.Junk)` 遗漏了未扫描自动触发 `scanJunk()`，且 `JunkPage` 缺乏 `!Scanned && !Scanning` 的空状态分支，直接落入 `else` 渲染空容器。②`apps_page.go` 移植时占位仅写了两行纯文本，遗漏了 Rust 的 `LoadingState`（64px 8 瓣轨道旋转圆点 + 呼吸光晕 + 动态省略号）。
+- **防护**：`Navigate(view.Junk)` 未扫描时自动启动扫描；`JunkPage` 增加 `unscannedPrompt` 引导视图与「开始全面扫描」按钮，未扫描时收起底部清理胶囊；在 `indicators.go` 中实现 64px `orbitSpinner` 与 `loadingState`，为「软件卸载」与「智能清理」提供与 Rust 一致的平滑帧绘制粒子动画。回归见 Note。
+- **禁止回退**：不能在 `Navigate(view.Junk)` 时漏掉自动扫描；不能让未扫描的 `JunkPage` 渲染空白；不能在页面扫描占位中使用静态纯文本替代粒子动效。
+
+## P93 Unix 索引里的反斜杠是文件名字符，不能套 Windows 分隔符规则
+
+Note: `2026-10-28-index-native-filenames.md`
+
+- **症状**：智能清理反复报 `invalid disk index: unsafe name component`，数百万节点索引无法复用，缓存扫描和构建产物发现退回逐目录遍历。
+- **根因**：合法 macOS 文件名里含反斜杠；全树校验和增量快路径都无条件拒绝 `/` 与 `\`，把 Windows 路径分隔符规则套到了 Unix。
+- **防护**：base/delta 与增量快路径共用 `validDiskIndexName`，遵守本机分隔符；回归覆盖合法名称保存、旧索引加载、路径查找、增量更新与危险名称拒绝。决策及红绿证据见 Note。
+- **禁止回退**：不能在 Unix 上无条件拒绝反斜杠；不能在 Windows 上一并放开；不能只修一条校验路径；不能借修复允许空名、`.`、`..`、斜杠或 NUL；真实损坏须重建，不能跳过坏节点后宣称覆盖完整。
+
+## P94 根挂载点 `/` 不能归一化成空字符串后被共享索引丢弃
+
+Note: `2026-10-28-junk-root-index.md`
+
+- **症状**：整盘索引成功加载，智能清理仍隐式走 live 遍历，缓存目标继续花数秒逐文件统计。
+- **根因**：`Norm` 去掉尾部分隔符，`normMount("/")` 成了空串；规划器丢根树，query 与卷归属也匹配不到根卷。
+- **防护**：根卷保留 `/`，规划、卷归属与 query 共用根卷包含绝对路径的语义，更具体挂载点继续优先。回归用磁盘上不存在的索引哨兵数据证明真的走索引，见 Note。
+- **禁止回退**：不能只检查 `owner.Load` 成功就宣称扫描复用索引；不能只修规划器而漏 query；不能为了保住根卷改全局 `Norm`；不能把根索引存在当成跳过未知覆盖与实时目标身份检查的理由。

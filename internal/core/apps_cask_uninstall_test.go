@@ -99,9 +99,15 @@ func TestAppCaskUninstallerReceiptBoundContract(t *testing.T) {
 				}
 				return f.metadata(p)
 			}
+			// 传给 brew 的是解开了别名之后的可执行文件路径：macOS 的 /var 指向
+			// /private/var，夹具根就在这层别名下。
+			expectedBrew, err := filepath.EvalSymlinks(f.brew)
+			if err != nil {
+				t.Fatal(err)
+			}
 			run := func(_ context.Context, brew, home, token string) (platform.ProcessResult, bool) {
 				calls++
-				if brew != f.brew || home != f.home || token != "renamed" {
+				if brew != expectedBrew || home != f.home || token != "renamed" {
 					t.Fatalf("wrong command %s %s %s", brew, home, token)
 				}
 				if scenario == "nonzero" {
@@ -165,5 +171,52 @@ func TestAppCaskUninstallerMultipleOwnersAndLatestDefinition(t *testing.T) {
 	}
 	if _, err := runAppCaskUninstaller(context.Background(), f.app, f.home, []string{f.prefix, f.prefix}, f.metadata, run); err == nil {
 		t.Fatal("multiple owners accepted")
+	}
+}
+
+// Caskroom 里早期安装的 cask 只有 .metadata/<version>/<timestamp>/Casks 清单，没有
+// INSTALL_RECEIPT.json。归属盘点是为了找「谁拥有所选应用」，这份缺失不能把整次卸载
+// 判死——否则卸载无关应用也会报
+// "Homebrew evidence missing: .../INSTALL_RECEIPT.json"。
+//
+// 但「不当错误」不等于「当不存在」：旧记录仍要凭清单里的 app artifact 认领归属，
+// 并且因为拿不到 source 证据，Supported 恒为 false，永不授权卸载。
+func TestAppCaskUninstallerIgnoresReceiptlessLegacyCasks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew cask fixture; macOS product path")
+	}
+	f := newCaskFixture(t)
+	legacy := filepath.Join(f.prefix, "Caskroom", "legacy", ".metadata")
+	caskWrite(t, filepath.Join(legacy, "config.json"), []byte(`{"default":{"appdir":"/Applications"}}`))
+	caskWrite(t, filepath.Join(legacy, "0.12.6-2", "20230407104235.511", "Casks", "legacy.json"),
+		[]byte(`{"artifacts":[{"uninstall":[{"pkgutil":"org.example.legacy"}]}]}`))
+	caskWrite(t, filepath.Join(f.prefix, "Caskroom", "legacy", "0.12.6-2", "Legacy.pkg"), []byte("pkg"))
+
+	records, err := caskInventory(f.prefix, f.home, f.app.RegistrySubpath)
+	if err != nil {
+		t.Fatalf("receipt-less legacy cask blocked the inventory: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("legacy record vanished from the owner list: %+v", records)
+	}
+	for _, record := range records {
+		if record.Token == "legacy" && (record.Supported || len(record.Scope.Apps) != 0) {
+			t.Fatalf("receipt-less record gained authority: %+v", record)
+		}
+	}
+	// 收据缺失的那条与所选应用无关，卸载照常执行。
+	calls := 0
+	run := func(context.Context, string, string, string) (platform.ProcessResult, bool) {
+		calls++
+		for _, p := range []string{f.selected, f.receipt, f.definition} {
+			if err := os.RemoveAll(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return platform.ProcessResult{OK: true}, true
+	}
+	handled, err := runAppCaskUninstaller(context.Background(), f.app, f.home, []string{f.prefix}, f.metadata, run)
+	if !handled || err != nil || calls != 1 {
+		t.Fatalf("legacy record blocked an owned uninstall: handled=%v err=%v calls=%d", handled, err, calls)
 	}
 }

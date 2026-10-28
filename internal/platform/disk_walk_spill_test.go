@@ -102,7 +102,11 @@ func TestMacWalkSpillReclaimsDeadProcessFilesOnly(t *testing.T) {
 
 func deadTestPID(t *testing.T) int {
 	t.Helper()
-	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{})
+	bin := "/usr/bin/true"
+	if _, err := os.Stat(bin); err != nil {
+		bin = "/bin/true"
+	}
+	proc, err := os.StartProcess(bin, []string{"true"}, &os.ProcAttr{})
 	if err != nil {
 		t.Fatal(err)
 	}

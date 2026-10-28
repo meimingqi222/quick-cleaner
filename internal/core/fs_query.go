@@ -100,9 +100,14 @@ type FileIndexQuery interface {
 
 // FSIndexEngine uses an optional index. Incomplete/missing roots fall back
 // individually; a nonempty result from one root never suppresses another root.
-type FSIndexEngine struct{ tree *SizeTree }
+type FSIndexEngine struct {
+	tree  *SizeTree
+	slots chan struct{}
+}
 
-func NewFSIndexEngine(tree *SizeTree) *FSIndexEngine { return &FSIndexEngine{tree: tree} }
+func NewFSIndexEngine(tree *SizeTree) *FSIndexEngine {
+	return &FSIndexEngine{tree: tree, slots: newMeasurementSlots()}
+}
 
 var _ FileIndexQuery = (*FSIndexEngine)(nil)
 
@@ -221,8 +226,14 @@ func (e *FSIndexEngine) MeasurePath(ctx context.Context, path string) (PathMeasu
 		idx, _ := e.tree.FindNodeByPath(path)
 		return PathMeasurement{Size: e.tree.SizeOf(idx), Files: e.tree.FileCountOf(idx)}, true
 	}
-	return measurePathShared(ctx, path, make(chan struct{}, max(1, runtime.GOMAXPROCS(0)-1)))
+	slots := e.slots
+	if slots == nil {
+		slots = newMeasurementSlots()
+	}
+	return measurePathShared(ctx, path, slots)
 }
+
+func newMeasurementSlots() chan struct{} { return make(chan struct{}, max(1, runtime.GOMAXPROCS(0)-1)) }
 
 // measurePathShared lets concurrent callers share one fan-out budget, so N
 // parallel measurements do not each spawn GOMAXPROCS directory goroutines.

@@ -1,0 +1,6 @@
+=== RUN   TestResidualCleanDoesNotReopenTheReviewPanel
+    root_test.go:348: review panel remained open while cleaning was in progress
+--- FAIL: TestResidualCleanDoesNotReopenTheReviewPanel (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.422s
+FAIL

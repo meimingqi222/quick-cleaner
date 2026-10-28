@@ -1,6 +1,8 @@
 # Agent Note: 自动检查更新挪进侧栏设置区，应用菜单只留 macOS
 
 Status: implemented
+Archived: 2026-10-27
+Superseded-by: 2026-10-27-sidebar-matches-rust-reference.md
 
 ## Problem
 
@@ -37,7 +39,8 @@ macOS 仍用系统菜单栏且保留 Cmd+Q。「删除到回收站」维持磁�
 
 ## Verification
 
-- `internal/ui/dashboard_test.go::TestSidebarOffersAutoUpdateToggle`
+- `internal/ui/dashboard_test.go`（当时的 `TestSidebarOffersAutoUpdateToggle`，已被
+  `2026-10-27-sidebar-matches-rust-reference.md` 的 `TestSidebarSettingsAreaMatchesTheRustReference` 取代）
 
 Proved: 修复前该断言把侧栏全部文案打印出来，里面没有任何自动检查更新选项；日志见
 `docs/agent-notes-evidence/2026-10-25-auto-check-toggle-red.log`。修复后 focused 通过，

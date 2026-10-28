@@ -1,0 +1,5 @@
+$ go test ./internal/platform/ -run TestMacRegisteredLiveIgnoresCachedBundleCopies -v
+=== RUN   TestMacRegisteredLiveIgnoresCachedBundleCopies
+--- PASS: TestMacRegisteredLiveIgnoresCachedBundleCopies (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	(cached)

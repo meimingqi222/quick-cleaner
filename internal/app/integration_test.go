@@ -48,7 +48,7 @@ func TestUnelevatedSearchWithoutAnIndexAsksForAdmin(t *testing.T) {
 	}
 	r, q := testRoot(t)
 	r.disk.Volumes = []view.DiskPageVolume{{ID: core.VolumeFromMountPoint(`C:\`)}}
-	r.scanSearch()
+	r.scanSearch(false)
 	select {
 	case fn := <-q:
 		t.Fatalf("unelevated search published work: %T", fn)
@@ -74,7 +74,7 @@ func TestSearchIndexesMissingVolumesWithoutChangingDiskNavigation(t *testing.T) 
 	r.searchTrees[r.disk.Volume.Mount] = r.tree
 	diskTree := r.tree
 	r.search.Query = "needle"
-	r.scanSearch()
+	r.scanSearch(false)
 	if runtime.GOOS == "windows" && !platform.IsElevated() {
 		// $MFT stays unread. The index that already exists is still searched.
 		dispatchNext(t, q)
@@ -85,11 +85,7 @@ func TestSearchIndexesMissingVolumesWithoutChangingDiskNavigation(t *testing.T) 
 	}
 	dispatchNext(t, q)
 	dispatchNext(t, q)
-	expectedCalls := 1
-	if runtime.GOOS == "darwin" {
-		expectedCalls = 2
-	}
-	if len(owner.calls) != expectedCalls || len(r.search.Results) != 2 || !r.search.Ready || r.tree != diskTree {
+	if len(owner.calls) != 1 || len(r.search.Results) != 2 || !r.search.Ready || r.tree != diskTree {
 		t.Fatalf("multi-volume index/navigation mismatch: calls=%v hits=%v", owner.calls, r.search.Results)
 	}
 }

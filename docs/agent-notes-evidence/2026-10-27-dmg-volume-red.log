@@ -1,0 +1,7 @@
+$ go test ./internal/platform/ -run TestMacRegisteredLiveIgnoresBundlesOnOtherVolumes -v  # 只撤「挂载卷副本不算安装」这一处防护
+=== RUN   TestMacRegisteredLiveIgnoresBundlesOnOtherVolumes
+    apps_bundle_test.go:285: mounted image copy counted as an installation: map[com.example.Dmg:{}] true
+--- FAIL: TestMacRegisteredLiveIgnoresBundlesOnOtherVolumes (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.344s
+FAIL

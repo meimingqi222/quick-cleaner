@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 )
 
@@ -23,10 +24,25 @@ type DiskResult struct {
 	Skipped int64
 }
 
+func isAllowedSystemAncestor(p string) bool {
+	clean := filepath.Clean(p)
+	switch runtime.GOOS {
+	case "darwin":
+		return clean == "/var" || clean == "/tmp" || clean == "/etc"
+	case "linux":
+		return clean == "/bin" || clean == "/sbin" || clean == "/lib" || clean == "/lib64"
+	default:
+		return false
+	}
+}
+
 // ScanDirectory never follows symbolic links. Inaccessible entries are counted
 // explicitly so a partial inventory cannot masquerade as a complete one.
 // The callback runs on the caller's goroutine.
 func ScanDirectory(ctx context.Context, root string, progress func(Usage)) (DiskResult, error) {
+	if err := ctx.Err(); err != nil {
+		return DiskResult{}, err
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return DiskResult{}, err
@@ -38,7 +54,20 @@ func ScanDirectory(ctx context.Context, root string, progress func(Usage)) (Disk
 		if err != nil {
 			return result, err
 		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if p != root && isAllowedSystemAncestor(p) {
+				targetInfo, statErr := os.Stat(p)
+				if statErr != nil || !targetInfo.IsDir() {
+					return result, fmt.Errorf("not a plain directory: %s", p)
+				}
+				if filepath.Dir(p) == p {
+					break
+				}
+				continue
+			}
+			return result, fmt.Errorf("not a plain directory: %s", p)
+		}
+		if !info.IsDir() {
 			return result, fmt.Errorf("not a plain directory: %s", p)
 		}
 		if filepath.Dir(p) == p {

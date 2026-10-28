@@ -34,6 +34,7 @@ type JunkPage struct {
 }
 
 type JunkPageActions struct {
+	Rescan                                 func()
 	ToggleCategory                         func(core.CategoryID)
 	ToggleExpanded                         func(core.CategoryID)
 	ToggleItem                             func(string)
@@ -42,6 +43,10 @@ type JunkPageActions struct {
 	Exclude, RemoveExclusion, ReleaseCache func(string)
 	ToggleFailedDetails                    func()
 	RequestClean                           func()
+}
+
+func (s *JunkPage) busy() bool {
+	return s.Scanning || s.Cleaning || s.Discovering
 }
 
 var junkError = ui.Hex("#ba1a1a")
@@ -60,15 +65,15 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 	ui.Column(c).Fill().Gap(0).Children(func() {
 		ui.Scroll(c.Key("junk-scroll")).Grow(1).MinHeight(0).FillWidth().TrackScroll(&s.Scroll).Children(func() {
 			ui.Column(c).FillWidth().Padding(20).Gap(20).Children(func() {
-				ui.Row(c).Gap(16).Children(func() {
+				ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-						ui.Text(c, dashboardStrings(s.Language).nav[Junk]).FontSize(18).Bold()
-						ui.Text(c, t.headingSub).FontSize(12).TextColor(muted)
+						ui.Text(c, dashboardStrings(s.Language).nav[Junk]).FontSize(22).Bold()
+						ui.Text(c, t.headingSub).FontSize(13).FixedLineHeight(18).TextColor(muted)
 					})
 					if junkButton(c.Key("exclusions-toggle"), fmt.Sprintf(t.exclusions, len(s.Exclusions)), true, s.ShowExclusions) && actions.ToggleExclusions != nil {
 						actions.ToggleExclusions()
 					}
-					ui.Row(c).Padding(6, 12).Gap(12).Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Children(func() {
+					ui.Row(c).Padding(6, 14).Gap(12).Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).AlignItems(ui.Center).Children(func() {
 						size := "—"
 						var total uint64
 						for _, category := range s.Categories {
@@ -81,11 +86,11 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 						if total > 0 {
 							fg, bg = junkError, junkErrorContainer
 						}
-						ui.Column(c).Gap(0).Children(func() {
-							ui.Text(c, t.found).FontSize(12).TextColor(outline)
-							ui.Text(c, size).FontSize(14).Bold().TextColor(fg)
+						ui.Column(c).Gap(1).Children(func() {
+							ui.Text(c, t.found).FontSize(11).TextColor(outline)
+							ui.Text(c, size).FontSize(16).Bold().TextColor(fg)
 						})
-						ui.Box(c).Size(26, 26).Radius(999).Center().Background(bg).Children(func() { icon(c, Junk, fg, 13) })
+						ui.Box(c).Size(32, 32).Radius(999).Center().Background(bg).Children(func() { icon(c, Junk, fg, 16) })
 					})
 				})
 				if s.ShowExclusions {
@@ -95,11 +100,9 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 					s.failures(c, actions)
 				}
 				if s.Scanning {
-					ui.Column(c).FillWidth().Padding(48).Gap(12).AlignItems(ui.Center).Children(func() {
-						loadingSpinner(c, 28)
-						ui.Text(c, t.loadingTitle).FontSize(16).Bold()
-						ui.Text(c, t.loadingSub).FontSize(12).TextColor(outline)
-					})
+					loadingState(c, t.loadingTitle, t.loadingSub)
+				} else if !s.Scanned {
+					s.unscannedPrompt(c, actions, t)
 				} else if s.Scanned && !s.Discovering && s.itemCount() == 0 {
 					ui.Column(c.Key("junk-clean")).FillWidth().Padding(48).Gap(12).AlignItems(ui.Center).Children(func() {
 						ui.Box(c).Size(56, 56).Radius(999).Background(primaryFixed).Center().Children(func() { icon(c, Junk, primary, 24) })
@@ -296,6 +299,24 @@ func (s *JunkPage) failures(c *ui.Context, actions JunkPageActions) {
 	})
 }
 
+func (s *JunkPage) unscannedPrompt(c *ui.Context, actions JunkPageActions, t junkCopy) {
+	ui.Column(c.Key("junk-unscanned")).FillWidth().Padding(64, 20).Gap(16).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Size(64, 64).Radius(999).Background(primaryFixed).Center().Children(func() {
+			icon(c, Junk, primary, 32)
+		})
+		ui.Text(c, t.unscannedTitle).FontSize(18).Bold()
+		ui.Text(c, t.loadingSub).FontSize(12).TextColor(outline)
+		rescanBtn := ui.ButtonBase(c.Key("junk-start-scan")).Padding(10, 24).Radius(999).Cursor(ui.CursorPointer)
+		interactive(rescanBtn, primary, primary.Alpha(.9), primary.Alpha(.8), !s.busy())
+		rescanBtn.Children(func() {
+			ui.Text(c, t.startScan).FontSize(14).Bold().TextColor(card)
+		})
+		if rescanBtn.Clicked() && actions.Rescan != nil {
+			actions.Rescan()
+		}
+	})
+}
+
 func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 	t := junkStrings(s.Language)
 	total, picked := 0, 0
@@ -310,11 +331,11 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 		}
 	}
 	ui.Row(c).FillWidth().Shrink(0).Padding(10, 20).Justify(ui.Center).Background(background).BorderWidth(1, 0, 0, 0).BorderColor(outlineVariant.Alpha(.5)).Children(func() {
-		ui.Row(c).Padding(4, 5, 4, 20).Gap(20).Radius(999).Background(card).Border(1, outlineVariant.Alpha(.6)).Children(func() {
+		ui.Row(c).Padding(5, 6, 5, 20).Gap(20).Radius(999).Background(card).Border(1, outlineVariant.Alpha(.6)).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(0).Children(func() {
-				ui.Text(c, t.selected).FontSize(12).TextColor(outline)
-				ui.Row(c).Gap(8).Children(func() {
-					ui.Text(c, core.FmtSize(size)).FontSize(16).Bold()
+				ui.Text(c, t.selected).FontSize(11).TextColor(outline)
+				ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
+					ui.Text(c, core.FmtSize(size)).FontSize(18).Bold()
 					ui.Text(c, fmt.Sprintf(t.selectedItems, picked)).FontSize(12).TextColor(outline)
 				})
 			})
