@@ -1138,3 +1138,12 @@ Note: `2026-10-28-junk-root-index.md`
 - **根因**：`Norm` 去掉尾部分隔符，`normMount("/")` 成了空串；规划器丢根树，query 与卷归属也匹配不到根卷。
 - **防护**：根卷保留 `/`，规划、卷归属与 query 共用根卷包含绝对路径的语义，更具体挂载点继续优先。回归用磁盘上不存在的索引哨兵数据证明真的走索引，见 Note。
 - **禁止回退**：不能只检查 `owner.Load` 成功就宣称扫描复用索引；不能只修规划器而漏 query；不能为了保住根卷改全局 `Norm`；不能把根索引存在当成跳过未知覆盖与实时目标身份检查的理由。
+
+## P95 笔记锚点检查只认 Rust/Python，新增语言会全量误报
+
+Note: `2026-10-28-go-anchor-check.md`
+
+- **症状**：Go 迁移后 `Bound anchors are real tests` 作业恒红，报告 94 个锚点「不是任何已列出二进制里的测试」，而这些测试在引用文件里真实存在。
+- **根因**：`scripts/check-anchors-vs-tests.py` 只对 `.py` 锚点做文件内 `def` 校验，其余一律和 `cargo test --list` 清单比对；CI 也只产 Rust 清单。Python 锚点曾因同一缺口全红过一次，Go 锚点又重演。
+- **防护**：`.go` 锚点按 `^func <name>(` 在引用文件内校验，与 `.py` 的 `def` 同级；Rust 继续走清单并集。回归见 Note。
+- **禁止回退**：不能把新语言锚点直接塞进 Rust 清单比对；不能因为「Go 测试在 go.yml 里会跑」就删掉 verify-anchors 的绑定检查；新增语言必须先登记声明形式并补一条 red/green。
