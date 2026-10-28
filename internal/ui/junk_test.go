@@ -1,6 +1,7 @@
 package ui_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -110,6 +111,45 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 		}
 		if requests != 1 {
 			t.Fatalf("%s authorized cleanup", state)
+		}
+	}
+}
+
+// The page body owns only the space left under the top bar. Claiming the whole
+// column height pushes the docked capsule past the content area and over the
+// global status bar once the window stops being tall enough to hide it.
+func TestJunkCleanBarStaysAboveTheStatusBar(t *testing.T) {
+	const status = "Loaded 194 apps, about 227.67 GB in total"
+	dash := appui.Dashboard{Language: appui.English, StatusText: status}
+	for _, height := range []int{900, 800, 700, 600} {
+		items := make([]core.ScanItem, 146)
+		for i := range items {
+			items[i] = core.ScanItem{Path: "/fixture/cache/" + strconv.Itoa(i), Label: core.NewText("示例缓存", "Example cache"), Size: 7}
+		}
+		// A ListState belongs to one window, so each height needs its own page.
+		page := appui.JunkPage{
+			Language: appui.English, Scanned: true,
+			Categories: []core.CategorySummary{
+				{Category: core.UserCache, TotalSize: 1022, Items: items},
+				{Category: core.DevBuild, TotalSize: 200, Items: []core.ScanItem{
+					{Path: "/fixture/build", Label: core.NewText("构建产物", "Build output"), Size: 200},
+				}},
+			},
+			Selected: map[string]bool{"/fixture/cache/0": true},
+			Expanded: map[core.CategoryID]bool{core.UserCache: true},
+		}
+		tt := ui.NewTester(func(c *ui.Context) {
+			dash.RenderPage(c, appui.Junk, appui.DashboardActions{}, func() {
+				page.RenderContent(c, appui.JunkPageActions{})
+			})
+		}, 1456, height)
+		clean, ok := tt.Find("Clean Now")
+		statusBar, okStatus := tt.Find(status)
+		if !ok || !okStatus {
+			t.Fatalf("%d: clean button found=%v, status bar found=%v; texts: %v", height, ok, okStatus, tt.Texts())
+		}
+		if bottom := clean.Y + clean.H; bottom > statusBar.Y {
+			t.Fatalf("%d: clean bar bottom %.1f overlaps the status bar at %.1f", height, bottom, statusBar.Y)
 		}
 	}
 }

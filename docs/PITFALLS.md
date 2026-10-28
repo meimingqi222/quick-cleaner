@@ -1147,3 +1147,12 @@ Note: `2026-10-28-go-anchor-check.md`
 - **根因**：`scripts/check-anchors-vs-tests.py` 只对 `.py` 锚点做文件内 `def` 校验，其余一律和 `cargo test --list` 清单比对；CI 也只产 Rust 清单。Python 锚点曾因同一缺口全红过一次，Go 锚点又重演。
 - **防护**：`.go` 锚点按 `^func <name>(` 在引用文件内校验，与 `.py` 的 `def` 同级；Rust 继续走清单并集。回归见 Note。
 - **禁止回退**：不能把新语言锚点直接塞进 Rust 清单比对；不能因为「Go 测试在 go.yml 里会跑」就删掉 verify-anchors 的绑定检查；新增语言必须先登记声明形式并补一条 red/green。
+
+## P96 页面根列用 Fill() 会越过顶栏压到底部状态栏
+
+Note: `2026-10-28-junk-clean-bar-overlap.md`
+
+- **症状**：窗口高度较矮（约 810 DIP 以下）时，智能清理底部的「已选择清理」胶囊条压到全局状态栏上，按钮底边被窗口裁掉；窗口拉高后自行消失，容易误判为截图裁剪。
+- **根因**：`JunkPage.RenderContent` 的根列用 `Fill()`（高度 100%），它位于 44px 顶栏之后，却按整列高度取尺寸，比剩余空间多出顶栏高度；内容区没有裁剪，多出的部分直接覆盖到底部状态栏。
+- **防护**：页面根列改用 `Grow(1).FillWidth().MinHeight(0)`，与其他页面一致，只占顶栏之后的空间；`TestJunkCleanBarStaysAboveTheStatusBar` 在 900/800/700/600 高度下锁住胶囊条底边不越过状态栏。回归见 Note。
+- **禁止回退**：不能把根列改回 `Fill()`；不能只在窗口高度上做特殊判断（换顶栏高度或 DPI 后又会复发）；不能删除短窗口高度的断言。

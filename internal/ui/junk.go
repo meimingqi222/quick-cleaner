@@ -62,7 +62,7 @@ func (s *JunkPage) itemCount() int {
 
 func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 	t := junkStrings(s.Language)
-	ui.Column(c).Fill().Gap(0).Children(func() {
+	ui.Column(c).Grow(1).FillWidth().MinHeight(0).Gap(0).Children(func() {
 		ui.Scroll(c.Key("junk-scroll")).Grow(1).MinHeight(0).FillWidth().TrackScroll(&s.Scroll).Children(func() {
 			ui.Column(c).FillWidth().Padding(20).Gap(20).Children(func() {
 				ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {

@@ -1,0 +1,6 @@
+=== RUN   TestJunkCleanBarStaysAboveTheStatusBar
+    junk_test.go:152: 800: clean bar bottom 787.0 overlaps the status bar at 778.0
+--- FAIL: TestJunkCleanBarStaysAboveTheStatusBar (0.02s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.407s
+FAIL

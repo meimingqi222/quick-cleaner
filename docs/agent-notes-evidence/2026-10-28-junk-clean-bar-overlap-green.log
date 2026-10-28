@@ -1,0 +1,4 @@
+=== RUN   TestJunkCleanBarStaysAboveTheStatusBar
+--- PASS: TestJunkCleanBarStaysAboveTheStatusBar (0.03s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.326s
