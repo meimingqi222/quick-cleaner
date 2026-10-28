@@ -112,6 +112,9 @@ func TestUninstallConfirmationDialogMatchesRustReference(t *testing.T) {
 }
 
 func TestUninstallSuccessDoesNotLeaveResidualWarningBanner(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("native residual verification is only available on macOS and Windows")
+	}
 	r, q := testRoot(t)
 	loc := filepath.Join(t.TempDir(), "Example.app")
 	uninstall := "example-uninstaller"
@@ -169,6 +172,9 @@ func TestResidualCleanClearsNotice(t *testing.T) {
 // 卸载成功直接从列表删行，不再重扫清单：残留的快捷方式/缓存目录会让
 // ListInstalledApps 把已卸载的应用重新「发现」回来，行必须靠移除消失。
 func TestSuccessfulUninstallDropsTheRowWithoutRescan(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("native residual verification is only available on macOS and Windows")
+	}
 	r, q := testRoot(t)
 	loc := filepath.Join(t.TempDir(), "Example")
 	uninstall := "example-uninstaller"
