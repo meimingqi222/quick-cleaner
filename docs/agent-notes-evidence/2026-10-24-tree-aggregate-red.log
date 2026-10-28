@@ -1,0 +1,7 @@
+# guard removed: recomputeHeapAggregates restored to the per-file ancestor walk
+=== RUN   TestHeapAggregatesRollUpOncePerEdge
+    disk_tree_test.go:257: aggregation walked per-file ancestor chains
+--- FAIL: TestHeapAggregatesRollUpOncePerEdge (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.304s
+FAIL

@@ -1,0 +1,5 @@
+$ go test ./internal/ui/ -run TestResidualGuaranteeIsNotDrawnAsAWarning -v
+=== RUN   TestResidualGuaranteeIsNotDrawnAsAWarning
+--- PASS: TestResidualGuaranteeIsNotDrawnAsAWarning (0.03s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.257s

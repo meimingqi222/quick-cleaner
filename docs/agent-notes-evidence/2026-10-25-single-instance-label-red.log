@@ -1,0 +1,7 @@
+# guard removed: no Medium mandatory label in the instance SDDL
+=== RUN   TestInstanceObjectsAreReachableFromMediumIntegrity
+    single_instance_windows_test.go:75: mutex label "" is not Medium
+--- FAIL: TestInstanceObjectsAreReachableFromMediumIntegrity (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.950s
+FAIL

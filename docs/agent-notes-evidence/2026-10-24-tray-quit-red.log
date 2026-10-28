@@ -1,0 +1,7 @@
+# guard removed: onMainClose hides to the tray even during an admitted quit
+=== RUN   TestAdmittedQuitClosesTheMainWindowInsteadOfHidingIt
+    tray_quit_test.go:41: the main window hid during a quit; MyGo abandons the quit
+--- FAIL: TestAdmittedQuitClosesTheMainWindowInsteadOfHidingIt (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.506s
+FAIL

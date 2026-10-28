@@ -1,0 +1,67 @@
+==================
+WARNING: DATA RACE
+Read at 0x00c00013bc50 by goroutine 40:
+  runtime.mapaccess1_faststr()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/internal/runtime/maps/runtime_faststr.go:114 +0x4c
+  runtime.mapaccess1_faststr()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/internal/runtime/maps/runtime_faststr.go:115 +0x1c
+
+Previous write at 0x00c00013bc50 by goroutine 15:
+  runtime.mapaccess2_faststr()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/internal/runtime/maps/runtime_faststr.go:120 +0x2bc
+  github.com/meimingqi222/quick-cleaner/internal/app.(*Root).markTrashSeen()
+      /Users/<user>/work/code/quick-cleaner/internal/app/tray.go:158 +0xc8
+  github.com/meimingqi222/quick-cleaner/internal/app.TestTrashSeenConcurrentClaims.func1()
+      /Users/<user>/work/code/quick-cleaner/internal/app/trash_seen_test.go:14 +0x18
+
+Goroutine 40 (running) created at:
+  sync.(*WaitGroup).Go()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/sync/waitgroup.go:238 +0x6c
+  testing.tRunner()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2258 +0x34
+
+Goroutine 15 (running) created at:
+  sync.(*WaitGroup).Go()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/sync/waitgroup.go:238 +0x6c
+  testing.tRunner()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2258 +0x34
+==================
+==================
+WARNING: DATA RACE
+Read at 0x00c0000ae018 by goroutine 40:
+  github.com/meimingqi222/quick-cleaner/internal/app.(*Root).markTrashSeen()
+      /Users/<user>/work/code/quick-cleaner/internal/app/tray.go:157 +0x90
+  github.com/meimingqi222/quick-cleaner/internal/app.TestTrashSeenConcurrentClaims.func1()
+      /Users/<user>/work/code/quick-cleaner/internal/app/trash_seen_test.go:14 +0x18
+
+Previous write at 0x00c0000ae018 by goroutine 15:
+  github.com/meimingqi222/quick-cleaner/internal/app.(*Root).markTrashSeen()
+      /Users/<user>/work/code/quick-cleaner/internal/app/tray.go:158 +0xd4
+  github.com/meimingqi222/quick-cleaner/internal/app.TestTrashSeenConcurrentClaims.func1()
+      /Users/<user>/work/code/quick-cleaner/internal/app/trash_seen_test.go:14 +0x18
+
+Goroutine 40 (running) created at:
+  sync.(*WaitGroup).Go()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/sync/waitgroup.go:238 +0x6c
+  testing.tRunner()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2258 +0x34
+
+Goroutine 15 (running) created at:
+  sync.(*WaitGroup).Go()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/sync/waitgroup.go:238 +0x6c
+  testing.tRunner()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /Users/<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/testing/testing.go:2258 +0x34
+==================
+--- FAIL: TestTrashSeenConcurrentClaims (0.01s)
+    testing.go:1865: race detected during execution of test
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	2.188s
+FAIL

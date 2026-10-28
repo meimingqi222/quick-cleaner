@@ -1,0 +1,5 @@
+--- FAIL: TestIndexedDiscoveryReadsCacheDirTagOnlyWhenTreeNamesIt (0.02s)
+    devscan_test.go:167: indexed discovery opened CACHEDIR.TAG that the tree does not name
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.302s
+FAIL

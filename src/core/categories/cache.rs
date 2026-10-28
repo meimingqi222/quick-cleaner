@@ -64,6 +64,7 @@ fn push_user_cache_targets(
     push_user_cache_dirs(t, &cache, claims);
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn push_user_cache_dirs(
     t: &mut Vec<ScanTarget>,
     cache: &Path,
@@ -359,6 +360,10 @@ mod tests {
     /// 兄弟子项（GoogleUpdater 的下载目录那一类）在界面上彻底隐身——看不见也
     /// 清不掉，比「不默认勾选」更糟。规范说得很清楚：展示不是成本，隐藏才是。
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "macOS Library layout; browsers-macos claims are platform-scoped"
+    )]
     fn partially_claimed_parent_still_shows_its_other_children() {
         let root = crate::core::testing::fixture("qc_partial_claim");
         let caches = root.join("Library/Caches");
@@ -613,6 +618,10 @@ mod tests {
 
     /// `~/Library/Caches` 的整目录认领跟会产出这些目标的规则走，不另维护一张表。
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "macOS Library layout; browsers-macos claims are platform-scoped"
+    )]
     fn library_cache_claims_follow_the_rules_that_emit_them() {
         let home = std::path::Path::new("/qc-claims-home");
         let roots = crate::core::rules::user_roots(Some(home));

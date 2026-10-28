@@ -23,8 +23,27 @@ use std::path::{Path, PathBuf};
 
 /// 建一个属于当前进程、以 `tag` 命名的空夹具目录。
 pub(crate) fn fixture(tag: &str) -> PathBuf {
+    fixture_in(&std::env::temp_dir(), tag)
+}
+
+/// 项目类夹具：要被当成普通代码目录的那种。
+///
+/// Windows 的 TEMP 在 `AppData` 下，而 `AppData` 是安装边界，发现式扫描按产品
+/// 规则会拒绝它；这类夹具改建在用户目录下的隐藏目录里，其他平台仍用 TEMP。
+pub(crate) fn project_fixture(tag: &str) -> PathBuf {
+    #[cfg(windows)]
+    let root = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".quickcleaner-test");
+    #[cfg(not(windows))]
     let root = std::env::temp_dir();
-    reclaim_stale(&root, tag);
+    std::fs::create_dir_all(&root).unwrap_or_else(|e| panic!("建夹具根 {root:?} 失败：{e}"));
+    fixture_in(&root, tag)
+}
+
+fn fixture_in(root: &Path, tag: &str) -> PathBuf {
+    reclaim_stale(root, tag);
     let path = root.join(format!("{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap_or_else(|e| panic!("建夹具目录 {path:?} 失败：{e}"));

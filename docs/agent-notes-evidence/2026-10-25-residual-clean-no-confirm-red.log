@@ -1,0 +1,8 @@
+== manufactured red: 只把二次确认加回去，focused ==
+$ go test -count=1 -run TestResidualCleanStartsWithoutConfirmation ./internal/app
+--- FAIL: TestResidualCleanStartsWithoutConfirmation (0.00s)
+    root_test.go:327: residual clean still opens a confirmation dialog
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.301s
+FAIL
+exit=1

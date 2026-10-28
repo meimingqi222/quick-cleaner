@@ -1,0 +1,7 @@
+# guard removed: runStatusLoop samples on every tick regardless of statusWanted
+=== RUN   TestStatusLoopSamplesOnlyWhenWantedOrAsked
+    status_sampling_test.go:66: a tick off the Status page sampled
+--- FAIL: TestStatusLoopSamplesOnlyWhenWantedOrAsked (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.578s
+FAIL

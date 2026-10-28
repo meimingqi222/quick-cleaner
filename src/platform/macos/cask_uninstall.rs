@@ -50,8 +50,18 @@ pub(super) fn run(app: &InstalledApp) -> Result<bool, String> {
         return Err("Application identity changed before Homebrew uninstall".into());
     }
     let identity = capture_identity(selected).ok_or("Application identity unavailable")?;
-    let brew = std::fs::canonicalize(install.prefix.join("bin/brew")).map_err(|e| e.to_string())?;
-    if !confined_file(&install.prefix, &brew)? {
+    let brew_path = install.prefix.join("bin/brew");
+    if !confined_file(&install.prefix, &brew_path)? {
+        return Err("Homebrew executable is outside its installation".into());
+    }
+    let brew = std::fs::canonicalize(&brew_path).map_err(|e| e.to_string())?;
+    // 上面那次已经拒绝了 prefix 以下任何一跳链接；这里只用真实路径复核一次是否仍
+    // 落在 prefix 里。根必须同时换成真实路径：macOS 的 /var → /private/var 这类
+    // 别名会让「真实目标 vs 别名根」的文本前缀比较误判成越界。
+    if !confined_file(
+        &std::fs::canonicalize(&install.prefix).map_err(|e| e.to_string())?,
+        &brew,
+    )? {
         return Err("Homebrew executable is outside its installation".into());
     }
     let executable_identity =
@@ -168,7 +178,16 @@ fn inventory(prefix: &Path, home: &Path, id: &str) -> Result<Vec<Installation>, 
         }
         let receipt_path = metadata.join("INSTALL_RECEIPT.json");
         let mut files = Vec::new();
-        let receipt = json_file(&root, &receipt_path, &mut files)?;
+        // Homebrew 早期只写 `.metadata/<version>/<timestamp>/Casks` 清单，不写收据。
+        // 收据缺失是「更早的安装」，不是记录损坏：按空收据继续盘点，这条记录仍凭
+        // 清单里的 app artifact 认领归属，但拿不到 source 证据时 `supported` 恒为
+        // false，永不授权卸载。把缺失当错误，会让 Caskroom 里任意一条旧记录拦住
+        // 每一次卸载——包括根本不是 Homebrew 安装的应用。
+        let receipt = if absent(&receipt_path) {
+            serde_json::json!({})
+        } else {
+            json_file(&root, &receipt_path, &mut files)?
+        };
         let config = json_file(&root, &metadata.join("config.json"), &mut files)?;
         let mut candidates = Vec::new();
         for version in children(&metadata)? {
@@ -291,6 +310,66 @@ mod tests {
         std::fs::rename(&config_path, &external).unwrap();
         std::os::unix::fs::symlink(&external, &config_path).unwrap();
         assert!(inventory(&prefix, &home, "com.example.main").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Caskroom 里早期安装的 cask 只有 `.metadata/<version>/<timestamp>/Casks`
+    /// 清单，没有 `INSTALL_RECEIPT.json`。收据缺失是「更早的安装」，不能把整次
+    /// 归属盘点判死，否则卸载任何应用都会报 "Homebrew evidence missing"。
+    #[test]
+    fn receiptless_legacy_cask_stays_listed_without_uninstall_authority() {
+        let root = crate::core::testing::fixture("cask_receiptless_legacy");
+        let prefix = root.join("brew");
+        let home = root.join("home");
+        let owned = prefix.join("Caskroom/owned/.metadata");
+        let legacy = prefix.join("Caskroom/legacy/.metadata");
+        std::fs::create_dir_all(owned.join("1.2/20261016090000/Casks")).unwrap();
+        std::fs::create_dir_all(legacy.join("0.12.6-2/20230407104235.511/Casks")).unwrap();
+        std::fs::write(
+            owned.join("INSTALL_RECEIPT.json"),
+            json!({"source": {"tap": "homebrew/cask", "version": "1.2"}, "uninstall_flight_blocks": false})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            owned.join("config.json"),
+            json!({"default": {"appdir": "/Applications"}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            owned.join("1.2/20261016090000/Casks/owned.json"),
+            json!({"artifacts": [{"app": ["Selected.app"]}]}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            legacy.join("config.json"),
+            json!({"default": {"appdir": "/Applications"}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            legacy.join("0.12.6-2/20230407104235.511/Casks/legacy.json"),
+            json!({"artifacts": [{"uninstall": [{"pkgutil": "org.example.legacy"}]}]}).to_string(),
+        )
+        .unwrap();
+
+        let records = inventory(&prefix, &home, "com.example.main")
+            .expect("receipt-less legacy cask must not block the inventory");
+        assert_eq!(records.len(), 2);
+        let record = |token: &str| {
+            records
+                .iter()
+                .find(|record| record.token == token)
+                .unwrap_or_else(|| panic!("missing {token}"))
+        };
+        assert!(record("owned").supported);
+        assert!(record("owned")
+            .scope
+            .authorizes(Path::new("/Applications/Selected.app")));
+        // 旧记录照常入表（它仍可能认领归属），但没有 source 证据就没有卸载授权。
+        assert!(!record("legacy").supported);
+        assert!(!record("legacy")
+            .scope
+            .authorizes(Path::new("/Applications/Selected.app")));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,10 +1,23 @@
-# Rust 构建产物
+# Rust 构建产物。Rust 源仍是 Go 移植的行为参照，cargo 检查照旧在 CI 跑，不能因为发布改走 Go 就删掉。
 /target
 /dist
 .amp/portals/
 *.pdb
 *.ilk
 *.rs.bk
+
+# Go 构建产物。`go build ./...` 会把 main 包的可执行文件落在 cwd，打包脚本的输出统一进 /dist。
+/quick-cleaner
+/quick-cleaner.exe
+/ui-gallery
+/ui-gallery.exe
+*.test
+coverage.out
+*.coverprofile
+
+# cmd/quick-cleaner/rsrc_windows_*.syso 由 tools/winres 生成，但图标、版本信息和清单只靠它，
+# `tools/winres --check` 校验的也是入库的那份，所以它必须可提交，不要并进上面的构建产物规则。
+!cmd/quick-cleaner/rsrc_windows_*.syso
 
 # 测试与覆盖率分析产物
 *.profraw

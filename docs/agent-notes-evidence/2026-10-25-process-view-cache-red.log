@@ -1,0 +1,7 @@
+# guard removed: filteredProcesses recomputes on every call
+=== RUN   TestProcessViewIsComputedOncePerInputs
+    status_view_cache_test.go:18: unchanged inputs filtered and sorted the processes again
+--- FAIL: TestProcessViewIsComputedOncePerInputs (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.336s
+FAIL

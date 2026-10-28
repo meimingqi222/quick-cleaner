@@ -1,0 +1,7 @@
+# guard removed: DiscoverWithin ignores the budget (no timeout, never partial)
+=== RUN   TestDiscoverWithinMarksOnlyBudgetExpiryPartial
+    junk_index_test.go:133: an exhausted budget must report partial results
+--- FAIL: TestDiscoverWithinMarksOnlyBudgetExpiryPartial (0.02s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.326s
+FAIL

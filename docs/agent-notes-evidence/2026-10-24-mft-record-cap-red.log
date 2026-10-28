@@ -1,0 +1,7 @@
+# guard removed: record count = valid length / record size with the old fixed 16M cap
+=== RUN   TestMFTRecordCountFollowsRunsNotAFixedCap
+    mft_test.go:307: valid length beyond a fixed cap rejected: invalid NTFS MFT metadata
+--- FAIL: TestMFTRecordCountFollowsRunsNotAFixedCap (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.785s
+FAIL

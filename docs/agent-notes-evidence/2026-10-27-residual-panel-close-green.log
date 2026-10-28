@@ -1,0 +1,4 @@
+=== RUN   TestResidualCleanDoesNotReopenTheReviewPanel
+--- PASS: TestResidualCleanDoesNotReopenTheReviewPanel (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.266s

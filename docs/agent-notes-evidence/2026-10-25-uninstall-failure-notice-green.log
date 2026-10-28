@@ -1,0 +1,11 @@
+== restored: 卸载失败提示本地化，指向 --force 而不是「设置→应用」 ==
+$ go test -count=1 -run TestUninstallFailureNoticeExplainsAndKeepsTheCode ./internal/app -v
+=== RUN   TestUninstallFailureNoticeExplainsAndKeepsTheCode
+--- PASS: TestUninstallFailureNoticeExplainsAndKeepsTheCode (0.00s)
+PASS
+ok  	github.com/<user>/quick-cleaner/internal/app	1.343s
+exit=0
+$ go test -count=1 ./internal/app ./internal/core
+ok  	github.com/<user>/quick-cleaner/internal/app	2.287s
+ok  	github.com/<user>/quick-cleaner/internal/core	51.600s
+exit=0

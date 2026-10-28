@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestJunkEmptyResultIsACleanState
+--- PASS: TestJunkEmptyResultIsACleanState (0.02s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.283s

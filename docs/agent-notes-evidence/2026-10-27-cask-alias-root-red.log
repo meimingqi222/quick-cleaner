@@ -1,0 +1,9 @@
+$ go test ./internal/core/ -run TestAppCaskUninstallerReceiptBoundContract/success -v  # 只撤「别名根也取真实路径」这一处防护
+=== RUN   TestAppCaskUninstallerReceiptBoundContract
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/success
+    apps_cask_uninstall_test.go:138: true evidence escapes root calls=0
+--- FAIL: TestAppCaskUninstallerReceiptBoundContract (0.00s)
+    --- FAIL: TestAppCaskUninstallerReceiptBoundContract/success (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.408s
+FAIL

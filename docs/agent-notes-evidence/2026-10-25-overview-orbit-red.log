@@ -1,0 +1,7 @@
+# guard removed: overview orbit dot driven by c.After(1/60s) during the build
+=== RUN   TestScanningOverviewAnimatesWithoutRebuilding
+    dashboard_motion_test.go:20: the scanning overview rebuilt 60 times in a second
+--- FAIL: TestScanningOverviewAnimatesWithoutRebuilding (0.03s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.360s
+FAIL

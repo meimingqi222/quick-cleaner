@@ -36,7 +36,9 @@ utf16_selection 同时提供规范化 UTF-16 范围和方向，由共享输入�
 - `src/ui/components/search_input.rs::shift_selection_shrinks_on_reverse`
 - `src/ui/components/search_input.rs::shift_selection_preserves_anchor_across_unicode_and_home_end`
 - `src/ui/components/search_input.rs::reverse_mouse_selection_keeps_anchor_for_shift_arrow`
-- `../gpui-app-kit/crates/ui-widgets/src/input.rs::directed_selection_reports_utf16_and_replaces_exact_text`
+
+共享控件那层的同名断言原本指向兄弟仓库 gpui-app-kit；Go 版本改用 MyGo，不再消费该库，
+所以跨仓绑定不再作为本仓库的可校验目标，保留的是本仓库内的活绑定。
 
 Proved: 修复前真实 GPUI 键盘事件自然红跑，Shift+右再 Shift+左的断言实际 0..2、期望 1..1，
 见 `docs/agent-notes-evidence/2026-10-14-selection-red.log`；恢复方向后同 focused 转绿，见

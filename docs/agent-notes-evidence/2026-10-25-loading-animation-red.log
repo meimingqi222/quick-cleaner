@@ -1,0 +1,7 @@
+# guard removed: scanBar restored to the build-time c.Now() bar
+=== RUN   TestScanBarKeepsAnimatingOnItsOwn
+    indicators_test.go:48: the scan bar asked for no next frame; it stands still until something else repaints
+--- FAIL: TestScanBarKeepsAnimatingOnItsOwn (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.210s
+FAIL

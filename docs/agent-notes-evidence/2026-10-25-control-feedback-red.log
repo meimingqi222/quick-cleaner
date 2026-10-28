@@ -1,0 +1,7 @@
+# guard removed: appsPageButton switches its hover colour instantly with no press state
+=== RUN   TestButtonsEaseHoverAndPressFeedback
+    interaction_test.go:35: the hover colour did not ease; it switched at once
+--- FAIL: TestButtonsEaseHoverAndPressFeedback (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.269s
+FAIL

@@ -1,0 +1,5 @@
+--- FAIL: TestResidualUserDataRequiresOptInNotPermanentDisabling (0.00s)
+    integration_test.go:173: explicit user-data selection was incorrectly disabled
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.007s
+FAIL

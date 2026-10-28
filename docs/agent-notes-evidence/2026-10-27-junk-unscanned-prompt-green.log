@@ -1,0 +1,4 @@
+=== RUN   TestJunkPageUnscannedStateRendersStartScanPrompt
+--- PASS: TestJunkPageUnscannedStateRendersStartScanPrompt (0.03s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.403s

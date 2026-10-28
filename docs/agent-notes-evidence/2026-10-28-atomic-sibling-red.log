@@ -1,0 +1,7 @@
+--- FAIL: TestMacAtomicTempSuffixDoesNotClaimSiblingProducts (0.00s)
+    apps_residual_scan_test.go:328: sibling product claimed as atomic temp: com.example.app.editor
+    apps_residual_scan_test.go:328: sibling product claimed as atomic temp: com.example.app.client.plist
+    apps_residual_scan_test.go:328: sibling product claimed as atomic temp: com.example.app.helper.editor
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.415s
+FAIL

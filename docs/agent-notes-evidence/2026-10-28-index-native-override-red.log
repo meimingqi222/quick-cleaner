@@ -1,0 +1,5 @@
+--- FAIL: TestDiskIndexCacheNativeFilenameRoundTrip (0.03s)
+    disk_index_filename_test.go:41: legal native filename rejected by incremental fast path
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.462s
+FAIL

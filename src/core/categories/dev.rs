@@ -9,13 +9,14 @@ use std::path::Path;
 pub(super) fn push_dev_targets(
     t: &mut Vec<ScanTarget>,
     home: &Path,
+    local: Option<&Path>,
     roaming: &Path,
     claims: &crate::core::rules::claims::Claims,
 ) {
     #[cfg(not(test))]
     let _ = home;
     // AI 编程助手的会话记录与缓存
-    push_ai_agent_targets(t, roaming, claims);
+    push_ai_agent_targets(t, local, roaming, claims);
     #[cfg(test)]
     crate::core::rules::versions::append_fixture(t, "zed_node", home, roaming);
 }
@@ -61,8 +62,12 @@ fn is_ai_app_dir(name: &str) -> bool {
 /// 平台无关：调用方传入平台对应的根目录即可——
 /// - Windows: `roaming = %APPDATA%`
 /// - macOS:   `roaming = ~/Library/Application Support`
+///
+/// `local` 是调用方给的 `%LOCALAPPDATA%`（`user_roots` 的 `local`），不能在这里
+/// 另读进程环境：提权跨账户时根目录由调用方决定，测试也要能隔离。
 pub(super) fn push_ai_agent_targets(
     t: &mut Vec<ScanTarget>,
+    local: Option<&Path>,
     roaming: &Path,
     claims: &crate::core::rules::claims::Claims,
 ) {
@@ -74,11 +79,11 @@ pub(super) fn push_ai_agent_targets(
     // 4 个一个都没列到。macOS 侧由 `push_user_cache_dirs` 探测
     // `~/Library/Caches`，两边共用同一套签名。
     #[cfg(windows)]
-    {
-        if let Some(local) = crate::platform::user_cache_dir() {
-            super::updater::push_updater_dirs_under(t, &local);
-        }
+    if let Some(local) = local {
+        super::updater::push_updater_dirs_under(t, local);
     }
+    #[cfg(not(windows))]
+    let _ = local;
 }
 
 /// 应用目录（`~/Library/Application Support` / `%APPDATA%`）下所有 Chromium
@@ -522,6 +527,7 @@ mod tests {
 
         push_ai_agent_targets(
             &mut targets,
+            Some(&local),
             &roaming,
             &fixture_claims(&home, &local, &roaming),
         );
@@ -563,6 +569,7 @@ mod tests {
         let mut targets = Vec::new();
         push_ai_agent_targets(
             &mut targets,
+            None,
             &roaming,
             &fixture_claims(&roaming, &roaming, &roaming),
         );
@@ -586,6 +593,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "macOS Library layout; browsers-macos claims are platform-scoped"
+    )]
     fn browser_vendor_siblings_are_scanned_without_claimed_browser() {
         let root = crate::core::testing::fixture("qc_browser_vendor_siblings");
         let roaming = root.join("Application Support");
@@ -1131,9 +1142,10 @@ mod tests {
     fn ai_agent_rows(targets: &[ScanTarget], root: &Path) -> Vec<serde_json::Value> {
         let canonical = std::fs::canonicalize(root).unwrap();
         let relative = |path: &Path| {
-            path.strip_prefix(root)
-                .or_else(|_| path.strip_prefix(&canonical))
-                .unwrap()
+            let path = std::fs::canonicalize(path)
+                .unwrap_or_else(|error| panic!("cannot resolve fixture target {path:?}: {error}"));
+            path.strip_prefix(&canonical)
+                .unwrap_or_else(|_| panic!("target outside the fixture: {path:?}"))
                 .to_string_lossy()
                 .replace('\\', "/")
         };
@@ -1166,6 +1178,25 @@ mod tests {
         rows
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn ai_agent_rows_accepts_normal_and_verbatim_fixture_paths() {
+        let (root, home, local, roaming) = ai_agent_layout_fixture();
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        let mut targets = rule_directories(&home, &local, &roaming);
+        push_ai_agent_targets(
+            &mut targets,
+            Some(&local),
+            &roaming,
+            &fixture_claims(&home, &local, &roaming),
+        );
+        assert_eq!(
+            ai_agent_rows(&targets, &root),
+            ai_agent_rows(&targets, &canonical_root)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// 迁移金样：目标、标签、类别、推荐与操作逐项与记录基线一致。基线由
     /// 迁移前的 `push_ai_agent_targets` 产出后提交，此后规则扫描加剩余
     /// provider 输出必须逐行相同；有差异说明行为变了，不是改基线的理由。
@@ -1175,6 +1206,7 @@ mod tests {
         let mut targets = rule_directories(&home, &local, &roaming);
         push_ai_agent_targets(
             &mut targets,
+            Some(&local),
             &roaming,
             &fixture_claims(&home, &local, &roaming),
         );

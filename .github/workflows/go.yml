@@ -1,0 +1,33 @@
+name: Go migration
+
+on:
+  push:
+    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", "tools/**", ".github/workflows/go.yml"]
+  pull_request:
+    paths: ["go.mod", "go.sum", "cmd/**", "internal/**", "assets/**", "rules/**", "tools/**", ".github/workflows/go.yml"]
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Formatting
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l cmd internal assets rules tools)
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...
+      - name: Windows resources are current
+        run: go run ./tools/winres -check

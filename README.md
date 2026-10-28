@@ -2,6 +2,14 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
+**Go rewrite in progress:** the target is Go + MyGo with the existing UI and
+interactions preserved, not a redesign. The Go product entry point is
+`go run ./cmd/quick-cleaner --no-elevate`; a separate non-destructive UI gallery
+is available at `go run ./cmd/ui-gallery`. Native acceptance and remaining parity
+gates are not complete; do not treat this as a validated release replacement.
+See [migration status and preview commands](GO_MIGRATION.md).
+The features and Cargo instructions below describe the existing Rust release.
+
 > **Native, multi-threaded Windows disk space analyzer & system cleaner**  
 > Built with **Rust + GPUI**, zero WebView / Electron overhead, millisecond-level responsiveness, and GPU-accelerated rendering.
 
@@ -109,6 +117,18 @@ cargo build --release
 ```
 
 The compiled binary will be located at `target/release/quick-cleaner.exe`.
+
+### Go build and release packages
+
+Release packages are built from the Go product (Go 1.27.1 or newer, no cgo):
+
+```bash
+go test ./...
+go run ./cmd/quick-cleaner --no-elevate      # not a dry run: actions still modify files
+go run ./tools/winres                        # after changing internal/app Version
+pwsh ./scripts/package-windows.ps1           # dist/quick-cleaner-windows-x86_64.zip
+./scripts/package-macos.sh dist universal    # dist/QuickCleaner.app (on macOS)
+```
 
 ### Windows `$MFT` verification (dev only)
 

@@ -2,6 +2,11 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
+**Go 重写进行中：**目标是 Go + MyGo，保持现有 UI 和交互不变，不重新设计界面。
+Go 主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，无破坏性操作的界面预览入口为
+`go run ./cmd/ui-gallery`。原生平台验收与剩余一致性门槛尚未完成，不能当作已验证的发行版替代品。
+详见[迁移状态与预览命令](GO_MIGRATION.md)。下方功能与 Cargo 构建说明仍对应现有 Rust 发行版。
+
 > **极速、原生、安全的 Windows 磁盘空间分析与系统深度清理工具**  
 > 基于 **Rust + GPUI** 构建，无 WebView / Electron 开销，毫秒级响应与 GPU 加速渲染。
 
@@ -109,6 +114,18 @@ cargo build --release
 ```
 
 编译生成的可执行文件位于 `target/release/quick-cleaner.exe`。
+
+### Go 构建与发布包
+
+发布包由 Go 版产品构建（Go 1.27.1 或更高，不需要 cgo）：
+
+```bash
+go test ./...
+go run ./cmd/quick-cleaner --no-elevate      # 不是演练模式：确认后的操作照样会改动文件
+go run ./tools/winres                        # 修改 internal/app 的 Version 后重新生成 Windows 资源
+pwsh ./scripts/package-windows.ps1           # 生成 dist/quick-cleaner-windows-x86_64.zip
+./scripts/package-macos.sh dist universal    # 生成 dist/QuickCleaner.app（需在 macOS 上）
+```
 
 ### Windows `$MFT` 校验（仅开发用）
 

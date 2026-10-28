@@ -1,0 +1,24 @@
+== restored: 卸载页独占应用视图 ==
+$ go test -count=1 -run TestAppsPageBusyAndNativeCapabilities ./internal/ui -v
+=== RUN   TestAppsPageBusyAndNativeCapabilities
+=== RUN   TestAppsPageBusyAndNativeCapabilities/idle
+=== RUN   TestAppsPageBusyAndNativeCapabilities/residual
+=== RUN   TestAppsPageBusyAndNativeCapabilities/cleaning
+=== RUN   TestAppsPageBusyAndNativeCapabilities/verifying
+=== RUN   TestAppsPageBusyAndNativeCapabilities/incapable
+=== RUN   TestAppsPageBusyAndNativeCapabilities/portable
+=== RUN   TestAppsPageBusyAndNativeCapabilities/mac
+--- PASS: TestAppsPageBusyAndNativeCapabilities (0.05s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/idle (0.03s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/residual (0.00s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/cleaning (0.00s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/verifying (0.00s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/incapable (0.01s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/portable (0.01s)
+    --- PASS: TestAppsPageBusyAndNativeCapabilities/mac (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.542s
+exit=0
+$ go test -count=1 ./internal/ui
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	3.694s
+exit=0

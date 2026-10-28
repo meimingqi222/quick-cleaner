@@ -50,9 +50,6 @@ remain pending and are documented in docs/ui-baselines/README.md.
 
 ## Verification
 
-- `../gpui-app-kit/crates/ui-widgets/src/input.rs::bindings_isolate_fields_and_commit_composition_once`
-- `../gpui-app-kit/crates/ui-widgets/src/scroll_area.rs::virtualized_lists_drag_outside_and_keep_independent_offsets`
-- `../gpui-app-kit/crates/ui-widgets/src/scroll_area.rs::normal_scroll_view_measures_content_and_supports_shared_drag`
 - `src/ui/shell/overlay_stack.rs::nested_close_is_children_first_and_render_order_matches_escape`
 - `src/ui/shell/overlay_stack.rs::disappearing_parent_removes_open_children_without_registering_them_again`
 - `src/ui/shell/overlay_stack.rs::escape_closes_only_the_top_popup_and_modal_swallows`

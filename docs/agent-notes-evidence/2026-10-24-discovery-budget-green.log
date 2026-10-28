@@ -1,0 +1,6 @@
+# guard restored
+=== RUN   TestDiscoverWithinMarksOnlyBudgetExpiryPartial
+2026/10/24 21:43:10 阶段二 scan_discovered 预算耗尽（0s），结果按「部分统计」上报
+--- PASS: TestDiscoverWithinMarksOnlyBudgetExpiryPartial (0.07s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.329s

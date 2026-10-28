@@ -1,0 +1,7 @@
+# guard removed: empty results list zero-byte categories and keep selection buttons enabled
+=== RUN   TestJunkEmptyResultIsACleanState
+    junk_test.go:173: empty result: [Smart Clean Rebuildable app, browser, package-manager and update-package caches are selected; temp data and dev builds require manual selection Exclusions (0) Cleanable Found 0 B Application Cache Rebuildable data stored in application cache directories 0 B ▾ Nothing cleanable found in this category Browser Cache Cache files from Chrome, Edge, Firefox, Safari 0 B ▸ Selected for Cleaning 0 B (0 items) Recommended Select All Invert Clear All 0 items Clean Now]
+--- FAIL: TestJunkEmptyResultIsACleanState (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.187s
+FAIL

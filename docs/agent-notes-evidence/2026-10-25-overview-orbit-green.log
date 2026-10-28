@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestScanningOverviewAnimatesWithoutRebuilding
+--- PASS: TestScanningOverviewAnimatesWithoutRebuilding (0.02s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.311s

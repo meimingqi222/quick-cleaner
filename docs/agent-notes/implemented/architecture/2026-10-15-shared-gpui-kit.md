@@ -26,18 +26,17 @@ Usage Metrics 的 tray.rs 只渲染和发事件，tray_model.rs 管业务，tray
 ## Consequences
 
 现有宿主、输入、滚动测试迁到其新所有者；应用布局、硬件可见性、采样和关闭行为测试保留。
-应用 notes 的迁移测试引用指向兄弟库；CI 检出库并合并两侧测试列表。
+应用 notes 只绑定本仓库内的测试：Go 版本改用 MyGo 后不再消费该库，agent-notes 校验不再检出兄弟仓库；Rust 侧的 ci.yml 仍检出库并合并两侧测试列表。
 公共库已发布到 meimingqi222/gpui-app-kit 私有仓库；两个 crate 与根 GPUI patch 固定 3cf5e6cb3c171769e91674d3d5b0b3a7115b9c56。CI 从 manifest 读取提交；跨仓库读取需要 GPUI_APP_KIT_TOKEN 专用只读凭据。
 完整原生点击、Windows DPI/多屏、Explorer 重启和原生 IME 不由模拟测试证明。
 
 ## Verification
 
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_old_session_cannot_touch_reopened_window`
-- `../gpui-app-kit/crates/app-host/src/tray.rs::tray_host_programmatic_open_needs_no_window_event`
-- `../gpui-app-kit/crates/ui-widgets/src/input.rs::bindings_isolate_fields_and_commit_composition_once`
-- `../gpui-app-kit/crates/ui-widgets/src/scroll_area.rs::virtualized_lists_drag_outside_and_keep_independent_offsets`
 - `src/ui/shell/overlay_stack.rs::nested_close_is_children_first_and_render_order_matches_escape`
 - `src/ui/views/tray_popover.rs::tray_hardware_stays_visible_with_many_volumes`
+
+宿主与控件的同名约束原本绑定兄弟仓库 gpui-app-kit 的测试；Go 版本改用 MyGo，不再消费
+该库，跨仓绑定不再是本仓库的可校验目标。
 
 Validation: 公共库 workspace 测试、严格 clippy、格式检查与内容守卫通过；Usage Metrics 完整 cargo test 为 201 passed，原生窗口 smoke 通过 keep-open、close-before-action、dismiss 与 Escape。
 Usage Metrics 原有 local_sources.rs 有四条 clippy 告警；沿用其原 CI 策略。其旧 note 2026-10-03-antigravity-windows-login.md 引用的 antigravity_windows_client_pairs_config_references 在本轮前的源码中已缺失，本轮未扩展到该业务模块。

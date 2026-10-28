@@ -1,0 +1,9 @@
+$ go test ./internal/ui/ -run TestResidualGuaranteeIsNotDrawnAsAWarning -v
+=== RUN   TestResidualGuaranteeIsNotDrawnAsAWarning
+--- PASS: TestResidualGuaranteeIsNotDrawnAsAWarning (0.04s)
+=== RUN   TestResidualGuaranteeIsNotDrawnAsAWarning
+    zz_notice_red_test.go:34: standing explanation painted as a banner: [Applications Manager Analyze disk usage and thoroughly clean residual files Desktop Apps Dev Environments Total Estimated Size  Installed Applications 0 Apps Rarely Used (>90 days) 0 Apps Presets: All Apps Large Apps (>500MB) Rarely Used (>90d) Invalid Uninstaller 0 apps Search apps by name or publisher… Name & Version (0 apps) Publisher Last Used Installed Date Size Actions No matching applications found Displaying 0 apps (Total 0 installed) Total Size:  Found 2 residual items for "Example" Includes caches, app configuration and registry traces. Potential space: 946 KB /tmp/a Certain Cache directory File /tmp/a 4 KB /tmp/b Certain Cache directory Directory /tmp/b 1 MB Before deleting, each selected item is checked again: the app is really gone, the file has not been replaced, and nothing is using it. If any check fails, nothing is deleted. Recommended Select All Clear Selection Cancel Clean Selected (2) · Free ]
+--- FAIL: TestResidualGuaranteeIsNotDrawnAsAWarning (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.304s
+FAIL

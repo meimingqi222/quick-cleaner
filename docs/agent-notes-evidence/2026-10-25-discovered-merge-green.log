@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge
+--- PASS: TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.291s

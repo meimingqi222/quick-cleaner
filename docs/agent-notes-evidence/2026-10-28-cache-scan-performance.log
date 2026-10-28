@@ -1,0 +1,10 @@
+macOS native, same process and same filesystem target list; read-only ScanFixed comparison.
+Does not include native provider commands, FSEvents refresh, discovery, or UI time.
+Rebuilt snapshot may differ slightly from live data; item count stayed identical.
+target_enumeration=1.142193333s targets=714
+live_fixed=5.46110275s items=711 bytes=47104315392
+index_load=2.051888125s entries=7208729 event_id=<redacted>
+indexed_fixed=3.092137083s items=711 bytes=47143096320
+indexed_fixed_repeat=3.181486125s items=711 bytes=47143096320
+A genuinely corrupt previous cache contained empty /dev/fd names; normal rebuild took 85.16 seconds once.
+No user files cleaned or deleted.

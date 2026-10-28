@@ -1,0 +1,15 @@
+== restored: 清理后不再重开残留面板 ==
+$ go test -count=1 -run 'TestResidualCleanDoesNotReopenTheReviewPanel|TestResidualCleanStartsWithoutConfirmation|TestResidualCleanProbesOnlyAfterTheUserStartsIt' ./internal/app -v
+=== RUN   TestResidualCleanProbesOnlyAfterTheUserStartsIt
+--- PASS: TestResidualCleanProbesOnlyAfterTheUserStartsIt (0.00s)
+=== RUN   TestResidualCleanStartsWithoutConfirmation
+--- PASS: TestResidualCleanStartsWithoutConfirmation (0.00s)
+=== RUN   TestResidualCleanDoesNotReopenTheReviewPanel
+--- PASS: TestResidualCleanDoesNotReopenTheReviewPanel (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	1.307s
+exit=0
+$ go test -count=1 ./internal/app ./internal/ui
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	2.189s
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	3.645s
+exit=0

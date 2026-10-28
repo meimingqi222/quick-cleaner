@@ -1,0 +1,7 @@
+# guard restored
+=== RUN   TestDiskPageEventsAreControllerRequests
+--- PASS: TestDiskPageEventsAreControllerRequests (0.03s)
+=== RUN   TestDiskPageBreakdownPhysicalApparentAndUnique
+--- PASS: TestDiskPageBreakdownPhysicalApparentAndUnique (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.312s

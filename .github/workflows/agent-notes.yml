@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gpui-kit
-        with:
-          token: ${{ secrets.GPUI_APP_KIT_TOKEN }}
+      # notes 只绑定本仓库内的测试：Go 版本不消费 gpui-app-kit，这里不再检出兄弟仓库，
+      # 也就不再需要 GPUI_APP_KIT_TOKEN。Rust 参照树的 ci.yml 仍然检出它。
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'

@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestWalkDiscoveryStatsEachDirectoryOnce
+--- PASS: TestWalkDiscoveryStatsEachDirectoryOnce (0.25s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.575s

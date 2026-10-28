@@ -1,0 +1,8 @@
+== red run (8.3 enabled on this volume) ==
+$ go test -count=1 -run TestAppShortcutNativeReadOnly ./internal/platform
+--- FAIL: TestAppShortcutNativeReadOnly (0.18s)
+    apps_shortcut_windows_test.go:53: target="C:\\Users\\<user>\\AppData\\Local\\Temp\\TestAppShortcutNativeReadOnly1947564345\\001\\literal target.exe" ok=true
+FAIL
+FAIL	github.com/<user>/quick-cleaner/internal/platform	1.182s
+FAIL
+exit=1

@@ -1,0 +1,7 @@
+$ go test ./internal/platform -run ^TestInUseSpotCheckDirectoryTimeout$ -count=1
+--- FAIL: TestInUseSpotCheckDirectoryTimeout (0.00s)
+    inuse_darwin_test.go:13: directory options: [-F0n +D /cache], 3s
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.850s
+FAIL
+Exit status: 1

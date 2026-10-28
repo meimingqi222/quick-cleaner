@@ -1,0 +1,7 @@
+--- FAIL: TestDiskIndexCacheNativeFilenameRoundTrip (0.00s)
+    disk_index_filename_test.go:21: legal native filename rejected during save: invalid disk index: unsafe name component
+--- FAIL: TestDiskIndexCacheLoadsExistingNativeFilename (0.02s)
+    disk_index_filename_test.go:76: existing Unix index rejected: invalid disk index: unsafe name component
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.659s
+FAIL

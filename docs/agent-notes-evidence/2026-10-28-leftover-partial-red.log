@@ -1,0 +1,5 @@
+--- FAIL: TestLeftoverCleanKeepsUnselectedAndManualItems (0.00s)
+    tray_leftover_clean_test.go:23: unselected/manual residuals disappeared: []
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.413s
+FAIL

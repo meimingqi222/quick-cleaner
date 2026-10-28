@@ -1,0 +1,5 @@
+# guard restored
+=== RUN   TestDeclutterListsShowMoreInsteadOfHidingTheRest
+--- PASS: TestDeclutterListsShowMoreInsteadOfHidingTheRest (0.07s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.308s

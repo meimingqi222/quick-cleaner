@@ -1,0 +1,8 @@
+--- FAIL: TestJunkRefreshPublishesAndUsesNewSnapshot (0.01s)
+    --- FAIL: TestJunkRefreshPublishesAndUsesNewSnapshot/scan (0.01s)
+        junk_index_snapshot_test.go:24: scan used stale snapshot: {Size:1 Files:1 NewestMtime:0}
+    --- FAIL: TestJunkRefreshPublishesAndUsesNewSnapshot/search (0.00s)
+        junk_index_snapshot_test.go:32: search kept stale snapshot
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.776s
+FAIL

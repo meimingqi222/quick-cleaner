@@ -1,0 +1,2 @@
+*.syso binary
+*.go text eol=lf

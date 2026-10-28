@@ -1,0 +1,8 @@
+== red: 清理收尾无条件重开残留面板 ==
+$ go test -count=1 -run TestResidualCleanDoesNotReopenTheReviewPanel ./internal/app
+--- FAIL: TestResidualCleanDoesNotReopenTheReviewPanel (0.01s)
+    root_test.go:349: cleaning reopened the residual review panel
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.387s
+FAIL
+exit=1

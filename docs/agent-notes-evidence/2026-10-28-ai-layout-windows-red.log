@@ -1,0 +1,7 @@
+GitHub Actions run 40659693776, Windows, commit b87a2d5.
+test core::categories::dev::tests::ai_agent_layouts_preserve_the_migration_baseline ... FAILED
+thread panicked at src/core/categories/dev.rs:1147:
+target outside the fixture: <Windows TEMP>/ai_agent_layout_baseline_<pid>/repo-codex/.git/worktrees/feature-x
+test result: FAILED. 793 passed; 1 failed; 12 ignored.
+Source: https://github.com/meimingqi222/quick-cleaner/actions/runs/40659693776
+Windows TEMP and process ID redacted.

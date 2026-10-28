@@ -1,0 +1,11 @@
+== restored: 侧栏设置区提供自动检查更新开关 ==
+$ go test -count=1 -run TestSidebarOffersAutoUpdateToggle ./internal/ui -v
+=== RUN   TestSidebarOffersAutoUpdateToggle
+--- PASS: TestSidebarOffersAutoUpdateToggle (0.02s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.285s
+exit=0
+$ go test -count=1 ./internal/ui ./internal/app
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	3.827s
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	2.249s
+exit=0

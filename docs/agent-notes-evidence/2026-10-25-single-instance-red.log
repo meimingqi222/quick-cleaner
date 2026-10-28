@@ -1,0 +1,10 @@
+# guards removed: no Medium mandatory label in the instance SDDL; InstanceRunning never reports an instance
+=== RUN   TestSecondLaunchFindsAndWakesTheInstance
+    single_instance_windows_test.go:43: a second launch cannot see the instance
+--- FAIL: TestSecondLaunchFindsAndWakesTheInstance (0.00s)
+=== RUN   TestInstanceObjectsAreReachableFromMediumIntegrity
+    single_instance_windows_test.go:67: acquire
+--- FAIL: TestInstanceObjectsAreReachableFromMediumIntegrity (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.818s
+FAIL

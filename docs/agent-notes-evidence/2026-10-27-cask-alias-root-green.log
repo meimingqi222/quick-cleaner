@@ -1,0 +1,7 @@
+$ go test ./internal/core/ -run TestAppCaskUninstallerReceiptBoundContract/success -v  # 恢复同一处防护后
+=== RUN   TestAppCaskUninstallerReceiptBoundContract
+=== RUN   TestAppCaskUninstallerReceiptBoundContract/success
+--- PASS: TestAppCaskUninstallerReceiptBoundContract (0.00s)
+    --- PASS: TestAppCaskUninstallerReceiptBoundContract/success (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.220s

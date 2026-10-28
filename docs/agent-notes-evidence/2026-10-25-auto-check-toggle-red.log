@@ -1,0 +1,8 @@
+== red: 侧栏没有自动检查更新入口（此前只有应用菜单能改） ==
+$ go test -count=1 -run TestSidebarOffersAutoUpdateToggle ./internal/ui
+--- FAIL: TestSidebarOffersAutoUpdateToggle (0.02s)
+    dashboard_test.go:229: settings area has no auto-update toggle: [QuickCleaner Fast Disk & App Cleaner Overview Status Smart Clean Apps Disk Lens Declutter File Search Space Freed  Language 中文 English v0.0.16 Overview Standard user Rescan Smart Scan Click to Start Smart Scan Quickly scan system caches, developer dependencies, and disk usage. Smart Clean Clean Junk Apps Uninstall Disk Lens Storage Declutter Duplicates/Photos Ready]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	1.291s
+FAIL
+exit=1

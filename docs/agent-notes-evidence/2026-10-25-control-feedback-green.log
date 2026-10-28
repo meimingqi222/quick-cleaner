@@ -1,0 +1,9 @@
+# guard restored
+=== RUN   TestButtonsEaseHoverAndPressFeedback
+--- PASS: TestButtonsEaseHoverAndPressFeedback (0.01s)
+=== RUN   TestDialogEntranceAnimatesThenSettles
+--- PASS: TestDialogEntranceAnimatesThenSettles (0.14s)
+=== RUN   TestCategoryChevronTurnsThenSettles
+--- PASS: TestCategoryChevronTurnsThenSettles (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	1.450s
