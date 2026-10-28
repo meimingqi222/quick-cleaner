@@ -1142,8 +1142,9 @@ mod tests {
     fn ai_agent_rows(targets: &[ScanTarget], root: &Path) -> Vec<serde_json::Value> {
         let canonical = std::fs::canonicalize(root).unwrap();
         let relative = |path: &Path| {
-            path.strip_prefix(root)
-                .or_else(|_| path.strip_prefix(&canonical))
+            let path = std::fs::canonicalize(path)
+                .unwrap_or_else(|error| panic!("cannot resolve fixture target {path:?}: {error}"));
+            path.strip_prefix(&canonical)
                 .unwrap_or_else(|_| panic!("target outside the fixture: {path:?}"))
                 .to_string_lossy()
                 .replace('\\', "/")
@@ -1175,6 +1176,25 @@ mod tests {
             .collect();
         rows.sort_by(|a, b| a["path"].as_str().unwrap().cmp(b["path"].as_str().unwrap()));
         rows
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ai_agent_rows_accepts_normal_and_verbatim_fixture_paths() {
+        let (root, home, local, roaming) = ai_agent_layout_fixture();
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        let mut targets = rule_directories(&home, &local, &roaming);
+        push_ai_agent_targets(
+            &mut targets,
+            Some(&local),
+            &roaming,
+            &fixture_claims(&home, &local, &roaming),
+        );
+        assert_eq!(
+            ai_agent_rows(&targets, &root),
+            ai_agent_rows(&targets, &canonical_root)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// 迁移金样：目标、标签、类别、推荐与操作逐项与记录基线一致。基线由
