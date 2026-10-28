@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -273,6 +274,10 @@ func TestMacResidualVerificationRetainsUnknownAndRefreshesIdentity(t *testing.T)
 			t.Fatal(err)
 		}
 		unknown := filepath.Join(loop, "state")
+		if runtime.GOOS == "windows" {
+			// Windows may report a symlink loop as not found; NUL reliably gives an unknown read.
+			unknown = filepath.Join(root, "invalid\x00path")
+		}
 		if _, err := os.Lstat(unknown); err == nil || os.IsNotExist(err) {
 			t.Fatalf("fixture must be an unknown read, not absence: %v", err)
 		}
