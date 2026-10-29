@@ -1,6 +1,7 @@
 # Agent Note: Loading indicators animate in paint-only frames
 
 Status: implemented
+Partly-superseded-by: 2026-10-29-indicators-ignore-reduce-motion.md
 
 ## Problem
 
@@ -26,9 +27,9 @@ the display rate without rebuilding the page:
   three quarters and shrinks back while the whole turns, drawn with
   `Path.Circle` and `Trim`.
 
-Both stay still when the desktop asks for reduced motion. The dashboard and
-the junk, disk and apps pages use them in place of the old bar and
-`ui.Spinner`.
+Both animate at the display's rate regardless of the desktop's
+reduce-motion setting. The dashboard and the junk, disk and apps pages
+use them in place of the old bar and `ui.Spinner`.
 
 ## Alternatives considered
 
@@ -43,6 +44,15 @@ the junk, disk and apps pages use them in place of the old bar and
 
 The indicators keep moving through quiet stretches of a scan. They are
 painted only while visible.
+
+## Superseded
+
+The "stay still under reduced motion" part is dead: a static indicator
+makes a quiet scan read as a hang, and a stepped one still felt choppy
+over RDP. The successor `2026-10-29-indicators-ignore-reduce-motion.md`
+makes the indicators ignore ReduceMotion entirely and always animate at
+the display's rate, matching the Rust reference; the paint-only-frames
+mechanism this note owns is unchanged.
 
 ## Verification
 

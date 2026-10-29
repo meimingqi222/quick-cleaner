@@ -40,15 +40,20 @@ func scanBarSpan(t float64) (tail, head float64) {
 	return 1.2*easeInQuad(t) - 0.1, 1.2*easeOutQuad(t) - 0.1
 }
 
+// indicatorNow returns the paint time and asks for the next frame at the
+// display's rate. Loading indicators always animate, whatever the
+// desktop's reduce-motion setting says: a static or stepped spinner makes
+// a quiet scan read as a hang, and the Rust reference animates
+// unconditionally too.
+func indicatorNow(p *ui.Painter) time.Time {
+	p.AnimationFrame()
+	return p.Now()
+}
+
 // scanBar is the 3px indeterminate progress bar under the top bar.
 func scanBar(c *ui.Context) ui.Element {
-	still := c.Preferences().ReduceMotion
 	return ui.Box(c).FillWidth().Height(3).Shrink(0).Clip().Background(surfaceHighest).Role(ui.RoleProgress).Draw(func(p *ui.Painter, r ui.Rect) {
-		tail, head := 0.0, 0.35
-		if !still {
-			tail, head = scanBarSpan(cycle(p.Now(), scanBarPeriod))
-			p.AnimationFrame()
-		}
+		tail, head := scanBarSpan(cycle(indicatorNow(p), scanBarPeriod))
 		x0 := r.X + r.W*float32(max(0, tail))
 		x1 := r.X + r.W*float32(min(1, head))
 		if x1 > x0 {
@@ -73,18 +78,13 @@ func spinnerArc(now time.Time) (start, length float64) {
 
 // loadingSpinner is a rotating arc on a faint ring, in the primary color.
 func loadingSpinner(c *ui.Context, size float32) ui.Element {
-	still := c.Preferences().ReduceMotion
 	return ui.Box(c).Size(size, size).Shrink(0).Role(ui.RoleProgress).Draw(func(p *ui.Painter, r ui.Rect) {
 		width := max(2, r.W*0.11)
 		cx, cy := r.X+r.W/2, r.Y+r.H/2
 		radius := min(r.W, r.H)/2 - width/2
 		var ring ui.Path
 		p.StrokePath(ring.Circle(cx, cy, radius), width, primary.Alpha(0.14))
-		start, length := 0.0, 0.7
-		if !still {
-			start, length = spinnerArc(p.Now())
-			p.AnimationFrame()
-		}
+		start, length := spinnerArc(indicatorNow(p))
 		// Circle starts at three o'clock and runs clockwise; an arc past the
 		// end of the circle is drawn as two trims.
 		end := start + length
@@ -109,13 +109,8 @@ func orbitPosition(now time.Time, radius float32) (float32, float32) {
 // orbitDot overlays a size×size box with a dot circling its centre at
 // radius, for the overview's scan ring.
 func orbitDot(c *ui.Context, size, radius, dot float32, color ui.Color) ui.Element {
-	still := c.Preferences().ReduceMotion
 	return ui.Box(c).Absolute().Top(0).Left(0).Size(size, size).PassThrough().Draw(func(p *ui.Painter, r ui.Rect) {
-		dx, dy := float32(0), -radius
-		if !still {
-			dx, dy = orbitPosition(p.Now(), radius)
-			p.AnimationFrame()
-		}
+		dx, dy := orbitPosition(indicatorNow(p), radius)
 		cx, cy := r.X+r.W/2+dx, r.Y+r.H/2+dy
 		p.Fill(ui.Rect{X: cx - dot/2, Y: cy - dot/2, W: dot, H: dot}, color, dot/2)
 	})
@@ -155,23 +150,14 @@ func orbitDotSpecs(phase, i, count int) (opacity float32, dot float32) {
 // orbitSpinner renders an 8-dot rotating orbit with a breathing centre glow,
 // faithfully transcribing Rust's LoadingState spinner.
 func orbitSpinner(c *ui.Context, size float32) ui.Element {
-	still := c.Preferences().ReduceMotion
 	return ui.Box(c).Size(size, size).Shrink(0).Role(ui.RoleProgress).Draw(func(p *ui.Painter, r ui.Rect) {
 		const count = 8
 		radius := (r.W - 12.0) / 2.0
 		cx, cy := r.X+r.W/2, r.Y+r.H/2
 
-		phase := 0
-		if !still {
-			phase = int(p.Now().UnixNano()/int64(100*time.Millisecond)) % count
-			p.AnimationFrame()
-		}
-
-		pulse := float32(0.12)
-		if !still {
-			animPhase := int(p.Now().UnixNano() / int64(100*time.Millisecond))
-			pulse = float32(0.12 + 0.10*math.Sin(float64(animPhase%12)/12.0*math.Pi))
-		}
+		animPhase := int(indicatorNow(p).UnixNano() / int64(100*time.Millisecond))
+		phase := animPhase % count
+		pulse := float32(0.12 + 0.10*math.Sin(float64(animPhase%12)/12.0*math.Pi))
 		centreSize := float32(28.0) * (r.W / 64.0)
 		p.Fill(ui.Rect{X: cx - centreSize/2, Y: cy - centreSize/2, W: centreSize, H: centreSize}, primary.Alpha(pulse), centreSize/2)
 

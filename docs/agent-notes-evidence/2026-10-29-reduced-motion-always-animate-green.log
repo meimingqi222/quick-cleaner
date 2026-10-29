@@ -1,0 +1,12 @@
+=== RUN   TestIndicatorsAnimateUnderReducedMotion
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/scanBar
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/loadingSpinner
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/orbitSpinner
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/orbitDot
+--- PASS: TestIndicatorsAnimateUnderReducedMotion (0.01s)
+    --- PASS: TestIndicatorsAnimateUnderReducedMotion/scanBar (0.01s)
+    --- PASS: TestIndicatorsAnimateUnderReducedMotion/loadingSpinner (0.00s)
+    --- PASS: TestIndicatorsAnimateUnderReducedMotion/orbitSpinner (0.00s)
+    --- PASS: TestIndicatorsAnimateUnderReducedMotion/orbitDot (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.051s

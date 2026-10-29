@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"image"
 	"testing"
 	"time"
@@ -119,6 +120,44 @@ func TestOrbitSpinnerKeepsAnimatingOnItsOwn(t *testing.T) {
 	}
 	if same {
 		t.Fatal("the orbit spinner did not move")
+	}
+}
+
+// A machine with Windows animations off reports ReduceMotion; indicators
+// that then slow down or freeze make a quiet scan read as a hang and feel
+// choppy over RDP. Like the Rust reference, they animate at the display's
+// rate regardless of the desktop's reduce-motion setting.
+func TestIndicatorsAnimateUnderReducedMotion(t *testing.T) {
+	cases := []struct {
+		name string
+		el   func(c *ui.Context) ui.Element
+	}{
+		{"scanBar", func(c *ui.Context) ui.Element { return scanBar(c) }},
+		{"loadingSpinner", func(c *ui.Context) ui.Element { return loadingSpinner(c, 28) }},
+		{"orbitSpinner", func(c *ui.Context) ui.Element { return orbitSpinner(c, 64) }},
+		{"orbitDot", func(c *ui.Context) ui.Element { return orbitDot(c, 230, 112, 12, primary) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tt := ui.NewTester(func(c *ui.Context) {
+				ui.Column(c).Fill().Background(card).Children(func() { tc.el(c) })
+			}, 240, 240)
+			tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+			tt.Frame()
+			if !tt.FramePending() {
+				t.Fatalf("%s asked for no next frame under reduced motion", tc.name)
+			}
+			first := image.NewRGBA(tt.Image().Rect)
+			copy(first.Pix, tt.Image().Pix)
+			changed := false
+			for i := 0; i < 6 && !changed; i++ {
+				tt.Advance(100 * time.Millisecond)
+				changed = !bytes.Equal(first.Pix, tt.Image().Pix)
+			}
+			if !changed {
+				t.Fatalf("%s stood still under reduced motion", tc.name)
+			}
+		})
 	}
 }
 

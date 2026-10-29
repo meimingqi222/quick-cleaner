@@ -1,0 +1,17 @@
+=== RUN   TestIndicatorsAnimateUnderReducedMotion
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/scanBar
+    indicators_test.go:148: scanBar asked for no next frame under reduced motion
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/loadingSpinner
+    indicators_test.go:148: loadingSpinner asked for no next frame under reduced motion
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/orbitSpinner
+    indicators_test.go:148: orbitSpinner asked for no next frame under reduced motion
+=== RUN   TestIndicatorsAnimateUnderReducedMotion/orbitDot
+    indicators_test.go:148: orbitDot asked for no next frame under reduced motion
+--- FAIL: TestIndicatorsAnimateUnderReducedMotion (0.01s)
+    --- FAIL: TestIndicatorsAnimateUnderReducedMotion/scanBar (0.01s)
+    --- FAIL: TestIndicatorsAnimateUnderReducedMotion/loadingSpinner (0.00s)
+    --- FAIL: TestIndicatorsAnimateUnderReducedMotion/orbitSpinner (0.00s)
+    --- FAIL: TestIndicatorsAnimateUnderReducedMotion/orbitDot (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.040s
+FAIL
