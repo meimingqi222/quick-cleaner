@@ -58,6 +58,34 @@ func (c *DiskIndexCache) PruneOrphans(keep VolumeID) (int, error) {
 	var failures []error
 	for _, entry := range entries {
 		name := entry.Name()
+		baseName := strings.TrimSuffix(strings.TrimSuffix(name, ".tmp"), ".delta.bin")
+		if strings.HasSuffix(name, ".delta.bin") {
+			baseName += ".bin"
+		}
+		_, isIndex := diskIndexMountFromName(baseName)
+		if isIndex || diskIndexTemporaryName(name) {
+			if info, e := dir.Lstat(name); e == nil && info.Mode().IsRegular() && !platform.DevEnvStorageIsReparse(info) {
+				if f, e := dir.Open(name); e == nil {
+					if opened, e := f.Stat(); e == nil && os.SameFile(info, opened) {
+						_ = f.Chmod(0600)
+					}
+					_ = f.Close()
+				}
+			}
+		}
+		if diskIndexTemporaryName(name) {
+			info, err := dir.Lstat(name)
+			if err == nil && info.Mode().IsRegular() && !platform.DevEnvStorageIsReparse(info) && now.Sub(info.ModTime()) > 30*24*time.Hour {
+				current, e := dir.Lstat(name)
+				if e == nil && os.SameFile(current, info) && current.Mode().IsRegular() {
+					e = dir.Remove(name)
+				}
+				if e != nil {
+					failures = append(failures, e)
+				}
+			}
+			continue
+		}
 		mount, ok := diskIndexMountFromName(name)
 		if !ok || mount == keep.Mount {
 			continue
@@ -183,4 +211,17 @@ func diskIndexPhysicalDirectory(path string) bool {
 			return true
 		}
 	}
+}
+
+func diskIndexTemporaryName(name string) bool {
+	if strings.HasPrefix(name, ".scan-index-") && strings.HasSuffix(name, ".tmp") {
+		key := strings.TrimSuffix(strings.TrimPrefix(name, ".scan-index-"), ".tmp")
+		return key != "" && strings.Trim(key, "0123456789") == ""
+	}
+	base := strings.TrimSuffix(name, ".tmp")
+	if stem, ok := strings.CutSuffix(base, ".delta.bin"); ok {
+		base = stem + ".bin"
+	}
+	_, ok := diskIndexMountFromName(base)
+	return strings.HasSuffix(name, ".tmp") && ok
 }

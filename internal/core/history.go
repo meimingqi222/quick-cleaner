@@ -53,5 +53,5 @@ func RecordHistory(action string, targets []string, ok, skipped, failed uint, fr
 	}
 	content = append(content, line...)
 	content = append(content, '\n')
-	_ = os.WriteFile(path, content, 0666)
+	_ = writePrivateFile(path, content)
 }

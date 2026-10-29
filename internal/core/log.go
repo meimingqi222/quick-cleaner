@@ -78,6 +78,9 @@ func openProductLog(dir string) *os.File {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil
 	}
+	for _, name := range []string{logFileName, logOldName, "history.jsonl", "settings.json"} {
+		restrictExistingFile(filepath.Join(dir, name))
+	}
 	path := filepath.Join(dir, logFileName)
 	if info, err := os.Stat(path); err == nil && info.Size() > logMaxBytes {
 		old := filepath.Join(dir, logOldName)
@@ -86,6 +89,10 @@ func openProductLog(dir string) *os.File {
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		return nil
+	}
+	if file.Chmod(0600) != nil {
+		_ = file.Close()
 		return nil
 	}
 	return file

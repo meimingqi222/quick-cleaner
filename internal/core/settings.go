@@ -150,14 +150,14 @@ func (s Settings) Save() {
 		return
 	}
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0666) != nil {
+	if writePrivateFile(tmp, data) != nil {
 		return
 	}
 	if os.Rename(tmp, path) != nil {
 		_ = os.Remove(path)
 		if os.Rename(tmp, path) != nil {
 			_ = os.Remove(tmp)
-			_ = os.WriteFile(path, data, 0666)
+			_ = writePrivateFile(path, data)
 		}
 	}
 }

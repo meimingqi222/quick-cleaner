@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -87,8 +88,19 @@ func testConfigPersistence(t *testing.T) {
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatal("temporary settings file left behind", err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s.Language = core.Chinese
 	s.Save()
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("settings permissions: %v %v", info, err)
+		}
+	}
 	if got := core.LoadSettings(); !reflect.DeepEqual(got, s) {
 		t.Fatal("overwriting existing settings lost values")
 	}
@@ -101,7 +113,18 @@ func testConfigPersistence(t *testing.T) {
 
 	history := filepath.Join(filepath.Dir(path), "history.jsonl")
 	core.RecordHistory("arbitrary_clean", []string{filepath.Join(home, "a"), "中文目录"}, 3, 1, 2, 12345)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(history, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	core.RecordHistory("residual_clean", nil, 0, 4, 1, 678)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(history)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("history permissions: %v %v", info, err)
+		}
+	}
 	data, err := os.ReadFile(history)
 	if err != nil {
 		t.Fatal(err)

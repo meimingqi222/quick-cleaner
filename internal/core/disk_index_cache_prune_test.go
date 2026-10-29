@@ -60,6 +60,11 @@ func TestDiskIndexCachePruneOrphansPairsAndKeepsActive(t *testing.T) {
 	}
 	keep := VolumeFromMountPoint(mount)
 	active := diskPruneGroup(t, c, mount, 90*24*time.Hour)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(active[0], 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	covered := diskPruneGroup(t, c, nested, 0)
 	stale := diskPruneGroup(t, c, filepath.Join(diskCacheVolumeDir(t), "unmounted"), 31*24*time.Hour)
 	unknown := diskPruneGroup(t, c, filepath.Join(mount, "not-mounted"), 0)
@@ -70,6 +75,12 @@ func TestDiskIndexCachePruneOrphansPairsAndKeepsActive(t *testing.T) {
 		t.Fatalf("prune: %d %v", n, e)
 	}
 	diskPruneAssert(t, active, true)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(active[0])
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("active index permissions: %v %v", info, err)
+		}
+	}
 	diskPruneAssert(t, covered, false)
 	diskPruneAssert(t, stale, false)
 	diskPruneAssert(t, unknown, true)
@@ -192,4 +203,24 @@ func TestDiskIndexCachePruneMountKeyValidation(t *testing.T) {
 			t.Fatalf("mount key %q: %q %v", name, got, ok)
 		}
 	}
+}
+
+func TestDiskIndexPruneOldTemporaryFiles(t *testing.T) {
+	c, root := diskPruneCache(t)
+	old := filepath.Join(root, "scan-index-2f.bin.tmp")
+	fresh := filepath.Join(root, ".scan-index-123.tmp")
+	for _, p := range []string{old, fresh} {
+		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	when := time.Now().Add(-31 * 24 * time.Hour)
+	if err := os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PruneOrphans(VolumeFromMountPoint(root)); err != nil {
+		t.Fatal(err)
+	}
+	diskPruneAssert(t, []string{old}, false)
+	diskPruneAssert(t, []string{fresh}, true)
 }

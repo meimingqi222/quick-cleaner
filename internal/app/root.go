@@ -19,7 +19,7 @@ import (
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
-const Version = "0.0.19"
+const Version = "0.0.20"
 
 type diskOwner interface {
 	Load(context.Context, core.VolumeID) (*core.ScanResult, error)

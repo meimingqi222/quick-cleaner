@@ -1,0 +1,5 @@
+--- FAIL: TestProductLogRestrictsExistingAndRotatedFiles (0.00s)
+    log_test.go:73: quick-cleaner.log.1 mode = 644, want 600
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.897s
+FAIL

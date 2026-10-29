@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -58,5 +59,33 @@ func TestProductLogKeepsFileAtExactLimit(t *testing.T) {
 	}
 	if info.Size() != logMaxBytes {
 		t.Fatalf("size = %d", info.Size())
+	}
+}
+
+func TestProductLogRestrictsExistingAndRotatedFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, logFileName)
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), logMaxBytes+1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	f := openProductLog(dir)
+	if f == nil {
+		t.Fatal("open failed")
+	}
+	f.Close()
+	for _, name := range []string{logFileName, logOldName} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("%s mode = %o, want 600", name, info.Mode().Perm())
+		}
 	}
 }
