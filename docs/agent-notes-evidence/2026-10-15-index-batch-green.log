@@ -1,4 +1,4 @@
-   Compiling quick-cleaner v0.0.13 (/Users/yuqiang/work/code/quick-cleaner)
+   Compiling quick-cleaner v0.0.13 (/Users/<user>/work/code/quick-cleaner)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 17.70s
      Running unittests src/lib.rs (target/debug/deps/quick_cleaner-99b37516beec0b75)
 

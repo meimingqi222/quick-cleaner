@@ -1174,3 +1174,12 @@ Note: `2026-10-29-disk-delete-prunes-index.md`
 - **根因**：删除收尾写成 `disk.Loaded=false + scanDisk()`，重解析 $MFT 并重置 `currentNode`；Rust 参照是内存摘除。
 - **防护**：`pruneDiskPaths` 对已从盘上消失的目标 `RemoveSubtreeInplace`，祖先尺寸与 `searchTrees`（同一棵树）自动一致，`currentNode` 退到最深存活祖先；`TestDiskDeletePrunesTreeAndKeepsPosition` 锁定。回归见 Note。
 - **禁止回退**：不能把删除收尾改回整卷重扫；不能摘除仍在盘上的目标（删除失败/被保护跳过的节点必须留下）；改树前必须先取消在飞的文件搜索 goroutine。
+
+## P99 拖拽授权面板的箭头动画不能漏迁，也不能每次显示都重启
+
+Note: `2026-10-29-fda-arrow-bounce.md`
+
+- **症状**：Go 版完全磁盘访问拖拽提示的箭头静止，没有 Rust 版的弹跳引导。
+- **根因**：只迁移了箭头视图和引用，没有迁移 Core Animation；若在每次轮询显示时无条件添加动画，也会不断重置进度而近乎静止。
+- **防护**：箭头启用 layer，创建与显示时检查 `bounce`；存在则保留，丢失才补挂。参数、幂等与补挂回归见 Note。
+- **禁止回退**：不能用静态箭头替代；不能每次显示覆盖已有动画；不能只在创建时挂载而遗漏再次显示时的恢复。

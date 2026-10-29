@@ -1,0 +1,5 @@
+--- FAIL: TestFDADropArrowHasRustBounce (0.44s)
+    permission_drop_darwin_test.go:31: FDA arrow is static: missing Rust bounce animation
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.096s
+FAIL

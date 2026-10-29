@@ -169,7 +169,7 @@ Caused by:
 
 
 error: couldn't read `D:\code\quick-cleaner\target\x86_64-apple-darwin\debug\build\gpui_media-5c64c8119a4c5cbc\out/bindings.rs`: 系统找不到指定的文件。 (os error 2)
-  --> C:\Users\meimingqi222\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui_media-0.2.2\src\bindings.rs:10:1
+  --> C:\Users\<user>\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui_media-0.2.2\src\bindings.rs:10:1
    |
 10 | include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

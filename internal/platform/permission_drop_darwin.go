@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"reflect"
 	"runtime"
 	"sync"
@@ -97,6 +98,7 @@ func ShowFDADrop(bundle string, text FDADropText, allowFallback bool) bool {
 		fdaPanel.Store(uintptr(panel))
 	}
 	positionFDAPanel(panel, rect, found)
+	ensureFDABounceAnimation()
 	panel.Send(objc.RegisterName("orderFrontRegardless"))
 	return true
 }
@@ -153,8 +155,10 @@ func fdaContent(bundle string, text FDADropText) objc.ID {
 	container.Send(objc.RegisterName("addSubview:"), chip)
 	chip.Send(objc.RegisterName("release"))
 	arrow := fdaLabel(cgRect{Origin: cgPoint{268, 46}, Size: cgSize{40, 40}}, "↑", 30, false, true)
+	arrow.Send(objc.RegisterName("setWantsLayer:"), true)
 	container.Send(objc.RegisterName("addSubview:"), arrow)
 	fdaArrow.Store(uintptr(arrow))
+	ensureFDABounceAnimation()
 	arrow.Send(objc.RegisterName("release"))
 	line1 := fdaLabel(cgRect{Origin: cgPoint{318, 62}, Size: cgSize{220, 22}}, text.Line1, 13, true, false)
 	line2 := fdaLabel(cgRect{Origin: cgPoint{318, 40}, Size: cgSize{220, 22}}, text.Line2, 13, false, false)
@@ -163,6 +167,46 @@ func fdaContent(bundle string, text FDADropText) objc.ID {
 	line1.Send(objc.RegisterName("release"))
 	line2.Send(objc.RegisterName("release"))
 	return container
+}
+
+func ensureFDABounceAnimation() {
+	arrow := objc.ID(fdaArrow.Load())
+	if arrow == 0 {
+		return
+	}
+	layer := arrow.Send(objc.RegisterName("layer"))
+	if layer == 0 {
+		return
+	}
+	key := nsString("bounce")
+	defer key.Send(objc.RegisterName("release"))
+	// Show is polled while following System Settings. Replacing a live animation
+	// on every poll restarts it, making the arrow appear stuck or jittery.
+	if layer.Send(objc.RegisterName("animationForKey:"), key) != 0 {
+		return
+	}
+	path := nsString("position.y")
+	defer path.Send(objc.RegisterName("release"))
+	animation := objc.ID(objc.GetClass("CABasicAnimation")).Send(objc.RegisterName("animationWithKeyPath:"), path)
+	if animation == 0 {
+		return
+	}
+	position := objc.Send[cgPoint](layer, objc.RegisterName("position"))
+	number := objc.ID(objc.GetClass("NSNumber"))
+	from := objc.Send[objc.ID](number, objc.RegisterName("numberWithDouble:"), position.Y)
+	to := objc.Send[objc.ID](number, objc.RegisterName("numberWithDouble:"), position.Y+8)
+	animation.Send(objc.RegisterName("setFromValue:"), from)
+	animation.Send(objc.RegisterName("setToValue:"), to)
+	animation.Send(objc.RegisterName("setDuration:"), 0.6)
+	animation.Send(objc.RegisterName("setAutoreverses:"), true)
+	animation.Send(objc.RegisterName("setRepeatCount:"), float32(math.Inf(1)))
+	name := nsString("easeInEaseOut")
+	defer name.Send(objc.RegisterName("release"))
+	timing := objc.ID(objc.GetClass("CAMediaTimingFunction")).Send(objc.RegisterName("functionWithName:"), name)
+	if timing != 0 {
+		animation.Send(objc.RegisterName("setTimingFunction:"), timing)
+	}
+	layer.Send(objc.RegisterName("addAnimation:forKey:"), animation, key)
 }
 
 func fdaLabel(frame cgRect, text string, size float64, bold, center bool) objc.ID {

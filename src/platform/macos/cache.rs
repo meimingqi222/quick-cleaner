@@ -1485,10 +1485,10 @@ mod tests {
             assert!(tree.upsert_file(&PathBuf::from(format!("/qc-mem-gate-root/f{i}.bin")), i));
         }
         let mut removed = 0;
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME 应当存在"));
         for i in 0..50 {
-            if let Some(idx) = tree.find_node_by_path(&PathBuf::from(format!(
-                "/Users/yuqiang/Library/Caches/dir{i}"
-            ))) {
+            if let Some(idx) = tree.find_node_by_path(&home.join(format!("Library/Caches/dir{i}")))
+            {
                 tree.remove_subtree_inplace(idx);
                 removed += 1;
             }

@@ -8,19 +8,19 @@ test_seal_never_rewrites_but_reseal_migrates (test_seal_digest.TestSealDigest.te
 FAIL: test_digest_ignores_line_endings (test_seal_digest.TestSealDigest.test_digest_ignores_line_endings)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\MEIMIN~1\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 90, in test_digest_ignores_line_endings
+  File "C:\Users\<user>\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 90, in test_digest_ignores_line_endings
     self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 1 != 0 : 
 1 error(s):
-  C:\Users\MEIMIN~1\AppData\Local\Temp\tmpglkz6knh\notes/archived/bug-fix/2026-09-01-fixture-decision.md: archived note was modified after sealing
+  C:\Users\<user>\AppData\Local\Temp\tmpglkz6knh\notes/archived/bug-fix/2026-09-01-fixture-decision.md: archived note was modified after sealing
 
 
 ======================================================================
 FAIL: test_dump_anchors_skips_archived_notes (test_seal_digest.TestSealDigest.test_dump_anchors_skips_archived_notes)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\MEIMIN~1\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 115, in test_dump_anchors_skips_archived_notes
+  File "C:\Users\<user>\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 115, in test_dump_anchors_skips_archived_notes
     self.assertNotIn("test_retired", dumped.stdout)
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 'test_retired' unexpectedly found in 'tests/test_login.py::test_retired\n'
@@ -29,7 +29,7 @@ AssertionError: 'test_retired' unexpectedly found in 'tests/test_login.py::test_
 FAIL: test_seal_never_rewrites_but_reseal_migrates (test_seal_digest.TestSealDigest.test_seal_never_rewrites_but_reseal_migrates)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\MEIMIN~1\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 104, in test_seal_never_rewrites_but_reseal_migrates
+  File "C:\Users\<user>\AppData\Local\Temp\seal-red-sim\tests\test_seal_digest.py", line 104, in test_seal_never_rewrites_but_reseal_migrates
     self.assertEqual(migrated.returncode, 0, migrated.stdout + migrated.stderr)
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 2 != 0 : usage: verify-notes.py [-h] [--notes-dir NOTES_DIR] [--repo-root REPO_ROOT]
