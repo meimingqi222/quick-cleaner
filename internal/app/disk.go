@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -60,6 +62,7 @@ func (r *Root) scanDisk() {
 		r.diskOwner = owner
 	}
 	owner := r.diskOwner
+	savedPath := r.disk.CurrentPath
 	r.disk.Scanning = true
 	r.search.Indexing = true
 	r.disk.Error = ""
@@ -68,10 +71,21 @@ func (r *Root) scanDisk() {
 		started := time.Now()
 		var result *core.ScanResult
 		var err error
-		if owner != nil {
-			result, err = owner.Load(ctx, v)
-		} else {
-			result, err = scanNativeVolume(ctx, v)
+		// Windows: a tree scanned this session (junk prescan, search, an
+		// earlier lens visit) is reused while fresh instead of re-parsing
+		// $MFT. Older trees are stale enough that rows would lie.
+		if owner == nil && time.Since(r.searchTreesAt[v.Mount]) < diskIndexReuseTTL {
+			if cached := r.searchTrees[v.Mount]; cached != nil {
+				log.Printf("磁盘透镜复用会话内索引 %s（%.0fs 前解析）", v.Mount, time.Since(r.searchTreesAt[v.Mount]).Seconds())
+				result = &core.ScanResult{Volume: v, Tree: cached, TotalSize: cached.SizeOf(cached.Root()), FileCount: cached.CountUsedFiles()}
+			}
+		}
+		if result == nil {
+			if owner != nil {
+				result, err = owner.Load(ctx, v)
+			} else {
+				result, err = scanNativeVolume(ctx, v)
+			}
 		}
 		if err == nil {
 			err = ctx.Err()
@@ -91,9 +105,15 @@ func (r *Root) scanDisk() {
 			}
 			r.tree = result.Tree
 			r.searchTrees[v.Mount] = result.Tree
+			r.searchTreesAt[v.Mount] = time.Now()
 			r.disk.Loaded = true
 			r.disk.UniqueSize = result.UniqueSize
 			r.currentNode = r.tree.Root()
+			if savedPath != "" && strings.HasPrefix(savedPath, v.Mount) {
+				if ids := r.tree.FindPath(savedPath); len(ids) > 0 {
+					r.currentNode = ids[len(ids)-1]
+				}
+			}
 			r.diskSelected.Clear()
 			r.disk.Partial = len(r.tree.BlockedSubtrees()) > 0
 			r.rebuildDisk()
@@ -106,6 +126,11 @@ func (r *Root) scanDisk() {
 		}
 	})
 }
+
+// diskIndexReuseTTL is how old a session-cached volume index may be before
+// the disk lens re-parses it. $MFT drifts constantly; two minutes keeps a
+// second parse off the fast path without showing noticeably stale rows.
+const diskIndexReuseTTL = 2 * time.Minute
 
 func (r *Root) rebuildDisk() {
 	if r.tree == nil {
@@ -278,7 +303,61 @@ func (r *Root) requestDiskDelete(paths []string) {
 		}
 		targets = append(targets, target)
 	}
-	r.requestArbitraryClean("disk", targets, func(core.CleanReport) { r.disk.Loaded = false; r.diskSelected.Clear(); r.scanDisk() })
+	r.requestArbitraryClean("disk", targets, func(core.CleanReport) { r.pruneDiskPaths(paths) })
+}
+
+// pruneDiskPaths removes the deleted paths from the in-memory index instead
+// of rescanning the volume: ancestors lose their sizes, the search index
+// (the same tree) stays consistent, and the position keeps the deepest
+// surviving ancestor—matching the Rust reference's prune_deleted_from_mft.
+func (r *Root) pruneDiskPaths(paths []string) {
+	t := r.tree
+	if t == nil {
+		return
+	}
+	// The file-search goroutine traverses the same tree; stop it before
+	// mutating. Its generation bump discards whatever it was about to say.
+	if r.searchCancel != nil {
+		r.searchCancel()
+		r.searchCancel = nil
+		r.searchGeneration++
+		r.search.Searching = false
+	}
+	// Record the position's ancestor chain while every node is valid:
+	// ParentOf may refuse an already-removed slot.
+	var chain []uint32
+	for id := r.currentNode; t.Valid(id); {
+		chain = append(chain, id)
+		p, ok := t.ParentOf(id)
+		if !ok || p == id {
+			break
+		}
+		id = p
+	}
+	var freed uint64
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			continue // failed or skipped: still on disk, keep the node
+		}
+		if idx, ok := t.FindNodeByPath(path); ok && idx != t.Root() {
+			freed += t.SizeOf(idx)
+			t.RemoveSubtreeInplace(idx)
+		}
+	}
+	for _, id := range chain {
+		if t.Valid(id) {
+			r.currentNode = id
+			break
+		}
+	}
+	if !t.Valid(r.currentNode) {
+		r.currentNode = t.Root()
+	}
+	if r.disk.Space != nil {
+		r.disk.Space.Free += freed
+	}
+	r.diskSelected.Clear()
+	r.rebuildDisk()
 }
 
 func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarget, finish func(core.CleanReport)) {
@@ -487,6 +566,7 @@ func (r *Root) scanSearch(force bool) {
 			r.search.Indexing = false
 			for mount, tree := range loaded {
 				r.searchTrees[mount] = tree
+				r.searchTreesAt[mount] = time.Now()
 			}
 			r.search.Ready = len(r.searchTrees) > 0
 			if len(failures) != 0 {

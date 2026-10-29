@@ -1156,3 +1156,21 @@ Note: `2026-10-28-junk-clean-bar-overlap.md`
 - **根因**：`JunkPage.RenderContent` 的根列用 `Fill()`（高度 100%），它位于 44px 顶栏之后，却按整列高度取尺寸，比剩余空间多出顶栏高度；内容区没有裁剪，多出的部分直接覆盖到底部状态栏。
 - **防护**：页面根列改用 `Grow(1).FillWidth().MinHeight(0)`，与其他页面一致，只占顶栏之后的空间；`TestJunkCleanBarStaysAboveTheStatusBar` 在 900/800/700/600 高度下锁住胶囊条底边不越过状态栏。回归见 Note。
 - **禁止回退**：不能把根列改回 `Fill()`；不能只在窗口高度上做特殊判断（换顶栏高度或 DPI 后又会复发）；不能删除短窗口高度的断言。
+
+## P97 加载指示器不响应减少动画设置，必须始终动
+
+Note: `2026-10-29-indicators-ignore-reduce-motion.md`
+
+- **症状**：Windows 下扫描没有任何动画，界面像卡死。「调整为最佳性能」、RDP、辅助功能「动画效果」关掉时必现；Rust 版不读该设置、一直动，所以被当成版本回退。先修成 500ms 低频步进，用户在 RDP 下实测仍然觉得不流畅。
+- **根因**：`ReduceMotion` 时各指示器画一张静态图并**不再调用** `Painter.AnimationFrame()`，静默扫描阶段连一帧重绘请求都没有。「减少动画」被实现成了「零重绘」。
+- **防护**：`internal/ui/indicators.go` 的 `indicatorNow` 统一发帧策略——不读 `Preferences().ReduceMotion`，一律 `Painter.AnimationFrame()` + 当前绘制时钟，与 Rust 参照一致；`TestIndicatorsAnimateUnderReducedMotion` 断言四个指示器在该设置下仍持续请求帧且画面变化。回归见 Note。
+- **禁止回退**：不能给加载指示器加回 ReduceMotion / `still` 分支（静止或步进都算回退）；新增加载指示器必须走 `indicatorNow`；MyGo 自带控件的偏好行为不动，那是框架层的事。
+
+## P98 磁盘透镜删除后在内存索引里摘除，不能全量重扫
+
+Note: `2026-10-29-disk-delete-prunes-index.md`
+
+- **症状**：磁盘透镜删任意文件后整卷重新加载数秒，浏览位置弹回根目录。
+- **根因**：删除收尾写成 `disk.Loaded=false + scanDisk()`，重解析 $MFT 并重置 `currentNode`；Rust 参照是内存摘除。
+- **防护**：`pruneDiskPaths` 对已从盘上消失的目标 `RemoveSubtreeInplace`，祖先尺寸与 `searchTrees`（同一棵树）自动一致，`currentNode` 退到最深存活祖先；`TestDiskDeletePrunesTreeAndKeepsPosition` 锁定。回归见 Note。
+- **禁止回退**：不能把删除收尾改回整卷重扫；不能摘除仍在盘上的目标（删除失败/被保护跳过的节点必须留下）；改树前必须先取消在飞的文件搜索 goroutine。

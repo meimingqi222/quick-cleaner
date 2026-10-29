@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
@@ -80,6 +81,11 @@ func (r *Root) scanJunk() {
 		busyDone := make(chan map[string]core.Busy, 1)
 		go func() { busyDone <- core.DetectInUse(busyPaths) }()
 		r.armJunkBusy(busyDone)
+		// Every tree acquire parses is recorded so the scan's finish can share
+		// it with the disk lens and file search instead of letting it die
+		// inside the plan. Acquires run in parallel during discovery.
+		var acquiredMu sync.Mutex
+		var acquiredTrees []*core.SizeTree
 		var acquire func(context.Context, core.VolumeID) (*core.SizeTree, error)
 		if elevated {
 			acquire = func(ctx context.Context, v core.VolumeID) (*core.SizeTree, error) {
@@ -93,14 +99,21 @@ func (r *Root) scanJunk() {
 				if err != nil || result == nil {
 					return nil, err
 				}
+				acquiredMu.Lock()
+				acquiredTrees = append(acquiredTrees, result.Tree)
+				acquiredMu.Unlock()
 				return result.Tree, nil
 			}
 		}
+		planT0 := time.Now()
 		plan := core.BeginJunkIndex(ctx, elevated, home, volumes, indexes, targets, acquire)
 		if plan.Acquired == nil && acquiredTree != nil {
 			plan.Acquired = acquiredTree
 		}
+		log.Printf("阶段零索引就绪：%s（acquired=%v）", time.Since(planT0).Round(time.Millisecond), plan.Acquired != nil)
+		fixedT0 := time.Now()
 		cats := core.ScanFixed(ctx, targets, plan.Query)
+		log.Printf("阶段一 ScanFixed 完成：%s", time.Since(fixedT0).Round(time.Millisecond))
 		var discovered []core.ScanItem
 		partial := false
 		if ctx.Err() == nil {
@@ -143,6 +156,9 @@ func (r *Root) scanJunk() {
 		cancelled := ctx.Err()
 		return func() {
 			r.junk.Scanning, r.junk.Discovering = false, false
+			for _, tree := range acquiredTrees {
+				r.rememberJunkIndex(tree)
+			}
 			if cancelled != nil {
 				r.failure(cancelled)
 				return

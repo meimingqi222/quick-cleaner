@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -104,25 +105,61 @@ func (plan JunkIndex) Discover(ctx context.Context, rules *RuleSnapshot) []ScanI
 		log.Printf("卷 %s: 复用阶段一已解析的 MFT 树，省去一次全盘解析", tree.Volume())
 		add(DiscoverBuildArtifacts(ctx, rules, nil, tree))
 	}
-	var live []VolumeID
+	var live, pending []VolumeID
 	for _, volume := range plan.volumes {
-		if ctx.Err() != nil {
-			return out
-		}
 		key := normMount(volume.MountPoint())
 		if key == "" || covered[key] {
 			continue
 		}
-		if plan.acquire != nil {
-			tree, err := plan.acquire(ctx, volume)
-			if err == nil && tree != nil {
-				covered[key] = true
-				held = append(held, tree)
-				add(DiscoverBuildArtifacts(ctx, rules, nil, tree))
+		pending = append(pending, volume)
+	}
+	if plan.acquire != nil && len(pending) > 1 && ctx.Err() == nil {
+		// Remaining volumes parse in parallel: each acquire opens its own raw
+		// volume handle, and results merge in volume order so dedup stays
+		// deterministic. A cancelled ctx aborts every parse together.
+		results := make([]struct {
+			tree  *SizeTree
+			items []ScanItem
+		}, len(pending))
+		var wg sync.WaitGroup
+		for i, volume := range pending {
+			wg.Add(1)
+			go func(i int, volume VolumeID) {
+				defer wg.Done()
+				tree, err := plan.acquire(ctx, volume)
+				if err != nil || tree == nil || ctx.Err() != nil {
+					return
+				}
+				results[i].tree = tree
+				results[i].items = DiscoverBuildArtifacts(ctx, rules, nil, tree)
+			}(i, volume)
+		}
+		wg.Wait()
+		for i, volume := range pending {
+			if results[i].tree == nil {
+				live = append(live, volume)
 				continue
 			}
+			held = append(held, results[i].tree)
+			add(results[i].items)
 		}
-		live = append(live, volume)
+	} else {
+		for _, volume := range pending {
+			if ctx.Err() != nil {
+				return out
+			}
+			key := normMount(volume.MountPoint())
+			if plan.acquire != nil {
+				tree, err := plan.acquire(ctx, volume)
+				if err == nil && tree != nil {
+					covered[key] = true
+					held = append(held, tree)
+					add(DiscoverBuildArtifacts(ctx, rules, nil, tree))
+					continue
+				}
+			}
+			live = append(live, volume)
+		}
 	}
 	home := plan.home
 	if junkIndexCovers(held, home) {

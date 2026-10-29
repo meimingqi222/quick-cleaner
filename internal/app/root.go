@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -71,6 +72,7 @@ type Root struct {
 	appsLoaded, devLoaded bool
 	tree                  *core.SizeTree
 	searchTrees           map[string]*core.SizeTree
+	searchTreesAt         map[string]time.Time
 	diskOwner             diskOwner
 	currentNode           uint32
 	diskSelected          *core.DiskSelectionState
@@ -120,6 +122,7 @@ func NewRoot(settings core.Settings, post func(func()), invalidate func()) *Root
 		save: func(s core.Settings) { s.Save() }, record: core.RecordHistory, diskSelected: core.NewDiskSelectionState(), declutterAuthority: map[string]core.ArbitraryTarget{}}
 	r.appIcons = map[string]*ui.Bitmap{}
 	r.searchTrees = map[string]*core.SizeTree{}
+	r.searchTreesAt = map[string]time.Time{}
 	r.trashSeen = map[string]bool{}
 	r.residualAuthority = appResidualsAllowed
 	r.uninstallApp = uninstallApp
@@ -381,6 +384,7 @@ func (r *Root) Scan() {
 		// replay on macOS). Windows drops its copies so all mounts reload.
 		if runtime.GOOS != "darwin" {
 			r.searchTrees = map[string]*core.SizeTree{}
+			r.searchTreesAt = map[string]time.Time{}
 		}
 		r.scanSearch(true)
 	case view.Declutter:
