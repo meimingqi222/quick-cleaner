@@ -16,10 +16,12 @@ Status: implemented
 
 ## Consequences
 
-清理仅在既有索引回收触发时运行，没有总容量上限；旧临时文件最多保留到下一次触发回收。
+清理仅在既有索引回收触发时运行，没有总容量上限；旧临时文件最多保留到下一次触发回收。测试使用当前平台的绝对路径生成索引名，不能硬编码 Unix 的 `/`。
 
 ## Verification
 
 - `internal/core/disk_index_cache_prune_test.go::TestDiskIndexPruneOldTemporaryFiles`
 
 Proved: 修复前过期索引临时文件未删除，断言失败，见 `docs/agent-notes-evidence/2026-10-29-index-temp-red.log`；修复后相同测试通过。
+
+Windows CI 在旧夹具中将 `/` 当作挂载点，因不是 Windows 绝对路径导致删除断言失败：见 `docs/agent-notes-evidence/2026-10-29-index-temp-windows-ci-red.log`。

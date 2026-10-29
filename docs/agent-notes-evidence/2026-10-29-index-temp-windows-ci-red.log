@@ -1,0 +1,3 @@
+Build & Release (Windows x86_64)	Vet and test	2026-10-29T06:29:28.3574693Z --- FAIL: TestDiskIndexPruneOldTemporaryFiles (0.00s)
+Build & Release (Windows x86_64)	Vet and test	2026-10-29T06:29:28.3575781Z     disk_index_cache_prune_test.go:224: must remove C:\Users\runneradmin\AppData\Local\Temp\TestDiskIndexPruneOldTemporaryFiles3288950990\001\scan-index-2f.bin.tmp: <nil>
+Build & Release (Windows x86_64)	Vet and test	2026-10-29T06:29:28.3581850Z FAIL	github.com/meimingqi222/quick-cleaner/internal/core	39.218s

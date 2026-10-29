@@ -207,7 +207,7 @@ func TestDiskIndexCachePruneMountKeyValidation(t *testing.T) {
 
 func TestDiskIndexPruneOldTemporaryFiles(t *testing.T) {
 	c, root := diskPruneCache(t)
-	old := filepath.Join(root, "scan-index-2f.bin.tmp")
+	old := filepath.Join(root, "scan-index-"+hex.EncodeToString([]byte(root))+".bin.tmp")
 	fresh := filepath.Join(root, ".scan-index-123.tmp")
 	for _, p := range []string{old, fresh} {
 		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
