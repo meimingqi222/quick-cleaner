@@ -10,10 +10,11 @@ import (
 )
 
 type statusProcessRow struct {
-	process core.ProcInfo
-	group   string
-	count   int
-	child   bool
+	process   core.ProcInfo
+	group     string
+	count     int
+	child     bool
+	childLast bool
 }
 
 func (s *StatusPage) processRows(filtered []core.ProcInfo) []statusProcessRow {
@@ -58,8 +59,13 @@ func (s *StatusPage) processRows(filtered []core.ProcInfo) []statusProcessRow {
 	for _, row := range top {
 		rows = append(rows, row)
 		if row.group != "" && s.ExpandedGroups[row.group] {
-			for _, p := range groups[row.group] {
-				rows = append(rows, statusProcessRow{process: p, child: true})
+			children := groups[row.group]
+			for i, p := range children {
+				rows = append(rows, statusProcessRow{
+					process:   p,
+					child:     true,
+					childLast: i == len(children)-1,
+				})
 			}
 		}
 	}
@@ -169,6 +175,24 @@ func (s *StatusPage) processIcon(c *ui.Context, p core.ProcInfo, size float32) {
 	ui.Box(c).Size(size, size).Shrink(0).Radius(3).Background(surfaceLow).Border(1, outlineVariant.Alpha(.5)).Center().Children(func() { ui.Text(c, label).FontSize(12).Bold().TextColor(muted) })
 }
 
+func processTreeBranch(c *ui.Context, isLast bool, color ui.Color) ui.Element {
+	return ui.Box(c).Width(24).Height(32).Shrink(0).PassThrough().Draw(func(p *ui.Painter, r ui.Rect) {
+		x := r.X + 8
+		midY := r.Y + r.H/2
+		rightX := r.X + r.W
+		stroke := float32(1.5)
+
+		var path ui.Path
+		if isLast {
+			path.MoveTo(x, r.Y).LineTo(x, midY-3).QuadTo(x, midY, x+3, midY).LineTo(rightX, midY)
+		} else {
+			path.MoveTo(x, r.Y).LineTo(x, r.Y+r.H)
+			path.MoveTo(x, midY).LineTo(rightX, midY)
+		}
+		p.StrokePath(&path, stroke, color)
+	})
+}
+
 func (s *StatusPage) renderProcessRow(c *ui.Context, row statusProcessRow, a StatusPageActions) {
 	p := row.process
 	b := ui.ButtonBase(c).Height(32).FillWidth().Padding(0, 16).Gap(0).Justify(ui.Start).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.35)).Cursor(ui.CursorPointer)
@@ -183,12 +207,20 @@ func (s *StatusPage) renderProcessRow(c *ui.Context, row statusProcessRow, a Sta
 			case row.group != "":
 				ui.Box(c).Width(16).Shrink(0).Center().Children(func() { chevron(c, s.ExpandedGroups[row.group], outline, 12) })
 			case row.child:
-				ui.Text(c, "│").Width(16).Shrink(0).FontSize(12).TextColor(outline)
+				processTreeBranch(c, row.childLast, outlineVariant)
 			default:
 				ui.Box(c).Width(16).Shrink(0)
 			}
-			s.processIcon(c, p, 18)
-			ui.Text(c, p.Name).Grow(1).MinWidth(0).Clip().FontSize(12).FontWeight(500).TextColor(text)
+			iconSize := float32(18)
+			nameWeight := 500
+			nameColor := text
+			if row.child {
+				iconSize = 16
+				nameWeight = 400
+				nameColor = muted
+			}
+			s.processIcon(c, p, iconSize)
+			ui.Text(c, p.Name).Grow(1).MinWidth(0).Clip().FontSize(12).FontWeight(nameWeight).TextColor(nameColor)
 			if row.group != "" {
 				ui.Text(c, fmt.Sprint(row.count)).Shrink(0).Padding(0, 6).Radius(6).Background(outlineVariant.Alpha(.5)).FontSize(12).TextColor(muted)
 			}

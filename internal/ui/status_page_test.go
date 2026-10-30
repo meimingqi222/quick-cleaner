@@ -352,3 +352,28 @@ func TestStatusCopyAndCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusProcessHierarchyTreeBranch(t *testing.T) {
+	s := statusFixture()
+	s.Tab = StatusProcesses
+	s.ExpandedGroups = map[string]bool{"node": true}
+	rows := s.processRows(s.filteredProcesses())
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(rows))
+	}
+	var childRows []statusProcessRow
+	for _, r := range rows {
+		if r.child {
+			childRows = append(childRows, r)
+		}
+	}
+	if len(childRows) != 2 {
+		t.Fatalf("expected 2 child rows, got %d", len(childRows))
+	}
+	if childRows[0].childLast {
+		t.Errorf("first child row should not be marked as childLast")
+	}
+	if !childRows[1].childLast {
+		t.Errorf("second (last) child row must be marked as childLast")
+	}
+}
