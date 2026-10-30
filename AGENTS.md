@@ -26,6 +26,8 @@ go run ./cmd/quick-cleaner --no-elevate
 
 `.github/workflows/go.yml` 在 Windows、macOS 和 Linux 检查格式、vet、race 测试和构建，并检查 Windows 资源。运行产品程序不是 dry run，实际操作仍会修改文件。
 
+扫描性能可直接用 `go run ./tools/indexbench -mode refresh -product-discovery -rounds 2` 测量（macOS），无需启动 GUI；默认使用临时缓存副本，覆盖完整发现规划，并分开报告前台返回与后台保存等待时间。缓存解析/单树发现微基准用 `go run ./tools/indexbench`。参数及 CPU profile 用法见 [`tools/indexbench/README.md`](tools/indexbench/README.md)。
+
 Rust 参照树相关任务才使用以下命令；Rust CI 仍检查格式和 Clippy：
 
 ```bash
