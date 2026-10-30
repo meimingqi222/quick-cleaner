@@ -142,7 +142,7 @@ func TestDiscoverWithinMarksOnlyBudgetExpiryPartial(t *testing.T) {
 }
 
 func TestPartialIndexDiscoveryWalksOnlyUncoveredBranches(t *testing.T) {
-	home, err := filepath.EvalSymlinks(t.TempDir())
+	home, err := filepath.EvalSymlinks(buildProjectFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}

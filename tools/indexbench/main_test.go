@@ -110,7 +110,16 @@ func TestSnapshotRejectsRedirectedCacheFile(t *testing.T) {
 }
 
 func TestProductDiscoveryIncludesUncoveredLiveBranch(t *testing.T) {
-	root, err := os.MkdirTemp("", "qc-bench-live-")
+	// Windows TEMP lives in AppData, which production discovery must reject.
+	parent := ""
+	if core.IsDevelopmentInstallationPath(os.TempDir()) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent = home
+	}
+	root, err := os.MkdirTemp(parent, ".qc-bench-live-")
 	if err != nil {
 		t.Fatal(err)
 	}
