@@ -20,8 +20,8 @@ import (
 // .app bundle and must not call Show.
 
 const (
-	fdaPanelWidth  = 560.0
-	fdaPanelHeight = 132.0
+	fdaPanelWidth  = 500.0
+	fdaPanelHeight = 76.0
 	fdaPanelGap    = 12.0
 )
 
@@ -128,40 +128,50 @@ func fdaContent(bundle string, text FDADropText) objc.ID {
 	container = objc.Send[objc.ID](container, objc.RegisterName("initWithFrame:"), frame)
 	container.Send(objc.RegisterName("setWantsLayer:"), true)
 	if layer := container.Send(objc.RegisterName("layer")); layer != 0 {
-		layer.Send(objc.RegisterName("setCornerRadius:"), 16.0)
+		layer.Send(objc.RegisterName("setCornerRadius:"), 18.0)
 		bg := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 0.16, 0.16, 0.17, 0.98)
 		layer.Send(objc.RegisterName("setBackgroundColor:"), bg.Send(objc.RegisterName("CGColor")))
 	}
+	// 左侧：胶囊背景卡片（使用 NSBox 确保在 AppKit 图层合成下稳定渲染背景与精致描边）
+	box := objc.ID(objc.GetClass("NSBox")).Send(objc.RegisterName("alloc"))
+	box = objc.Send[objc.ID](box, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{16, 14}, Size: cgSize{180, 48}})
+	box.Send(objc.RegisterName("setBoxType:"), 4) // NSBoxCustom
+	box.Send(objc.RegisterName("setCornerRadius:"), 10.0)
+	box.Send(objc.RegisterName("setTitlePosition:"), 0) // NSNoTitle
+	boxBg := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 0.24, 0.24, 0.26, 1.0)
+	box.Send(objc.RegisterName("setFillColor:"), boxBg)
+	boxBorder := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 1.0, 1.0, 1.0, 0.12)
+	box.Send(objc.RegisterName("setBorderColor:"), boxBorder)
+	box.Send(objc.RegisterName("setBorderWidth:"), 1.0)
+	container.Send(objc.RegisterName("addSubview:"), box)
+	box.Send(objc.RegisterName("release"))
+
 	chip := objc.ID(fdaDragClass()).Send(objc.RegisterName("alloc"))
-	chip = objc.Send[objc.ID](chip, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{28, 34}, Size: cgSize{220, 64}})
+	chip = objc.Send[objc.ID](chip, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{16, 14}, Size: cgSize{180, 48}})
 	setDragPath(chip, bundle)
-	chip.Send(objc.RegisterName("setWantsLayer:"), true)
-	if layer := chip.Send(objc.RegisterName("layer")); layer != 0 {
-		layer.Send(objc.RegisterName("setCornerRadius:"), 12.0)
-		bg := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 0.26, 0.26, 0.28, 1)
-		layer.Send(objc.RegisterName("setBackgroundColor:"), bg.Send(objc.RegisterName("CGColor")))
-	}
 	icon := workspaceIcon(bundle)
 	if icon != 0 {
 		view := objc.ID(objc.GetClass("NSImageView")).Send(objc.RegisterName("alloc"))
-		view = objc.Send[objc.ID](view, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{12, 12}, Size: cgSize{40, 40}})
+		view = objc.Send[objc.ID](view, objc.RegisterName("initWithFrame:"), cgRect{Origin: cgPoint{8, 8}, Size: cgSize{32, 32}})
 		view.Send(objc.RegisterName("setImage:"), icon)
 		chip.Send(objc.RegisterName("addSubview:"), view)
 		view.Send(objc.RegisterName("release"))
 	}
-	name := fdaLabel(cgRect{Origin: cgPoint{62, 20}, Size: cgSize{146, 24}}, text.AppName, 15, true, false)
+	name := fdaLabel(cgRect{Origin: cgPoint{48, 14}, Size: cgSize{124, 20}}, text.AppName, 14, true, false)
 	chip.Send(objc.RegisterName("addSubview:"), name)
 	name.Send(objc.RegisterName("release"))
 	container.Send(objc.RegisterName("addSubview:"), chip)
 	chip.Send(objc.RegisterName("release"))
-	arrow := fdaLabel(cgRect{Origin: cgPoint{268, 46}, Size: cgSize{40, 40}}, "↑", 30, false, true)
+	arrow := fdaLabel(cgRect{Origin: cgPoint{206, 22}, Size: cgSize{26, 32}}, "↑", 24, false, true)
+	blue := objc.Send[objc.ID](objc.ID(objc.GetClass("NSColor")), objc.RegisterName("colorWithSRGBRed:green:blue:alpha:"), 0.38, 0.65, 0.98, 1.0)
+	arrow.Send(objc.RegisterName("setTextColor:"), blue)
 	arrow.Send(objc.RegisterName("setWantsLayer:"), true)
 	container.Send(objc.RegisterName("addSubview:"), arrow)
 	fdaArrow.Store(uintptr(arrow))
 	ensureFDABounceAnimation()
 	arrow.Send(objc.RegisterName("release"))
-	line1 := fdaLabel(cgRect{Origin: cgPoint{318, 62}, Size: cgSize{220, 22}}, text.Line1, 13, true, false)
-	line2 := fdaLabel(cgRect{Origin: cgPoint{318, 40}, Size: cgSize{220, 22}}, text.Line2, 13, false, false)
+	line1 := fdaLabel(cgRect{Origin: cgPoint{242, 38.5}, Size: cgSize{242, 18}}, text.Line1, 13, true, false)
+	line2 := fdaLabel(cgRect{Origin: cgPoint{242, 19.5}, Size: cgSize{242, 16}}, text.Line2, 11.5, false, false)
 	container.Send(objc.RegisterName("addSubview:"), line1)
 	container.Send(objc.RegisterName("addSubview:"), line2)
 	line1.Send(objc.RegisterName("release"))

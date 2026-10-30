@@ -61,9 +61,9 @@ func (r *Root) openFDASettings() {
 					zh := r.settings.Language != core.English
 					text = platform.FDADropText{AppName: "QuickCleaner"}
 					if zh {
-						text.Line1, text.Line2 = "把左边的图标拖进上方的列表", "松手即完成授权，无需再点开关"
+						text.Line1, text.Line2 = "拖拽到上方窗口列表中松手", "无需翻找文件，松手即完成授权"
 					} else {
-						text.Line1, text.Line2 = "Drag the icon on the left into the list above", "Drop it there to grant access — no switch to flip"
+						text.Line1, text.Line2 = "Drag into the list above to authorize", "Release to grant access instantly"
 					}
 					// AppKit only from the main-thread publisher, matching Rust's update callback.
 					platform.ShowFDADrop(bundle, text, tick >= 20)
