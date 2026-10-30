@@ -29,6 +29,10 @@ var diskWalkLib struct {
 	errno func() *int32
 }
 
+var diskWalkBuffers = sync.Pool{
+	New: func() any { return new([256 * 1024]byte) },
+}
+
 func diskWalkLoad() error {
 	diskWalkLib.Do(func() {
 		h, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_NOW|purego.RTLD_LOCAL)
@@ -90,8 +94,14 @@ func diskWalkNative(ctx context.Context, path string, budget time.Duration) disk
 	if err != nil {
 		return diskWalkBatch{reason: MacWalkUnreadable, err: err}
 	}
-	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
+	var f *os.File
+	defer func() {
+		if f != nil {
+			_ = f.Close()
+		} else {
+			_ = unix.Close(fd)
+		}
+	}()
 	var st unix.Stat_t
 	if err = unix.Fstat(fd, &st); err != nil {
 		return diskWalkBatch{reason: MacWalkUnreadable, err: err}
@@ -100,10 +110,15 @@ func diskWalkNative(ctx context.Context, path string, budget time.Duration) disk
 		return diskWalkBatch{reason: MacWalkDataless}
 	}
 	if diskWalkLib.err != nil {
+		f = os.NewFile(uintptr(fd), path)
 		return diskWalkFallback(ctx, f, started, budget)
 	}
 	al := diskWalkAttrList{Count: 5, Common: diskWalkReturned | diskWalkName | diskWalkType | diskWalkModtime | diskWalkFlags | diskWalkError, File: diskWalkAlloc}
-	buf := make([]byte, 256*1024)
+	slab := diskWalkBuffers.Get().(*[256 * 1024]byte)
+	// A timed-out acquisition may still be in the syscall: only its worker
+	// can return these bytes after the native call has actually finished.
+	defer diskWalkBuffers.Put(slab)
+	buf := slab[:]
 	batch := diskWalkBatch{}
 	for {
 		if err = ctx.Err(); err != nil {
@@ -125,6 +140,7 @@ func diskWalkNative(ctx context.Context, path string, budget time.Duration) disk
 		runtime.UnlockOSThread()
 		if n < 0 {
 			if len(batch.items) == 0 && (errors.Is(callErr, unix.ENOTSUP) || errors.Is(callErr, unix.ENOSYS) || errors.Is(callErr, unix.EINVAL)) {
+				f = os.NewFile(uintptr(fd), path)
 				if _, err = f.Seek(0, io.SeekStart); err != nil {
 					batch.reason = MacWalkUnreadable
 					batch.err = err
@@ -140,7 +156,11 @@ func diskWalkNative(ctx context.Context, path string, budget time.Duration) disk
 			return batch
 		}
 		items, e := diskWalkParseBatch(buf, int(n))
-		batch.items = append(batch.items, items...)
+		if len(batch.items) == 0 {
+			batch.items = items
+		} else {
+			batch.items = append(batch.items, items...)
+		}
 		if e != nil {
 			batch.reason = MacWalkMalformed
 			batch.err = e

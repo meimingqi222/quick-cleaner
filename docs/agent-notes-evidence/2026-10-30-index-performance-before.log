@@ -1,0 +1,2 @@
+round  load         discover     verify       persist wait load MiB    discover MiB  items
+1      21.203s      0s           0s           18.114s      94628.9     0.0           0

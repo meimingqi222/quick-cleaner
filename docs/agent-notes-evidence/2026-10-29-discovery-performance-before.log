@@ -1,0 +1,8 @@
+cache_load elapsed=1.800476916s allocated=1441.7MiB mallocs=15109208 heap=1442.2MiB
+files=6520318 dirs=1043413 delta=false delta_error=<nil>
+discover_1 elapsed=7.899534834s allocated=4720.8MiB mallocs=52045667 heap=1059.0MiB
+drop_vanished_1 elapsed=53.66325ms allocated=19.1MiB mallocs=16723 heap=1079.5MiB
+items_1=8352 fingerprint=18fa38142c9447159794a2017e21d2ce30715f75c4280db8ebcf5ed88404495f
+discover_2 elapsed=7.859005459s allocated=4721.2MiB mallocs=52043580 heap=1658.4MiB
+drop_vanished_2 elapsed=38.421583ms allocated=19.1MiB mallocs=16723 heap=1030.6MiB
+items_2=8352 fingerprint=18fa38142c9447159794a2017e21d2ce30715f75c4280db8ebcf5ed88404495f

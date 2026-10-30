@@ -1,0 +1,5 @@
+--- FAIL: TestMappedTagCandidatesDoNotCopyUnrelatedLongNames (0.05s)
+    disk_index_mapped_load_test.go:38: tag candidate harvesting copied unrelated names: 1295544 allocated bytes
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.479s
+FAIL

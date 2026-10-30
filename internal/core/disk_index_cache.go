@@ -103,6 +103,7 @@ func (c *DiskIndexCache) Load(volume VolumeID) (*LoadedDiskIndex, error) {
 func (c *DiskIndexCache) load(volume VolumeID) (*LoadedDiskIndex, error) {
 	base, delta := c.Paths(volume)
 	mapped, mapErr := mapDiskIndex(base)
+	defer runtime.KeepAlive(mapped)
 	var b []byte
 	var err error
 	if mapErr == nil {
@@ -113,15 +114,14 @@ func (c *DiskIndexCache) load(volume VolumeID) (*LoadedDiskIndex, error) {
 			return nil, err
 		}
 	}
-	decoded, err := decodeDiskIndex(b, volume)
+	decoded, err := decodeDiskIndexWithMapping(b, volume, mapped)
 	if err != nil {
+		if mapped != nil {
+			mapped.close()
+		}
 		return nil, err
 	}
-	// Keep the mapping as the tree's base instead of a second heap copy of every
-	// record. The decode above already validated it; reads now come from the file
-	// and writes become overrides. A read-path fallback has no mapping to keep.
-	if mapErr == nil {
-		decoded.tree.attachMappedBase(mapped, b, int(cacheU32(b, 84)))
+	if mapped != nil {
 		mapped.releasePages()
 	}
 	if err := restoreDiskIndexCoverage(base, b, decoded.tree, decoded.checksum, decoded.meta.LastEventID, false); err != nil {
@@ -223,15 +223,23 @@ func (c *DiskIndexCache) persist(volume VolumeID, tree *SizeTree, event uint64, 
 			}
 		}
 	}
+	return c.publishBase(volume, tree, meta, incremental)
+}
+
+// The caller holds diskIndexWrites and has validated the snapshot and event
+// watermark, either as a full tree or a validated base plus checked edits.
+func (c *DiskIndexCache) publishBase(volume VolumeID, tree *SizeTree, meta DiskIndexMetadata, compacted bool) (DiskIndexSaveResult, error) {
+	base, delta := c.Paths(volume)
+	result := DiskIndexSaveResult{DiskIndexMetadata: meta}
 	b, err := encodeDiskIndex(tree, volume, meta)
 	if err != nil {
 		return DiskIndexSaveResult{}, err
 	}
-	if err := publishDiskIndexCovered(base, b, tree, 0, event, false); err != nil {
+	if err := publishDiskIndexCovered(base, b, tree, 0, meta.LastEventID, false); err != nil {
 		return DiskIndexSaveResult{}, err
 	}
-	diskIndexWrites.watermarks[base] = event
-	result.BaseChecksum, result.Compacted = cacheU64(b, 72), incremental
+	diskIndexWrites.watermarks[base] = meta.LastEventID
+	result.BaseChecksum, result.Compacted = cacheU64(b, 72), compacted
 	// A stale delta is checksum-bound to the previous base and cannot apply even
 	// if removal fails. Report the cleanup error; the base is already published.
 	if err := os.Remove(delta); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -262,6 +270,10 @@ func publishDiskIndex(path string, b []byte) error {
 	if err = os.Rename(f.Name(), path); err != nil {
 		return err
 	}
+	return syncDiskIndexDirectory(path)
+}
+
+func syncDiskIndexDirectory(path string) error {
 	// Sync the directory on Unix so publication survives a power loss too.
 	// Windows cannot flush a directory handle opened by os.Open (Access is
 	// denied); its rename is already the publication point.

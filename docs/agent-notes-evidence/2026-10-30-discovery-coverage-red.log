@@ -1,0 +1,5 @@
+--- FAIL: TestJunkCoveragePreparesGapsOncePerDiscovery (0.00s)
+    junk_index_test.go:207: coverage query repeated per-gap normalization: 778 allocations
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.408s
+FAIL

@@ -1,0 +1,99 @@
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=rebuild-arrays duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=background-persist duration=17ms incremental=true delta=true compacted=false event=11 error=<nil>
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=1ms error=unexpected EOF
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: unexpected EOF background=false
+2026/10/30 11:16:55 [disk index] phase=full-scan started
+2026/10/30 11:16:55 [disk index] phase=full-scan duration=0s spill=false error=unexpected whole-volume rebuild
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=context canceled
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: context canceled background=false
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=rebuild-arrays duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=background-persist duration=15ms incremental=true delta=true compacted=false event=11 error=<nil>
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=unexpected EOF
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: unexpected EOF background=false
+2026/10/30 11:16:55 [disk index] phase=full-scan started
+2026/10/30 11:16:55 [disk index] phase=full-scan duration=0s spill=false error=unexpected whole-volume rebuild
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=context canceled
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: context canceled background=false
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=rebuild-arrays duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=background-persist duration=16ms incremental=true delta=true compacted=false event=11 error=<nil>
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=2ms error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=unexpected EOF
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: unexpected EOF background=false
+2026/10/30 11:16:55 [disk index] phase=full-scan started
+2026/10/30 11:16:55 [disk index] phase=full-scan duration=0s spill=false error=unexpected whole-volume rebuild
+2026/10/30 11:16:55 [disk index] phase=wait duration=0s
+2026/10/30 11:16:55 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:16:55 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:16:55 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:16:55 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:16:55 [disk index] phase=apply-events duration=0s error=context canceled
+2026/10/30 11:16:55 [disk index] phase=rebuild reason=apply events: context canceled background=false
+goos: darwin
+goarch: arm64
+pkg: github.com/meimingqi222/quick-cleaner/internal/core
+cpu: Apple M1 Max
+BenchmarkSpillSubtreeGraft/memory-subtree-10         	      10	  10129858 ns/op	39326971 B/op	     669 allocs/op
+BenchmarkSpillSubtreeGraft/memory-subtree-10         	      10	  10333758 ns/op	39326987 B/op	     669 allocs/op
+BenchmarkSpillSubtreeGraft/memory-subtree-10         	      10	  10320154 ns/op	39326972 B/op	     669 allocs/op
+BenchmarkSpillSubtreeGraft/streamed-spill-10         	      19	   6250568 ns/op	10649488 B/op	  100188 allocs/op
+BenchmarkSpillSubtreeGraft/streamed-spill-10         	      20	   6145635 ns/op	10649488 B/op	  100188 allocs/op
+BenchmarkSpillSubtreeGraft/streamed-spill-10         	      20	   6056950 ns/op	10649488 B/op	  100188 allocs/op
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.900s

@@ -1,0 +1,21 @@
+2026/10/29 18:19:52 [disk index] phase=wait duration=0s
+2026/10/29 18:19:52 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/29 18:19:52 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:19:52 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/29 18:19:52 [disk index] phase=subtree-scans roots=1 files=0 estimated=2
+2026/10/29 18:19:52 [disk index] phase=subtree-scans duration=0s
+2026/10/29 18:19:52 [disk index] phase=clone duration=0s mapped=true nodes=5
+2026/10/29 18:19:52 [disk index] phase=rebuild-arrays duration=3ms
+2026/10/29 18:19:52 [disk index] phase=apply-events duration=16ms error=<nil>
+2026/10/29 18:19:52 [disk index] phase=incremental-persist duration=88ms delta=false compacted=true error=<nil>
+2026/10/29 18:19:52 [disk index] phase=wait duration=0s
+2026/10/29 18:19:52 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:19:52 [disk index] events raw=0 paths=0 rescan=0 incomplete=false reason= since=2 delivered=3
+2026/10/29 18:19:52 [disk index] phase=incremental-persist duration=87ms delta=false compacted=true error=<nil>
+--- FAIL: TestMacDiskIndexCompactionRebindsMappedBase (0.27s)
+    disk_index_rebind_test.go:57: owner still maps the retired base after compaction
+    disk_index_rebind_test.go:66: quiet refresh rewrote the entire compacted base
+    disk_index_rebind_test.go:69: quiet refresh did not use a metadata-only delta stat $TMPDIR/TestMacDiskIndexCompactionRebindsMappedBase1079352450/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d343137303434373733332fe58db7.delta.bin: no such file or directory
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.766s
+FAIL

@@ -1,0 +1,8 @@
+--- FAIL: TestNativeScanOwnsSpillUntilSuccessfulTransfer (0.00s)
+    --- FAIL: TestNativeScanOwnsSpillUntilSuccessfulTransfer/walk-error (0.00s)
+        disk_index_subtree_spill_test.go:296: failed native scan leaked finished spill <nil>
+    --- FAIL: TestNativeScanOwnsSpillUntilSuccessfulTransfer/conversion-cancel (0.00s)
+        disk_index_subtree_spill_test.go:296: failed native scan leaked finished spill <nil>
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.655s
+FAIL

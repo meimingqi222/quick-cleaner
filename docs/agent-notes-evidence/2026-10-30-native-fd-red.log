@@ -1,0 +1,5 @@
+--- FAIL: TestDiskWalkNativeClosesDescriptorsOnEveryExit (0.00s)
+    disk_walk_buffers_darwin_test.go:134: native worker leaked descriptors: 5 -> 133
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.266s
+FAIL

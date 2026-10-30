@@ -1,0 +1,10 @@
+--- FAIL: TestMacWalkIndexBoundsTimestampsBeforePersistence (0.07s)
+    disk_index_timestamp_test.go:24: acquired timestamp 4294967296, want 4294967295 for 4294967296
+    disk_index_timestamp_test.go:27: native timestamp 4294967296 blocked checkpoint: invalid disk index: entry 0 exceeds v7 representation: parent=0 mtime=4294967296 files=1 name_bytes=0 utf8=true
+    disk_index_timestamp_test.go:24: acquired timestamp 18446744073709551615, want 4294967295 for 18446744073709551615
+    disk_index_timestamp_test.go:27: native timestamp 18446744073709551615 blocked checkpoint: invalid disk index: entry 0 exceeds v7 representation: parent=0 mtime=18446744073709551615 files=1 name_bytes=0 utf8=true
+--- FAIL: TestMappedAppendGrowthDoesNotReallocateWholeTreePerFile (0.04s)
+    disk_tree_snapshot_test.go:103: 128 appends allocated 13725896 bytes by repeatedly growing full-tree scratch
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.637s
+FAIL

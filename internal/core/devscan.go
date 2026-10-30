@@ -92,14 +92,14 @@ func buildCandidateAllowedWith(path string, marker BuildMarker, stat func(string
 // A directory the tree does not name is not a tag, so the scan must not
 // CreateFile it. The walk channel has no tree and still opens the file.
 func treeNamesCacheDirTag(tree *SizeTree, dir uint32) bool {
-	if tree == nil || int(dir) >= len(tree.children) {
+	if tree == nil || int(dir) >= tree.nodeCount() {
 		return false
 	}
 	if tree.baseCount == 0 {
 		if int(dir) >= len(tree.entries) || !tree.entries[dir].Used {
 			return false
 		}
-		for _, child := range tree.children[dir] {
+		for child := range tree.childList(dir).all {
 			if int(child) >= len(tree.entries) {
 				continue
 			}
@@ -113,7 +113,7 @@ func treeNamesCacheDirTag(tree *SizeTree, dir uint32) bool {
 	if !tree.Valid(dir) {
 		return false
 	}
-	for _, child := range tree.children[dir] {
+	for child := range tree.childList(dir).all {
 		if tree.Valid(child) && !tree.IsDir(child) && isCacheDirTagName(tree.EntryName(child)) {
 			return true
 		}
@@ -198,18 +198,25 @@ func buildSiblingMatches(files []string, required []string) bool {
 // and bounded walking channels. Passing a tree reuses its measurements; it does
 // not acquire a native index. A hit (even one refused by evidence) stops descent.
 func DiscoverBuildArtifacts(ctx context.Context, s *RuleSnapshot, roots []CodeRoot, tree *SizeTree) []ScanItem {
-	rule := s.Definition("build")
-	if rule == nil {
+	return discoverBuildArtifacts(ctx, s, roots, tree, nil)
+}
+
+func discoverBuildArtifacts(ctx context.Context, s *RuleSnapshot, roots []CodeRoot, tree *SizeTree, covered func(string) bool) []ScanItem {
+	if ctx.Err() != nil || s.Definition("build") == nil {
 		return nil
 	}
+	// Every hit has the same rule and scope; freeze the bundle once, while
+	// each hit still captures its own identity and execution plan.
+	ref := NewRuleRef(s, "build", "")
+	rule := ref.snapshot.Definition("build")
 	if tree != nil {
 		depth := int(^uint(0) >> 1)
 		if runtime.GOOS == "windows" {
 			depth = 12
 		}
-		return discoverIndexed(ctx, s, rule, tree, depth)
+		return discoverIndexed(ctx, ref, rule, tree, depth)
 	}
-	return discoverWalked(ctx, s, rule, roots)
+	return discoverWalked(ctx, ref, rule, roots, covered)
 }
 
 type walkHit struct {
@@ -220,15 +227,16 @@ type walkHit struct {
 // walkCollector owns one code root. Ancestor evidence is memoized for that
 // walk only; each hit is confined again without the memo before measurement.
 type walkCollector struct {
-	ctx    context.Context
-	rule   *RuleDefinition
-	anchor string
-	io     *discoverIO
-	hits   []walkHit
+	ctx     context.Context
+	rule    *RuleDefinition
+	anchor  string
+	io      *discoverIO
+	hits    []walkHit
+	covered func(string) bool
 }
 
 func (w *walkCollector) collect(dir string, depth, maxDepth int) {
-	if w.ctx.Err() != nil || depth > maxDepth {
+	if w.ctx.Err() != nil || depth > maxDepth || (w.covered != nil && w.covered(dir)) {
 		return
 	}
 	if ok, err := confinedRulePath(w.anchor, dir, false, w.io.Lstat, w.io.Eval); !ok || err != nil {
@@ -265,6 +273,11 @@ func (w *walkCollector) collect(dir string, depth, maxDepth int) {
 		if w.ctx.Err() != nil {
 			return
 		}
+		// Indexed discovery already visited covered branches. Unknown or
+		// missing branches retain the original live evidence and depth limit.
+		if w.covered != nil && w.covered(child.path) {
+			continue
+		}
 		lower := strings.ToLower(child.name)
 		if skippedBuildDir(lower) {
 			continue
@@ -295,11 +308,11 @@ func (w *walkCollector) collect(dir string, depth, maxDepth int) {
 
 // discoverWalked collects code roots concurrently and measures hits on one
 // shared worker budget, as Rust does with rayon. Output follows root order.
-func discoverWalked(ctx context.Context, s *RuleSnapshot, rule *RuleDefinition, roots []CodeRoot) []ScanItem {
+func discoverWalked(ctx context.Context, ref RuleRef, rule *RuleDefinition, roots []CodeRoot, covered func(string) bool) []ScanItem {
 	workers := max(1, runtime.GOMAXPROCS(0))
 	perRoot := make([][]walkHit, len(roots))
 	boundedEach(ctx, len(roots), workers, func(i int) {
-		w := walkCollector{ctx: ctx, rule: rule, anchor: roots[i].Path, io: &discoverIO{}}
+		w := walkCollector{ctx: ctx, rule: rule, anchor: roots[i].Path, io: &discoverIO{}, covered: covered}
 		w.collect(roots[i].Path, 0, roots[i].MaxDepth)
 		perRoot[i] = w.hits
 	})
@@ -333,7 +346,7 @@ func discoverWalked(ctx context.Context, s *RuleSnapshot, rule *RuleDefinition, 
 		if len(parts) > 3 {
 			short = `…\` + short
 		}
-		item := ScanItem{Rule: NewRuleRef(s, "build", ""), Path: hit.path, Operation: Operation{Kind: OpTree}, Disposal: Permanent, Category: DevBuild, Label: NewText(hit.marker.Zh+" · "+short, hit.marker.En+" · "+short), Size: measurement.Size, FileCount: measurement.Files, LastModified: measurement.NewestMtime, Identity: &identity}
+		item := ScanItem{Rule: ref, Path: hit.path, Operation: Operation{Kind: OpTree}, Disposal: Permanent, Category: DevBuild, Label: NewText(hit.marker.Zh+" · "+short, hit.marker.En+" · "+short), Size: measurement.Size, FileCount: measurement.Files, LastModified: measurement.NewestMtime, Identity: &identity}
 		frozen := item.FreezePlan()
 		items[i] = &frozen
 	})
@@ -369,7 +382,7 @@ func boundedEach(ctx context.Context, n, workers int, fn func(int)) {
 // a hit or a named CACHEDIR.TAG. File nodes stay out of this loop: the tag
 // bitset is one sequential pass, and sibling names are read only after a
 // directory name matches a marker.
-func discoverIndexed(ctx context.Context, s *RuleSnapshot, rule *RuleDefinition, tree *SizeTree, maxDepth int) []ScanItem {
+func discoverIndexed(ctx context.Context, ref RuleRef, rule *RuleDefinition, tree *SizeTree, maxDepth int) []ScanItem {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -385,18 +398,18 @@ func discoverIndexed(ctx context.Context, s *RuleSnapshot, rule *RuleDefinition,
 		if ctx.Err() != nil || depth > maxDepth {
 			return
 		}
-		var children []uint32
+		var children treeChildView
 		if heap {
 			if int(dir)+1 >= len(csr.start) {
 				return
 			}
-			children = csr.at[csr.start[dir]:csr.start[dir+1]]
-		} else if int(dir) < len(tree.children) {
-			children = tree.children[dir]
+			children = treeChildView{slots: csr.at[csr.start[dir]:csr.start[dir+1]]}
+		} else if int(dir) < tree.nodeCount() {
+			children = tree.childList(dir)
 		} else {
 			return
 		}
-		for _, child := range children {
+		for child := range children.all {
 			name, ok := indexedDirName(tree, child, heap)
 			if !ok {
 				continue
@@ -427,7 +440,7 @@ func discoverIndexed(ctx context.Context, s *RuleSnapshot, rule *RuleDefinition,
 				continue
 			}
 			path := tree.PathOfWith(child, pathCache)
-			if item, hit := acceptBuildHit(s, tree, anchor, path, child, marker, seen, ioCache); hit {
+			if item, hit := acceptBuildHit(ref, tree, anchor, path, child, marker, seen, ioCache); hit {
 				out = append(out, item)
 			}
 		}
@@ -505,18 +518,53 @@ func cacheTagBitsSlow(tree *SizeTree) []uint64 {
 	}
 	n := tree.nodeCount()
 	tags := make([]uint64, (n+63)>>6)
+	if tree.base != nil {
+		mark := func(idx, parent uint32) {
+			if parent != idx && uint64(parent) < uint64(n) && tree.IsDir(parent) {
+				tags[parent>>6] |= 1 << (parent & 63)
+			}
+		}
+		// Base candidates were named during full load validation. Every
+		// mutable slot is checked separately, including newly named tags.
+		for _, idx := range tree.base.cacheTagNodes() {
+			if _, changed := tree.overrides[idx]; !changed {
+				mark(idx, tree.base.bits(idx)&cacheParentMask)
+			}
+		}
+		for idx, e := range tree.overrides {
+			if int(idx) < tree.baseCount && e.Used && !e.IsDir && isCacheDirTagName(e.Name) {
+				mark(idx, e.Parent)
+			}
+		}
+		for i, e := range tree.entries {
+			if e.Used && !e.IsDir && isCacheDirTagName(e.Name) {
+				mark(uint32(tree.baseCount+i), e.Parent)
+			}
+		}
+		return tags
+	}
 	for i := 0; i < n; i++ {
-		e := tree.slot(uint32(i))
-		if !e.Used || e.IsDir || e.Parent == uint32(i) || !isCacheDirTagName(e.Name) {
+		idx := uint32(i)
+		if tree.nodeFlags(idx)&(cacheUsedBit|cacheDirBit) != cacheUsedBit || !treeCacheDirTagName(tree, idx) {
 			continue
 		}
-		p := e.Parent
-		if int(p) >= n || !tree.Valid(p) || !tree.IsDir(p) {
+		p := tree.slot(idx).Parent
+		if p == idx || int(p) >= n || !tree.IsDir(p) {
 			continue
 		}
 		tags[p>>6] |= 1 << (p & 63)
 	}
 	return tags
+}
+
+func treeCacheDirTagName(tree *SizeTree, idx uint32) bool {
+	if int(idx) < tree.baseCount {
+		if slot, ok := tree.overrides[idx]; ok {
+			return isCacheDirTagName(slot.Name)
+		}
+		return tree.base.nameEqualFold(idx, "CACHEDIR.TAG")
+	}
+	return isCacheDirTagName(tree.entries[int(idx)-tree.baseCount].Name)
 }
 
 func tagBit(tags []uint64, idx uint32) bool {
@@ -637,15 +685,15 @@ func treeSiblingsMatch(tree *SizeTree, dir uint32, required []string) bool {
 	if len(required) == 0 {
 		return true
 	}
-	if tree == nil || int(dir) >= len(tree.children) {
+	if tree == nil || int(dir) >= tree.nodeCount() {
 		return false
 	}
-	kids := tree.children[dir]
+	kids := tree.childList(dir)
 	if tree.baseCount == 0 {
 		entries := tree.entries
 		for _, want := range required {
 			ext := len(want) > 0 && want[0] == '.'
-			for _, child := range kids {
+			for child := range kids.all {
 				if int(child) >= len(entries) {
 					continue
 				}
@@ -662,7 +710,7 @@ func treeSiblingsMatch(tree *SizeTree, dir uint32, required []string) bool {
 	}
 	for _, want := range required {
 		ext := len(want) > 0 && want[0] == '.'
-		for _, child := range kids {
+		for child := range kids.all {
 			if !tree.Valid(child) || tree.IsDir(child) {
 				continue
 			}
@@ -749,7 +797,7 @@ func (d *discoverIO) Eval(path string) (string, error) {
 	return resolved, nil
 }
 
-func acceptBuildHit(s *RuleSnapshot, tree *SizeTree, anchor, path string, idx uint32, marker *BuildMarker, seen map[string]bool, ioCache *discoverIO) (ScanItem, bool) {
+func acceptBuildHit(ref RuleRef, tree *SizeTree, anchor, path string, idx uint32, marker *BuildMarker, seen map[string]bool, ioCache *discoverIO) (ScanItem, bool) {
 	// Rust reads the in-memory directory total first and skips an empty
 	// directory without opening package.json or stating the path.
 	if seen[Norm(path)] || !tree.Valid(idx) || tree.SizeOf(idx) == 0 {
@@ -771,6 +819,6 @@ func acceptBuildHit(s *RuleSnapshot, tree *SizeTree, anchor, path string, idx ui
 	if len(parts) > 3 {
 		short = `…\` + short
 	}
-	item := ScanItem{Rule: NewRuleRef(s, "build", ""), Path: path, Operation: Operation{Kind: OpTree}, Disposal: Permanent, Category: DevBuild, Label: NewText(marker.Zh+" · "+short, marker.En+" · "+short), Size: tree.SizeOf(idx), FileCount: tree.FileCountOf(idx), Identity: &identity}
+	item := ScanItem{Rule: ref, Path: path, Operation: Operation{Kind: OpTree}, Disposal: Permanent, Category: DevBuild, Label: NewText(marker.Zh+" · "+short, marker.En+" · "+short), Size: tree.SizeOf(idx), FileCount: tree.FileCountOf(idx), Identity: &identity}
 	return item.FreezePlan(), true
 }

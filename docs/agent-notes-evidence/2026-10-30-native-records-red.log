@@ -1,0 +1,5 @@
+--- FAIL: TestDiskWalkBatchAllocatesRecordsOnce (0.00s)
+    disk_walk_test.go:374: parsing 512 names used 522 allocations; record storage grew repeatedly
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.624s
+FAIL

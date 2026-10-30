@@ -1,0 +1,5 @@
+--- FAIL: TestMappedLoadDoesNotMaterializeValidatedBase (0.18s)
+    disk_index_mapped_load_test.go:47: mapped delta load revalidated 3461640 bytes of unchanged base nodes
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.718s
+FAIL

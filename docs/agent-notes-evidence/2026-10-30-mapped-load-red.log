@@ -1,0 +1,5 @@
+--- FAIL: TestMappedLoadDoesNotMaterializeValidatedBase (0.23s)
+    disk_index_mapped_load_test.go:25: mapped load materialized 36232520 bytes for a 6434408-byte validated base
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.711s
+FAIL

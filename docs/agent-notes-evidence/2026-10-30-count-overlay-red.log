@@ -1,0 +1,5 @@
+--- FAIL: TestMappedCountsMatchLiveSlotsAcrossSnapshotChanges (0.02s)
+    disk_tree_snapshot_test.go:145: live slot counts differ: got 482/37, want 466/33 files/dirs
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.419s
+FAIL

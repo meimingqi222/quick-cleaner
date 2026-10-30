@@ -1,0 +1,5 @@
+--- FAIL: TestTargetNormalizationDoesNotAllocatePerTargetPair (0.05s)
+    scan_targets_perf_test.go:105: normalization allocated 15691456 bytes across target pairs
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.538s
+FAIL

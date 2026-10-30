@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -136,5 +138,77 @@ func TestDiscoverWithinMarksOnlyBudgetExpiryPartial(t *testing.T) {
 	cancel()
 	if _, expired := plan.DiscoverWithin(cancelled, rules, time.Hour); expired {
 		t.Fatal("a user cancel is not a partial result")
+	}
+}
+
+func TestPartialIndexDiscoveryWalksOnlyUncoveredBranches(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy := filepath.Join(home, "work", "healthy")
+	missing := filepath.Join(home, "work", "unknown")
+	for _, dir := range []string{healthy, filepath.Join(missing, "node_modules")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(missing, "package.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(missing, "node_modules", "payload"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tree := SizeTreeFromSnapshot(VolumeFromMountPoint(home), []TreeSnapshotEntry{
+		{Path: filepath.Join(home, "work"), IsDir: true},
+		{Path: healthy, IsDir: true},
+	})
+	tree.SetBlockedSubtrees([]string{missing})
+	rules, err := CurrentRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := ruleLstat
+	defer func() { ruleLstat = previous }()
+	var probes atomic.Int64
+	ruleLstat = func(path string) (os.FileInfo, error) {
+		if pathWithin(path, healthy) {
+			probes.Add(1)
+		}
+		return previous(path)
+	}
+	plan := BeginJunkIndex(context.Background(), false, home, nil, []*SizeTree{tree}, nil, nil)
+	items, expired := plan.DiscoverWithin(context.Background(), rules, time.Minute)
+	if expired {
+		t.Fatal("small discovery exhausted budget")
+	}
+	discoverPath(t, items, filepath.Join(missing, "node_modules"))
+	if n := probes.Load(); n != 0 {
+		t.Errorf("walk re-probed fully indexed branch %d times", n)
+	}
+}
+
+func TestJunkCoveragePreparesGapsOncePerDiscovery(t *testing.T) {
+	root := t.TempDir()
+	volume := VolumeFromMountPoint(root)
+	tree := NewSizeTree(volume, []TreeIndexEntry{{Used: true, IsDir: true, Name: "root"}, {Used: true, IsDir: true, Name: "healthy"}, {Used: true, IsDir: true, Name: "project"}, {Parent: 2, Used: true, IsDir: true, Name: "cloud"}, {Parent: 2, Used: true, IsDir: true, Name: "cloud-x"}})
+	blocked := []string{filepath.Join(root, "project", "cloud", "unknown")}
+	for i := range 128 {
+		blocked = append(blocked, filepath.Join(root, fmt.Sprintf("OTHER-GAP-%d", i), "UNKNOWN"))
+	}
+	tree.SetBlockedSubtrees(blocked)
+	covered := newJunkCoverage([]*SizeTree{tree})
+	path := filepath.Join(root, "healthy")
+	if allocs := testing.AllocsPerRun(3, func() {
+		if !covered(path) {
+			panic("healthy branch lost coverage")
+		}
+	}); allocs > 30 {
+		t.Errorf("coverage query repeated per-gap normalization: %.0f allocations", allocs)
+	}
+	for _, path := range []string{root, filepath.Join(root, "healthy"), filepath.Join(root, "project"), filepath.Join(root, "project", "CLOUD"), filepath.Join(root, "project", "cloud-x"), filepath.Join(root, "project", "cloud", "unknown"), filepath.Join(root, "absent")} {
+		if got, want := covered(path), tree.CoversSubtree(path); got != want {
+			t.Errorf("coverage(%q)=%v, want %v", path, got, want)
+		}
 	}
 }

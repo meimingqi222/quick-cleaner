@@ -1,0 +1,28 @@
+2026/10/30 10:29:54 阶段一 scan_fixed 完成：401.084µs，2/2 个目标命中，合计 8 KB；最慢 5 个：299.416µs 4 KB $TMPDIR/TestFilesystemTargetsShareFrozenRulesAndKeepCaptureIdentity3594429234/001/Library/Caches/fixture-cache-0 | 283.459µs 4 KB $TMPDIR/TestFilesystemTargetsShareFrozenRulesAndKeepCaptureIdentity3594429234/001/Library/Caches/fixture-cache-1
+--- FAIL: TestFilesystemTargetsShareFrozenRulesAndKeepCaptureIdentity (0.05s)
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+    scan_targets_perf_test.go:45: fixed target copied the rule bundle again
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.543s
+FAIL

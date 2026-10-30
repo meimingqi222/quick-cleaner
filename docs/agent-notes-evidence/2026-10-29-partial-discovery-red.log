@@ -1,0 +1,6 @@
+2026/10/29 18:41:44 卷 $TMPDIR/TestPartialIndexDiscoveryWalksOnlyUncoveredBranches633809948/001: 复用阶段一已解析的 MFT 树，省去一次全盘解析
+--- FAIL: TestPartialIndexDiscoveryWalksOnlyUncoveredBranches (0.01s)
+    junk_index_test.go:171: walk re-probed fully indexed branch 2 times
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.382s
+FAIL

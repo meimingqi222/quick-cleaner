@@ -1,0 +1,5 @@
+--- FAIL: TestMappedChildReaderKeepsOwnerUntilReleased (0.02s)
+    disk_index_mapped_lifetime_test.go:91: child reader lost its mapping owner stat $TMPDIR/TestMappedChildReaderKeepsOwnerUntilReleased362289739/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d333931373937383437312fe58db7.bin: file already closed
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.405s
+FAIL

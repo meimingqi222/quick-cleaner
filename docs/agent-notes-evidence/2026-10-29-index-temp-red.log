@@ -1,5 +1,5 @@
 --- FAIL: TestDiskIndexPruneOldTemporaryFiles (0.00s)
-    disk_index_cache_prune_test.go:213: must remove /private/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/TestDiskIndexPruneOldTemporaryFiles2405801886/001/scan-index-2f.bin.tmp: <nil>
+    disk_index_cache_prune_test.go:213: must remove $TMPDIR/TestDiskIndexPruneOldTemporaryFiles2405801886/001/scan-index-2f.bin.tmp: <nil>
 FAIL
 FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.429s
 FAIL

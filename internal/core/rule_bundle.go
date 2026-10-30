@@ -20,7 +20,10 @@ const MaxRulePackage = 8 * 1024 * 1024
 
 var ruleCapabilities = []string{"file", "providers", "source_install", "python_module", "registration", "chromium", "build_markers", "docker", "snapshot", "owner", "declutter", "variables", "source_flow", "directory_selection", "updater_artifacts", "version_retention"}
 
-type RuleSnapshot struct{ Bundle RuleBundle }
+type RuleSnapshot struct {
+	Bundle  RuleBundle
+	capture *ruleSnapshotCapture
+}
 
 func (s *RuleSnapshot) Definition(id string) *RuleDefinition {
 	if s != nil {

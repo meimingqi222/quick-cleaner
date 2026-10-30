@@ -1,0 +1,6 @@
+=== RUN   TestPersistenceQuarantinesUnrepresentableNodes
+2026/10/30 11:45:39 [disk index] phase=background-persist duration=0s incremental=true delta=false compacted=false event=2 error=invalid disk index: entry 5 exceeds v7 representation: parent=1 mtime=5 files=0 name_bytes=8 utf8=false
+2026/10/30 11:45:39 [disk index] phase=background-persist-quarantine nodes=2 duration=42ms compacted=false error=<nil>
+--- PASS: TestPersistenceQuarantinesUnrepresentableNodes (0.08s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.435s

@@ -1,0 +1,11 @@
+--- FAIL: TestBuildDiscoverySharesFrozenRuleAndKeepsTargetsIndependent (0.02s)
+    --- FAIL: TestBuildDiscoverySharesFrozenRuleAndKeepsTargetsIndependent/walk (0.01s)
+        devscan_perf_test.go:49: discovery copied the rule bundle per target instead of once per scan
+    --- FAIL: TestBuildDiscoverySharesFrozenRuleAndKeepsTargetsIndependent/index (0.01s)
+        devscan_perf_test.go:49: discovery copied the rule bundle per target instead of once per scan
+--- FAIL: TestMappedDiscoveryFlagsAndTagsAvoidNameAllocations (0.02s)
+    devscan_perf_test.go:113: mapped flags allocated names: 3078 allocations
+    devscan_perf_test.go:117: mapped tag scan allocated names: 1030 allocations
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.464s
+FAIL

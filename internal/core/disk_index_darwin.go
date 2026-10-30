@@ -22,14 +22,7 @@ func (nativeMacDiskIndexSource) Scan(ctx context.Context, volume VolumeID, few b
 	} else {
 		raw, err = platform.WalkMacVolume(ctx, volume, nil)
 	}
-	if err != nil {
-		return ScanResult{}, err
-	}
-	scan, err := BuildMacWalkScanResult(ctx, raw)
-	if err == nil {
-		scan.ElapsedMS = uint64(time.Since(started).Milliseconds())
-	}
-	return scan, err
+	return finishMacWalkScan(ctx, raw, err, started)
 }
 
 func NewMacDiskIndex(ctx context.Context) (*MacDiskIndex, error) {
@@ -37,7 +30,13 @@ func NewMacDiskIndex(ctx context.Context) (*MacDiskIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMacDiskIndex(ctx, cache, nativeMacDiskIndexSource{}), nil
+	return NewMacDiskIndexWithCache(ctx, cache), nil
+}
+
+// NewMacDiskIndexWithCache runs the product owner against an explicit cache,
+// including disposable cache snapshots used by the command-line profiler.
+func NewMacDiskIndexWithCache(ctx context.Context, cache *DiskIndexCache) *MacDiskIndex {
+	return newMacDiskIndex(ctx, cache, nativeMacDiskIndexSource{})
 }
 
 // ScanVolume is an explicit fresh analysis, not a cache read. Product scan,

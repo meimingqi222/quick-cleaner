@@ -4,7 +4,7 @@ import "sort"
 
 // Deltas are cumulative relative to the immutable base, not chained patches.
 func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMetadata) ([]byte, int, error) {
-	bn := len(base.records)
+	bn := base.recordCount()
 	if t.nodeCount() < bn {
 		return nil, 0, cacheInvalid("slots no longer match base")
 	}
@@ -12,7 +12,8 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 		return nil, 0, err
 	}
 	var overrides []int
-	for i, r := range base.records {
+	for i := 0; i < bn; i++ {
+		r := base.record(uint32(i))
 		e := t.slot(uint32(i))
 		if e.Parent != r.slot.Parent || e.Name != r.slot.Name {
 			return nil, 0, cacheInvalid("base identity changed")
@@ -38,7 +39,7 @@ func encodeDiskIndexDelta(t *SizeTree, base *decodedDiskIndex, meta DiskIndexMet
 			}
 		}
 	}
-	return writeDiskIndexDelta(t, bn, base.checksum, meta, overrides, func(idx int) uint32 { return base.records[idx].nameOff }, extra)
+	return writeDiskIndexDelta(t, bn, base.checksum, meta, overrides, func(idx int) uint32 { return base.record(uint32(idx)).nameOff }, extra)
 }
 
 // writeDiskIndexDelta lays out a cumulative delta. overrides must be ascending
@@ -110,7 +111,7 @@ func decodeDiskIndexDelta(b []byte, base *decodedDiskIndex) (*SizeTree, DiskInde
 		return fail("delta watermark predates base")
 	}
 	n, pl, no, np := cacheU64(b, 60), cacheU64(b, 68), cacheU64(b, 76), cacheU64(b, 84)
-	bn := uint64(len(base.records))
+	bn := uint64(base.recordCount())
 	total := bn + n
 	if total < bn || total > uint64(cacheParentMask)+1 || n > uint64(len(b))/24 || no > uint64(len(b))/28 || np > uint64(len(b))/8 {
 		return fail("delta counts")
@@ -152,7 +153,7 @@ func decodeDiskIndexDelta(b []byte, base *decodedDiskIndex) (*SizeTree, DiskInde
 			return fail("duplicate/out of bounds override")
 		}
 		seenOverrides[idx] = true
-		original := base.records[idx]
+		original := base.record(idx)
 		if cacheU32(bytes, 8) != original.nameOff || cacheU32(bytes, 4)&cacheParentMask != original.slot.Parent {
 			return fail("override identity")
 		}
@@ -189,7 +190,7 @@ func decodeDiskIndexDelta(b []byte, base *decodedDiskIndex) (*SizeTree, DiskInde
 			unique[k] = true
 		}
 		if uint64(p) < bn {
-			for _, k := range base.tree.children[p] {
+			for k := range base.tree.childList(p).all {
 				if t.Valid(k) && !unique[k] {
 					return fail("overlay omits base child")
 				}
@@ -200,8 +201,20 @@ func decodeDiskIndexDelta(b []byte, base *decodedDiskIndex) (*SizeTree, DiskInde
 	if cur != uint64(len(b)) {
 		return fail("trailing delta bytes")
 	}
-	if err := validateDiskTree(t, true); err != nil {
-		return nil, DiskIndexMetadata{}, err
+	files, dirs := uint64(0), uint64(0)
+	if t.base != nil {
+		// The immutable base was fully checked above. Validate every possible
+		// delta change, including live children under removed directories.
+		_, f, d, ok := t.validateOverrides(base.meta.FileCount, base.meta.DirCount)
+		if !ok {
+			return fail("invalid delta edits")
+		}
+		files, dirs = f, d
+	} else {
+		if err := validateDiskTree(t, true); err != nil {
+			return nil, DiskIndexMetadata{}, err
+		}
+		files, dirs = t.CountUsedFiles(), t.CountUsedDirs()
 	}
 	for i := bn; i < total; i++ {
 		e := t.slot(uint32(i))
@@ -209,7 +222,7 @@ func decodeDiskIndexDelta(b []byte, base *decodedDiskIndex) (*SizeTree, DiskInde
 			return fail("appended child missing from overlay")
 		}
 	}
-	if meta.FileCount != t.CountUsedFiles() || meta.DirCount != t.CountUsedDirs() || meta.TotalSize != t.SizeOf(0) {
+	if meta.FileCount != files || meta.DirCount != dirs || meta.TotalSize != t.SizeOf(0) {
 		return fail("delta statistics")
 	}
 	t.RebuildChildArrays()

@@ -57,6 +57,7 @@ func (r *Root) scanJunk() {
 		// 索引同时交给 searchTrees，磁盘透镜与文件搜索复用同一份，不再重扫。
 		// Load 有持久化缓存 + FSEvents 增量，已有索引时只是回放增量。
 		volumes := platform.ListVolumes()
+		planT0 := time.Now()
 		var acquiredTree *core.SizeTree
 		if runtime.GOOS == "darwin" && owner != nil {
 			root := core.VolumeFromMountPoint("/")
@@ -66,12 +67,14 @@ func (r *Root) scanJunk() {
 					break
 				}
 			}
+			indexT0 := time.Now()
 			if result, err := owner.Load(ctx, root); err != nil {
 				log.Printf("整盘索引加载失败，本次垃圾扫描退回遍历通道：%v", err)
 			} else if result != nil && result.Tree != nil {
 				acquiredTree = result.Tree
 				indexes = prioritizeJunkIndex(indexes, acquiredTree)
 			}
+			log.Printf("整盘索引加载/更新完成：%s（acquired=%v）", time.Since(indexT0).Round(time.Millisecond), acquiredTree != nil)
 		}
 		targets = append(targets, finishNative()...)
 		busyPaths := make([]string, len(targets))
@@ -105,7 +108,6 @@ func (r *Root) scanJunk() {
 				return result.Tree, nil
 			}
 		}
-		planT0 := time.Now()
 		plan := core.BeginJunkIndex(ctx, elevated, home, volumes, indexes, targets, acquire)
 		if plan.Acquired == nil && acquiredTree != nil {
 			plan.Acquired = acquiredTree

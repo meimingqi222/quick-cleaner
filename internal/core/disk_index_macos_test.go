@@ -123,20 +123,23 @@ func TestMacDiskIndexCheckpointReplayAndSharedSnapshot(t *testing.T) {
 	}
 	source := &macIndexFixture{current: 100, afterScanID: 120}
 	owner := newMacDiskIndex(ctx, cache, source)
-	defer owner.Close()
+	defer func() { owner.Close(); flushMacIndex(t, owner) }()
 	volume := VolumeFromMountPoint(root)
 	original, err := owner.Load(ctx, volume)
 	if err != nil {
 		t.Fatal(err)
 	}
+	flushMacIndex(t, owner)
 	loaded, err := cache.Load(volume)
 	if err != nil || loaded.LastEventID != 100 || loaded.Scan.FileCount != 5 {
 		t.Fatalf("full scan must save its pre-walk checkpoint: %+v, %v", loaded, err)
 	}
+	original = owner.Peek(volume)
 	quiet, err := owner.Load(ctx, volume)
 	if err != nil || quiet != original {
 		t.Fatalf("unchanged views must share the same immutable tree: %p, %p, %v", original, quiet, err)
 	}
+	flushMacIndex(t, owner)
 	loaded, err = cache.Load(volume)
 	if err != nil || loaded.LastEventID != 120 {
 		t.Fatalf("quiet replay must persist progress: %+v, %v", loaded, err)
@@ -188,6 +191,7 @@ func TestMacDiskIndexCheckpointReplayAndSharedSnapshot(t *testing.T) {
 	if updated.TotalSize != want {
 		t.Fatalf("allocated bytes after mixed file/directory changes: %d != %d", updated.TotalSize, want)
 	}
+	flushMacIndex(t, owner)
 	loaded, err = cache.Load(volume)
 	if err != nil || loaded.LastEventID != 130 || loaded.Scan.TotalSize != want || loaded.Scan.FileCount != 4 {
 		t.Fatalf("replayed snapshot did not persist at delivered prefix: %+v, %v", loaded, err)
@@ -205,7 +209,7 @@ func TestMacDiskIndexBackgroundNeverRebuilds(t *testing.T) {
 			}
 			source := &macIndexFixture{current: 10}
 			owner := newMacDiskIndex(context.Background(), cache, source)
-			defer owner.Close()
+			defer func() { owner.Close(); flushMacIndex(t, owner) }()
 			if advanced, err := owner.Advance(context.Background()); err != nil || advanced {
 				t.Fatalf("never-loaded index must remain idle: %v, %v", advanced, err)
 			}
@@ -223,7 +227,7 @@ func TestMacDiskIndexBackgroundNeverRebuilds(t *testing.T) {
 			case "root-rescan":
 				source.changes.MustRescan = []string{root}
 			case "stale":
-				source.current = 4_000_011
+				source.current = 9
 			case "subtree-failure":
 				source.changes.Paths = []string{filepath.Join(root, "sub")}
 				source.scanError = errors.New("unreadable subtree")
@@ -231,6 +235,7 @@ func TestMacDiskIndexBackgroundNeverRebuilds(t *testing.T) {
 			if advanced, err := owner.Advance(context.Background()); advanced || !errors.Is(err, ErrDiskIndexRebuildNeeded) {
 				t.Fatalf("background must defer full scan: advanced=%v, error=%v", advanced, err)
 			}
+			flushMacIndex(t, owner)
 			loaded, err := cache.Load(volume)
 			if err != nil || loaded.LastEventID != 10 || loaded.Scan.FileCount != 1 {
 				t.Fatalf("failed replay must leave durable snapshot and ID unchanged: %+v, %v", loaded, err)
@@ -271,6 +276,7 @@ func TestMacDiskIndexCancellationAndNoBackgroundContention(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("close did not cancel acquisition")
 	}
+	flushMacIndex(t, owner)
 	if _, err := cache.Load(VolumeFromMountPoint(root)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancelled full scan must not publish: %v", err)
 	}
@@ -326,7 +332,7 @@ func TestMacDiskIndexCachedNeverStartsOrReplaysScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := newMacDiskIndex(context.Background(), cache, readOnlyIndexSource{})
-	defer owner.Close()
+	defer func() { owner.Close(); flushMacIndex(t, owner) }()
 	if owner.Peek(volume) != nil {
 		t.Fatal("peek must not load a cold cache")
 	}
@@ -355,5 +361,62 @@ func TestMacDiskIndexCachedNeverStartsOrReplaysScan(t *testing.T) {
 	cancel()
 	if _, err := owner.Cached(ctx, volume); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled lookup: %v", err)
+	}
+}
+
+func TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		for _, incomplete := range []bool{false, true} {
+			name := "foreground"
+			if background {
+				name = "background"
+			}
+			if incomplete {
+				name += "-prefix"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := diskCacheVolumeDir(t)
+				macIndexWrite(t, filepath.Join(root, "old"), 4096)
+				cache, err := NewDiskIndexCache(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				source := &macIndexFixture{current: 10}
+				owner := newMacDiskIndex(context.Background(), cache, source)
+				defer owner.Close()
+				v := VolumeFromMountPoint(root)
+				original, err := owner.Load(context.Background(), v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				flushMacIndex(t, owner)
+				path := filepath.Join(root, "new")
+				macIndexWrite(t, path, 8192)
+				current := uint64(10_000_010)
+				delivered := current
+				if incomplete {
+					delivered -= 5
+				}
+				source.mu.Lock()
+				source.current, source.forbidFull = current, true
+				source.changes = &platform.FSEventChanges{Paths: []string{path}, LastEventID: delivered, Incomplete: incomplete, RawEventCount: 1}
+				source.mu.Unlock()
+				if background {
+					if advanced, err := owner.Advance(context.Background()); err != nil || !advanced {
+						t.Fatalf("large ID gap bypassed usable history: advanced=%t error=%v", advanced, err)
+					}
+				} else if _, err := owner.Load(context.Background(), v); err != nil {
+					t.Fatal("large ID gap bypassed usable history", err)
+				}
+				flushMacIndex(t, owner)
+				loaded, err := cache.Load(v)
+				if err != nil || loaded.LastEventID != delivered || loaded.Scan.FileCount != 2 {
+					t.Fatalf("delivered prefix not persisted: result=%+v error=%v", loaded, err)
+				}
+				if _, ok := original.Tree.FindNodeByPath(path); ok || original.FileCount != 1 {
+					t.Fatal("replay changed original snapshot")
+				}
+			})
+		}
 	}
 }

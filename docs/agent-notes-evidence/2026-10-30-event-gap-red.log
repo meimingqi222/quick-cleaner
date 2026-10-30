@@ -1,0 +1,50 @@
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=cache-read duration=0s error=lstat $TMPDIR/TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistoryforegroun99857211/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d31303738323633373837.bin: no such file or directory
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-persist duration=25ms incremental=false delta=false compacted=false event=10 error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-rebind duration=0s error=<nil>
+2026/10/30 10:20:40 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=rebuild reason=event-id gap=10000000 error=<nil> background=false
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=forbidden full rebuild
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=cache-read duration=0s error=lstat $TMPDIR/TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistoryforegroun3472711973/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d393734313130333030.bin: no such file or directory
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-persist duration=21ms incremental=false delta=false compacted=false event=10 error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-rebind duration=0s error=<nil>
+2026/10/30 10:20:40 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=rebuild reason=event-id gap=10000000 error=<nil> background=false
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=forbidden full rebuild
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=cache-read duration=0s error=lstat $TMPDIR/TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistorybackgroun952535440/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d333631363138333438.bin: no such file or directory
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-persist duration=17ms incremental=false delta=false compacted=false event=10 error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-rebind duration=0s error=<nil>
+2026/10/30 10:20:40 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+2026/10/30 10:20:40 [disk index] phase=rebuild reason=event-id gap=10000000 error=<nil> background=true
+2026/10/30 10:20:40 [disk index] phase=wait duration=0s
+2026/10/30 10:20:40 [disk index] phase=cache-read duration=0s error=lstat $TMPDIR/TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistorybackgroun1726106427/001/scan-index-2f7661722f666f6c646572732f746c2f37345f5f7063746435663338316d6279713663633270646830303030676e2f542f71632d766f6c756d652d31333234313732383936.bin: no such file or directory
+2026/10/30 10:20:40 [disk index] phase=full-scan started
+2026/10/30 10:20:40 [disk index] phase=full-scan duration=0s spill=false error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-persist duration=18ms incremental=false delta=false compacted=false event=10 error=<nil>
+2026/10/30 10:20:40 [disk index] phase=background-rebind duration=0s error=<nil>
+2026/10/30 10:20:40 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+2026/10/30 10:20:40 [disk index] phase=rebuild reason=event-id gap=10000000 error=<nil> background=true
+--- FAIL: TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory (0.09s)
+    --- FAIL: TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory/foreground (0.03s)
+        disk_index_macos_test.go:409: large ID gap bypassed usable history forbidden full rebuild
+    --- FAIL: TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory/foreground-prefix (0.02s)
+        disk_index_macos_test.go:409: large ID gap bypassed usable history forbidden full rebuild
+    --- FAIL: TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory/background (0.02s)
+        disk_index_macos_test.go:406: large ID gap bypassed usable history: advanced=false error=disk index needs an interactive rebuild
+    --- FAIL: TestMacDiskIndexLargeEventIDGapReplaysDeliveredHistory/background-prefix (0.02s)
+        disk_index_macos_test.go:406: large ID gap bypassed usable history: advanced=false error=disk index needs an interactive rebuild
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.464s
+FAIL

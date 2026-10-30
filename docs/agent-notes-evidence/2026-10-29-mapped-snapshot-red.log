@@ -1,0 +1,5 @@
+--- FAIL: TestMappedSnapshotEditsStayLocal (0.66s)
+    disk_tree_snapshot_test.go:30: quiet mapped snapshot allocated 7188144 bytes for unchanged nodes
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.374s
+FAIL

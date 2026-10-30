@@ -71,6 +71,7 @@ func ProviderTarget(snapshot *RuleSnapshot, ruleID, key, path string, label Text
 func NormalizeScanTargets(targets []ScanTarget) []ScanTarget {
 	positions := map[string]int{}
 	var merged []ScanTarget
+	var paths []string
 	for _, target := range targets {
 		key := Norm(target.Path)
 		if i, ok := positions[key]; ok {
@@ -84,15 +85,16 @@ func NormalizeScanTargets(targets []ScanTarget) []ScanTarget {
 		} else {
 			positions[key] = len(merged)
 			merged = append(merged, target)
+			paths = append(paths, key)
 		}
 	}
 	covered := make([]bool, len(merged))
 	for i := range merged {
 		parent := -1
-		path := Norm(merged[i].Path)
+		path := paths[i]
 		for j, candidate := range merged {
-			key := Norm(candidate.Path)
-			if i != j && key != path && candidate.Operation.CoversSubtree() && atOrUnder(path, key) && (parent < 0 || len(key) < len(Norm(merged[parent].Path))) {
+			key := paths[j]
+			if i != j && key != path && candidate.Operation.CoversSubtree() && atOrUnder(path, key) && (parent < 0 || len(key) < len(paths[parent])) {
 				parent = j
 			}
 		}

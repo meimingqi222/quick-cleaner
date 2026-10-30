@@ -71,8 +71,18 @@ func (c *DiskIndexCache) persistOverrides(volume VolumeID, tree *SizeTree, event
 		extra[p] = slices.Compact(kids)
 	}
 	meta := DiskIndexMetadata{LastEventID: event, ScannedAt: uint64(time.Now().Unix()), FileCount: files, DirCount: dirs, TotalSize: tree.SizeOf(0)}
-	d, count, err := writeDiskIndexDelta(tree, tree.baseCount, checksum, meta, overrides, func(idx int) uint32 { return tree.base.nameOff(uint32(idx)) }, extra)
-	if err != nil || count > DiskIndexDeltaCompactThreshold {
+	count := len(tree.entries) + len(overrides)
+	for _, kids := range extra {
+		count += len(kids)
+	}
+	if count > DiskIndexDeltaCompactThreshold {
+		// The base binding and every possible edit have already passed the
+		// same validation as a delta. Only the publication format changes.
+		r, err := c.publishBase(volume, tree, meta, true)
+		return r, true, err
+	}
+	d, _, err := writeDiskIndexDelta(tree, tree.baseCount, checksum, meta, overrides, func(idx int) uint32 { return tree.base.nameOff(uint32(idx)) }, extra)
+	if err != nil {
 		return result, false, nil
 	}
 	if err := publishDiskIndexCovered(deltaPath, d, tree, checksum, event, true); err != nil {

@@ -1,0 +1,5 @@
+--- FAIL: TestMappedOwnerReleasesResourcesAfterLastReader (3.03s)
+    disk_index_mapped_lifetime_test.go:52: unreachable mapping owner did not close its still-reachable file
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	3.630s
+FAIL

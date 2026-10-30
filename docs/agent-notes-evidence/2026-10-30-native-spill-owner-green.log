@@ -1,0 +1,25 @@
+=== RUN   TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume
+=== RUN   TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/valid
+=== RUN   TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/truncated
+=== RUN   TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/cancelled
+--- PASS: TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume (0.13s)
+=== RUN   TestSpillGraftMatchesMemorySubtreeAcrossLayouts
+=== RUN   TestSpillGraftMatchesMemorySubtreeAcrossLayouts/heap
+=== RUN   TestSpillGraftMatchesMemorySubtreeAcrossLayouts/mapped
+--- PASS: TestSpillGraftMatchesMemorySubtreeAcrossLayouts (0.03s)
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/forward-parent
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/file-parent
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/unsafe-name
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/invalid-utf8
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/too-many
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/too-few
+=== RUN   TestSpillGraftRejectsMalformedRecordsAndCount/oversized-count
+--- PASS: TestSpillGraftRejectsMalformedRecordsAndCount (0.01s)
+=== RUN   TestNativeScanOwnsSpillUntilSuccessfulTransfer
+=== RUN   TestNativeScanOwnsSpillUntilSuccessfulTransfer/success
+=== RUN   TestNativeScanOwnsSpillUntilSuccessfulTransfer/walk-error
+=== RUN   TestNativeScanOwnsSpillUntilSuccessfulTransfer/conversion-cancel
+--- PASS: TestNativeScanOwnsSpillUntilSuccessfulTransfer (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.539s

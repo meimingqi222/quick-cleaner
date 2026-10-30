@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/meimingqi222/quick-cleaner/internal/core
+cpu: Apple M1 Max
+BenchmarkSpillIndexBuild-10    	       1	 331390750 ns/op	52974760 B/op	  801231 allocs/op
+BenchmarkSpillIndexBuild-10    	       1	 304193208 ns/op	52964832 B/op	  801164 allocs/op
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.481s

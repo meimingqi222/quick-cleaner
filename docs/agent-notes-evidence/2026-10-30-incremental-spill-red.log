@@ -1,0 +1,40 @@
+2026/10/30 11:09:38 [disk index] phase=wait duration=0s
+2026/10/30 11:09:38 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:09:38 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:09:38 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:09:38 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:09:38 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:09:38 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:09:38 [disk index] phase=apply-events duration=0s error=disk index needs an interactive rebuild
+2026/10/30 11:09:38 [disk index] phase=rebuild reason=apply events: disk index needs an interactive rebuild background=false
+2026/10/30 11:09:38 [disk index] phase=full-scan started
+2026/10/30 11:09:38 [disk index] phase=full-scan duration=0s spill=false error=unexpected whole-volume rebuild
+2026/10/30 11:09:38 [disk index] phase=wait duration=0s
+2026/10/30 11:09:38 [disk index] phase=cache-read duration=1ms error=<nil>
+2026/10/30 11:09:38 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:09:38 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:09:38 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:09:38 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:09:38 [disk index] phase=clone duration=0s mapped=true nodes=4
+2026/10/30 11:09:38 [disk index] phase=apply-events duration=0s error=disk index needs an interactive rebuild
+2026/10/30 11:09:38 [disk index] phase=rebuild reason=apply events: disk index needs an interactive rebuild background=false
+2026/10/30 11:09:38 [disk index] phase=full-scan started
+2026/10/30 11:09:38 [disk index] phase=full-scan duration=0s spill=false error=unexpected whole-volume rebuild
+2026/10/30 11:09:38 [disk index] phase=wait duration=0s
+2026/10/30 11:09:38 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 11:09:38 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 11:09:38 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=10 delivered=11
+2026/10/30 11:09:38 [disk index] phase=subtree-scans roots=1 files=0 estimated=1
+2026/10/30 11:09:38 [disk index] phase=subtree-scans duration=0s
+2026/10/30 11:09:38 [disk index] phase=apply-events duration=0s error=context canceled
+2026/10/30 11:09:38 [disk index] phase=rebuild reason=apply events: context canceled background=false
+--- FAIL: TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume (0.07s)
+    --- FAIL: TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/valid (0.03s)
+        disk_index_subtree_spill_test.go:84: spilled subtree triggered a whole-volume rebuild: unexpected whole-volume rebuild full=1
+    --- FAIL: TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/truncated (0.03s)
+        disk_index_subtree_spill_test.go:119: consumed or abandoned subtree spill was not removed <nil>
+    --- FAIL: TestMacDiskIndexSpilledSubtreeDoesNotRebuildVolume/cancelled (0.02s)
+        disk_index_subtree_spill_test.go:119: consumed or abandoned subtree spill was not removed <nil>
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.087s
+FAIL

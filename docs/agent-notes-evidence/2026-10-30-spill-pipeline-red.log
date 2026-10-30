@@ -1,0 +1,18 @@
+2026/10/30 09:38:39 [disk index] phase=wait duration=0s
+2026/10/30 09:38:39 [disk index] phase=cache-read duration=0s error=lstat $TMPDIR/TestSpillOwnerPublishesOnceAndReturnsMappedBase3879542895/001/scan-index-2f66697874757265.bin: no such file or directory
+2026/10/30 09:38:39 [disk index] phase=full-scan started
+2026/10/30 09:38:39 [disk index] phase=full-scan duration=0s spill=true error=<nil>
+2026/10/30 09:38:39 [disk index] phase=spill-build duration=21ms error=<nil>
+2026/10/30 09:38:39 [disk index] phase=background-persist duration=24ms incremental=false delta=false compacted=false event=7 error=<nil>
+2026/10/30 09:38:39 [disk index] phase=background-rebind duration=0s error=<nil>
+2026/10/30 09:38:39 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+--- FAIL: TestSpillOwnerPublishesOnceAndReturnsMappedBase (0.05s)
+    disk_index_spill_test.go:153: already published spill was saved again 1 times
+    disk_index_spill_test.go:156: spill result materialized a heap tree instead of the published base
+--- FAIL: TestSpillBuildDoesNotMaterializeBaseAndRejectsTrailingName (0.66s)
+    disk_index_spill_test.go:185: spill build allocated 52967864 bytes for 100017 nodes
+    disk_index_spill_test.go:207: trailing record with missing name was published
+    disk_index_spill_test.go:210: malformed spill replaced the previous valid checkpoint
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.108s
+FAIL

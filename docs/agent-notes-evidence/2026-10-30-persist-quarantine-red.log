@@ -1,0 +1,7 @@
+=== RUN   TestPersistenceQuarantinesUnrepresentableNodes
+2026/10/30 11:45:07 [disk index] phase=background-persist duration=0s incremental=true delta=false compacted=false event=2 error=invalid disk index: entry 5 exceeds v7 representation: parent=1 mtime=5 files=0 name_bytes=8 utf8=false
+    disk_index_quarantine_test.go:29: one unencodable node blocked the checkpoint: invalid disk index: entry 5 exceeds v7 representation: parent=1 mtime=5 files=0 name_bytes=8 utf8=false
+--- FAIL: TestPersistenceQuarantinesUnrepresentableNodes (0.03s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.718s
+FAIL

@@ -1,0 +1,5 @@
+--- FAIL: TestMappedLoaderMatchesHeapValidationAndChildOrder (0.06s)
+    disk_index_mapped_load_test.go:101: mapped child order changed at mutation 0 node 1
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.631s
+FAIL

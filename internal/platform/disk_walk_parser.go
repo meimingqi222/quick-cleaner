@@ -141,6 +141,9 @@ func diskWalkParseBatch(b []byte, count int) ([]diskWalkItem, error) {
 		if err != nil {
 			return out, err
 		}
+		if out == nil {
+			out = make([]diskWalkItem, 0, count)
+		}
 		out = append(out, item)
 		b = b[int(n):]
 	}

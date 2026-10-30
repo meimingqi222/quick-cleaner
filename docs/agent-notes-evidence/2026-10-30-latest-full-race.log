@@ -1,0 +1,10 @@
+?   	github.com/meimingqi222/quick-cleaner/assets	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/cmd/quick-cleaner	1.667s
+?   	github.com/meimingqi222/quick-cleaner/cmd/ui-gallery	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	9.167s
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	56.357s
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	(cached)
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	63.812s
+?   	github.com/meimingqi222/quick-cleaner/rules	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/tools/indexbench	1.543s
+ok  	github.com/meimingqi222/quick-cleaner/tools/winres	(cached)

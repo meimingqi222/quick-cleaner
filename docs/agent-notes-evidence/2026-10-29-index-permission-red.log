@@ -1,0 +1,38 @@
+2026/10/29 18:16:06 [disk index] phase=wait duration=0s
+2026/10/29 18:16:06 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/29 18:16:06 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:16:06 [disk index] events raw=0 paths=2 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/29 18:16:06 [disk index] phase=subtree-scans roots=2 files=0 estimated=2
+2026/10/29 18:16:06 [disk index] phase=subtree-scans duration=0s
+2026/10/29 18:16:06 [disk index] phase=apply-events duration=0s error=scan $TMPDIR/qc-volume-3928024302/denied: operation not permitted
+2026/10/29 18:16:06 [disk index] phase=rebuild reason=apply events: scan $TMPDIR/qc-volume-3928024302/denied: operation not permitted background=false
+2026/10/29 18:16:06 [disk index] phase=full-scan started
+2026/10/29 18:16:06 [disk index] phase=full-scan duration=0s spill=false error=unexpected full-volume rebuild
+2026/10/29 18:16:06 [disk index] phase=wait duration=0s
+2026/10/29 18:16:06 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/29 18:16:06 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:16:06 [disk index] events raw=0 paths=2 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/29 18:16:06 [disk index] phase=subtree-scans roots=2 files=0 estimated=2
+2026/10/29 18:16:06 [disk index] phase=subtree-scans duration=0s
+2026/10/29 18:16:06 [disk index] phase=apply-events duration=0s error=scan $TMPDIR/qc-volume-4191536048/denied: permission denied
+2026/10/29 18:16:06 [disk index] phase=rebuild reason=apply events: scan $TMPDIR/qc-volume-4191536048/denied: permission denied background=false
+2026/10/29 18:16:06 [disk index] phase=full-scan started
+2026/10/29 18:16:06 [disk index] phase=full-scan duration=0s spill=false error=unexpected full-volume rebuild
+2026/10/29 18:16:07 [disk index] phase=wait duration=0s
+2026/10/29 18:16:07 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/29 18:16:07 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:16:07 [disk index] events raw=0 paths=2 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/29 18:16:07 [disk index] phase=subtree-scans roots=2 files=0 estimated=2
+2026/10/29 18:16:07 [disk index] phase=subtree-scans duration=0s
+2026/10/29 18:16:07 [disk index] phase=apply-events duration=0s error=scan $TMPDIR/qc-volume-4168840621/denied: malformed scan
+2026/10/29 18:16:07 [disk index] phase=rebuild reason=apply events: scan $TMPDIR/qc-volume-4168840621/denied: malformed scan background=false
+2026/10/29 18:16:07 [disk index] phase=full-scan started
+2026/10/29 18:16:07 [disk index] phase=full-scan duration=0s spill=false error=unexpected full-volume rebuild
+--- FAIL: TestMacDiskIndexPermissionFailureKeepsUnknownSubtreeWithoutRebuild (0.06s)
+    --- FAIL: TestMacDiskIndexPermissionFailureKeepsUnknownSubtreeWithoutRebuild/EPERM (0.02s)
+        disk_index_refresh_permission_test.go:74: local permission error triggered a full rebuild: unexpected full-volume rebuild
+    --- FAIL: TestMacDiskIndexPermissionFailureKeepsUnknownSubtreeWithoutRebuild/EACCES (0.02s)
+        disk_index_refresh_permission_test.go:74: local permission error triggered a full rebuild: unexpected full-volume rebuild
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.710s
+FAIL

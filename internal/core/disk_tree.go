@@ -5,6 +5,7 @@ import (
 	"context"
 	"math"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -63,9 +64,11 @@ type treeSlot struct {
 // SizeTree preserves stable node IDs across incremental edits. Readers may run
 // concurrently, but callers must serialize mutations with all readers.
 type SizeTree struct {
-	volume     VolumeID
-	entries    []treeSlot
-	children   [][]uint32
+	volume   VolumeID
+	entries  []treeSlot
+	children [][]uint32
+	// Mapped snapshots share immutable base edges; only edited parents own lists.
+	childEdits map[uint32][]uint32
 	cacheMu    sync.Mutex
 	childNames map[uint32]map[string]uint32
 	blocked    []string
@@ -140,7 +143,15 @@ func (t *SizeTree) Clone() *SizeTree {
 			out.overrides[idx] = slot
 		}
 	}
-	out.RebuildChildArrays()
+	if t.base != nil {
+		out.childNames = make(map[uint32]map[string]uint32)
+		out.childEdits = make(map[uint32][]uint32, len(t.childEdits))
+		for parent, kids := range t.childEdits {
+			out.childEdits[parent] = append([]uint32(nil), kids...)
+		}
+	} else {
+		out.RebuildChildArrays()
+	}
 	return out
 }
 func SizeTreeFromSnapshot(volume VolumeID, snapshot []TreeSnapshotEntry) *SizeTree {
@@ -167,9 +178,30 @@ func SizeTreeFromSnapshot(volume VolumeID, snapshot []TreeSnapshotEntry) *SizeTr
 func (t *SizeTree) Volume() VolumeID { return t.volume }
 func (t *SizeTree) Root() uint32     { return 0 }
 func (t *SizeTree) Valid(idx uint32) bool {
-	return uint64(idx) < uint64(t.nodeCount()) && t.slot(idx).Used
+	return uint64(idx) < uint64(t.nodeCount()) && t.nodeFlags(idx)&cacheUsedBit != 0
 }
-func (t *SizeTree) IsDir(idx uint32) bool { return t.Valid(idx) && t.slot(idx).IsDir }
+func (t *SizeTree) IsDir(idx uint32) bool {
+	const directory = cacheUsedBit | cacheDirBit
+	return uint64(idx) < uint64(t.nodeCount()) && t.nodeFlags(idx)&directory == directory
+}
+
+// Flags on a validated mapped base do not require decoding or copying a name.
+func (t *SizeTree) nodeFlags(idx uint32) uint32 {
+	if int(idx) < t.baseCount {
+		if _, ok := t.overrides[idx]; !ok {
+			return t.base.bits(idx)
+		}
+	}
+	e := t.slot(idx)
+	var flags uint32
+	if e.Used {
+		flags |= cacheUsedBit
+	}
+	if e.IsDir {
+		flags |= cacheDirBit
+	}
+	return flags
+}
 
 // nodeCount counts the mapped base plus nodes appended after it.
 func (t *SizeTree) nodeCount() int {
@@ -187,6 +219,18 @@ func (t *SizeTree) slot(idx uint32) treeSlot {
 			return slot
 		}
 		return t.base.slot(idx)
+	}
+	return t.entries[int(idx)-t.baseCount]
+}
+
+// slotValues reads serialization fields without copying a mapped name.
+// Base names are absent: these values must never be written back with setSlot.
+func (t *SizeTree) slotValues(idx uint32) treeSlot {
+	if int(idx) < t.baseCount {
+		if slot, ok := t.overrides[idx]; ok {
+			return slot
+		}
+		return t.base.values(idx)
 	}
 	return t.entries[int(idx)-t.baseCount]
 }
@@ -241,7 +285,7 @@ func (t *SizeTree) ChildIndices(idx uint32) []uint32 {
 	if !t.Valid(idx) {
 		return nil
 	}
-	return append([]uint32(nil), t.children[idx]...)
+	return t.childList(idx).copy()
 }
 func (t *SizeTree) PathOf(idx uint32) string { return t.PathOfWith(idx, make(map[uint32]string)) }
 func (t *SizeTree) PathOfWith(idx uint32, cache map[uint32]string) string {
@@ -293,7 +337,7 @@ func (t *SizeTree) findChild(parent uint32, name string) (uint32, bool) {
 	m, ok := t.childNames[parent]
 	if !ok {
 		m = make(map[string]uint32)
-		for _, c := range t.children[parent] {
+		for c := range t.childList(parent).all {
 			if t.Valid(c) {
 				key := asciiLower(t.slot(c).Name)
 				if _, found := m[key]; !found {
@@ -311,7 +355,7 @@ func (t *SizeTree) findChild(parent uint32, name string) (uint32, bool) {
 	if t.Valid(idx) {
 		return idx, true
 	}
-	for _, c := range t.children[parent] {
+	for c := range t.childList(parent).all {
 		if t.Valid(c) && asciiLower(t.slot(c).Name) == key {
 			m[key] = c
 			return c, true
@@ -360,7 +404,7 @@ func (t *SizeTree) ownSize(idx uint32) uint64 {
 		return t.SizeOf(idx)
 	}
 	var size uint64
-	for _, c := range t.children[idx] {
+	for c := range t.childList(idx).all {
 		if t.Valid(c) && !t.IsDir(c) {
 			size = saturatingAdd(size, t.SizeOf(c))
 		}
@@ -399,8 +443,10 @@ func (t *SizeTree) ancestors(idx uint32, fn func(*treeSlot)) {
 	if n == 0 {
 		return
 	}
+	// Leave room for appended nodes; exact capacity reallocates the whole
+	// volume scratch on every subsequent file insertion.
 	if cap(t.ancestorStamp) < n {
-		t.ancestorStamp = make([]uint32, n)
+		t.ancestorStamp = make([]uint32, n, max(n, 2*cap(t.ancestorStamp)))
 	} else if len(t.ancestorStamp) != n {
 		t.ancestorStamp = t.ancestorStamp[:n]
 	}
@@ -627,7 +673,9 @@ func (t *SizeTree) RemoveSubtree(idx uint32, size, files uint64) {
 		if !t.Valid(cur) {
 			continue
 		}
-		stack = append(stack, t.children[cur]...)
+		for child := range t.childList(cur).all {
+			stack = append(stack, child)
+		}
 		slot := t.slot(cur)
 		slot.Used = false
 		t.setSlot(cur, slot)
@@ -640,8 +688,74 @@ func (t *SizeTree) RemoveSubtree(idx uint32, size, files uint64) {
 func (t *SizeTree) RemoveSubtreeInplace(idx uint32) {
 	t.RemoveSubtree(idx, t.SizeOf(idx), t.FileCountOf(idx))
 }
+
+// Child edges stay either in heap storage or in the validated little-endian
+// mapped CSR. The view never copies edges just to iterate them.
+type treeChildView struct {
+	slots []uint32
+	data  []byte
+	owner *mappedDiskIndex
+}
+
+func (v treeChildView) len() int {
+	if v.data != nil {
+		return len(v.data) / 4
+	}
+	return len(v.slots)
+}
+func (v treeChildView) at(i int) uint32 {
+	if v.data != nil {
+		child := cacheU32(v.data, i*4)
+		runtime.KeepAlive(v.owner)
+		return child
+	}
+	return v.slots[i]
+}
+func (v treeChildView) all(yield func(uint32) bool) {
+	for i := 0; i < v.len(); i++ {
+		if !yield(v.at(i)) {
+			return
+		}
+	}
+}
+func (v treeChildView) copy() []uint32 {
+	if v.len() == 0 {
+		return nil
+	}
+	out := make([]uint32, v.len())
+	for i := range out {
+		out[i] = v.at(i)
+	}
+	return out
+}
+func (t *SizeTree) childList(parent uint32) treeChildView {
+	if t.base != nil {
+		if kids, ok := t.childEdits[parent]; ok {
+			return treeChildView{slots: kids}
+		}
+		if int(parent) < t.baseCount {
+			return t.base.children(parent)
+		}
+		return treeChildView{}
+	}
+	if int(parent) < len(t.children) {
+		return treeChildView{slots: t.children[parent]}
+	}
+	return treeChildView{}
+}
 func (t *SizeTree) link(parent, idx uint32) {
-	t.children[parent] = append(t.children[parent], idx)
+	if t.base != nil {
+		if t.childEdits == nil {
+			t.childEdits = make(map[uint32][]uint32)
+		}
+		kids, owned := t.childEdits[parent]
+		if !owned {
+			kids = t.childList(parent).copy()
+		}
+		t.childEdits[parent] = append(kids, idx)
+	} else {
+		t.children[parent] = append(t.children[parent], idx)
+	}
 	if m, ok := t.childNames[parent]; ok {
 		key := asciiLower(t.slot(idx).Name)
 		if _, found := m[key]; !found {
@@ -675,7 +789,9 @@ func (t *SizeTree) UpsertFileWithMtime(path string, size, mtime uint64) bool {
 	}
 	idx := uint32(t.nodeCount())
 	t.entries = append(t.entries, treeSlot{TreeIndexEntry: TreeIndexEntry{parent, name, false, size, true, mtime}})
-	t.children = append(t.children, nil)
+	if t.base == nil {
+		t.children = append(t.children, nil)
+	}
 	t.link(parent, idx)
 	t.ancestors(parent, func(e *treeSlot) { e.Size = saturatingAdd(e.Size, size); e.files = saturatingAdd(e.files, 1) })
 	return true
@@ -713,7 +829,9 @@ func (t *SizeTree) AppendSubtree(parent uint32, subtree *SizeTree, rootName stri
 		}
 		e.Parent = p
 		t.entries = append(t.entries, e)
-		t.children = append(t.children, nil)
+		if t.base == nil {
+			t.children = append(t.children, nil)
+		}
 	}
 	for i := base; i < t.nodeCount(); i++ {
 		e := t.slot(uint32(i))
@@ -725,29 +843,37 @@ func (t *SizeTree) AppendSubtree(parent uint32, subtree *SizeTree, rootName stri
 		e.Size = saturatingAdd(e.Size, subtree.SizeOf(0))
 		e.files = saturatingAdd(e.files, subtree.FileCountOf(0))
 	})
+	t.appendSubtreeCoverage(parent, rootName, subtree.volume, subtree.blocked)
+}
+
+func (t *SizeTree) appendSubtreeCoverage(parent uint32, rootName string, volume VolumeID, gaps []string) {
 	newRoot := filepath.Join(t.PathOf(parent), rootName)
-	for _, blocked := range subtree.blocked {
-		if pathWithin(blocked, subtree.volume.Mount) {
-			rel, _ := filepath.Rel(subtree.volume.Mount, blocked)
+	for _, blocked := range gaps {
+		if pathWithin(blocked, volume.Mount) {
+			rel, _ := filepath.Rel(volume.Mount, blocked)
 			t.blocked = append(t.blocked, filepath.Join(newRoot, rel))
 		}
 	}
 }
 func (t *SizeTree) RebuildChildArrays() {
 	t.childNames = make(map[uint32]map[string]uint32)
-	n := t.nodeCount()
-	// Heap trees read slots in place; slot() copies one per call.
-	edge := func(i int) (uint32, bool) {
-		if t.baseCount == 0 {
-			return heapEdge(t.entries, i)
+	if t.base != nil {
+		// Base identities do not move. Rebuild only appended edges; tombstones
+		// in shared lists are filtered by readers, as with RemoveSubtree.
+		t.childEdits = make(map[uint32][]uint32)
+		for i, e := range t.entries {
+			idx := uint32(t.baseCount + i)
+			if e.Used && e.Parent != idx && t.IsDir(e.Parent) {
+				t.link(e.Parent, idx)
+			}
 		}
-		e := t.slot(uint32(i))
-		return e.Parent, e.Used && t.IsDir(e.Parent) && e.Parent != uint32(i)
+		return
 	}
+	n := t.nodeCount()
 	counts := make([]uint32, n)
 	var total uint32
 	for i := 1; i < n; i++ {
-		if p, ok := edge(i); ok {
+		if p, ok := heapEdge(t.entries, i); ok {
 			counts[p]++
 			total++
 		}
@@ -766,26 +892,39 @@ func (t *SizeTree) RebuildChildArrays() {
 		t.children[i] = backing[start:start:cursor]
 	}
 	for i := 1; i < n; i++ {
-		if p, ok := edge(i); ok {
+		if p, ok := heapEdge(t.entries, i); ok {
 			t.children[p] = append(t.children[p], uint32(i))
 		}
 	}
 }
 func (t *SizeTree) CountUsedDirs() uint64 {
-	var n uint64
-	for i := 0; i < t.nodeCount(); i++ {
-		e := t.slot(uint32(i))
-		if e.Used && e.IsDir {
-			n++
-		}
-	}
-	return n
+	return t.countUsed(true)
 }
 func (t *SizeTree) CountUsedFiles() uint64 {
+	return t.countUsed(false)
+}
+
+func (t *SizeTree) countUsed(directory bool) uint64 {
 	var n uint64
-	for i := 0; i < t.nodeCount(); i++ {
-		e := t.slot(uint32(i))
-		if e.Used && !e.IsDir {
+	if t.base != nil {
+		// The immutable base's counts were checked against every record at
+		// load. Only overlays can change them; root aggregates are different.
+		n = t.base.usedCount(directory)
+		want := uint32(cacheUsedBit)
+		if directory {
+			want |= cacheDirBit
+		}
+		for idx, e := range t.overrides {
+			if t.base.bits(idx)&(cacheUsedBit|cacheDirBit) == want {
+				n--
+			}
+			if e.Used && e.IsDir == directory {
+				n++
+			}
+		}
+	}
+	for _, e := range t.entries {
+		if e.Used && e.IsDir == directory {
 			n++
 		}
 	}
@@ -859,7 +998,7 @@ func (t *SizeTree) CollectSubtreeFiles(root uint32, maxDepth int, minSize, maxSi
 			continue
 		}
 		seen[cur.idx] = true
-		for _, c := range t.children[cur.idx] {
+		for c := range t.childList(cur.idx).all {
 			if !t.Valid(c) {
 				continue
 			}

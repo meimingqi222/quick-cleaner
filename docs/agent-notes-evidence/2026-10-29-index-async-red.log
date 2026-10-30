@@ -1,0 +1,10 @@
+2026/10/29 18:37:31 [disk index] phase=wait duration=0s
+2026/10/29 18:37:31 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/29 18:37:31 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/29 18:37:31 [disk index] events raw=0 paths=0 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/29 18:37:32 [disk index] phase=incremental-persist duration=1.024s delta=true compacted=false error=<nil>
+--- FAIL: TestMacDiskIndexSlowPersistenceDoesNotBlockReaders (1.06s)
+    disk_index_async_test.go:44: Load waited for slow persistence before publishing its snapshot
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.561s
+FAIL

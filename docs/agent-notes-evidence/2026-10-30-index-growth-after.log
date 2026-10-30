@@ -1,0 +1,26 @@
+08:41:49.108840 [disk index] phase=wait duration=0s
+08:41:52.721287 [disk index] phase=cache-read duration=3.612s error=<nil>
+08:41:53.678543 [disk index] phase=event-replay duration=957ms error=<nil>
+08:41:53.678595 [disk index] events raw=76050 paths=36001 rescan=0 incomplete=false reason= since=1172060689 delivered=1172896599
+08:41:53.949946 [disk index] phase=subtree-scans roots=290 files=33239 estimated=54442
+08:41:54.056376 [disk index] phase=subtree-scans duration=106ms
+08:41:54.056546 [disk index] unreadable subtrees retained=22
+08:41:54.056896 [disk index] phase=clone duration=0s mapped=true nodes=7648534
+08:41:54.421157 [disk index] phase=rebuild-arrays duration=128ms
+08:41:54.421241 [disk index] phase=apply-events duration=743ms error=<nil>
+08:41:58.137700 发现索引通道：卷 /，耗时 3.716s
+08:42:03.503714 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 5.366s
+08:42:10.757820 [disk index] phase=background-persist duration=16.336s incremental=true delta=false compacted=true event=1172896599 error=<nil>
+08:42:12.470549 [disk index] phase=background-rebind duration=1.713s error=<nil>
+08:42:12.470804 [disk index] phase=wait duration=0s
+08:42:12.517826 [disk index] phase=event-replay duration=47ms error=<nil>
+08:42:12.517950 [disk index] events raw=407 paths=177 rescan=0 incomplete=false reason= since=1172896599 delivered=1172900760
+08:42:12.538170 [disk index] phase=subtree-scans roots=9 files=167 estimated=33
+08:42:12.541673 [disk index] phase=subtree-scans duration=3ms
+08:42:12.541975 [disk index] unreadable subtrees retained=7
+08:42:12.541991 [disk index] phase=clone duration=0s mapped=true nodes=7584270
+08:42:12.674696 [disk index] phase=rebuild-arrays duration=103ms
+08:42:12.674746 [disk index] phase=apply-events duration=157ms error=<nil>
+08:42:12.697713 [disk index] phase=background-persist duration=23ms incremental=true delta=true compacted=false event=1172900760 error=<nil>
+08:42:14.111845 发现索引通道：卷 /，耗时 1.437s
+08:42:19.407534 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 5.295s

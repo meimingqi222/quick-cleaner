@@ -1,0 +1,6 @@
+--- FAIL: TestSpillGraftRejectsMalformedRecordsAndCount (0.00s)
+    --- FAIL: TestSpillGraftRejectsMalformedRecordsAndCount/oversized-count (0.00s)
+        disk_index_subtree_spill_test.go:219: untrusted count reserved 64299736 bytes before checking spill length
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	1.140s
+FAIL

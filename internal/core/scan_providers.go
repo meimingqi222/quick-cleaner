@@ -19,6 +19,7 @@ import (
 // Native resources (trash, snapshots, Docker, brew) are separate inputs; this
 // is not the complete product scan until those providers are connected.
 func FilesystemScanTargets(s *RuleSnapshot, roots map[string]string, osName string) []ScanTarget {
+	s = captureRuleSnapshot(s)
 	claims := CollectRuleClaims(s, roots, osName)
 	var targets []ScanTarget
 	for _, provider := range s.List("engine", "providers") {

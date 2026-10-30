@@ -1,0 +1,22 @@
+18:20:43.846078 [disk index] phase=wait duration=0s
+18:20:45.609821 [disk index] phase=cache-read duration=1.764s error=<nil>
+18:20:46.253658 [disk index] phase=event-replay duration=643ms error=<nil>
+18:20:46.253714 [disk index] events raw=40760 paths=20831 rescan=0 incomplete=false reason= since=1170865402 delivered=1171339566
+18:20:46.338040 [disk index] phase=subtree-scans roots=120 files=20632 estimated=61497
+18:20:46.445876 [disk index] phase=subtree-scans duration=107ms
+18:20:46.445975 [disk index] unreadable subtrees retained=64
+18:20:47.371753 [disk index] phase=clone duration=926ms mapped=true nodes=7672818
+18:20:54.735034 [disk index] phase=rebuild-arrays duration=1.489s
+18:20:54.735100 [disk index] phase=apply-events duration=8.481s error=<nil>
+18:21:08.998112 [disk index] phase=incremental-persist duration=14.263s delta=false compacted=true error=<nil>
+18:21:10.529914 [disk index] phase=rebind-base duration=1.532s error=<nil>
+18:21:11.732790 [disk index] phase=wait duration=0s
+18:21:11.776843 [disk index] phase=event-replay duration=44ms error=<nil>
+18:21:11.776881 [disk index] events raw=1646 paths=903 rescan=0 incomplete=false reason= since=1171339566 delivered=1171356158
+18:21:11.789054 [disk index] phase=subtree-scans roots=11 files=887 estimated=639
+18:21:11.789577 [disk index] phase=subtree-scans duration=0s
+18:21:11.790326 [disk index] unreadable subtrees retained=7
+18:21:12.652243 [disk index] phase=clone duration=862ms mapped=true nodes=7660221
+18:21:14.510491 [disk index] phase=rebuild-arrays duration=1.485s
+18:21:14.510562 [disk index] phase=apply-events duration=2.734s error=<nil>
+18:21:14.539902 [disk index] phase=incremental-persist duration=29ms delta=true compacted=false error=<nil>

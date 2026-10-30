@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -23,11 +24,18 @@ type macDiskIndexSource interface {
 	Scan(context.Context, VolumeID, bool) (ScanResult, error)
 }
 
+type macDiskIndexWriter interface {
+	Load(VolumeID) (*LoadedDiskIndex, error)
+	Save(VolumeID, *SizeTree, uint64) (DiskIndexSaveResult, error)
+	PersistIncremental(VolumeID, *SizeTree, uint64) (DiskIndexSaveResult, error)
+}
+
 // MacDiskIndex shares one immutable snapshot across scan, search and disk views.
 // Consumers must clone before mutation, then Remember the replacement. Background
 // refresh can replay history but cannot initiate a full-volume rebuild.
 type MacDiskIndex struct {
 	cache   *DiskIndexCache
+	writer  macDiskIndexWriter
 	source  macDiskIndexSource
 	gate    chan struct{}
 	ctx     context.Context
@@ -35,11 +43,12 @@ type MacDiskIndex struct {
 	ticker  sync.Once
 	cached  *ScanResult
 	eventID uint64
+	persist indexPersistence
 }
 
 func newMacDiskIndex(ctx context.Context, cache *DiskIndexCache, source macDiskIndexSource) *MacDiskIndex {
 	ctx, cancel := context.WithCancel(ctx)
-	return &MacDiskIndex{cache: cache, source: source, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	return &MacDiskIndex{cache: cache, writer: cache, source: source, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel, persist: indexPersistence{changed: make(chan struct{})}}
 }
 
 // Close cancels the idle ticker and in-flight work without blocking the UI on a
@@ -57,6 +66,7 @@ func (m *MacDiskIndex) Peek(volume VolumeID) *ScanResult {
 	default:
 		return nil
 	}
+	m.adoptPersisted()
 	if m.cached != nil && m.cached.Volume.Mount == volume.Mount {
 		return m.cached
 	}
@@ -82,6 +92,7 @@ func (m *MacDiskIndex) Cached(ctx context.Context, volume VolumeID) (*ScanResult
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	m.adoptPersisted()
 	if m.cached != nil && m.cached.Volume.Mount == volume.Mount {
 		m.startTicker()
 		return m.cached, nil
@@ -99,6 +110,7 @@ func (m *MacDiskIndex) Cached(ctx context.Context, volume VolumeID) (*ScanResult
 }
 
 func (m *MacDiskIndex) Load(ctx context.Context, volume VolumeID) (*ScanResult, error) {
+	started := time.Now()
 	if err := m.ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -115,12 +127,19 @@ func (m *MacDiskIndex) Load(ctx context.Context, volume VolumeID) (*ScanResult, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	log.Printf("[disk index] phase=wait duration=%s", time.Since(started).Round(time.Millisecond))
 	var previous *ScanResult
 	var event uint64
+	m.adoptPersisted()
 	if m.cached != nil && m.cached.Volume.Mount == volume.Mount {
 		previous, event = m.cached, m.eventID
-	} else if loaded, err := m.cache.Load(volume); err == nil {
-		previous, event = &loaded.Scan, loaded.LastEventID
+	} else {
+		cacheStarted := time.Now()
+		loaded, err := m.cache.Load(volume)
+		log.Printf("[disk index] phase=cache-read duration=%s error=%v", time.Since(cacheStarted).Round(time.Millisecond), err)
+		if err == nil {
+			previous, event = &loaded.Scan, loaded.LastEventID
+		}
 	}
 	var scan *ScanResult
 	var err error
@@ -179,6 +198,7 @@ func (m *MacDiskIndex) Advance(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	m.adoptPersisted()
 	if m.cached == nil {
 		return false, nil
 	}
@@ -225,21 +245,28 @@ func (m *MacDiskIndex) full(ctx context.Context, volume VolumeID) (*ScanResult, 
 	if err != nil {
 		return nil, 0, err
 	}
+	scanStarted := time.Now()
+	log.Printf("[disk index] phase=full-scan started")
 	scan, err := m.source.Scan(ctx, volume, false)
+	log.Printf("[disk index] phase=full-scan duration=%s spill=%v error=%v", time.Since(scanStarted).Round(time.Millisecond), scan.Spill != nil, err)
 	if err != nil {
 		return nil, 0, err
 	}
+	persisted := false
 	// A scan past the spill threshold comes back without a tree: the raw records
 	// are on disk and this is the only place that both owns the cache and knows
 	// the event checkpoint captured before the walk.
 	if scan.Spill != nil {
 		defer scan.Spill.Remove()
+		spillStarted := time.Now()
 		built, err := BuildMacWalkSpillIndex(m.cache, volume, scan.SpillRoot, scan.Spill, scan.SpillBlocked, event)
+		log.Printf("[disk index] phase=spill-build duration=%s error=%v", time.Since(spillStarted).Round(time.Millisecond), err)
 		if err != nil {
 			return nil, 0, err
 		}
 		built.ElapsedMS = scan.ElapsedMS
 		scan = *built
+		persisted = true
 	}
 	if scan.Tree == nil || !scan.Tree.Valid(0) {
 		return nil, 0, ErrDiskIndexCorrupt
@@ -247,8 +274,8 @@ func (m *MacDiskIndex) full(ctx context.Context, volume VolumeID) (*ScanResult, 
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	if _, err := m.cache.Save(volume, scan.Tree, event); err != nil {
-		log.Printf("[disk index] full index persistence: %v", err)
+	if !persisted {
+		m.queuePersistence(&scan, event, false)
 	} else if _, err := m.cache.PruneOrphans(volume); err != nil {
 		log.Printf("[disk index] retired cache pruning: %v", err)
 	}
@@ -256,7 +283,8 @@ func (m *MacDiskIndex) full(ctx context.Context, volume VolumeID) (*ScanResult, 
 }
 
 func (m *MacDiskIndex) refresh(ctx context.Context, original *ScanResult, since uint64, background bool) (*ScanResult, uint64, error) {
-	rebuild := func() (*ScanResult, uint64, error) {
+	rebuild := func(reason string) (*ScanResult, uint64, error) {
+		log.Printf("[disk index] phase=rebuild reason=%s background=%v", reason, background)
 		if err := ctx.Err(); err != nil {
 			return nil, since, err
 		}
@@ -266,18 +294,28 @@ func (m *MacDiskIndex) refresh(ctx context.Context, original *ScanResult, since 
 		return m.full(ctx, original.Volume)
 	}
 	current, err := m.source.Current()
-	if err != nil || (since > 0 && saturatingSub(current, since) > 4_000_000) {
-		return rebuild()
+	if err != nil || current < since {
+		return rebuild(fmt.Sprintf("event-id current=%d since=%d error=%v", current, since, err))
 	}
+	// IDs are global sequence numbers, not a count of changes under this root.
+	// Let the bounded replay report actual history loss and delivered progress.
+	replayStarted := time.Now()
 	changes, err := m.source.Changes(ctx, original.Volume.Mount, since, m.cache.Root())
-	if err != nil || changes == nil || changes.RequiresFullScan || changes.LastEventID < since {
-		return rebuild()
+	log.Printf("[disk index] phase=event-replay duration=%s error=%v", time.Since(replayStarted).Round(time.Millisecond), err)
+	if err != nil || changes == nil {
+		return rebuild(fmt.Sprintf("replay error=%v", err))
+	}
+	log.Printf("[disk index] events raw=%d paths=%d rescan=%d incomplete=%v reason=%s since=%d delivered=%d", changes.RawEventCount, len(changes.Paths), len(changes.MustRescan), changes.Incomplete, changes.FullScanReason, since, changes.LastEventID)
+	if changes.RequiresFullScan || changes.LastEventID < since {
+		return rebuild("replay " + changes.FullScanReason)
 	}
 	refreshed := original
 	if len(changes.Paths)+len(changes.MustRescan) > 0 {
+		refreshStarted := time.Now()
 		updated, err := refreshMacDiskIndex(ctx, *original, changes, m.source)
+		log.Printf("[disk index] phase=apply-events duration=%s error=%v", time.Since(refreshStarted).Round(time.Millisecond), err)
 		if err != nil {
-			return rebuild()
+			return rebuild(fmt.Sprintf("apply events: %v", err))
 		}
 		refreshed = &updated
 	}
@@ -285,9 +323,7 @@ func (m *MacDiskIndex) refresh(ctx context.Context, original *ScanResult, since 
 		return nil, since, err
 	}
 	if refreshed != original || changes.LastEventID > since {
-		if _, err := m.cache.PersistIncremental(refreshed.Volume, refreshed.Tree, changes.LastEventID); err != nil {
-			log.Printf("[disk index] incremental persistence: %v", err)
-		}
+		m.queuePersistence(refreshed, changes.LastEventID, true)
 	}
 	return refreshed, changes.LastEventID, nil
 }
@@ -332,12 +368,16 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 			if _, ok := original.Tree.FindNodeByPath(filepath.Dir(path)); !ok {
 				roots = append(roots, filepath.Dir(path))
 			} else {
-				mtime := uint64(max(int64(0), info.ModTime().Unix()))
+				mtime := min(uint64(max(int64(0), info.ModTime().Unix())), uint64(math.MaxUint32))
 				files = append(files, fileChange{path: path, size: platform.AllocatedFileSize(info), mtime: mtime})
 			}
 		}
 	}
 	roots = coalesceMacIndexRoots(roots)
+	rescanned := make(macIndexPathSet, len(roots))
+	for _, root := range roots {
+		rescanned[filepath.Clean(root)] = struct{}{}
+	}
 	var estimated uint64
 	for _, root := range roots {
 		if idx, ok := original.Tree.FindNodeByPath(root); ok {
@@ -351,6 +391,8 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 		scan *ScanResult
 		err  error
 	}
+	log.Printf("[disk index] phase=subtree-scans roots=%d files=%d estimated=%d", len(roots), len(files), estimated)
+	subtreeStarted := time.Now()
 	results := make([]subtreeResult, len(roots))
 	var workers sync.WaitGroup
 	jobs := make(chan int)
@@ -361,7 +403,11 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
-				if err != nil || !info.IsDir() {
+				if err != nil {
+					results[i].err = err
+					continue
+				}
+				if !info.IsDir() {
 					results[i].err = ErrDiskIndexRebuildNeeded
 					continue
 				}
@@ -375,21 +421,46 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 	}
 	close(jobs)
 	workers.Wait()
+	defer func() {
+		for _, result := range results {
+			if result.scan != nil && result.scan.Spill != nil {
+				result.scan.Spill.Remove()
+			}
+		}
+	}()
+	log.Printf("[disk index] phase=subtree-scans duration=%s", time.Since(subtreeStarted).Round(time.Millisecond))
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
 	}
-	for _, result := range results {
+	denied := 0
+	for i, result := range results {
+		if errors.Is(result.err, os.ErrPermission) {
+			// The previous subtree is unknown, not absent. Keep it until a
+			// successful rescan can replace both its data and coverage.
+			uncertain = append(uncertain, roots[i])
+			denied++
+			if denied <= 5 {
+				log.Printf("[disk index] subtree coverage unknown: %q error=%v", roots[i], result.err)
+			}
+			continue
+		}
 		if result.err != nil {
 			return ScanResult{}, result.err
 		}
 	}
+	if denied > 0 {
+		log.Printf("[disk index] unreadable subtrees retained=%d", denied)
+	}
+	cloneStarted := time.Now()
 	updated := original
 	updated.Tree = original.Tree.Clone()
-	clearCoverage := func(path string) {
-		updated.Tree.blocked = slices.DeleteFunc(updated.Tree.blocked, func(blocked string) bool { return pathWithin(blocked, path) })
-	}
+	log.Printf("[disk index] phase=clone duration=%s mapped=%v nodes=%d", time.Since(cloneStarted).Round(time.Millisecond), original.Tree.base != nil, original.Tree.nodeCount())
+	previousCoverage := updated.Tree.blocked
+	updated.Tree.blocked = nil
+	cleared := make(macIndexPathSet)
+	clearCoverage := func(path string) { cleared[filepath.Clean(path)] = struct{}{} }
 	for _, change := range files {
-		if slices.ContainsFunc(roots, func(root string) bool { return pathWithin(change.path, root) }) {
+		if rescanned.contains(change.path) {
 			continue
 		}
 		if change.removed {
@@ -402,8 +473,11 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 		}
 	}
 	for i, root := range roots {
+		if results[i].err != nil {
+			continue
+		}
 		subtree := results[i].scan
-		if subtree != nil && subtree.Tree == nil {
+		if subtree != nil && subtree.Tree == nil && subtree.Spill == nil {
 			return ScanResult{}, ErrDiskIndexRebuildNeeded
 		}
 		parent, ok := updated.Tree.FindNodeByPath(filepath.Dir(root))
@@ -415,13 +489,46 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 			updated.Tree.RemoveSubtreeInplace(idx)
 		}
 		if subtree != nil {
-			updated.Tree.AppendSubtree(parent, subtree.Tree, filepath.Base(root))
+			if subtree.Spill != nil {
+				if err := updated.Tree.appendSpillSubtree(ctx, parent, filepath.Base(root), subtree); err != nil {
+					return ScanResult{}, err
+				}
+			} else {
+				updated.Tree.AppendSubtree(parent, subtree.Tree, filepath.Base(root))
+			}
 		}
 	}
+	// Clear only old gaps. A successfully rescanned subtree may report new
+	// gaps under the same root, which must survive publication.
+	previousCoverage = slices.DeleteFunc(previousCoverage, func(path string) bool { return cleared.contains(path) })
+	updated.Tree.blocked = append(previousCoverage, updated.Tree.blocked...)
 	updated.Tree.blocked = append(updated.Tree.blocked, uncertain...)
+	rebuildStarted := time.Now()
 	updated.Tree.RebuildChildArrays()
 	refreshDiskScanTotals(&updated)
+	log.Printf("[disk index] phase=rebuild-arrays duration=%s", time.Since(rebuildStarted).Round(time.Millisecond))
 	return updated, nil
+}
+
+// Keys and queries are canonical absolute macOS paths. Walking parents
+// preserves component boundaries without comparing every path/root pair.
+type macIndexPathSet map[string]struct{}
+
+func (paths macIndexPathSet) contains(path string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	path = filepath.Clean(path)
+	for {
+		if _, ok := paths[path]; ok {
+			return true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
 }
 
 func coalesceMacIndexRoots(roots []string) []string {
@@ -464,15 +571,30 @@ func refreshDiskScanTotals(scan *ScanResult) {
 	scan.UniqueSize, scan.UniqueFiles = scan.TotalSize, scan.FileCount
 }
 
+// The spill belongs to this call until a successful result transfers it;
+// callers never see a failed scan's spill, so they cannot remove it.
+func finishMacWalkScan(ctx context.Context, raw platform.MacWalkResult, walkErr error, started time.Time) (ScanResult, error) {
+	if walkErr != nil {
+		raw.Spill.Remove()
+		return ScanResult{}, walkErr
+	}
+	scan, err := BuildMacWalkScanResult(ctx, raw)
+	if err != nil {
+		raw.Spill.Remove()
+		return ScanResult{}, err
+	}
+	scan.ElapsedMS = uint64(time.Since(started).Milliseconds())
+	return scan, nil
+}
+
 // BuildMacWalkScanResult preserves allocated-byte measurements and incomplete
 // coverage. Missing children below an unreadable/dataless root remain unknown.
 func BuildMacWalkScanResult(ctx context.Context, raw platform.MacWalkResult) (ScanResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
 	}
-	// The spill file replaces the entry array. Hand it up unchanged; full() is
-	// the one caller that can stream it, because only it has the cache and the
-	// event checkpoint captured before the walk.
+	// The caller streams the spill into either a full base or a private
+	// refresh candidate; do not first materialize another in-memory tree.
 	if raw.Spill != nil {
 		blocked := make([]string, len(raw.Incomplete))
 		for i, gap := range raw.Incomplete {
@@ -491,7 +613,8 @@ func BuildMacWalkScanResult(ctx context.Context, raw platform.MacWalkResult) (Sc
 		if entry.Parent >= uint64(len(raw.Entries)) {
 			return ScanResult{}, platform.ErrMacWalkMalformed
 		}
-		entries[i] = TreeIndexEntry{Parent: uint32(entry.Parent), Name: entry.Name, IsDir: entry.IsDir, Size: entry.Size, Used: entry.Used, Mtime: entry.Mtime}
+		// Match the spill ABI: future mtimes saturate instead of wrapping.
+		entries[i] = TreeIndexEntry{Parent: uint32(entry.Parent), Name: entry.Name, IsDir: entry.IsDir, Size: entry.Size, Used: entry.Used, Mtime: min(entry.Mtime, uint64(math.MaxUint32))}
 	}
 	result := ScanResult{Volume: raw.Volume, Tree: NewSizeTree(raw.Volume, entries)}
 	for _, incomplete := range raw.Incomplete {

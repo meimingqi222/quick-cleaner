@@ -504,8 +504,8 @@ failures:
 
 thread 'core::devscan::tests::installation_dependencies_are_not_build_garbage' (16264360) panicked at src/core/devscan.rs:539:9:
 assertion `left == right` failed: installed tools must never be offered as rebuildable dependencies
-  left: ["/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/.local/share/uv/tools/cli/node_modules", "/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/projects/demo/node_modules", "/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/Tool.app/Contents/Resources/app/node_modules", "/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/.nvm/versions/node/v22/lib/node_modules", "/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/Library/Application Support/Tool/runtime/node_modules", "/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/unverified/venv"]
- right: ["/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/qc_installation_build_boundary_35857/projects/demo/node_modules"]
+  left: ["$TMPDIR/qc_installation_build_boundary_35857/.local/share/uv/tools/cli/node_modules", "$TMPDIR/qc_installation_build_boundary_35857/projects/demo/node_modules", "$TMPDIR/qc_installation_build_boundary_35857/Tool.app/Contents/Resources/app/node_modules", "$TMPDIR/qc_installation_build_boundary_35857/.nvm/versions/node/v22/lib/node_modules", "$TMPDIR/qc_installation_build_boundary_35857/Library/Application Support/Tool/runtime/node_modules", "$TMPDIR/qc_installation_build_boundary_35857/unverified/venv"]
+ right: ["$TMPDIR/qc_installation_build_boundary_35857/projects/demo/node_modules"]
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 

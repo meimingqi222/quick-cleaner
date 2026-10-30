@@ -1,0 +1,5 @@
+--- FAIL: TestMappedDiscoveryFlagsAndTagsAvoidNameAllocations (0.03s)
+    devscan_mapped_perf_test.go:49: mapped tag name override ignored
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.414s
+FAIL

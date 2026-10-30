@@ -1,6 +1,8 @@
 package core
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,8 +10,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -53,6 +55,19 @@ type decodedDiskIndex struct {
 	checksum uint64
 }
 
+func (d *decodedDiskIndex) recordCount() int {
+	if d.records != nil {
+		return len(d.records)
+	}
+	return d.tree.baseCount
+}
+func (d *decodedDiskIndex) record(idx uint32) cacheRecord {
+	if d.records != nil {
+		return d.records[idx]
+	}
+	return cacheRecord{slot: d.tree.base.slot(idx), nameOff: d.tree.base.nameOff(idx)}
+}
+
 func cacheReadRecord(b, pool []byte) (cacheRecord, error) {
 	bits, off := cacheU32(b, 0), cacheU32(b, 4)
 	prefix, err := cacheRange(pool, uint64(off), 2)
@@ -82,10 +97,16 @@ func cacheWriteRecord(b []byte, e treeSlot, off uint32) {
 
 // A backslash is a filename character on Unix and a separator on Windows.
 // Base and delta validation must agree with the host's path reconstruction.
-func validDiskIndexName(name string) bool {
-	return name != "" && name != "." && name != ".." &&
-		!strings.ContainsAny(name, "/\x00") &&
-		(filepath.Separator != '\\' || !strings.ContainsRune(name, '\\'))
+func validDiskIndexName[T ~string | ~[]byte](name T) bool {
+	if len(name) == 0 || (name[0] == '.' && (len(name) == 1 || (len(name) == 2 && name[1] == '.'))) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' || name[i] == 0 || (filepath.Separator == '\\' && name[i] == '\\') {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDiskTree(t *SizeTree, ordered bool) error {
@@ -99,7 +120,7 @@ func validateDiskTree(t *SizeTree, ordered bool) error {
 	for i := 0; i < t.nodeCount(); i++ {
 		e := t.slot(uint32(i))
 		if e.Parent > cacheParentMask || e.Mtime > math.MaxUint32 || e.files > math.MaxUint32 || len(e.Name) > math.MaxUint16 || !utf8.ValidString(e.Name) {
-			return cacheInvalid("entry exceeds v7 representation")
+			return cacheInvalid(fmt.Sprintf("entry %d exceeds v7 representation: parent=%d mtime=%d files=%d name_bytes=%d utf8=%t", i, e.Parent, e.Mtime, e.files, len(e.Name), utf8.ValidString(e.Name)))
 		}
 		if !e.Used {
 			continue
@@ -132,6 +153,11 @@ func validateDiskTree(t *SizeTree, ordered bool) error {
 }
 
 func decodeDiskIndex(b []byte, volume VolumeID) (*decodedDiskIndex, error) {
+	return decodeDiskIndexWithMapping(b, volume, nil)
+}
+
+func decodeDiskIndexWithMapping(b []byte, volume VolumeID, mapped *mappedDiskIndex) (*decodedDiskIndex, error) {
+	defer runtime.KeepAlive(mapped)
 	if len(b) < 128 || string(b[:8]) != "QCIDXV07" || cacheU32(b, 8) != 7 {
 		return nil, cacheInvalid("unknown or incomplete base")
 	}
@@ -169,6 +195,9 @@ func decodeDiskIndex(b []byte, volume VolumeID) (*decodedDiskIndex, error) {
 		end = s.off + s.size
 	}
 	pool, _ := cacheRange(b, po, poolLen)
+	if mapped != nil {
+		return decodeMappedDiskIndexBody(b, pool, volume, mapped, int(n), int(eo), int(cs), int(ca), caLen, checksum)
+	}
 	records := make([]cacheRecord, int(n))
 	for i := range records {
 		r, e := cacheReadRecord(b[int(eo)+i*24:int(eo)+(i+1)*24], pool)
@@ -216,6 +245,84 @@ func decodeDiskIndex(b []byte, volume VolumeID) (*decodedDiskIndex, error) {
 	}
 	t.RebuildChildArrays()
 	return &decodedDiskIndex{t, records, meta, checksum}, nil
+}
+
+// All sections and the whole-file checksum are checked before this view is
+// created. Ordered parent links prove acyclicity without allocating heap slots.
+func decodeMappedDiskIndexBody(b, pool []byte, volume VolumeID, mapped *mappedDiskIndex, n, eo, cs, ca int, childCount, checksum uint64) (*decodedDiskIndex, error) {
+	t := newMappedSizeTree(mapped, b, volume, n, eo)
+	var files, dirs uint64
+	for i := 0; i < n; i++ {
+		raw := b[eo+i*24 : eo+(i+1)*24]
+		bits, off := cacheU32(raw, 0), uint64(cacheU32(raw, 4))
+		prefix, err := cacheRange(pool, off, 2)
+		if err != nil {
+			return nil, err
+		}
+		name, err := cacheRange(pool, off+2, uint64(binary.LittleEndian.Uint16(prefix)))
+		if err != nil || !utf8.Valid(name) {
+			return nil, cacheInvalid("invalid name pool")
+		}
+		if bits&cacheUsedBit == 0 {
+			return nil, cacheInvalid("base tombstone")
+		}
+		parent := bits & cacheParentMask
+		if i == 0 {
+			if parent != 0 || bits&cacheDirBit == 0 {
+				return nil, cacheInvalid("invalid root")
+			}
+		} else {
+			if !validDiskIndexName(name) {
+				return nil, cacheInvalid("unsafe name component")
+			}
+			if parent >= uint32(i) || t.base.bits(parent)&(cacheUsedBit|cacheDirBit) != cacheUsedBit|cacheDirBit {
+				return nil, cacheInvalid("invalid parent")
+			}
+		}
+		if bits&cacheDirBit != 0 {
+			dirs++
+		} else {
+			files++
+			if len(name) == len("CACHEDIR.TAG") && isCacheDirTagName(string(name)) {
+				t.base.rememberCacheTag(uint32(i))
+			}
+		}
+	}
+	if childCount != uint64(n-1) || cacheU32(b, cs) != 0 || uint64(cacheU32(b, cs+n*4)) != childCount {
+		return nil, cacheInvalid("CSR sentinel")
+	}
+	seen := make([]uint64, (n+63)/64)
+	for i := 0; i < n; i++ {
+		start, stop := uint64(cacheU32(b, cs+i*4)), uint64(cacheU32(b, cs+(i+1)*4))
+		if start > stop || stop > childCount {
+			return nil, cacheInvalid("CSR range")
+		}
+		var previous uint32
+		ordered := true
+		for j := start; j < stop; j++ {
+			child := cacheU32(b, ca+int(j)*4)
+			if child == 0 || uint64(child) >= uint64(n) || seen[child/64]&(uint64(1)<<(child%64)) != 0 || t.base.bits(child)&cacheParentMask != uint32(i) {
+				return nil, cacheInvalid("CSR child")
+			}
+			seen[child/64] |= uint64(1) << (child % 64)
+			if child < previous {
+				ordered = false
+			}
+			previous = child
+		}
+		if !ordered {
+			// Older loaders rebuilt rows in slot order. Preserve that behavior
+			// for valid files whose CSR rows were stored in another order.
+			children := t.base.children(uint32(i)).copy()
+			sort.Slice(children, func(a, b int) bool { return children[a] < children[b] })
+			t.base.rememberSortedChildren(uint32(i), children)
+		}
+	}
+	meta := DiskIndexMetadata{FileCount: cacheU64(b, 32), DirCount: cacheU64(b, 40), TotalSize: cacheU64(b, 48), LastEventID: cacheU64(b, 56), ScannedAt: cacheU64(b, 64)}
+	if files != meta.FileCount || dirs != meta.DirCount {
+		return nil, cacheInvalid("base statistics")
+	}
+	return &decodedDiskIndex{tree: t, meta: meta, checksum: checksum}, nil
 }
 
 type spillLayout struct {
@@ -272,48 +379,81 @@ func BuildMacWalkSpillIndex(cache *DiskIndexCache, volume VolumeID, rootName str
 	}
 	tmp := out.Name()
 	defer os.Remove(tmp)
+	defer out.Close()
 	mapped, err := mapSpillOutput(out, reserve)
 	if err != nil {
 		out.Close()
 		return nil, err
 	}
+	defer func() {
+		if mapped != nil {
+			unmapSpillOutput(mapped)
+		}
+	}()
 	written, err := fillSpillIndex(mapped, file, start, layout)
-	unmapSpillOutput(mapped)
-	if err != nil {
-		out.Close()
-		return nil, err
-	}
-	if err = out.Truncate(int64(written)); err != nil {
-		out.Close()
-		return nil, err
-	}
-	if err = out.Close(); err != nil {
-		return nil, err
-	}
-	index, err := readDiskIndexRegular(tmp)
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := decodeDiskIndex(index, volume)
+	index := mapped[:written]
+	decoded, err := decodeSpillIndex(index, volume)
 	if err != nil {
 		return nil, err
 	}
 	decoded.tree.SetBlockedSubtrees(blocked)
-	if err = publishDiskIndexCovered(base, index, decoded.tree, 0, lastEventID, false); err != nil {
+	coveragePath, coverage, err := prepareDiskIndexCoverage(base, index, decoded.tree, 0, lastEventID, false)
+	if err != nil {
 		return nil, err
 	}
-	if err = os.Remove(delta); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// No reader escapes this writable mapping. After validation and coverage
+	// preparation, publish the actual built file rather than copying it again.
+	unmapSpillOutput(mapped)
+	mapped = nil
+	if err := out.Truncate(int64(written)); err != nil {
 		return nil, err
 	}
-	return &ScanResult{Volume: volume, Tree: decoded.tree, TotalSize: decoded.tree.SizeOf(0), FileCount: decoded.tree.CountUsedFiles(), DirCount: decoded.tree.CountUsedDirs()}, nil
+	if err := out.Sync(); err != nil {
+		return nil, err
+	}
+	if err := out.Close(); err != nil {
+		return nil, err
+	}
+	diskIndexWrites.Lock()
+	defer diskIndexWrites.Unlock()
+	if lastEventID < diskIndexWrites.watermarks[base] {
+		return nil, ErrDiskIndexStale
+	}
+	if previous, err := cache.load(volume); err == nil && lastEventID < previous.LastEventID {
+		return nil, ErrDiskIndexStale
+	}
+	// The immutable sidecar precedes the base rename, just as in Save. Never
+	// remove it on a later error: the index rename may already have succeeded.
+	if err := publishDiskIndex(coveragePath, coverage); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, base); err != nil {
+		return nil, err
+	}
+	diskIndexWrites.watermarks[base] = lastEventID
+	if err := syncDiskIndexDirectory(base); err != nil {
+		return nil, err
+	}
+	if err := os.Remove(delta); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	loaded, err := cache.load(volume)
+	if err != nil {
+		return nil, err
+	}
+	return &loaded.Scan, nil
 }
 
 func countSpillChildren(file *os.File, children []uint32) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
+	reader := newSpillRecordReader(file)
 	for {
-		entry, err := readSpillRecord(file)
+		entry, err := reader.next(false)
 		if err == io.EOF {
 			return nil
 		}
@@ -336,12 +476,13 @@ func fillSpillIndex(buf []byte, file *os.File, start []uint32, layout spillLayou
 	cachePut32(buf, layout.csOff+layout.n*4, uint32(layout.poolOff-layout.caOff)/4)
 	names := map[uint64]uint32{}
 	cursor := layout.poolOff
-	writeSpillRecord(buf[layout.entOff:layout.entOff+24], 0, spillIntern(buf, &cursor, layout.poolOff, names, layout.rootName), true, 0, 0, 0)
+	writeSpillRecord(buf[layout.entOff:layout.entOff+24], 0, spillIntern(buf, &cursor, layout.poolOff, names, []byte(layout.rootName)), true, 0, 0, 0)
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return 0, err
 	}
+	reader := newSpillRecordReader(file)
 	for index := 1; ; index++ {
-		entry, err := readSpillRecord(file)
+		entry, err := reader.next(true)
 		if err == io.EOF {
 			if index != layout.n {
 				return 0, platform.ErrMacWalkMalformed
@@ -373,22 +514,14 @@ func fillSpillIndex(buf []byte, file *os.File, start []uint32, layout spillLayou
 			cachePut32(slot, 20, 0)
 		}
 	}
-	for i := 0; i < layout.n; i++ {
+	// Parents precede children in the spill. Reverse slot order rolls each
+	// complete subtree up once instead of walking every file's ancestors.
+	for i := layout.n - 1; i > 0; i-- {
 		slot := buf[layout.entOff+i*24:][:24]
-		if cacheU32(slot, 0)&cacheDirBit != 0 {
-			continue
-		}
-		addSize := cacheU64(slot, 8)
-		cur := cacheU32(slot, 0) & cacheParentMask
-		for {
-			parent := buf[layout.entOff+int(cur)*24:][:24]
-			cachePut64(parent, 8, cacheU64(parent, 8)+addSize)
-			cachePut32(parent, 20, cacheU32(parent, 20)+1)
-			if cur == 0 {
-				break
-			}
-			cur = cacheU32(parent, 0) & cacheParentMask
-		}
+		parentIdx := cacheU32(slot, 0) & cacheParentMask
+		parent := buf[layout.entOff+int(parentIdx)*24:][:24]
+		cachePut64(parent, 8, cacheU64(parent, 8)+cacheU64(slot, 8))
+		cachePut32(parent, 20, cacheU32(parent, 20)+cacheU32(slot, 20))
 	}
 	var files, dirs uint64
 	for i := 0; i < layout.n; i++ {
@@ -421,12 +554,12 @@ func fillSpillIndex(buf []byte, file *os.File, start []uint32, layout spillLayou
 // spillIntern appends a name to the mapped pool and returns its pool-relative
 // offset. Lookup is by FNV-1a with a byte comparison, matching Rust's intern
 // table, so identical names share one pool entry and a hash collision cannot.
-func spillIntern(buf []byte, cursor *int, poolOff int, names map[uint64]uint32, name string) uint32 {
-	hash := fnv1a64([]byte(name))
+func spillIntern(buf []byte, cursor *int, poolOff int, names map[uint64]uint32, name []byte) uint32 {
+	hash := fnv1a64(name)
 	if off, ok := names[hash]; ok {
 		existing := buf[poolOff+int(off):]
 		n := int(binary.LittleEndian.Uint16(existing))
-		if n == len(name) && string(existing[2:2+n]) == name {
+		if n == len(name) && bytes.Equal(existing[2:2+n], name) {
 			return off
 		}
 	}
@@ -464,26 +597,47 @@ type spillRecord struct {
 	IsDir  bool
 	Mtime  uint32
 	Size   uint64
-	Name   string
+	// Name aliases the reader until its next call; interning copies it.
+	Name []byte
 }
 
-func readSpillRecord(file *os.File) (spillRecord, error) {
-	var header [19]byte
-	if _, err := io.ReadFull(file, header[:]); err != nil {
+type spillRecordReader struct {
+	reader *bufio.Reader
+	header [19]byte
+	name   []byte
+}
+
+func newSpillRecordReader(reader io.Reader) *spillRecordReader {
+	return &spillRecordReader{reader: bufio.NewReaderSize(reader, 256<<10)}
+}
+func (r *spillRecordReader) next(withName bool) (spillRecord, error) {
+	if _, err := io.ReadFull(r.reader, r.header[:]); err != nil {
 		return spillRecord{}, err
 	}
-	n := int(binary.LittleEndian.Uint16(header[17:19]))
-	name := make([]byte, n)
-	if _, err := io.ReadFull(file, name); err != nil {
-		return spillRecord{}, err
+	n := int(binary.LittleEndian.Uint16(r.header[17:]))
+	var name []byte
+	if withName {
+		if cap(r.name) < n {
+			r.name = make([]byte, n)
+		} else {
+			r.name = r.name[:n]
+		}
+		if _, err := io.ReadFull(r.reader, r.name); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return spillRecord{}, err
+		}
+		name = r.name
+	} else {
+		if _, err := r.reader.Discard(n); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return spillRecord{}, err
+		}
 	}
-	return spillRecord{
-		Parent: binary.LittleEndian.Uint32(header[0:4]),
-		IsDir:  header[4] != 0,
-		Mtime:  binary.LittleEndian.Uint32(header[5:9]),
-		Size:   binary.LittleEndian.Uint64(header[9:17]),
-		Name:   string(name),
-	}, nil
+	return spillRecord{Parent: binary.LittleEndian.Uint32(r.header[:4]), IsDir: r.header[4] != 0, Mtime: binary.LittleEndian.Uint32(r.header[5:9]), Size: binary.LittleEndian.Uint64(r.header[9:17]), Name: name}, nil
 }
 
 func align8(v int) int { return (v + 7) &^ 7 }
@@ -500,6 +654,13 @@ func cacheIntern(pool *[]byte, names map[string]uint32, name string) uint32 {
 }
 
 func encodeDiskIndex(t *SizeTree, v VolumeID, meta DiskIndexMetadata) ([]byte, error) {
+	if b, ordered, err := encodeOrderedDiskIndex(t, v, meta); ordered {
+		return b, err
+	}
+	return encodeUnorderedDiskIndex(t, v, meta)
+}
+
+func encodeUnorderedDiskIndex(t *SizeTree, v VolumeID, meta DiskIndexMetadata) ([]byte, error) {
 	// Preserve slot/search order when already parent-first. Only acquisition
 	// trees with forward parents require a topological reordering.
 	children := make([][]uint32, t.nodeCount())
@@ -538,26 +699,10 @@ func encodeDiskIndex(t *SizeTree, v VolumeID, meta DiskIndexMetadata) ([]byte, e
 		offsets[i] = cacheIntern(&pool, names, t.slot(idx).Name)
 	}
 	n := len(order)
-	po := (128 + len(v.Mount) + len(v.Label) + 7) & ^7
-	eo := (po + len(pool) + 7) & ^7
-	cs := eo + n*24
-	ca := cs + (n+1)*4
-	length := ca + (n-1)*4
-	if uint64(length) > math.MaxUint32 {
-		return nil, cacheInvalid("base exceeds v7 offsets")
+	b, eo, cs, ca, err := allocateDiskIndex(v, meta, pool, n)
+	if err != nil {
+		return nil, err
 	}
-	b := make([]byte, length)
-	copy(b, "QCIDXV07")
-	cachePut32(b, 8, 7)
-	for off, val := range map[int]int{12: n, 16: len(pool), 20: n - 1, 24: len(v.Mount), 28: len(v.Label), 80: po, 84: eo, 88: cs, 92: ca} {
-		cachePut32(b, off, uint32(val))
-	}
-	for off, val := range map[int]uint64{32: meta.FileCount, 40: meta.DirCount, 48: meta.TotalSize, 56: meta.LastEventID, 64: meta.ScannedAt} {
-		cachePut64(b, off, val)
-	}
-	copy(b[128:], v.Mount)
-	copy(b[128+len(v.Mount):], v.Label)
-	copy(b[po:], pool)
 	cursor := 0
 	for i, idx := range order {
 		e := t.slot(idx)
@@ -572,4 +717,101 @@ func encodeDiskIndex(t *SizeTree, v VolumeID, meta DiskIndexMetadata) ([]byte, e
 	cachePut32(b, cs+n*4, uint32(cursor))
 	cachePut64(b, 72, cacheChecksum(b, 72))
 	return b, nil
+}
+
+func allocateDiskIndex(v VolumeID, meta DiskIndexMetadata, pool []byte, n int) ([]byte, int, int, int, error) {
+	po := (128 + len(v.Mount) + len(v.Label) + 7) & ^7
+	eo := (po + len(pool) + 7) & ^7
+	cs := eo + n*24
+	ca := cs + (n+1)*4
+	length := ca + (n-1)*4
+	if uint64(length) > math.MaxUint32 {
+		return nil, 0, 0, 0, cacheInvalid("base exceeds v7 offsets")
+	}
+	b := make([]byte, length)
+	copy(b, "QCIDXV07")
+	cachePut32(b, 8, 7)
+	for off, val := range map[int]int{12: n, 16: len(pool), 20: n - 1, 24: len(v.Mount), 28: len(v.Label), 80: po, 84: eo, 88: cs, 92: ca} {
+		cachePut32(b, off, uint32(val))
+	}
+	for off, val := range map[int]uint64{32: meta.FileCount, 40: meta.DirCount, 48: meta.TotalSize, 56: meta.LastEventID, 64: meta.ScannedAt} {
+		cachePut64(b, off, val)
+	}
+	copy(b[128:], v.Mount)
+	copy(b[128+len(v.Mount):], v.Label)
+	copy(b[po:], pool)
+	return b, eo, cs, ca, nil
+}
+
+// Ordered acquisition and mapped snapshots already have stable parent-first
+// slots. Compact in that order and use the output CSR as its own count table.
+func encodeOrderedDiskIndex(t *SizeTree, v VolumeID, meta DiskIndexMetadata) ([]byte, bool, error) {
+	order := make([]uint32, 0, t.nodeCount())
+	remap := make([]uint32, t.nodeCount())
+	for i := 0; i < t.nodeCount(); i++ {
+		e := t.slotValues(uint32(i))
+		if !e.Used {
+			continue
+		}
+		if i > 0 && e.Parent >= uint32(i) {
+			return nil, false, nil
+		}
+		remap[i] = uint32(len(order))
+		order = append(order, uint32(i))
+	}
+	pool := []byte{}
+	if t.base != nil {
+		pool = make([]byte, 0, t.base.poolLen())
+	}
+	names := make(map[string]uint32)
+	baseNames := make(map[uint32]uint32)
+	offsets := make([]uint32, len(order))
+	for i, idx := range order {
+		if int(idx) < t.baseCount {
+			if e, ok := t.overrides[idx]; ok {
+				offsets[i] = cacheIntern(&pool, names, e.Name)
+				continue
+			}
+			off := t.base.nameOff(idx)
+			if mapped, ok := baseNames[off]; ok {
+				offsets[i] = mapped
+				continue
+			}
+			offsets[i] = cacheIntern(&pool, names, t.base.name(idx))
+			baseNames[off] = offsets[i]
+		} else {
+			offsets[i] = cacheIntern(&pool, names, t.entries[int(idx)-t.baseCount].Name)
+		}
+	}
+	n := len(order)
+	b, eo, cs, ca, err := allocateDiskIndex(v, meta, pool, n)
+	if err != nil {
+		return nil, true, err
+	}
+	for i, idx := range order {
+		e := t.slotValues(idx)
+		e.Parent = remap[e.Parent]
+		cacheWriteRecord(b[eo+i*24:eo+(i+1)*24], e, offsets[i])
+		if i > 0 {
+			at := cs + (int(e.Parent)+1)*4
+			cachePut32(b, at, cacheU32(b, at)+1)
+		}
+	}
+	for i := 0; i < n; i++ {
+		cachePut32(b, cs+(i+1)*4, cacheU32(b, cs+i*4)+cacheU32(b, cs+(i+1)*4))
+	}
+	// Names are encoded now; reuse offsets for each parent's insertion cursor.
+	for i := range offsets {
+		offsets[i] = cacheU32(b, cs+i*4)
+	}
+	for i, idx := range order {
+		if i == 0 {
+			continue
+		}
+		parent := remap[t.slotValues(idx).Parent]
+		cachePut32(b, ca+int(offsets[parent])*4, uint32(i))
+		offsets[parent]++
+	}
+	cachePut64(b, 72, cacheChecksum(b, 72))
+	return b, true, nil
 }

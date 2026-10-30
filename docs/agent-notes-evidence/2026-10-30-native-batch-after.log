@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/meimingqi222/quick-cleaner/internal/platform
+cpu: Apple M1 Max
+BenchmarkDiskWalkNative/empty-10         	   12518	     17772 ns/op	     293 B/op	       7 allocs/op
+BenchmarkDiskWalkNative/empty-10         	   12897	     17678 ns/op	     313 B/op	       7 allocs/op
+BenchmarkDiskWalkNative/empty-10         	   13456	     17677 ns/op	     311 B/op	       7 allocs/op
+BenchmarkDiskWalkNative/single-batch-10  	    3050	     83964 ns/op	   10672 B/op	     113 allocs/op
+BenchmarkDiskWalkNative/single-batch-10  	    2925	     81199 ns/op	   10420 B/op	     113 allocs/op
+BenchmarkDiskWalkNative/single-batch-10  	    2804	     82545 ns/op	   10428 B/op	     113 allocs/op
+BenchmarkDiskWalkNative/multi-batch-10   	      70	   3452244 ns/op	  757377 B/op	    4117 allocs/op
+BenchmarkDiskWalkNative/multi-batch-10   	      58	   3732634 ns/op	  770351 B/op	    4117 allocs/op
+BenchmarkDiskWalkNative/multi-batch-10   	      68	   3551147 ns/op	  750265 B/op	    4117 allocs/op
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	8.726s

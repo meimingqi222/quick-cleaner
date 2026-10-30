@@ -1,0 +1,15 @@
+2026/10/30 08:45:24 [disk index] phase=wait duration=0s
+2026/10/30 08:45:24 [disk index] phase=cache-read duration=0s error=<nil>
+2026/10/30 08:45:24 [disk index] phase=event-replay duration=0s error=<nil>
+2026/10/30 08:45:24 [disk index] events raw=0 paths=1 rescan=0 incomplete=false reason= since=1 delivered=2
+2026/10/30 08:45:24 [disk index] phase=subtree-scans roots=0 files=1 estimated=0
+2026/10/30 08:45:24 [disk index] phase=subtree-scans duration=0s
+2026/10/30 08:45:24 [disk index] phase=clone duration=0s mapped=true nodes=2
+2026/10/30 08:45:24 [disk index] phase=rebuild-arrays duration=0s
+2026/10/30 08:45:24 [disk index] phase=apply-events duration=0s error=<nil>
+2026/10/30 08:45:24 [disk index] phase=background-persist duration=0s incremental=true delta=false compacted=false event=2 error=invalid disk index: entry 1 exceeds v7 representation: parent=0 mtime=4294970895 files=0 name_bytes=10 utf8=true
+--- FAIL: TestMacIndexFutureFileTimestampPersistsAcrossRestart (0.02s)
+    disk_index_timestamp_native_test.go:43: future file blocked durable checkpoint: invalid disk index: entry 1 exceeds v7 representation: parent=0 mtime=4294970895 files=0 name_bytes=10 utf8=true
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.432s
+FAIL

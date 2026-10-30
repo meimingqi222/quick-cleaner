@@ -101,3 +101,39 @@ func TestIncrementalPersistDoesNotCopyTheBase(t *testing.T) {
 		t.Fatalf("incremental persist allocated %d bytes for a %d-byte base", allocated, size)
 	}
 }
+
+func TestValidatedLargeOverlayCompactsWithoutRedecodingBase(t *testing.T) {
+	cache, volume, tree := overrideFixture(t, 5_000, 39)
+	entries := []TreeIndexEntry{{Used: true, IsDir: true, Name: "large"}}
+	for i := 0; i <= DiskIndexDeltaCompactThreshold/2; i++ {
+		entries = append(entries, TreeIndexEntry{Used: true, Name: "added-" + strconv.Itoa(i), Size: 3})
+	}
+	tree.AppendSubtree(mustNode(t, tree, filepath.Join(volume.Mount, "d0")), NewSizeTree(VolumeFromMountPoint("/large"), entries), "large")
+	tree.RemoveSubtreeInplace(mustNode(t, tree, filepath.Join(volume.Mount, "d1", "f0")))
+	gap := filepath.Join(volume.Mount, "d2", "unknown")
+	tree.SetBlockedSubtrees([]string{gap})
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	result, err := cache.PersistIncremental(volume, tree, 11)
+	runtime.ReadMemStats(&after)
+	if err != nil || !result.Compacted || result.Delta {
+		t.Fatalf("large valid overlay did not compact: %+v %v", result, err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 80<<20 {
+		t.Errorf("validated compaction allocated %d bytes by decoding the old base again", allocated)
+	}
+	loaded, err := cache.Load(volume)
+	if err != nil || loaded.LastEventID != 11 || loaded.Scan.FileCount != tree.FileCountOf(0) || loaded.TotalSize != tree.SizeOf(0) {
+		t.Fatal("compacted snapshot or watermark changed", err)
+	}
+	if _, ok := loaded.Scan.Tree.FindNodeByPath(filepath.Join(volume.Mount, "d0", "large", "added-100000")); !ok {
+		t.Fatal("appended subtree lost")
+	}
+	if _, ok := loaded.Scan.Tree.FindNodeByPath(filepath.Join(volume.Mount, "d1", "f0")); ok {
+		t.Fatal("deleted file resurrected")
+	}
+	if loaded.Scan.Tree.CoversSubtree(filepath.Join(volume.Mount, "d2")) {
+		t.Fatal("compaction lost unknown coverage")
+	}
+}

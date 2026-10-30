@@ -1,0 +1,25 @@
+18:13:10.196385 [disk index] phase=wait duration=0s
+18:13:11.968514 [disk index] phase=cache-read duration=1.773s error=<nil>
+18:13:12.321633 [disk index] phase=event-replay duration=352ms error=<nil>
+18:13:12.322985 [disk index] events raw=25102 paths=13706 rescan=0 incomplete=false reason= since=1170865402 delivered=1171130518
+18:13:12.383950 [disk index] phase=subtree-scans roots=68 files=13598 estimated=40229
+18:13:12.582397 [disk index] phase=subtree-scans duration=198ms
+18:13:12.582460 [disk index] phase=apply-events duration=260ms error=operation not permitted
+18:13:12.582474 [disk index] phase=rebuild reason=apply events: operation not permitted background=false
+18:13:12.582709 [disk index] phase=full-scan started
+18:14:16.978774 [disk index] phase=full-scan duration=1m4.4s spill=true error=<nil>
+18:14:39.812174 [disk index] phase=spill-build duration=22.833s error=<nil>
+18:14:48.742870 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+18:14:48.742925 [disk index] phase=full-persist duration=8.931s mapped=false nodes=7241396
+18:14:51.533709 [disk index] phase=wait duration=0s
+18:14:52.477608 [disk index] phase=event-replay duration=941ms error=<nil>
+18:14:52.477670 [disk index] events raw=6742 paths=3286 rescan=0 incomplete=false reason= since=1171130531 delivered=1171216967
+18:14:52.497839 [disk index] phase=subtree-scans roots=56 files=3141 estimated=9225
+18:14:53.973440 [disk index] phase=subtree-scans duration=1.476s
+18:14:53.973486 [disk index] phase=apply-events duration=1.496s error=permission denied
+18:14:53.973494 [disk index] phase=rebuild reason=apply events: permission denied background=false
+18:14:53.973562 [disk index] phase=full-scan started
+18:15:53.752202 [disk index] phase=full-scan duration=59.778s spill=true error=<nil>
+18:16:18.101686 [disk index] phase=spill-build duration=24.349s error=<nil>
+18:16:24.701227 [disk index] retired cache pruning: invalid disk index: cache root is redirected
+18:16:24.701296 [disk index] phase=full-persist duration=6.598s mapped=false nodes=7238904

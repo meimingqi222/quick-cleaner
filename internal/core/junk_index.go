@@ -102,8 +102,9 @@ func (plan JunkIndex) Discover(ctx context.Context, rules *RuleSnapshot) []ScanI
 			return out
 		}
 		covered[normMount(tree.Volume().MountPoint())] = true
-		log.Printf("卷 %s: 复用阶段一已解析的 MFT 树，省去一次全盘解析", tree.Volume())
+		started := time.Now()
 		add(DiscoverBuildArtifacts(ctx, rules, nil, tree))
+		log.Printf("发现索引通道：卷 %s，耗时 %s", tree.Volume(), time.Since(started).Round(time.Millisecond))
 	}
 	var live, pending []VolumeID
 	for _, volume := range plan.volumes {
@@ -162,11 +163,15 @@ func (plan JunkIndex) Discover(ctx context.Context, rules *RuleSnapshot) []ScanI
 		}
 	}
 	home := plan.home
-	if junkIndexCovers(held, home) {
+	coveredByIndex := newJunkCoverage(held)
+	if coveredByIndex(home) {
 		home = ""
 	}
 	if home != "" || len(live) > 0 {
-		add(DiscoverBuildArtifacts(ctx, rules, CodeRoots(home, live), nil))
+		roots := CodeRoots(home, live)
+		started := time.Now()
+		add(discoverBuildArtifacts(ctx, rules, roots, nil, coveredByIndex))
+		log.Printf("发现实时回退：%d 个候选根，跳过已覆盖分支，耗时 %s", len(roots), time.Since(started).Round(time.Millisecond))
 	}
 	return out
 }
@@ -222,18 +227,6 @@ func treeForMount(trees []*SizeTree, mount string) *SizeTree {
 		}
 	}
 	return nil
-}
-
-func junkIndexCovers(trees []*SizeTree, path string) bool {
-	if path == "" {
-		return false
-	}
-	for _, tree := range trees {
-		if tree != nil && tree.CoversSubtree(path) {
-			return true
-		}
-	}
-	return false
 }
 
 func normMount(mount string) string {
@@ -335,3 +328,61 @@ func (q indexQuery) QueryDuplicateBuckets(ctx context.Context, roots []string, m
 }
 
 var _ FileIndexQuery = indexQuery{}
+
+// Coverage is frozen for this discovery. Normalize gaps and index their
+// ancestors once; each directory query then walks only its own parent chain.
+func newJunkCoverage(trees []*SizeTree) func(string) bool {
+	type coverage struct {
+		tree            *SizeTree
+		gaps, ancestors map[string]bool
+	}
+	var prepared []coverage
+	for _, tree := range trees {
+		if tree == nil {
+			continue
+		}
+		c := coverage{tree: tree, gaps: make(map[string]bool), ancestors: make(map[string]bool)}
+		for _, blocked := range tree.blocked {
+			path := asciiLower(filepath.Clean(blocked))
+			c.gaps[path] = true
+			for {
+				c.ancestors[path] = true
+				parent := filepath.Dir(path)
+				if parent == path {
+					break
+				}
+				path = parent
+			}
+		}
+		prepared = append(prepared, c)
+	}
+	return func(path string) bool {
+		if path == "" {
+			return false
+		}
+		key := asciiLower(filepath.Clean(path))
+		for _, c := range prepared {
+			if c.ancestors[key] {
+				continue
+			}
+			unknown := false
+			for p := key; ; {
+				if c.gaps[p] {
+					unknown = true
+					break
+				}
+				parent := filepath.Dir(p)
+				if parent == p {
+					break
+				}
+				p = parent
+			}
+			if !unknown {
+				if _, ok := c.tree.FindNodeByPath(path); ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}

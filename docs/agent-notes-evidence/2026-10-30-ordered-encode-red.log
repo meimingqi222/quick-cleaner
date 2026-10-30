@@ -1,0 +1,5 @@
+--- FAIL: TestOrderedBaseEncodingDoesNotBuildAChildMatrix (0.19s)
+    disk_index_encode_perf_test.go:22: ordered encoding allocated 18695512 bytes for 200001 nodes by rebuilding and sorting adjacency
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.805s
+FAIL

@@ -1,0 +1,5 @@
+--- FAIL: TestValidatedLargeOverlayCompactsWithoutRedecodingBase (0.51s)
+    disk_index_cache_overrides_test.go:124: validated compaction allocated 183404968 bytes by decoding the old base again
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.899s
+FAIL

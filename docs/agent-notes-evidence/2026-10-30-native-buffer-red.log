@@ -1,0 +1,5 @@
+--- FAIL: TestDiskWalkNativeReusesBufferWithoutAliasingResults (0.02s)
+    disk_walk_buffers_darwin_test.go:41: 256 empty directories allocated 67256944 bytes of per-directory native buffers
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.683s
+FAIL

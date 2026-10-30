@@ -38,13 +38,32 @@ func clonePlanValue[T any](v T) T {
 	_ = json.Unmarshal(b, &out)
 	return out
 }
+
+type ruleSnapshotCapture struct {
+	origin, frozen *RuleSnapshot
+}
+
+// The enumeration wrapper is local to one scan. Returned refs hold only the
+// plain frozen snapshot and original identity, preserving Merge semantics.
+func captureRuleSnapshot(source *RuleSnapshot) *RuleSnapshot {
+	if source == nil || source.capture != nil {
+		return source
+	}
+	frozen := &RuleSnapshot{Bundle: clonePlanValue(source.Bundle)}
+	return &RuleSnapshot{Bundle: frozen.Bundle, capture: &ruleSnapshotCapture{source, frozen}}
+}
+
 func NewRuleRef(snapshot *RuleSnapshot, id, scope string) RuleRef {
 	r := RuleRef{origin: snapshot, id: id, scope: scope}
 	if snapshot == nil {
 		r.blocked = "Missing rule snapshot"
 		return r
 	}
-	r.snapshot = &RuleSnapshot{Bundle: clonePlanValue(snapshot.Bundle)}
+	if capture := snapshot.capture; capture != nil {
+		r.origin, r.snapshot = capture.origin, capture.frozen
+	} else {
+		r.snapshot = &RuleSnapshot{Bundle: clonePlanValue(snapshot.Bundle)}
+	}
 	d := r.snapshot.Definition(id)
 	if d == nil {
 		r.blocked = "Unknown rule: " + id

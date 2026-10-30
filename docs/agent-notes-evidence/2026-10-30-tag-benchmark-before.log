@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/meimingqi222/quick-cleaner/internal/core
+cpu: Apple M1 Max
+BenchmarkMappedCacheTagScan-10    	      30	   3353511 ns/op	   27280 B/op	       2 allocs/op
+BenchmarkMappedCacheTagScan-10    	      31	   3418398 ns/op	   27280 B/op	       2 allocs/op
+BenchmarkMappedCacheTagScan-10    	      30	   3407097 ns/op	   27280 B/op	       2 allocs/op
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	1.633s

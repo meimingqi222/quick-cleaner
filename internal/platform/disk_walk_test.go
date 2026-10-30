@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -354,5 +355,31 @@ func TestDiskWalkRealTempFilesystemBoundary(t *testing.T) {
 		if i > 0 && (!r.Entries[e.Parent].IsDir || e.Parent >= uint64(i)) {
 			t.Fatal("invalid parent", i, e)
 		}
+	}
+}
+
+func TestDiskWalkBatchAllocatesRecordsOnce(t *testing.T) {
+	const records = 512
+	record := diskWalkFixture("owned-name", 1, diskWalkName|diskWalkType, diskWalkAlloc)
+	data := bytes.Repeat(record, records)
+	var parsed []diskWalkItem
+	allocated := testing.AllocsPerRun(5, func() {
+		var err error
+		parsed, err = diskWalkParseBatch(data, records)
+		if err != nil || len(parsed) != records {
+			t.Fatal("batch parse changed", err, len(parsed))
+		}
+	})
+	if allocated > records+2 {
+		t.Errorf("parsing %d names used %.0f allocations; record storage grew repeatedly", records, allocated)
+	}
+	if parsed[0].Name != "owned-name" || parsed[records-1].Size != 8192 {
+		t.Fatal("batch records changed")
+	}
+	for i := range data {
+		data[i] = 0
+	}
+	if parsed[0].Name != "owned-name" || parsed[records-1].Name != "owned-name" {
+		t.Fatal("parsed names still alias the native buffer")
 	}
 }

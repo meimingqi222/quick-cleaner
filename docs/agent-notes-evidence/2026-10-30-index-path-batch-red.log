@@ -1,0 +1,13 @@
+2026/10/30 08:41:01 [disk index] phase=subtree-scans roots=0 files=513 estimated=0
+2026/10/30 08:41:01 [disk index] phase=subtree-scans duration=0s
+2026/10/30 08:41:01 [disk index] phase=clone duration=0s mapped=false nodes=513
+2026/10/30 08:41:01 [disk index] phase=rebuild-arrays duration=0s
+--- FAIL: TestMacIndexRemovedPathsClearCoverageInOneBatch (0.06s)
+    disk_index_path_set_test.go:45: coverage clearing allocated 1991432 bytes across every removed-path/gap pair
+2026/10/30 08:41:01 [disk index] phase=subtree-scans roots=1 files=0 estimated=0
+2026/10/30 08:41:01 [disk index] phase=subtree-scans duration=0s
+2026/10/30 08:41:01 [disk index] phase=clone duration=0s mapped=false nodes=2
+2026/10/30 08:41:01 [disk index] phase=rebuild-arrays duration=0s
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.514s
+FAIL

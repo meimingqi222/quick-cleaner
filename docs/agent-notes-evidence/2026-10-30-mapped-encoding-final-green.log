@@ -1,0 +1,13 @@
+=== RUN   TestValidatedLargeOverlayCompactsWithoutRedecodingBase
+--- PASS: TestValidatedLargeOverlayCompactsWithoutRedecodingBase (1.54s)
+=== RUN   TestOrderedBaseEncodingDoesNotBuildAChildMatrix
+    disk_index_encode_perf_test.go:22: ordered encode: 9558016 bytes for 200001 nodes
+--- PASS: TestOrderedBaseEncodingDoesNotBuildAChildMatrix (1.58s)
+=== RUN   TestMappedLoadDoesNotMaterializeValidatedBase
+    disk_index_mapped_load_test.go:27: mapped load: 41408 allocated bytes for 6434408 input bytes
+    disk_index_mapped_load_test.go:50: mapped load: 56280 allocated bytes for 6434408 input bytes
+--- PASS: TestMappedLoadDoesNotMaterializeValidatedBase (0.81s)
+=== RUN   TestMappedLoaderMatchesHeapValidationAndChildOrder
+--- PASS: TestMappedLoaderMatchesHeapValidationAndChildOrder (0.04s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	5.542s
