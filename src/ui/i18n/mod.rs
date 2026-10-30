@@ -1687,15 +1687,15 @@ pub fn tr_fda_drop_chip(lang: Language) -> &'static str {
 
 pub fn tr_fda_drop_line1(lang: Language) -> &'static str {
     match lang {
-        Language::Zh => "把左边的图标拖进上方的列表",
-        Language::En => "Drag the icon on the left into the list above",
+        Language::Zh => "拖拽到上方窗口列表中松手",
+        Language::En => "Drag into the list above to authorize",
     }
 }
 
 pub fn tr_fda_drop_line2(lang: Language) -> &'static str {
     match lang {
-        Language::Zh => "松手即完成授权，无需再点开关",
-        Language::En => "Drop it there to grant access — no switch to flip",
+        Language::Zh => "无需翻找文件，松手即完成授权",
+        Language::En => "Release to grant access instantly",
     }
 }
 

@@ -113,9 +113,9 @@ const CG_WINDOW_LIST_ON_SCREEN_ONLY: u32 = 1 << 0;
 /// `kCGNullWindowID`
 const CG_NULL_WINDOW_ID: u32 = 0;
 
-/// 面板尺寸。够放下图标条 + 两行提示，又不至于挡住设置窗口下面的东西。
-const PANEL_WIDTH: f64 = 560.0;
-const PANEL_HEIGHT: f64 = 132.0;
+/// 面板尺寸。紧凑药丸形态：压低高度减少遮挡，左右边距与垂直中轴对称对齐。
+const PANEL_WIDTH: f64 = 500.0;
+const PANEL_HEIGHT: f64 = 76.0;
 /// 面板顶边距设置窗口底边的间距。
 const PANEL_GAP: f64 = 12.0;
 
@@ -281,30 +281,35 @@ unsafe fn build_content_view(bundle_str: &str, text: &DropHelperText<'_>) -> *mu
     let _: () = msg_send![container, setWantsLayer: YES];
     let layer: *mut Object = msg_send![container, layer];
     if !layer.is_null() {
-        let _: () = msg_send![layer, setCornerRadius: 16.0f64];
+        let _: () = msg_send![layer, setCornerRadius: 18.0f64];
         let bg = srgb_color(0.16, 0.16, 0.17, 0.98);
         let cg: *mut Object = msg_send![bg, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
     }
 
-    // 左侧：可拖拽的图标条。这是整个面板唯一有交互的元素。
-    let chip_frame = CGRect::new(28.0, 34.0, 220.0, 64.0);
+    // 左侧：胶囊背景卡片（使用 NSBox 确保在 AppKit 图层合成下稳定渲染背景与精致描边）。
+    let chip_frame = CGRect::new(16.0, 14.0, 180.0, 48.0);
+    let box_view: *mut Object = msg_send![class!(NSBox), alloc];
+    let box_view: *mut Object = msg_send![box_view, initWithFrame: chip_frame];
+    let _: () = msg_send![box_view, setBoxType: 4usize]; // NSBoxCustom
+    let _: () = msg_send![box_view, setCornerRadius: 10.0f64];
+    let _: () = msg_send![box_view, setTitlePosition: 0usize]; // NSNoTitle
+    let box_bg = srgb_color(0.24, 0.24, 0.26, 1.0);
+    let _: () = msg_send![box_view, setFillColor: box_bg];
+    let box_border = srgb_color(1.0, 1.0, 1.0, 0.12);
+    let _: () = msg_send![box_view, setBorderColor: box_border];
+    let _: () = msg_send![box_view, setBorderWidth: 1.0f64];
+    let _: () = msg_send![container, addSubview: box_view];
+    let _: () = msg_send![box_view, release];
+
     let chip: *mut Object = msg_send![drag_source_class(), alloc];
     let chip: *mut Object = msg_send![chip, initWithFrame: chip_frame];
     set_drag_source_path(chip, bundle_str);
-    let _: () = msg_send![chip, setWantsLayer: YES];
-    let chip_layer: *mut Object = msg_send![chip, layer];
-    if !chip_layer.is_null() {
-        let _: () = msg_send![chip_layer, setCornerRadius: 12.0f64];
-        let bg = srgb_color(0.26, 0.26, 0.28, 1.0);
-        let cg: *mut Object = msg_send![bg, CGColor];
-        let _: () = msg_send![chip_layer, setBackgroundColor: cg];
-    }
 
     // 图标：直接问 NSWorkspace 要，拿到的就是访达里显示的那个。
     let icon = workspace_icon(bundle_str);
     if !icon.is_null() {
-        let icon_frame = CGRect::new(12.0, 12.0, 40.0, 40.0);
+        let icon_frame = CGRect::new(8.0, 8.0, 32.0, 32.0);
         let view: *mut Object = msg_send![class!(NSImageView), alloc];
         let view: *mut Object = msg_send![view, initWithFrame: icon_frame];
         let _: () = msg_send![view, setImage: icon];
@@ -313,9 +318,9 @@ unsafe fn build_content_view(bundle_str: &str, text: &DropHelperText<'_>) -> *mu
     }
 
     let name_label = label(
-        CGRect::new(62.0, 20.0, 146.0, 24.0),
+        CGRect::new(48.0, 14.0, 124.0, 20.0),
         text.app_name,
-        15.0,
+        14.0,
         true,
         false,
     );
@@ -325,17 +330,19 @@ unsafe fn build_content_view(bundle_str: &str, text: &DropHelperText<'_>) -> *mu
     let _: () = msg_send![container, addSubview: chip];
     let _: () = msg_send![chip, release];
 
-    // 中间：箭头。用文本而不是画图——一个字符省掉一整套绘制代码。
-    let arrow = label(CGRect::new(268.0, 46.0, 40.0, 40.0), "↑", 30.0, false, true);
+    // 中间：指示箭头。蓝色强调色，垂直居中对齐（中轴 Y=38）。
+    let arrow = label(CGRect::new(206.0, 22.0, 26.0, 32.0), "↑", 24.0, false, true);
+    let blue = srgb_color(0.38, 0.65, 0.98, 1.0);
+    let _: () = msg_send![arrow, setTextColor: blue];
     let _: () = msg_send![arrow, setWantsLayer: YES];
     let _: () = msg_send![container, addSubview: arrow];
     ARROW.store(arrow as usize, Ordering::Relaxed);
     ensure_bounce_animation();
     let _: () = msg_send![arrow, release];
 
-    // 右侧：两行提示。
+    // 右侧：两行提示。垂直整体居中（中轴 Y=38），右外边距严格对齐左侧 16pt。
     let line1 = label(
-        CGRect::new(318.0, 62.0, 220.0, 22.0),
+        CGRect::new(242.0, 38.5, 242.0, 18.0),
         text.line1,
         13.0,
         true,
@@ -345,9 +352,9 @@ unsafe fn build_content_view(bundle_str: &str, text: &DropHelperText<'_>) -> *mu
     let _: () = msg_send![line1, release];
 
     let line2 = label(
-        CGRect::new(318.0, 40.0, 220.0, 22.0),
+        CGRect::new(242.0, 19.5, 242.0, 16.0),
         text.line2,
-        13.0,
+        11.5,
         false,
         false,
     );
