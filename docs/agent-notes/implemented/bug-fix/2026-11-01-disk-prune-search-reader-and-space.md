@@ -53,7 +53,7 @@ Proved: TDD 先红。修复前报 `in-flight search was not cancelled before pru
 `a new search started while the prune was pending`。均见
 `docs/agent-notes-evidence/2026-11-01-disk-prune-reader-space-red.log`；恢复后绿跑见
 `docs/agent-notes-evidence/2026-11-01-disk-prune-reader-space-green.log`。
-复审补充（`docs/temp/functional-followup-review-2026-11-01.md`）：TDD 先红，
+复审补充：TDD 先红，
 `TestDiskPruneWaitsForEveryEarlierSearchReader` 修复前报
 `prune was applied while the earlier search A was still running`，见
 `docs/agent-notes-evidence/2026-11-01-disk-prune-reader-chain-red.log`；串联完成通道后绿跑见
