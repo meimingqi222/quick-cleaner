@@ -1381,3 +1381,13 @@ Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
 - **防护**：`platform.RemoveFileExclusive` 以共享模式 0、DELETE 权限打开再设置删除标记：打开本身就是占用检查，没有探测与删除之间的窗口，也拒绝共享删除句柄。`leafOccupancyGate` 只对 Windows 上永久处置的 `OpContents` / `OpFile` 跳过整体探测；`OpTree`（依赖树、构建目录）仍整体判断，避免运行中的项目留下半删的依赖。父目录用 `failParent` 按子项分类：全是占用/未确认则记为跳过，任一真实错误则记为失败，且不重复计数。macOS 没有共享模式，仍按目标整体判断。
 - **禁止回退**：不能把 `RemoveFileExclusive` 的共享模式放宽或改回 `os.Remove`；不能让 `OpTree` 或回收站处置走按文件模式；不能恢复「有子项失败就记 FailOther」；不能对父目录再次累加 Failed/Ignored。
 - **测试**：`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestContentsCleanupSkipsOnlyLockedLeaves`、`TestFailParentPrefersRealErrorsOverSkips`、`TestTreeTargetsKeepWholeTargetOccupancyGate`、`TestJunkLockAfterScanIsSkippedWithoutFailure`，红绿证据见 Note。
+
+## P121 关闭所属应用只在清理确认里按应用询问一次，且只请求正常退出
+
+Note: `2026-11-01-junk-close-owner-apps.md`
+
+- **症状**：浏览器运行时它的缓存文件被按文件跳过，用户不知道原因；旧的每行「退出应用后清理」要逐项点击，覆盖面也不全。
+- **根因**：占用者归属只在清理失败后才查，且 Restart Manager 太慢，不能放在清理前对所有目标探测。
+- **防护**：所属进程在 `browsers.toml` 的 `owner_processes_*` 列表声明，`validateOwnerProcesses` 绑定到已有浏览器行与裸 `.exe` 名。`RunningAppOwners` 只读进程列表并用缓存释放的 `cacheVerifyHandle` 过滤，系统/其他用户/关键进程/Explorer 永不列出。`FindRunningApps` 在 worker 上运行；确认框列出运行中的应用（默认勾选）。勾选的只请求正常退出、最多等 8 秒，不强制；未勾选的应用其缓存不进入本次目标。CLI 默认排除，`--close-apps` 才请求退出。
+- **禁止回退**：不能恢复每行的退出按钮或再加第二个对话框；不能在这条路径上强制结束进程；不能把 Restart Manager 探测放进清理前；不能列出系统/其他用户进程；不能让未勾选应用的缓存仍被清理；运行中标签不能改变推荐或勾选（P119）。
+- **测试**：`TestOwnerProcessListsMustMatchBrowserRows`、`TestFindRunningAppsGroupsByOwnerAndSkipsIdleApps`、`TestCloseRunningAppsAsksNormallyAndReportsStragglers`、`TestRunningAppOwnersOmitsSystemProcesses`、`TestJunkCleanSkipsUncheckedRunningOwnerApps`、`TestJunkCleanQuitsCheckedOwnerAppsFirst`、`TestConfirmationListsRunningAppsAsToggles`、`TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose`，红绿证据见 Note。

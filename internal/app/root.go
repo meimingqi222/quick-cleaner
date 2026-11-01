@@ -83,6 +83,11 @@ type Root struct {
 	junkBusyGen           uint64
 	junkBusySet           bool
 	freed                 uint64
+	// Owner-app seams: process listing and quit requests stay replaceable so
+	// tests never touch the user's real browsers.
+	runningOwnerBusy func([]core.ScanTarget) map[string]core.Busy
+	findRunningApps  func([]core.ScanItem) []core.RunningApp
+	closeApps        func([]core.RunningApp, func() bool) []core.Text
 
 	// Trash-watch leftovers (macOS): apps the user uninstalled by hand while
 	// the app was running, waiting for the user to open the residual review.
@@ -126,6 +131,11 @@ func NewRoot(settings core.Settings, post func(func()), invalidate func()) *Root
 	r.trashSeen = map[string]bool{}
 	r.residualAuthority = appResidualsAllowed
 	r.uninstallApp = uninstallApp
+	r.runningOwnerBusy = core.RunningOwnerBusy
+	r.findRunningApps = core.FindRunningApps
+	r.closeApps = func(apps []core.RunningApp, cancelled func() bool) []core.Text {
+		return core.CloseRunningApps(apps, 8*time.Second, cancelled)
+	}
 	owner, _ := newDiskOwner(ctx)
 	r.diskOwner = owner
 	r.scanAppResiduals = func(ctx context.Context, app core.InstalledApp) (core.ResidualScanResult, error) {

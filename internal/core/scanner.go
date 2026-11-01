@@ -24,6 +24,7 @@ type ScanItem struct {
 	Recommended                   bool
 	Busy                          *Busy
 	Identity                      *TargetIdentity
+	Owner                         *AppOwner
 }
 
 func (item ScanItem) FreezePlan() ScanItem {
@@ -65,7 +66,7 @@ func ScanFixed(ctx context.Context, targets []ScanTarget, query FileIndexQuery) 
 					elapsed[i] = time.Since(targetStarted)
 					continue
 				}
-				item := ScanItem{Rule: t.Rule, Operation: t.Operation.ForScannedPath(t.Path), Disposal: t.Disposal, Path: t.Path, Label: t.Label, Category: t.Category, Recommended: t.Recommended && !HasWhitelistEntryUnder(t.Path)}
+				item := ScanItem{Rule: t.Rule, Operation: t.Operation.ForScannedPath(t.Path), Disposal: t.Disposal, Path: t.Path, Label: t.Label, Category: t.Category, Recommended: t.Recommended && !HasWhitelistEntryUnder(t.Path), Owner: t.Owner}
 				if IsVirtualPath(t.Path) {
 					if t.SizeHint != nil {
 						item.Size = *t.SizeHint

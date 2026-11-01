@@ -1,0 +1,37 @@
+## Green after restoring both guards (same focused runs plus the rest of the phase 3 tests)
+=== RUN   TestJunkCleanSkipsUncheckedRunningOwnerApps
+--- PASS: TestJunkCleanSkipsUncheckedRunningOwnerApps (0.05s)
+=== RUN   TestJunkCleanQuitsCheckedOwnerAppsFirst
+--- PASS: TestJunkCleanQuitsCheckedOwnerAppsFirst (0.00s)
+=== RUN   TestJunkCleanWithoutRunningOwnersShowsNoAppList
+--- PASS: TestJunkCleanWithoutRunningOwnersShowsNoAppList (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.326s
+=== RUN   TestBundledBrowserOwnersAreDeclared
+--- PASS: TestBundledBrowserOwnersAreDeclared (0.00s)
+=== RUN   TestOwnerProcessListsMustMatchBrowserRows
+--- PASS: TestOwnerProcessListsMustMatchBrowserRows (0.00s)
+=== RUN   TestFindRunningAppsGroupsByOwnerAndSkipsIdleApps
+--- PASS: TestFindRunningAppsGroupsByOwnerAndSkipsIdleApps (0.00s)
+=== RUN   TestRunningOwnerBusyBadgesOnlyRunningOwners
+--- PASS: TestRunningOwnerBusyBadgesOnlyRunningOwners (0.00s)
+=== RUN   TestCloseRunningAppsAsksNormallyAndReportsStragglers
+--- PASS: TestCloseRunningAppsAsksNormallyAndReportsStragglers (0.05s)
+=== RUN   TestWindowsBrowserTargetsCarryTheirOwner
+--- PASS: TestWindowsBrowserTargetsCarryTheirOwner (0.32s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.591s
+=== RUN   TestRunningAppOwnersListsOwnProcessByImageName
+--- PASS: TestRunningAppOwnersListsOwnProcessByImageName (0.03s)
+=== RUN   TestRunningAppOwnersOmitsSystemProcesses
+--- PASS: TestRunningAppOwnersOmitsSystemProcesses (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.884s
+=== RUN   TestConfirmationListsRunningAppsAsToggles
+--- PASS: TestConfirmationListsRunningAppsAsToggles (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.218s
+=== RUN   TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose
+--- PASS: TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose (0.05s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/cli	1.022s

@@ -1,0 +1,16 @@
+## Phase 3 manufactured red: runJunkClean treats every listed app as checked; validateOwnerProcesses no longer requires a matching browser row
+$ go test ./internal/app/ -run TestJunkCleanSkipsUncheckedRunningOwnerApps -count=1 -v
+=== RUN   TestJunkCleanSkipsUncheckedRunningOwnerApps
+    root_test.go:25: test closed real applications
+    junk_owner_test.go:55: unchecked owner's cache was attempted: [C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkCleanSkipsUncheckedRunningOwnerApps3035552895\001\chrome-cache C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkCleanSkipsUncheckedRunningOwnerApps3035552895\001\plain-cache]
+--- FAIL: TestJunkCleanSkipsUncheckedRunningOwnerApps (0.05s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.305s
+FAIL
+$ go test ./internal/core/ -run TestOwnerProcessListsMustMatchBrowserRows -count=1 -v
+=== RUN   TestOwnerProcessListsMustMatchBrowserRows
+    app_owner_test.go:56: unknown row accepted
+--- FAIL: TestOwnerProcessListsMustMatchBrowserRows (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.182s
+FAIL

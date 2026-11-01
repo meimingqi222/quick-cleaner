@@ -19,6 +19,12 @@ func testRoot(t *testing.T) (*Root, chan func()) {
 	r := NewRoot(core.DefaultSettings(), func(fn func()) { queue <- fn }, func() {})
 	r.save = func(core.Settings) {}
 	r.record = func(string, []string, uint, uint, uint, uint64) {}
+	r.runningOwnerBusy = func([]core.ScanTarget) map[string]core.Busy { return map[string]core.Busy{} }
+	r.findRunningApps = func([]core.ScanItem) []core.RunningApp { return nil }
+	r.closeApps = func([]core.RunningApp, func() bool) []core.Text {
+		t.Error("test closed real applications")
+		return nil
+	}
 	t.Cleanup(r.Close)
 	return r, queue
 }

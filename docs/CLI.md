@@ -33,6 +33,11 @@ quick-cleaner cli junk clean --recommended --execute --json
 `node_modules`）只要有文件被占用就整体跳过，避免留下半删的依赖。macOS 仍按目标
 整体判断。这些跳过计入 `skipped_items`，不算失败，退出码仍为 0。
 
+浏览器（Chrome、Edge、Brave）正在运行时，CLI 不会询问：默认把它们的缓存排除在
+本次清理之外；加 `--close-apps` 才会先请求这些应用正常退出（最多等 8 秒，不强制
+结束），没退出的应用仍持有的文件照常按文件跳过。报告的 `running_apps` 列出应用、
+涉及路径、是否请求了退出以及是否仍在运行。系统或其他用户的进程永远不会被请求退出。
+
 智能清理的其他参数：
 
 | 参数 | 含义 |
@@ -40,6 +45,7 @@ quick-cleaner cli junk clean --recommended --execute --json
 | `--root DIR` | 只保留此目录内的固定文件目标，并在此目录下发现构建产物；不扫描 Docker、快照等原生资源 |
 | `--category ID` | 限制选择的类别，可重复；ID 见 `junk categories`；报告仍列出扫描项及其选择状态 |
 | `--exclude PATH` | 在持久排除项之外临时增加排除项，可重复；不改设置 |
+| `--close-apps` | 执行时先请求正在运行的浏览器正常退出再清理其缓存；不加则跳过这些缓存 |
 | `--discover=false` | 关闭构建产物发现 |
 | `--discovery-budget 30s` | 构建发现的单独时间预算；到期报告 `partial`，执行模式拒绝开始清理 |
 

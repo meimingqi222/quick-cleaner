@@ -37,7 +37,12 @@ func FilesystemScanTargets(s *RuleSnapshot, roots map[string]string, osName stri
 				if rule := s.Definition("browsers"); rule != nil {
 					e := &ruleEnumeration{}
 					for _, row := range rule.Catalogs["windows_user_data"] {
-						targets = append(targets, chromiumProviderTargets(s, e, local, filepath.Join(local, row.Path), NewText(row.Zh, row.En), BrowserCache, "browser_cache", "chromium_declared")...)
+						found := chromiumProviderTargets(s, e, local, filepath.Join(local, row.Path), NewText(row.Zh, row.En), BrowserCache, "browser_cache", "chromium_declared")
+						owner := browserOwner(s, row)
+						for i := range found {
+							found[i].Owner = owner
+						}
+						targets = append(targets, found...)
 					}
 				}
 			}

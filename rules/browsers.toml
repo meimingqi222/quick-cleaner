@@ -1,7 +1,15 @@
 id = "browsers"
-version = 2
+version = 3
 platform = "all"
 required = ["file"]
+
+# 拥有这些缓存的进程映像名，键为 `owner_processes_` + 目录行 en 名的小写。
+# 只用于清理前询问是否关闭应用和显示「运行中」提示，不授予删除或结束权限：
+# 结束仍走缓存释放的身份复核，系统/其他用户进程永远不列出。
+[lists]
+owner_processes_chrome = ["chrome.exe"]
+owner_processes_edge = ["msedge.exe"]
+owner_processes_brave = ["brave.exe"]
 
 # Windows 上 %LOCALAPPDATA% 下的 User Data 根。目录不存在时不产出目标。
 # Profile 枚举和 Crashpad/completed 仍由扫描代码完成。

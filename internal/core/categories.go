@@ -51,6 +51,7 @@ type ScanTarget struct {
 	Category    CategoryID
 	Recommended bool
 	SizeHint    *uint64
+	Owner       *AppOwner
 }
 
 func ProviderTarget(snapshot *RuleSnapshot, ruleID, key, path string, label Text, category CategoryID, operation Operation, recommended bool) ScanTarget {
@@ -82,6 +83,9 @@ func NormalizeScanTargets(targets []ScanTarget) []ScanTarget {
 			}
 			first.Rule = first.Rule.Merge(target.Rule)
 			first.Recommended = first.Recommended && target.Recommended
+			if first.Owner == nil {
+				first.Owner = target.Owner
+			}
 		} else {
 			positions[key] = len(merged)
 			merged = append(merged, target)

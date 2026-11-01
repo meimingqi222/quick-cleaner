@@ -15,7 +15,7 @@ func (r *Root) renderDialogs(c *ui.Context) {
 	// Destructive confirmations suspend update/FDA prompts, never vice versa.
 	if r.confirming {
 		r.confirmation.Language = r.settings.Language
-		r.confirmation.Render(c, view.ConfirmationDialogActions{Accept: func(id string) { r.resolveConfirmation(id, true) }, Cancel: func(id string) { r.resolveConfirmation(id, false) }})
+		r.confirmation.Render(c, view.ConfirmationDialogActions{Accept: func(id string) { r.resolveConfirmation(id, true) }, Cancel: func(id string) { r.resolveConfirmation(id, false) }, ToggleApp: r.toggleConfirmApp})
 		return
 	}
 	if r.permission.Open {

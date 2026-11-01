@@ -47,7 +47,7 @@ func TestProductDialogConfirmationLanguagesAndKinds(t *testing.T) {
 				}
 				productClick(t, tt, label)
 				productClick(t, tt, copy.cancel)
-				if accepted != 1 || cancelled != 1 || s != original {
+				if accepted != 1 || cancelled != 1 || !reflect.DeepEqual(s, original) {
 					t.Fatal("callback or snapshot violation")
 				}
 				s.Busy = true
@@ -284,6 +284,28 @@ func TestProductDialogMissingCallbacksAndProgressBounds(t *testing.T) {
 		tt = ui.NewTester(func(c *ui.Context) { PermissionDialog{Open: true, Language: lang}.Render(c, PermissionDialogActions{}) }, 1280, 1000)
 		for _, label := range []string{txt.configureLater, txt.check, txt.settings, txt.dontAsk} {
 			productClick(t, tt, label)
+		}
+	}
+}
+
+func TestConfirmationListsRunningAppsAsToggles(t *testing.T) {
+	for _, lang := range []Language{Chinese, English} {
+		copy := productDialogStrings(lang)
+		s := ConfirmationDialog{Open: true, Language: lang, ID: "request-7", Title: core.SameText("Confirm"), Apps: []ConfirmApp{{Label: "Chrome · 7 B", Checked: true}}}
+		var toggled []string
+		a := ConfirmationDialogActions{Accept: func(string) {}, Cancel: func(string) {}, ToggleApp: func(id string, i int) { toggled = append(toggled, fmt.Sprint(id, "/", i)) }}
+		tt := ui.NewTester(func(c *ui.Context) { s.Render(c, a) }, 1280, 900)
+		for _, text := range []string{copy.appsHeading, "Chrome · 7 B", copy.appsNote} {
+			if !tt.HasText(text) {
+				t.Fatalf("%v: missing %q", lang, text)
+			}
+		}
+		productClick(t, tt, "Chrome · 7 B")
+		if len(toggled) != 1 || toggled[0] != "request-7/0" {
+			t.Fatalf("%v: toggle = %v", lang, toggled)
+		}
+		if !s.Apps[0].Checked {
+			t.Fatal("view mutated the controller snapshot")
 		}
 	}
 }

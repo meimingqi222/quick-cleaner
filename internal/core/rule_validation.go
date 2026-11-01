@@ -37,6 +37,9 @@ func ruleLabel(s string, tokens []string) bool {
 func ruleCategory(s string) bool { return member(s, ruleCategoryNames) }
 func validateRuleDeclarations(r *RuleDefinition) error {
 	bad := func(s string) error { return errors.New("invalid " + s) }
+	if err := validateOwnerProcesses(r); err != nil {
+		return err
+	}
 	if len(r.Directories) > 32 || len(r.Directories) > 0 && (len(r.Variables) > 0 || !member("directory_selection", r.Required)) {
 		return bad("directory capability")
 	}

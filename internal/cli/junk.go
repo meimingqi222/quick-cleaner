@@ -23,6 +23,7 @@ type junkOptions struct {
 	root                                string
 	paths, categories, excludes         stringsFlag
 	recommended, all, execute, discover bool
+	closeApps                           bool
 	discoveryBudget                     time.Duration
 }
 
@@ -66,6 +67,16 @@ type cleanupReport struct {
 	Executions     []core.PlanExecution  `json:"executions"`
 	DeletedFiles   uint64                `json:"deleted_files"`
 	FreedBytes     uint64                `json:"freed_bytes"`
+	// RunningApps lists owner apps found running; Closed says whether they
+	// were asked to quit (--close-apps) or their caches were left out.
+	RunningApps []runningAppReport `json:"running_apps,omitempty"`
+}
+
+type runningAppReport struct {
+	Name         string   `json:"name"`
+	Paths        []string `json:"paths"`
+	Closed       bool     `json:"closed"`
+	StillRunning bool     `json:"still_running,omitempty"`
 }
 
 type junkReport struct {
@@ -116,7 +127,8 @@ func runJunk(parent context.Context, args []string, out, errOut io.Writer) (int,
 	f.Var(&o.paths, "path", "select an exact scanned target path (repeatable)")
 	f.Var(&o.categories, "category", "filter by category ID from junk categories (repeatable)")
 	f.Var(&o.excludes, "exclude", "add an in-memory exclusion without changing settings (repeatable)")
-	f.BoolVar(&o.recommended, "recommended", false, "select recommended, non-busy items (preview default)")
+	f.BoolVar(&o.recommended, "recommended", false, "select recommended, non-blocked items (preview default)")
+	f.BoolVar(&o.closeApps, "close-apps", false, "ask running owner apps (e.g. browsers) to quit before cleaning their caches; without it those caches are skipped")
 	f.BoolVar(&o.all, "all", false, "select all eligible scan results, including non-recommended items")
 	f.BoolVar(&o.execute, "execute", false, "perform cleanup; requires clean and an explicit selection")
 	f.BoolVar(&o.discover, "discover", true, "include build-artifact discovery")
@@ -234,7 +246,7 @@ func runJunk(parent context.Context, args []string, out, errOut io.Writer) (int,
 		operationErr = errors.New("discovery incomplete; refusing to execute a partial scan; narrow --root or increase the budget")
 	}
 	if o.execute && code == ExitOK {
-		r.Cleanup = executeJunk(ctx, items, selected, r.Bytes)
+		r.Cleanup = executeJunk(ctx, items, selected, r.Bytes, o.closeApps)
 		r.DryRun = false
 		code = contextCode(ctx)
 		if code == ExitOK && len(r.Cleanup.Failed)+len(r.Cleanup.Manual) > 0 {

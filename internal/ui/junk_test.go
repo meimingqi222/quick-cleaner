@@ -37,13 +37,12 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 		Expanded:        map[core.CategoryID]bool{core.UserCache: true},
 		ReleaseEligible: map[string]bool{"/fixture/cache": true},
 	}
-	var toggled, excluded, released string
+	var toggled, excluded string
 	var batch []appui.JunkSelection
 	requests := 0
 	actions := appui.JunkPageActions{
 		ToggleItem:   func(path string) { toggled = path },
 		Exclude:      func(path string) { excluded = path },
-		ReleaseCache: func(path string) { released = path },
 		Select:       func(selection appui.JunkSelection) { batch = append(batch, selection) },
 		RequestClean: func() { requests++ },
 	}
@@ -55,11 +54,9 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 			t.Fatalf("missing result/selection fact %q; texts: %v", text, tt.Texts())
 		}
 	}
-	if err := tt.Click("Quit apps and clean"); err != nil {
-		t.Fatal(err)
-	}
-	if released != "/fixture/cache" || toggled != "" || requests != 0 {
-		t.Fatal("release must request its own confirmation, not toggle or clean the selection")
+	// Quitting owner apps is asked once in the cleanup confirmation, never per row.
+	if tt.HasText("Quit apps and clean") {
+		t.Fatal("per-row quit-and-clean button is back")
 	}
 	// Both item rows have Exclude: use the first visible control, as a real pointer does.
 	if err := tt.Click("Exclude"); err != nil {

@@ -341,3 +341,28 @@ func testJunkLifecycle(t *testing.T) {
 		}
 	}
 }
+
+// Headless runs never prompt: running owner apps' caches are left out unless
+// --close-apps asks them to quit first. Stubs keep real apps untouched.
+func TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose(t *testing.T) {
+	oldFind, oldClose := findRunningApps, closeRunningApps
+	t.Cleanup(func() { findRunningApps, closeRunningApps = oldFind, oldClose })
+	cache := filepath.Join(t.TempDir(), "chrome-cache")
+	items := []core.ScanItem{{Path: cache, Size: 9, Owner: &core.AppOwner{Name: core.SameText("Chrome"), Processes: []string{"chrome.exe"}}}}
+	findRunningApps = func([]core.ScanItem) []core.RunningApp {
+		return []core.RunningApp{{Name: core.SameText("Chrome"), Paths: []string{cache}}}
+	}
+	closed := 0
+	closeRunningApps = func([]core.RunningApp, func() bool) []core.Text {
+		closed++
+		return []core.Text{core.SameText("Chrome")}
+	}
+	r := executeJunk(context.Background(), items, []bool{true}, 9, false)
+	if closed != 0 || len(r.RunningApps) != 1 || r.RunningApps[0].Closed || r.Skipped != 1 {
+		t.Fatalf("without --close-apps: closed=%d report=%+v", closed, r)
+	}
+	r = executeJunk(context.Background(), items, []bool{true}, 9, true)
+	if closed != 1 || len(r.RunningApps) != 1 || !r.RunningApps[0].Closed || !r.RunningApps[0].StillRunning {
+		t.Fatalf("with --close-apps: closed=%d report=%+v", closed, r)
+	}
+}

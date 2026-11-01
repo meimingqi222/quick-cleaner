@@ -21,17 +21,19 @@ const (
 type JunkPage struct {
 	Language                                 Language
 	Scanned, Scanning, Cleaning, Discovering bool
-	Categories                               []core.CategorySummary
-	Selected                                 map[string]bool
-	Expanded                                 map[core.CategoryID]bool
-	ReleaseEligible                          map[string]bool
-	Exclusions                               []string
-	ShowExclusions                           bool
-	ShowFailedDetails, ShowSkippedDetails    bool
-	FailedDetails, SkippedDetails            []JunkDetail
-	RecommendedSelected                      bool
-	Scroll                                   ui.ScrollState
-	lists                                    map[core.CategoryID]*ui.ListState
+	// Preparing covers the short owner-process check before the confirmation.
+	Preparing                             bool
+	Categories                            []core.CategorySummary
+	Selected                              map[string]bool
+	Expanded                              map[core.CategoryID]bool
+	ReleaseEligible                       map[string]bool
+	Exclusions                            []string
+	ShowExclusions                        bool
+	ShowFailedDetails, ShowSkippedDetails bool
+	FailedDetails, SkippedDetails         []JunkDetail
+	RecommendedSelected                   bool
+	Scroll                                ui.ScrollState
+	lists                                 map[core.CategoryID]*ui.ListState
 }
 
 // JunkDetail is one residual row. Release is true only when the controller has
@@ -44,21 +46,21 @@ type JunkDetail struct {
 }
 
 type JunkPageActions struct {
-	Rescan                                 func()
-	ToggleCategory                         func(core.CategoryID)
-	ToggleExpanded                         func(core.CategoryID)
-	ToggleItem                             func(string)
-	Select                                 func(JunkSelection)
-	ToggleExclusions                       func()
-	Exclude, RemoveExclusion, ReleaseCache func(string)
-	RetryRelease                           func(string)
-	ToggleFailedDetails                    func()
-	ToggleSkippedDetails                   func()
-	RequestClean                           func()
+	Rescan                   func()
+	ToggleCategory           func(core.CategoryID)
+	ToggleExpanded           func(core.CategoryID)
+	ToggleItem               func(string)
+	Select                   func(JunkSelection)
+	ToggleExclusions         func()
+	Exclude, RemoveExclusion func(string)
+	RetryRelease             func(string)
+	ToggleFailedDetails      func()
+	ToggleSkippedDetails     func()
+	RequestClean             func()
 }
 
 func (s *JunkPage) busy() bool {
-	return s.Scanning || s.Cleaning || s.Discovering
+	return s.Scanning || s.Cleaning || s.Discovering || s.Preparing
 }
 
 var junkError = ui.Hex("#ba1a1a")
@@ -258,13 +260,9 @@ func (s *JunkPage) item(c *ui.Context, item core.ScanItem, actions JunkPageActio
 		if row.Clicked() && actions.ToggleItem != nil {
 			actions.ToggleItem(item.Path)
 		}
-		if s.ReleaseEligible[item.Path] && !s.Cleaning {
-			if junkButton(c.Key("release"), t.release, true, false) && actions.ReleaseCache != nil {
-				actions.ReleaseCache(item.Path)
-			}
-		}
-		// These controls are siblings of the selection button: exclusion/release
-		// must not bubble into an accidental selection of the protected target.
+		// Exclude is a sibling of the selection button so it never bubbles into
+		// an accidental selection. Quitting owner apps is offered once in the
+		// cleanup confirmation, not per row.
 		if junkButton(c.Key("exclude"), t.exclude, true, false) && actions.Exclude != nil {
 			actions.Exclude(item.Path)
 		}

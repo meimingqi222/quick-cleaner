@@ -31,11 +31,20 @@ type ConfirmationDialog struct {
 	Kind                                 ConfirmationKind
 	Title, Body, Detail                  core.Text
 	AppData, Force, Busy, AcceptDisabled bool
+	// Apps lists running owner applications the cleanup would ask to quit.
+	// Label is controller-localized; the view only toggles Checked via actions.
+	Apps []ConfirmApp
+}
+
+type ConfirmApp struct {
+	Label   string
+	Checked bool
 }
 
 type ConfirmationDialogActions struct {
-	Cancel func(id string)
-	Accept func(id string)
+	Cancel    func(id string)
+	Accept    func(id string)
+	ToggleApp func(id string, index int)
 }
 
 // productDialogFrame uses MyGo's documented custom modal primitive rather than
@@ -131,6 +140,19 @@ func (s ConfirmationDialog) Render(c *ui.Context, a ConfirmationDialogActions) {
 		}
 		if s.AppData {
 			ui.Text(c, t.warning).FontSize(12).Padding(8, 12).Radius(6).Background(ui.Hex("#ffdad6")).TextColor(ui.Hex("#ba1a1a")).Border(1, ui.Hex("#ba1a1a"))
+		}
+		if len(s.Apps) > 0 {
+			ui.Column(c.Key("confirm-apps")).FillWidth().Gap(6).Padding(10, 12).Radius(8).Background(surfaceLow).Children(func() {
+				ui.Text(c, t.appsHeading).FontSize(12).Bold().TextColor(text)
+				for i, app := range s.Apps {
+					checked := app.Checked
+					box := ui.Checkbox(c.Key(fmt.Sprint("confirm-app-", i)), &checked, app.Label).FontSize(12).Disabled(s.Busy || a.ToggleApp == nil)
+					if box.Changed() && !s.Busy && a.ToggleApp != nil {
+						a.ToggleApp(s.ID, i)
+					}
+				}
+				ui.Text(c, t.appsNote).FontSize(12).TextColor(muted)
+			})
 		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Padding(8, 0, 0, 0).Children(func() {
 			var cancel, accept func()

@@ -82,7 +82,16 @@ func (r *Root) scanJunk() {
 			busyPaths[i] = targets[i].Path
 		}
 		busyDone := make(chan map[string]core.Busy, 1)
-		go func() { busyDone <- core.DetectInUse(busyPaths) }()
+		owned := append([]core.ScanTarget(nil), targets...)
+		go func() {
+			busy := core.DetectInUse(busyPaths)
+			for path, b := range r.runningOwnerBusy(owned) {
+				if _, exists := busy[path]; !exists {
+					busy[path] = b
+				}
+			}
+			busyDone <- busy
+		}()
 		r.armJunkBusy(busyDone)
 		// Every tree acquire parses is recorded so the scan's finish can share
 		// it with the disk lens and file search instead of letting it die
@@ -376,7 +385,7 @@ func (r *Root) junkActions() view.JunkPageActions {
 			r.junk.Exclusions = append([]string(nil), r.settings.Whitelist...)
 			r.message("已移除该排除项，此路径将在下次扫描后按普通路径处理", "Removed from exclusions — this path will be scanned again next time")
 		},
-		ReleaseCache: r.requestCacheRelease, RetryRelease: r.requestCacheRelease, RequestClean: r.requestJunkClean,
+		RetryRelease: r.requestCacheRelease, RequestClean: r.requestJunkClean,
 	}
 }
 
@@ -415,12 +424,10 @@ func planSummary(targets []core.CleanTarget) (rules []string, operations []core.
 }
 
 func (r *Root) requestJunkClean() {
-	if r.busy() || !r.junk.Scanned {
+	if r.busy() || !r.junk.Scanned || r.junk.Preparing {
 		return
 	}
-	var targets []core.CleanTarget
-	var paths []string
-	var bytes, files uint64
+	var items []core.ScanItem
 	droppedUnavailable := 0
 	for _, c := range r.junk.Categories {
 		for _, item := range c.Items {
@@ -432,17 +439,41 @@ func (r *Root) requestJunkClean() {
 				droppedUnavailable++
 				continue
 			}
-			targets = append(targets, item.CleanTarget())
-			paths = append(paths, item.Path)
-			bytes += item.Size
-			files += item.FileCount
+			items = append(items, item)
 		}
 	}
-	if len(targets) == 0 {
+	if len(items) == 0 {
 		if droppedUnavailable > 0 {
 			r.message(fmt.Sprintf("%d 个勾选项当前不可清理，已跳过", droppedUnavailable), fmt.Sprintf("%d selected items are currently unavailable; skipped", droppedUnavailable))
 		}
 		return
+	}
+	// Listing owner processes is cheap but still system I/O: keep it off the
+	// UI thread, and drop the answer if anything else started meanwhile.
+	r.junk.Preparing = true
+	gen := r.generation
+	find := r.findRunningApps
+	go func() {
+		apps := find(items)
+		r.publish(func() {
+			r.junk.Preparing = false
+			if gen != r.generation || r.busy() {
+				return
+			}
+			r.confirmJunkClean(items, apps)
+		})
+	}()
+}
+
+// confirmJunkClean shows one confirmation. Running owner apps appear in it as
+// checked boxes: checked apps are asked to quit before cleaning, unchecked
+// apps' items are left out of this run.
+func (r *Root) confirmJunkClean(items []core.ScanItem, apps []core.RunningApp) {
+	var bytes uint64
+	var targets []core.CleanTarget
+	for _, item := range items {
+		targets = append(targets, item.CleanTarget())
+		bytes += item.Size
 	}
 	body := r.tr(
 		fmt.Sprintf("将删除 %d 项，共 %s。", len(targets), core.FmtSize(bytes)),
@@ -471,26 +502,106 @@ func (r *Root) requestJunkClean() {
 	}
 	detail += "\n\n" + body
 	r.ask(r.tr("确认清理选中项", "Confirm cleanup"), detail, func() {
-		p := core.NewCleanProgress(files, bytes)
-		r.junk.Cleaning = true
-		r.message(fmt.Sprintf("正在清理 %d 项…", len(paths)), fmt.Sprintf("Cleaning %d items…", len(paths)))
-		r.start(true, p, func(context.Context) func() {
-			report := core.CleanTargets(targets, p)
-			occupants := identifyCleanupOccupants(report)
-			return func() {
-				r.junk.Cleaning = false
-				// Cancellation leaves unattempted targets in the snapshot. Do not
-				// infer success from their absence in the failure list.
-				r.finishCleanup("clean", paths, report, p, occupants)
-				if p.Cancelled() {
-					r.junk.Scanned = false
-					r.junkSummary()
-					return
-				}
-				r.applyJunkCleanResult(paths, report)
-				r.junkSummary()
+		r.runJunkClean(items, apps)
+	})
+	for _, app := range apps {
+		label := fmt.Sprintf("%s · %s", app.Name.Get(r.settings.Language), core.FmtSize(app.Bytes))
+		r.confirmation.Apps = append(r.confirmation.Apps, view.ConfirmApp{Label: label, Checked: true})
+	}
+}
+
+func (r *Root) toggleConfirmApp(id string, index int) {
+	if !r.confirming || id != r.confirmation.ID || index < 0 || index >= len(r.confirmation.Apps) {
+		return
+	}
+	r.confirmation.Apps[index].Checked = !r.confirmation.Apps[index].Checked
+	r.changed()
+}
+
+func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp) {
+	// resolveConfirmation closes the dialog but keeps its last snapshot, so
+	// the boxes the user left checked are still readable here.
+	var closing []core.RunningApp
+	skipped := map[string]bool{}
+	var skippedNames []string
+	for i, app := range apps {
+		if i < len(r.confirmation.Apps) && r.confirmation.Apps[i].Checked {
+			closing = append(closing, app)
+			continue
+		}
+		skippedNames = append(skippedNames, app.Name.Get(r.settings.Language))
+		for _, path := range app.Paths {
+			skipped[path] = true
+		}
+	}
+	var targets []core.CleanTarget
+	var paths []string
+	var bytes, files uint64
+	for _, item := range items {
+		if skipped[item.Path] {
+			continue
+		}
+		targets = append(targets, item.CleanTarget())
+		paths = append(paths, item.Path)
+		bytes += item.Size
+		files += item.FileCount
+	}
+	appNote := func() string {
+		if len(skippedNames) == 0 {
+			return ""
+		}
+		return r.tr(
+			fmt.Sprintf("「%s」正在运行，其缓存 %d 项本次跳过", strings.Join(skippedNames, "」、「"), len(items)-len(targets)),
+			fmt.Sprintf("%s still running; %d of its cache items skipped", strings.Join(skippedNames, ", "), len(items)-len(targets)),
+		)
+	}
+	if len(targets) == 0 {
+		r.dashboard.StatusText = appNote()
+		r.changed()
+		return
+	}
+	p := core.NewCleanProgress(files, bytes)
+	r.junk.Cleaning = true
+	r.message(fmt.Sprintf("正在清理 %d 项…", len(paths)), fmt.Sprintf("Cleaning %d items…", len(paths)))
+	closeApps := r.closeApps
+	r.start(true, p, func(context.Context) func() {
+		var stillRunning []core.Text
+		if len(closing) > 0 {
+			stillRunning = closeApps(closing, p.Cancelled)
+		}
+		report := core.CleanTargets(targets, p)
+		occupants := identifyCleanupOccupants(report)
+		return func() {
+			r.junk.Cleaning = false
+			// Cancellation leaves unattempted targets in the snapshot. Do not
+			// infer success from their absence in the failure list.
+			r.finishCleanup("clean", paths, report, p, occupants)
+			var notes []string
+			if note := appNote(); note != "" {
+				notes = append(notes, note)
 			}
-		})
+			if len(stillRunning) > 0 {
+				var names []string
+				for _, name := range stillRunning {
+					names = append(names, name.Get(r.settings.Language))
+				}
+				notes = append(notes, r.tr(
+					fmt.Sprintf("「%s」未在 8 秒内退出，仍被占用的文件已跳过", strings.Join(names, "」、「")),
+					fmt.Sprintf("%s did not quit within 8 s; files it still holds were skipped", strings.Join(names, ", ")),
+				))
+			}
+			if len(notes) > 0 {
+				sep := r.tr("；", "; ")
+				r.dashboard.StatusText += sep + strings.Join(notes, sep)
+			}
+			if p.Cancelled() {
+				r.junk.Scanned = false
+				r.junkSummary()
+				return
+			}
+			r.applyJunkCleanResult(paths, report)
+			r.junkSummary()
+		}
 	})
 }
 
