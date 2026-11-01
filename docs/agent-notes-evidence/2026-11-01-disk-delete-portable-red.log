@@ -1,0 +1,46 @@
+check (ubuntu-latest)	Run go test -race ./...	﻿2026-11-01T13:56:17.1868753Z ##[group]Run go test -race ./...
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.1869190Z [36;1mgo test -race ./...[0m
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.1889917Z shell: /usr/bin/bash -e {0}
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.1890362Z env:
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.1890715Z   GOTOOLCHAIN: local
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.1891028Z ##[endgroup]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:17.3303013Z ?   	github.com/meimingqi222/quick-cleaner/assets	[no test files]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:29.0200148Z ok  	github.com/meimingqi222/quick-cleaner/cmd/quick-cleaner	1.120s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:29.0201221Z ?   	github.com/meimingqi222/quick-cleaner/cmd/ui-gallery	[no test files]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5918152Z 2026/11/01 13:56:30 残留复核：关闭面板
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5919839Z 2026/11/01 13:56:30 [删除] 分类清理，共 1 个目标：["/tmp/TestJunkCleanSkipsUncheckedRunningOwnerApps3193369711/001/plain-cache"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5921749Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5923277Z 2026/11/01 13:56:30 [删除] 分类清理，共 1 个目标：["/tmp/TestJunkCleanSkipAndCleanButtonLeavesBusyCachesUnselected2426640337/001/plain-cache"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5924959Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5927035Z 2026/11/01 13:56:30 [删除] 分类清理，共 1 个目标：["/tmp/TestJunkCleanQuitsCheckedOwnerAppsFirst3075707044/001/plain-cache"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5928393Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5930219Z 2026/11/01 13:56:30 [删除] 分类清理，共 2 个目标：["/tmp/TestJunkCleanWithoutRunningOwnersCleansWithoutDialog3933758103/001/chrome-cache" "/tmp/TestJunkCleanWithoutRunningOwnersCleansWithoutDialog3933758103/001/plain-cache"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5931775Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=2；文件 0 个 / 0 B，失败 2 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5932657Z 2026/11/01 13:56:30 [删除] 分类清理，共 1 个目标：["/cache/sub/locked"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5933823Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5934697Z 2026/11/01 13:56:30 [删除] 分类清理，共 2 个目标：["/cache/busy1" "/cache/busy2"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5935589Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=2；文件 0 个 / 0 B，失败 2 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5936534Z 2026/11/01 13:56:30 [删除] 分类清理，共 3 个目标：["/fixture/cache" "/fixture/system" "/fixture/huge"]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5937646Z 2026/11/01 13:56:30 [删除] 完成：目标 ok=0 skipped=0 failed=3；文件 0 个 / 0 B，失败 3 个
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5938509Z --- FAIL: TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk (0.01s)
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5940009Z     root_test.go:290: surviving selected row was not deleted: <nil>
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5940741Z 2026/11/01 13:56:32 残留复核：关闭面板
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5941357Z 2026/11/01 13:56:32 残留复核：关闭面板
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5941953Z 2026/11/01 13:56:32 残留复核：关闭面板
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5942485Z 2026/11/01 13:56:32 残留复核：关闭面板
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5943235Z 2026/11/01 13:56:32 阶段零索引就绪：0s（acquired=false）
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5944676Z 2026/11/01 13:56:32 阶段一 scan_fixed 完成：2.488404ms，0/4 个目标命中，合计 0 B；最慢 5 个：
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5945448Z 2026/11/01 13:56:32 阶段一 ScanFixed 完成：3ms
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5946182Z 2026/11/01 13:56:32 残留检测：主程序已打开残留复核对话框，抑制外部悬浮小窗
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5946900Z 2026/11/01 13:56:32 残留检测：主窗口在前台活跃，抑制外部悬浮小窗
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.5947515Z FAIL
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.7060488Z FAIL	github.com/meimingqi222/quick-cleaner/internal/app	2.275s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:56:32.7061525Z ok  	github.com/meimingqi222/quick-cleaner/internal/cli	2.389s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:03.4384846Z ok  	github.com/meimingqi222/quick-cleaner/internal/core	29.917s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:03.4386149Z ok  	github.com/meimingqi222/quick-cleaner/internal/platform	2.576s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.2834357Z ok  	github.com/meimingqi222/quick-cleaner/internal/ui	72.107s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.2835060Z ?   	github.com/meimingqi222/quick-cleaner/rules	[no test files]
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.2835681Z ok  	github.com/meimingqi222/quick-cleaner/tools/indexbench	1.141s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.2836255Z ok  	github.com/meimingqi222/quick-cleaner/tools/winres	1.024s
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.2836696Z FAIL
+check (ubuntu-latest)	Run go test -race ./...	2026-11-01T13:57:45.3199446Z ##[error]Process completed with exit code 1.

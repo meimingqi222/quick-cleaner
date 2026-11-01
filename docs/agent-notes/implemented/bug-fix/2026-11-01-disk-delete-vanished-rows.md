@@ -25,6 +25,9 @@ Status: implemented
 - 删除确认里的「约释放」只累加真正要删的目标在索引里的大小，不再用选中总量（含已消失项）。
 - 删除完成后的 `pruneDiskPaths` 拆成两段：worker 里逐项 `os.Stat` 判定哪些真的没了，主线程
   `applyDiskPrune` 只在内存索引里摘节点。原先 7000 多项删除后要在主线程逐项 stat。
+- app 流程测试经现有 `cleanArbitrary` 接口注入成功与拒绝结果，并检查传入的唯一目标、冻结身份与
+  删除方式。Linux CI 无权读取全部 `/proc` 句柄时，占用检查会正确返回未知，不能要求真实后端必删；
+  两条分支都验证消失行被摘除，拒绝分支还验证存活文件及其索引保留。生产占用闸门不变。
 
 ## Alternatives considered
 
@@ -66,5 +69,10 @@ Proved: 制造型红跑。确认文案临时改回 `r.disk.SelectedSize`，
 把剪枝临时改回主线程同步 stat，`TestDiskDeletePrunesTreeAndKeepsPosition` 报
 `index pruned on the calling thread before the worker reported`，
 见 `docs/agent-notes-evidence/2026-11-01-disk-prune-worker-red.log`。两处恢复后同 focused 绿跑（同上 green log）。
+
+Proved: Linux CI run 41313616757 的真实红跑报
+`surviving selected row was not deleted: <nil>`，见
+`docs/agent-notes-evidence/2026-11-01-disk-delete-portable-red.log`。测试不再依赖宿主机的占用探测权限；
+成功与拒绝子用例的本地 race 绿跑见 `docs/agent-notes-evidence/2026-11-01-disk-delete-portable-green.log`。
 
 Pitfalls checked: P25/P37 身份闸门未放宽，删除目标仍逐项带冻结身份；P77/P128 文件系统访问不回主线程。

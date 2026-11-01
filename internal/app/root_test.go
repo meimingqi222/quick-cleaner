@@ -256,43 +256,72 @@ func TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming(t *testing.T)
 // refuse the whole batch; it has nothing to delete, so only the rows still on
 // disk need a frozen identity.
 func TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk(t *testing.T) {
-	r, q := testRoot(t)
-	dir := t.TempDir()
-	kept, gone := filepath.Join(dir, "kept.tmp"), filepath.Join(dir, "gone.tmp")
-	for _, p := range []string{kept, gone} {
-		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const keptSize, goneSize = 4 << 10, 1 << 20
-	r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), []core.TreeSnapshotEntry{{Path: dir, IsDir: true}, {Path: kept, Size: keptSize}, {Path: gone, Size: goneSize}})
-	r.disk.Loaded = true
-	r.rebuildDisk()
-	r.diskSelected.SetMany([]string{kept, gone}, []uint64{keptSize, goneSize}, true)
-	r.rebuildDisk()
-	if err := os.Remove(gone); err != nil {
-		t.Fatal(err)
-	}
-	r.requestSelectedDiskDelete()
-	dispatchNext(t, q)
-	if !r.confirming {
-		t.Fatalf("a vanished row refused the batch: %q", r.dashboard.StatusText)
-	}
-	// The estimate counts only what will be deleted, not the vanished row.
-	if detail := r.confirmation.Detail.Get(r.settings.Language); !strings.Contains(detail, core.FmtSize(keptSize)) || strings.Contains(detail, core.FmtSize(keptSize+goneSize)) {
-		t.Fatalf("confirmation size counts vanished rows: %s", detail)
-	}
-	r.resolveConfirmation(r.confirmation.ID, true)
-	for r.job != nil {
-		dispatchNext(t, q)
-	}
-	if _, err := os.Lstat(kept); !os.IsNotExist(err) {
-		t.Fatalf("surviving selected row was not deleted: %v", err)
-	}
-	for _, p := range []string{kept, gone} {
-		if _, ok := r.tree.FindNodeByPath(p); ok {
-			t.Fatalf("%s stayed in the index", p)
-		}
+	for _, refused := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refused=%v", refused), func(t *testing.T) {
+			r, q := testRoot(t)
+			dir := t.TempDir()
+			kept, gone := filepath.Join(dir, "kept.tmp"), filepath.Join(dir, "gone.tmp")
+			for _, p := range []string{kept, gone} {
+				if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			const keptSize, goneSize = 4 << 10, 1 << 20
+			r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), []core.TreeSnapshotEntry{{Path: dir, IsDir: true}, {Path: kept, Size: keptSize}, {Path: gone, Size: goneSize}})
+			r.disk.Loaded = true
+			r.rebuildDisk()
+			r.diskSelected.SetMany([]string{kept, gone}, []uint64{keptSize, goneSize}, true)
+			r.rebuildDisk()
+			if err := os.Remove(gone); err != nil {
+				t.Fatal(err)
+			}
+			r.requestSelectedDiskDelete()
+			dispatchNext(t, q)
+			if !r.confirming {
+				t.Fatalf("a vanished row refused the batch: %q", r.dashboard.StatusText)
+			}
+			// The estimate counts only what will be deleted, not the vanished row.
+			if detail := r.confirmation.Detail.Get(r.settings.Language); !strings.Contains(detail, core.FmtSize(keptSize)) || strings.Contains(detail, core.FmtSize(keptSize+goneSize)) {
+				t.Fatalf("confirmation size counts vanished rows: %s", detail)
+			}
+			// This test owns the app flow, not host-wide occupancy permissions.
+			// Linux CI cannot inspect every /proc PID and correctly fails closed.
+			called := false
+			r.cleanArbitrary = func(items []core.ArbitraryTarget, disposal core.Disposal, p *core.CleanProgress) core.CleanReport {
+				called = true
+				if len(items) != 1 || items[0].Path != kept || items[0].Identity == nil || !items[0].Identity.Recheck(kept) || disposal != core.Permanent {
+					t.Errorf("unexpected authorized cleanup: items=%+v disposal=%s", items, disposal)
+					return core.CleanReport{}
+				}
+				var report core.CleanReport
+				if refused {
+					report.Record(kept, core.CleanFailed)
+				} else {
+					report.Record(kept, core.CleanPath(kept, p))
+				}
+				return report
+			}
+			r.resolveConfirmation(r.confirmation.ID, true)
+			for r.job != nil {
+				dispatchNext(t, q)
+			}
+			if !called {
+				t.Fatal("confirmed targets never reached the cleaner")
+			}
+			if _, err := os.Lstat(kept); refused {
+				if err != nil {
+					t.Fatalf("refused file did not survive: %v", err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("surviving selected row was not deleted: %v", err)
+			}
+			if _, ok := r.tree.FindNodeByPath(kept); ok != refused {
+				t.Fatalf("surviving row in index = %v, want %v", ok, refused)
+			}
+			if _, ok := r.tree.FindNodeByPath(gone); ok {
+				t.Fatal("already vanished row stayed in the index")
+			}
+		})
 	}
 }
 
