@@ -440,17 +440,17 @@ func (r *Root) requestJunkClean() {
 	}()
 }
 
-// confirmCloseOwnerApps asks only when running applications hold selected caches.
+// confirmCloseOwnerApps asks when running applications use selected cleanup items.
 // Checked apps are asked to quit before cleaning; unchecked apps stay open and
 // their items remain unselected in the list.
 func (r *Root) confirmCloseOwnerApps(items []core.ScanItem, apps []core.RunningApp) {
 	title := core.NewText(
-		fmt.Sprintf("发现 %d 个应用正在使用缓存", len(apps)),
-		fmt.Sprintf("%d running apps are using caches", len(apps)),
+		fmt.Sprintf("发现 %d 个应用正在使用所选清理项", len(apps)),
+		fmt.Sprintf("%d running apps are using selected cleanup items", len(apps)),
 	)
 	body := core.NewText(
-		"关闭勾选的应用可彻底释放其缓存；未勾选的应用将保持运行并自动跳过其锁定的文件。",
-		"Closing checked apps frees their caches completely; unchecked apps stay open and their locked files are skipped.",
+		"关闭勾选的应用后继续清理；未勾选的应用将保持运行，本次跳过与其关联的所选清理项。",
+		"Close checked apps before cleaning. Unchecked apps stay open, and their associated selected cleanup items are skipped this time.",
 	)
 	r.askConfirm(view.ConfirmCloseApps, title, body, core.Text{}, func() {
 		r.runJunkClean(items, apps, false)
@@ -532,8 +532,8 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp, skipA
 			return ""
 		}
 		return r.tr(
-			fmt.Sprintf("「%s」正在运行，其缓存 %d 项本次跳过", strings.Join(skippedNames, "」、「"), len(items)-len(targets)),
-			fmt.Sprintf("%s still running; %d of its cache items skipped", strings.Join(skippedNames, ", "), len(items)-len(targets)),
+			fmt.Sprintf("「%s」正在运行，关联的 %d 个所选清理项本次跳过", strings.Join(skippedNames, "」、「"), len(items)-len(targets)),
+			fmt.Sprintf("%s still running; %d associated selected cleanup items skipped", strings.Join(skippedNames, ", "), len(items)-len(targets)),
 		)
 	}
 	if len(targets) == 0 {
@@ -582,7 +582,7 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp, skipA
 		if len(closing) > 0 {
 			r.publish(func() {
 				if len(stillRunning) > 0 {
-					r.message("部分应用仍未退出，已跳过其缓存；正在清理其余项目…", "Some apps are still running; their caches were skipped. Cleaning other items…")
+					r.message("部分应用仍未退出，已跳过关联的所选清理项；正在清理其余项目…", "Some apps are still running; their associated selected cleanup items were skipped. Cleaning other items…")
 				} else {
 					r.message("应用已退出，正在清理…", "Apps have exited. Cleaning…")
 				}
@@ -610,8 +610,8 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp, skipA
 					names = append(names, name.Get(r.settings.Language))
 				}
 				notes = append(notes, r.tr(
-					fmt.Sprintf("「%s」强制结束后仍未确认退出，其缓存本次已跳过", strings.Join(names, "」、「")),
-					fmt.Sprintf("%s could not be confirmed stopped after force termination; its caches were skipped", strings.Join(names, ", ")),
+					fmt.Sprintf("「%s」强制结束后仍未确认退出，关联的所选清理项本次已跳过", strings.Join(names, "」、「")),
+					fmt.Sprintf("%s could not be confirmed stopped after force termination; its associated selected cleanup items were skipped", strings.Join(names, ", ")),
 				))
 			}
 			if len(notes) > 0 {

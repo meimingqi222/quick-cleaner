@@ -54,7 +54,7 @@ func TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped(t *testing.T) {
 	dispatchNext(t, q)
 	r.resolveConfirmation(r.confirmation.ID, true)
 	dispatchNext(t, q)
-	if !strings.Contains(r.dashboard.StatusText, "their caches were skipped") {
+	if !strings.Contains(r.dashboard.StatusText, "their associated selected cleanup items were skipped") {
 		t.Fatalf("missing immediate close failure: %s", r.dashboard.StatusText)
 	}
 	for r.job != nil {
@@ -118,7 +118,7 @@ func TestJunkCleanSkipsUncheckedRunningOwnerApps(t *testing.T) {
 	if r.junk.Selected[chrome] {
 		t.Fatal("skipped running app cache must be deselected in the list")
 	}
-	if !strings.Contains(r.dashboard.StatusText, "Chrome still running; 1 of its cache items skipped") {
+	if !strings.Contains(r.dashboard.StatusText, "Chrome still running; 1 associated selected cleanup items skipped") {
 		t.Fatalf("status = %q", r.dashboard.StatusText)
 	}
 }

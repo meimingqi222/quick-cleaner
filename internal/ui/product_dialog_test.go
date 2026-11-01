@@ -302,7 +302,7 @@ func TestConfirmationListsRunningAppsAsToggles(t *testing.T) {
 		}
 		s := ConfirmationDialog{
 			Open: true, Language: lang, ID: "request-7", Kind: ConfirmCloseApps,
-			Title: core.NewText("发现 2 个应用正在使用缓存", "2 running apps are using caches"),
+			Title: core.NewText("发现 2 个应用正在使用所选清理项", "2 running apps are using selected cleanup items"),
 			Body:  core.NewText("说明", "Explanation"),
 			Apps: []ConfirmApp{
 				{Name: "Chrome", Size: "7 B", Checked: true},
