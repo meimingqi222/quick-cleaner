@@ -1,0 +1,15 @@
+=== RUN   TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles
+2026/11/01 15:20:25 阶段一 scan_fixed 完成：2.6077ms，1/1 个目标命中，合计 5 B；最慢 5 个：2.6077ms 5 B C:\Users\meimingqi222\AppData\Local\Temp\TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles4153503238\001\go-build
+    cleaner_parallel_windows_test.go:100: vanished file result=2 failed=1; want CleanSkipped with 0 failures
+--- FAIL: TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles (0.07s)
+=== RUN   TestIdentityWindowsDirectoryChurnKeepsStableIdentity
+    identity_windows_test.go:79: directory churn invalidated stable Windows directory identity
+--- FAIL: TestIdentityWindowsDirectoryChurnKeepsStableIdentity (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.276s
+=== RUN   TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation
+    remove_windows_test.go:124: mapped running executable: err=remove C:\Users\meimingqi222\AppData\Local\Temp\TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation2004826822\001\cached-runner.exe: Access is denied.; want sharing violation (errno 32)
+--- FAIL: TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation (0.73s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.345s
+FAIL

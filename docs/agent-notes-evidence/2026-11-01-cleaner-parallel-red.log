@@ -1,0 +1,5 @@
+--- FAIL: TestCleanerParallelBudgetCoversNestedWorkAndDrains (0.32s)
+    cleaner_parallel_windows_test.go:23: peak=1 active=0 finished=256; want 2..8, 0, 256
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.573s
+FAIL

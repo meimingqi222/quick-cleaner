@@ -12,6 +12,7 @@ type TargetIdentity struct {
 	length    int64
 	stable    [2]uint64
 	hasStable bool
+	isDir     bool
 }
 
 // IdentityFromMetadata reuses metadata without opening another handle. On
@@ -28,7 +29,7 @@ func IdentityFromMetadata(info os.FileInfo) (TargetIdentity, bool) {
 	if modified.Before(time.Unix(0, 0)) && modified.Nanosecond() != 0 {
 		seconds++
 	}
-	id := TargetIdentity{mtime: seconds, length: info.Size()}
+	id := TargetIdentity{mtime: seconds, length: info.Size(), isDir: info.IsDir() && !ruleEvidenceLink(info)}
 	return identityMetadata(id, info)
 }
 

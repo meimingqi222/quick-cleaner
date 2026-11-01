@@ -1,0 +1,12 @@
+goos: windows
+goarch: amd64
+pkg: github.com/meimingqi222/quick-cleaner/internal/core
+cpu: AMD Ryzen 7 7745HX with Radeon Graphics        
+BenchmarkDeleteTreeSmallFiles/dirs1-16         	       1	4111040300 ns/op
+BenchmarkDeleteTreeSmallFiles/dirs1-16         	       1	4362251300 ns/op
+BenchmarkDeleteTreeSmallFiles/dirs1-16         	       1	4386936700 ns/op
+BenchmarkDeleteTreeSmallFiles/dirs32-16        	       1	4013974400 ns/op
+BenchmarkDeleteTreeSmallFiles/dirs32-16        	       1	3785961400 ns/op
+BenchmarkDeleteTreeSmallFiles/dirs32-16        	       1	3668103400 ns/op
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	29.847s

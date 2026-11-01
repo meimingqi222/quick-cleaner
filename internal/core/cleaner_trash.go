@@ -42,7 +42,7 @@ func EmptyTrash(p *CleanProgress) CleanReport {
 			report.Record(dir, p.fail(dir, ioFailReason(err)))
 			continue
 		}
-		checked := cleanEntryBindings(dir, parent, hasParent, children)
+		parentOK, checked := cleanEntryBindings(dir, parent, hasParent, children)
 		for i, c := range children {
 			if p.Cancelled() {
 				return report
@@ -51,7 +51,11 @@ func EmptyTrash(p *CleanProgress) CleanReport {
 				continue
 			}
 			if !checked[i] {
-				report.Record(c.path, p.fail(c.path, FailChanged))
+				if reason, keep := classifyUncheckedChild(parentOK, c); keep {
+					report.Record(c.path, p.fail(c.path, reason))
+				} else {
+					report.Record(c.path, CleanSkipped)
+				}
 				continue
 			}
 			report.Record(c.path, DeleteTree(c.path, p))

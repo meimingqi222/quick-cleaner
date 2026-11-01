@@ -1,0 +1,13 @@
+=== RUN   TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles
+2026/11/01 15:22:27 阶段一 scan_fixed 完成：1.543ms，1/1 个目标命中，合计 5 B；最慢 5 个：1.543ms 5 B C:\Users\meimingqi222\AppData\Local\Temp\TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles3168520769\001\go-build
+2026/11/01 15:22:27 [删除] 分类清理，共 1 个目标：["C:\\Users\\meimingqi222\\AppData\\Local\\Temp\\TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles3168520769\\001\\go-build"]
+2026/11/01 15:22:27 [删除] 完成：目标 ok=2 skipped=0 failed=0；文件 2 个 / 10 B，失败 0 个
+--- PASS: TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles (0.08s)
+=== RUN   TestIdentityWindowsDirectoryChurnKeepsStableIdentity
+--- PASS: TestIdentityWindowsDirectoryChurnKeepsStableIdentity (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.302s
+=== RUN   TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation
+--- PASS: TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation (0.71s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	1.342s

@@ -6,19 +6,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"syscall"
 
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
 )
 
 func ioFailReason(err error) FailReason {
-	if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32)) {
+	if runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(33)) || errors.Is(err, syscall.Errno(1224))) {
 		return FailInUse
 	}
 	if errors.Is(err, os.ErrPermission) {
 		return FailAccessDenied
 	}
 	return FailOther
+}
+
+func isDirNotEmpty(err error) bool {
+	if runtime.GOOS == "windows" {
+		return errors.Is(err, syscall.Errno(145))
+	}
+	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
 }
 
 func removeWithReadonlyRetry(path string, remove func(string) error) error {
@@ -61,6 +69,9 @@ func cleanFile(path string, size uint64, p *CleanProgress) CleanResult {
 	}
 	p.Note(path)
 	if err := removeForcing(path, platform.RemoveFileExclusive); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CleanSkipped
+		}
 		return p.fail(path, ioFailReason(err))
 	}
 	p.Files.Add(1)
@@ -85,27 +96,102 @@ func enumerateCleanEntries(dir string) ([]cleanEntry, TargetIdentity, bool, erro
 	if err != nil {
 		return nil, TargetIdentity{}, false, err
 	}
-	parent, hasParent := CaptureIdentity(dir)
+	type statEntry struct {
+		info os.FileInfo
+		err  error
+	}
+	statCache := make(map[string]statEntry, 16)
+	cachedLstat := func(p string) (os.FileInfo, error) {
+		if hit, ok := statCache[p]; ok {
+			return hit.info, hit.err
+		}
+		info, err := os.Lstat(p)
+		statCache[p] = statEntry{info: info, err: err}
+		return info, err
+	}
+	parent, hasParent := captureIdentityUsing(dir, cachedLstat)
 	children := make([]cleanEntry, 0, len(entries))
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
-		md, err := os.Lstat(path)
+		md, err := entry.Info()
+		// Windows enumeration reports directory lengths differently from
+		// Lstat; identity rechecks must use the same metadata representation.
+		if entry.IsDir() {
+			md, err = cachedLstat(path)
+		}
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, parent, hasParent, err
 		}
-		id, ok := IdentityFromMetadata(md)
-		children = append(children, cleanEntry{path: path, size: platform.AllocatedFileSize(md), identity: id, hasIdentity: ok, link: ruleEvidenceLink(md), dir: md.IsDir()})
+		link := ruleEvidenceLink(md)
+		isDir := md.IsDir()
+		var id TargetIdentity
+		var ok bool
+		if isDir && !link {
+			id, ok = captureIdentityUsing(path, cachedLstat)
+		} else {
+			id, ok = IdentityFromMetadata(md)
+		}
+		children = append(children, cleanEntry{path: path, size: platform.AllocatedFileSize(md), identity: id, hasIdentity: ok, link: link, dir: isDir})
 	}
 	return children, parent, hasParent, nil
 }
 
-func cleanEntryBindings(dir string, parent TargetIdentity, hasParent bool, children []cleanEntry) []bool {
+func cleanEntryBindings(dir string, parent TargetIdentity, hasParent bool, children []cleanEntry) (bool, []bool) {
 	checked := make([]bool, len(children))
 	// All bindings are checked before deletion changes Windows directory mtimes.
-	for i, c := range children {
-		checked[i] = hasParent && c.hasIdentity && parent.Recheck(dir) && c.identity.Recheck(c.path)
+	if !hasParent || !parent.Recheck(dir) {
+		return false, checked
 	}
-	return checked
+	for i, c := range children {
+		checked[i] = c.hasIdentity && c.identity.Recheck(c.path)
+	}
+	return true, checked
+}
+
+// classifyUncheckedChild distinguishes a concurrently vanished temp file or an
+// actively appended log/cache file from a replaced directory/link target.
+func classifyUncheckedChild(parentOK bool, c cleanEntry) (FailReason, bool) {
+	if !parentOK {
+		return FailChanged, true
+	}
+	info, err := os.Lstat(c.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false
+	}
+	if err == nil && !c.dir && !c.link && !info.IsDir() && !ruleEvidenceLink(info) {
+		return FailInUse, true
+	}
+	return FailChanged, true
+}
+
+// One budget covers the entire recursive cleanup. Inline fallback avoids
+// waiting for slots held by ancestors; all children finish before rmdir.
+func (p *CleanProgress) cleanParallel(n int, run func(int)) {
+	if runtime.GOOS != "windows" || n < 2 {
+		for i := 0; i < n; i++ {
+			run(i)
+		}
+		return
+	}
+	p.workersOnce.Do(func() { p.workers = make(chan struct{}, 7) })
+	var pending sync.WaitGroup
+	for i := 0; i < n; i++ {
+		select {
+		case p.workers <- struct{}{}:
+			pending.Add(1)
+			go func() {
+				defer pending.Done()
+				defer func() { <-p.workers }()
+				run(i)
+			}()
+		default:
+			run(i)
+		}
+	}
+	pending.Wait()
 }
 
 func cleanFileFamilies(files []cleanEntry, p *CleanProgress) []string {
@@ -117,43 +203,55 @@ func cleanFileFamilies(files []cleanEntry, p *CleanProgress) []string {
 		}
 		groups[key] = append(groups[key], f)
 	}
-	var failed []string
+	var families [][]cleanEntry
 	for _, members := range groups {
-		sort.SliceStable(members, func(i, j int) bool {
-			return IsSQLiteCompanionName(filepath.Base(members[i].path)) && !IsSQLiteCompanionName(filepath.Base(members[j].path))
-		})
-		hasCompanion, hasMain := false, false
-		mainPath := ""
-		for _, f := range members {
-			if IsSQLiteCompanionName(filepath.Base(f.path)) {
-				hasCompanion = true
-			} else {
-				hasMain = true
-				mainPath = f.path
-			}
+		families = append(families, members)
+	}
+	failures := make([][]string, len(families))
+	p.cleanParallel(len(families), func(i int) { failures[i] = cleanFileFamily(families[i], p) })
+	var failed []string
+	for _, paths := range failures {
+		failed = append(failed, paths...)
+	}
+	return failed
+}
+
+func cleanFileFamily(members []cleanEntry, p *CleanProgress) []string {
+	var failed []string
+	sort.SliceStable(members, func(i, j int) bool {
+		return IsSQLiteCompanionName(filepath.Base(members[i].path)) && !IsSQLiteCompanionName(filepath.Base(members[j].path))
+	})
+	hasCompanion, hasMain := false, false
+	mainPath := ""
+	for _, f := range members {
+		if IsSQLiteCompanionName(filepath.Base(f.path)) {
+			hasCompanion = true
+		} else {
+			hasMain = true
+			mainPath = f.path
 		}
-		if hasCompanion && hasMain && IsLiveDatabase(mainPath) {
-			for _, f := range members {
-				p.fail(f.path, FailInUse)
-				failed = append(failed, f.path)
-			}
+	}
+	if hasCompanion && hasMain && IsLiveDatabase(mainPath) {
+		for _, f := range members {
+			p.fail(f.path, FailInUse)
+			failed = append(failed, f.path)
+		}
+		return failed
+	}
+	var companionFailures []string
+	for _, f := range members {
+		companion := IsSQLiteCompanionName(filepath.Base(f.path))
+		if !companion && len(companionFailures) > 0 {
+			// The main file is kept because its companion is; it inherits
+			// that companion's skip-or-error class.
+			p.failParent(f.path, companionFailures)
+			failed = append(failed, f.path)
 			continue
 		}
-		var companionFailures []string
-		for _, f := range members {
-			companion := IsSQLiteCompanionName(filepath.Base(f.path))
-			if !companion && len(companionFailures) > 0 {
-				// The main file is kept because its companion is; it inherits
-				// that companion's skip-or-error class.
-				p.failParent(f.path, companionFailures)
-				failed = append(failed, f.path)
-				continue
-			}
-			if cleanFile(f.path, f.size, p) == CleanFailed {
-				failed = append(failed, f.path)
-				if companion {
-					companionFailures = append(companionFailures, f.path)
-				}
+		if cleanFile(f.path, f.size, p) == CleanFailed {
+			failed = append(failed, f.path)
+			if companion {
+				companionFailures = append(companionFailures, f.path)
 			}
 		}
 	}
@@ -172,6 +270,9 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 	}
 	if ruleEvidenceLink(md) {
 		if err := os.Remove(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return CleanSkipped
+			}
 			return p.fail(path, ioFailReason(err))
 		}
 		p.Files.Add(1)
@@ -183,15 +284,20 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 	p.Note(path)
 	children, parent, hasParent, err := enumerateCleanEntries(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CleanSkipped
+		}
 		return p.fail(path, ioFailReason(err))
 	}
-	checked := cleanEntryBindings(path, parent, hasParent, children)
+	parentOK, checked := cleanEntryBindings(path, parent, hasParent, children)
 	var files, dirs []cleanEntry
 	var failed []string
 	for i, c := range children {
 		if !checked[i] {
-			p.fail(c.path, FailChanged)
-			failed = append(failed, c.path)
+			if reason, keep := classifyUncheckedChild(parentOK, c); keep {
+				p.fail(c.path, reason)
+				failed = append(failed, c.path)
+			}
 			continue
 		}
 		if c.dir || c.link {
@@ -201,8 +307,10 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 		}
 	}
 	failed = append(failed, cleanFileFamilies(files, p)...)
-	for _, d := range dirs {
-		if DeleteTree(d.path, p) == CleanFailed {
+	results := make([]CleanResult, len(dirs))
+	p.cleanParallel(len(dirs), func(i int) { results[i] = DeleteTree(dirs[i].path, p) })
+	for i, d := range dirs {
+		if results[i] == CleanFailed {
 			failed = append(failed, d.path)
 		}
 	}
@@ -215,6 +323,12 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 		return p.failParent(path, failed)
 	}
 	if err := removeForcing(path, os.Remove); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CleanOK
+		}
+		if isDirNotEmpty(err) {
+			return p.fail(path, FailInUse)
+		}
 		return p.fail(path, ioFailReason(err))
 	}
 	return CleanOK
@@ -257,17 +371,25 @@ func CleanDirContents(dir string, p *CleanProgress) CleanReport {
 	}
 	children, parent, hasParent, err := enumerateCleanEntries(dir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			report.Record(dir, CleanSkipped)
+			return report
+		}
 		report.Record(dir, p.fail(dir, ioFailReason(err)))
 		return report
 	}
-	checked := cleanEntryBindings(dir, parent, hasParent, children)
+	parentOK, checked := cleanEntryBindings(dir, parent, hasParent, children)
 	for i, c := range children {
 		if p.Cancelled() {
 			report.Record(c.path, CleanSkipped)
 			continue
 		}
 		if !checked[i] {
-			report.Record(c.path, p.fail(c.path, FailChanged))
+			if reason, keep := classifyUncheckedChild(parentOK, c); keep {
+				report.Record(c.path, p.fail(c.path, reason))
+			} else {
+				report.Record(c.path, CleanSkipped)
+			}
 			continue
 		}
 		report.Record(c.path, CleanPath(c.path, p))

@@ -1,0 +1,5 @@
+--- FAIL: TestRemoveFileExclusiveWaitsForOwnHardlinkProbe (0.01s)
+    remove_windows_test.go:41: own probe became external occupancy: remove C:\Users\MEIMIN~1\AppData\Local\Temp\TestRemoveFileExclusiveWaitsForOwnHardlinkProbe2761214898\001\file: The process cannot access the file because it is being used by another process.
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.124s
+FAIL

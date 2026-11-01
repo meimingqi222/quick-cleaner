@@ -53,3 +53,39 @@ func TestIdentityWindowsReparseFallback(t *testing.T) {
 		t.Fatal("reparse capture must retain weak fallback")
 	}
 }
+
+func TestIdentityWindowsDirectoryChurnKeepsStableIdentity(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "cache")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Unix(1700000000, 0)
+	if err := os.Chtimes(dir, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	id := identityCapture(t, dir)
+	if !id.hasStable {
+		t.Fatal("native directory did not yield stable identity")
+	}
+	// Simulate background cache/log churn between scan and clean advancing dir mtime.
+	child := filepath.Join(dir, "active.tmp")
+	identityWrite(t, child, "written after scan")
+	later := stamp.Add(5 * time.Second)
+	if err := os.Chtimes(dir, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if !id.Recheck(dir) {
+		t.Fatal("directory churn invalidated stable Windows directory identity")
+	}
+	// Replacing the directory with a new object must still fail recheck.
+	if err := os.Rename(dir, dir+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if id.Recheck(dir) {
+		t.Fatal("replacement directory accepted")
+	}
+}

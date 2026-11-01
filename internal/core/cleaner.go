@@ -72,6 +72,8 @@ type CleanProgress struct {
 	mu                                                    sync.Mutex
 	current                                               string
 	reasons                                               map[string]FailReason
+	workersOnce                                           sync.Once
+	workers                                               chan struct{}
 }
 
 func NewCleanProgress(files, bytes uint64) *CleanProgress {
