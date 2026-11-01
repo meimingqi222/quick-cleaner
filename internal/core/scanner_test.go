@@ -215,3 +215,31 @@ func TestDiscoveredExistenceIsCheckedBeforeTheMainThreadMerge(t *testing.T) {
 		}
 	}
 }
+
+// Overlap is symmetric across the ancestor relation and stops at a path
+// boundary. The merge used to scan every fixed path per item, so this pins the
+// hash-lookup replacement to the same answers.
+func TestMergeDiscoveredOverlapCoversBothDirectionsAtPathBoundaries(t *testing.T) {
+	fixedRoot := `C:\Data\Cache`
+	cats := AggregateScanItems([]ScanItem{{Path: fixedRoot, Category: UserCache, Size: 10}})
+	items := []ScanItem{
+		{Path: `C:\Data\Cache`, Category: DevBuild, Size: 1},
+		{Path: `C:\Data\Cache\Nested`, Category: DevBuild, Size: 2},
+		{Path: `C:/Data/Cache/Temp`, Category: DevBuild, Size: 3},
+		{Path: `C:\Data`, Category: DevBuild, Size: 4},
+		{Path: `c:\data\cache2`, Category: DevBuild, Size: 5},
+		{Path: `C:\Data\Other`, Category: DevBuild, Size: 6},
+	}
+	MergeDiscovered(cats, items, false)
+	kept := map[string]bool{}
+	for _, cat := range cats {
+		for _, item := range cat.Items {
+			if item.Path != fixedRoot {
+				kept[Norm(item.Path)] = true
+			}
+		}
+	}
+	if len(kept) != 2 || !kept[Norm(`C:\Data\Cache2`)] || !kept[Norm(`C:\Data\Other`)] {
+		t.Fatalf("overlap answers changed: %v", kept)
+	}
+}

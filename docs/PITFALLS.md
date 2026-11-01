@@ -1539,3 +1539,14 @@ Note: `2026-11-01-disk-lens-virtual-list.md`
 - **防护**：行列表用 `ui.List` 只构建视口行，行 key 用 `Node.Idx`；全选收集当前视图可选行后调用 `SetMany`，批量更新后统一清理祖先覆盖与无主排除项。
 - **禁止回退**：不能把磁盘行列表退回 `ui.Scroll` 全量遍历；不能让 `SetViewSelected` 退回逐行 `Set`；不能为性能改变“最近显式选择优先”的父子覆盖语义——`SetMany` 收尾不能把“有已选祖先”的选择项一律删掉，排除项之下的重新勾选必须保留。
 - **测试**：`TestDiskPageVirtualizesLargeFolderRows`、`TestDiskSelectionSetManyMatchesIndividualSets`、`TestDiskSelectionSetManyKeepsReinclusionUnderExclusion`，红绿证据见 Note。
+
+## P128 其余大列表同样必须虚拟化，清理后的逐项检查与合并重叠判定不能留在主线程
+
+Note: `2026-11-01-ui-list-virtualization.md`
+
+- **症状**：Declutter、Dev Env 包列表、应用残留和 Leftover 面板结果集上千时滚动掉帧；清理完成后的列表修剪与磁盘透镜确认框会卡住；大扫描收尾的合并阶段也会停一下。
+- **根因**：这些页面用 `ui.Scroll` 每帧构建全部行；`pruneDeclutter` 在主线程逐项 `os.Stat`；`RequestDeleteSelected` 在主线程递归解析排除项；`MergeDiscovered` 用「发现项 × 固定项」的 `atOrUnder` 双层循环。
+- **防护**：首层列表统一用 `ui.List`，行 key 必须非空且唯一（没有稳定唯一字段时用默认行索引）；`pruneDeclutter` 在 worker 里 stat、主线程只接收 `gone`；`RequestDeleteSelected` 在 worker 里解析目标；`MergeDiscovered` 用固定路径集合 + 边界前缀集合做哈希查找。
+- **禁止回退**：不能把这些大列表退回 `ui.Scroll` 全量构建；不能把 `os.Stat` 或目录递归放回主线程（与 P77 一致）；不能把 `MergeDiscovered` 的重叠判定改回双层 `atOrUnder` 扫描；不能放宽「勾选 + 未失败 + 确实不在」三条摘除条件。
+- **测试**：`TestDeclutterListsVirtualizeLargeResultSets`、`TestDevEnvPackageListVirtualizesLargeInventory`、`TestPruneDeclutterKeepsFailedRows`、`TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming`、`TestMergeDiscoveredOverlapCoversBothDirectionsAtPathBoundaries`，红绿证据见 Note。
+

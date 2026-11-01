@@ -337,30 +337,32 @@ func (s DevEnvPage) packageList(c *ui.Context, a DevEnvPageActions, t devEnvCopy
 		appsPageButton(c, "dev-site-all", t.siteAll, s.busy() || a.SelectSitePackages == nil, false, func() { a.SelectSitePackages(parent.ID) })
 		appsPageButton(c, "dev-site-invert", t.invert, s.busy() || a.InvertSitePackages == nil, false, func() { a.InvertSitePackages(parent.ID) })
 	})
-	ui.Scroll(c.Key("dev-packages-" + parent.ID)).Grow(1).FillWidth().MinHeight(0).Padding(12).Gap(4).Children(func() {
-		for _, item := range visible {
-			ui.Row(c.Key("dev-package-" + item.ID)).FillWidth().Padding(8).Gap(8).Radius(6).Children(func() {
-				s.check(c, a, item)
-				ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
-					ui.Row(c).Gap(8).Children(func() {
-						ui.Text(c, item.DisplayName()).MinWidth(0).NoWrap().MaxLines(1).FontSize(14).Bold()
-						if item.Kind.Version != nil {
-							devBadge(c, "v"+*item.Kind.Version, true)
-						}
-						if changed := s.ChangedLabels[item.ID]; changed != "" {
-							ui.Text(c, "· "+changed).FontSize(12).TextColor(outline)
-						}
-					})
-					path := filepath.Base(item.Path)
-					if rel, err := filepath.Rel(parent.Path, item.Path); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-						path = rel
-					}
-					ui.Text(c, "📁 "+s.displayPath(path)).FillWidth().FontSize(12).TextColor(muted).SingleLine().Tooltip(s.displayPath(item.Path))
-				})
-				if core.CanRemoveDevAsset(item) {
-					s.removeButton(c, a, t, item)
+	ui.List(c.Key("dev-packages-"+parent.ID), nil, len(visible)).Grow(1).FillWidth().MinHeight(0).Padding(12).Gap(4).
+		ItemKey(func(i int) any { return visible[i].ID }).
+		Rows(func(row ui.ListRow) { s.packageRow(row.Context, a, t, parent, visible[row.Index]) })
+}
+
+func (s DevEnvPage) packageRow(c *ui.Context, a DevEnvPageActions, t devEnvCopy, parent core.DevAssetItem, item core.DevAssetItem) {
+	ui.Row(c.Key("dev-package-" + item.ID)).FillWidth().Padding(8).Gap(8).Radius(6).Children(func() {
+		s.check(c, a, item)
+		ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
+			ui.Row(c).Gap(8).Children(func() {
+				ui.Text(c, item.DisplayName()).MinWidth(0).NoWrap().MaxLines(1).FontSize(14).Bold()
+				if item.Kind.Version != nil {
+					devBadge(c, "v"+*item.Kind.Version, true)
+				}
+				if changed := s.ChangedLabels[item.ID]; changed != "" {
+					ui.Text(c, "· "+changed).FontSize(12).TextColor(outline)
 				}
 			})
+			path := filepath.Base(item.Path)
+			if rel, err := filepath.Rel(parent.Path, item.Path); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				path = rel
+			}
+			ui.Text(c, "📁 "+s.displayPath(path)).FillWidth().FontSize(12).TextColor(muted).SingleLine().Tooltip(s.displayPath(item.Path))
+		})
+		if core.CanRemoveDevAsset(item) {
+			s.removeButton(c, a, t, item)
 		}
 	})
 }

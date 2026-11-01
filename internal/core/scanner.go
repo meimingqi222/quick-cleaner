@@ -165,11 +165,50 @@ func DropVanishedDiscovered(items []ScanItem) []ScanItem {
 // MergeDiscovered runs on the main thread and touches no filesystem: pass
 // items through DropVanishedDiscovered first. Whitelist and overlap checks
 // stay here because exclusions and fixed targets can change meanwhile.
+//
+// The overlap test used to compare every discovered item against every fixed
+// path, which is O(items×fixed) on the UI thread. Ancestor/descendant is now
+// answered by hash lookups: the fixed set, plus a set of every path prefix of
+// each fixed entry (the "norm is an ancestor of a fixed path" direction).
 func MergeDiscovered(cats []CategorySummary, items []ScanItem, partial bool) {
-	var fixed []string
+	// fixedSet catches "a fixed path is norm or an ancestor of norm";
+	// fixedPrefixes catches "norm is norm-or-ancestor of a fixed path".
+	fixedSet := make(map[string]struct{}, len(items))
 	for _, cat := range cats {
 		for _, item := range cat.Items {
-			fixed = append(fixed, Norm(item.Path))
+			fixedSet[Norm(item.Path)] = struct{}{}
+		}
+	}
+	var fixedPrefixes map[string]struct{}
+	if len(fixedSet) > 0 {
+		fixedPrefixes = make(map[string]struct{}, len(fixedSet)*2)
+		for path := range fixedSet {
+			fixedPrefixes[path] = struct{}{}
+			for p := path; ; {
+				i := strings.LastIndexByte(p, '\\')
+				if i < 0 {
+					break
+				}
+				p = p[:i]
+				fixedPrefixes[p] = struct{}{}
+			}
+		}
+	}
+	overlaps := func(norm string) bool {
+		if fixedPrefixes != nil {
+			if _, ok := fixedPrefixes[norm]; ok {
+				return true
+			}
+		}
+		for p := norm; ; {
+			if _, ok := fixedSet[p]; ok {
+				return true
+			}
+			i := strings.LastIndexByte(p, '\\')
+			if i < 0 {
+				return false
+			}
+			p = p[:i]
 		}
 	}
 	byCategory := map[CategoryID][]ScanItem{}
@@ -177,15 +216,7 @@ func MergeDiscovered(cats []CategorySummary, items []ScanItem, partial bool) {
 		if IsWhitelisted(item.Path) {
 			continue
 		}
-		norm := Norm(item.Path)
-		overlap := false
-		for _, path := range fixed {
-			if atOrUnder(path, norm) || atOrUnder(norm, path) {
-				overlap = true
-				break
-			}
-		}
-		if overlap {
+		if overlaps(Norm(item.Path)) {
 			continue
 		}
 		item.Recommended = item.Recommended && !HasWhitelistEntryUnder(item.Path)

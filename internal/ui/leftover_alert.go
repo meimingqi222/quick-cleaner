@@ -93,12 +93,10 @@ func (s LeftoverAlert) Render(c *ui.Context, a LeftoverAlertActions) {
 			}
 		})
 
-		// App content stream
-		ui.Scroll(c.Key("leftover-alert-list")).FillWidth().Grow(1).MinHeight(0).Padding(10, 14, 12, 14).Gap(12).Children(func() {
-			for i, l := range s.Leftovers {
-				s.renderApp(c, a, t, i, l)
-			}
-		})
+		// App content stream: one card is one virtual row, so a large leftover
+		// inventory does not rebuild every card per frame.
+		ui.List(c.Key("leftover-alert-list"), nil, len(s.Leftovers)).FillWidth().Grow(1).MinHeight(0).Padding(10, 14, 12, 14).Gap(12).
+			Rows(func(row ui.ListRow) { s.renderApp(row.Context, a, t, row.Index, s.Leftovers[row.Index]) })
 	})
 }
 

@@ -130,16 +130,14 @@ func (s DeclutterPage) columns(c *ui.Context, date string) {
 }
 
 func (s DeclutterPage) downloads(c *ui.Context, a DeclutterPageActions) {
-	ui.Text(c, fmt.Sprintf(s.tr("count"), len(s.Downloads))).FontSize(14).Bold().TextColor(primary)
-	ui.Column(c).FillWidth().Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
-		s.columns(c, "downloaded")
-		if len(s.Downloads) == 0 {
-			s.empty(c)
-		}
-		for i, f := range s.Downloads[:min(s.limit(DeclutterDownloads), len(s.Downloads))] {
-			s.fileRow(c, a, fmt.Sprintf("declutter-down-%d", i), f.Filename, f.Path, f.Path, f.Kind.Get(s.Language), f.DownloadedAtStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleDownload(i) }, a.ToggleDownload != nil)
-		}
-	})
+	ui.Text(c, fmt.Sprintf(s.tr("count"), len(s.Downloads))).Shrink(0).FontSize(14).Bold().TextColor(primary)
+	count := min(s.limit(DeclutterDownloads), len(s.Downloads))
+	rows := s.Downloads[:count]
+	s.listBox(c, "declutter-downloads", count, func(row ui.ListRow) {
+		i := row.Index
+		f := rows[i]
+		s.fileRow(row.Context, a, fmt.Sprintf("declutter-down-%d", i), f.Filename, f.Path, f.Path, f.Kind.Get(s.Language), f.DownloadedAtStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleDownload(i) }, a.ToggleDownload != nil)
+	}, func() { s.columns(c, "downloaded") })
 	s.showMore(c, a, DeclutterDownloads, len(s.Downloads), false)
 }
 
@@ -152,7 +150,7 @@ func (s DeclutterPage) largeFiles(c *ui.Context, a DeclutterPageActions) {
 			total += s.LargeFiles[i].Size
 		}
 	}
-	ui.Row(c).FillWidth().Gap(8).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 		label := s.tr("sizeAll")
 		if s.MinSizeFilter > 0 {
 			size := "1GB"
@@ -175,21 +173,18 @@ func (s DeclutterPage) largeFiles(c *ui.Context, a DeclutterPageActions) {
 		s.button(c, "clear-filters", s.tr("clearFilters"), a.ClearFilters, !s.busy())
 		ui.Text(c, s.tr("found")+" · "+core.FmtSize(total)).Grow(1).FontSize(12).TextColor(primary)
 	})
-	ui.Column(c).FillWidth().Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
-		s.columns(c, "accessed")
-		if len(indices) == 0 {
-			s.empty(c)
-		}
-		for _, i := range indices[:min(s.limit(DeclutterLargeFiles), len(indices))] {
-			f := s.LargeFiles[i]
-			s.fileRow(c, a, fmt.Sprintf("declutter-large-%d", i), f.Filename, f.Path, f.PathDisplay, f.Kind.Get(s.Language), f.LastAccessedStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleLargeFile(i) }, a.ToggleLargeFile != nil)
-		}
-	})
+	count := min(s.limit(DeclutterLargeFiles), len(indices))
+	rows := indices[:count]
+	s.listBox(c, "declutter-large", count, func(row ui.ListRow) {
+		i := rows[row.Index]
+		f := s.LargeFiles[i]
+		s.fileRow(row.Context, a, fmt.Sprintf("declutter-large-%d", i), f.Filename, f.Path, f.PathDisplay, f.Kind.Get(s.Language), f.LastAccessedStr.Get(s.Language), f.Size, f.Selected, func() { a.ToggleLargeFile(i) }, a.ToggleLargeFile != nil)
+	}, func() { s.columns(c, "accessed") })
 	s.showMore(c, a, DeclutterLargeFiles, len(indices), false)
 }
 
 func (s DeclutterPage) duplicates(c *ui.Context, a DeclutterPageActions) {
-	ui.Row(c).FillWidth().Gap(8).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 		label := fmt.Sprintf(s.tr("dupSummary"), len(s.Duplicates))
 		if shown := s.limit(DeclutterDuplicates); len(s.Duplicates) > shown {
 			label += fmt.Sprintf(s.tr("dupCap"), shown)
@@ -198,30 +193,38 @@ func (s DeclutterPage) duplicates(c *ui.Context, a DeclutterPageActions) {
 		s.button(c, "newest", s.tr("newest"), a.KeepNewestDuplicates, !s.busy())
 		s.button(c, "oldest", s.tr("oldest"), a.KeepOldestDuplicates, !s.busy())
 	})
-	if len(s.Duplicates) == 0 {
+	count := min(s.limit(DeclutterDuplicates), len(s.Duplicates))
+	groups := s.Duplicates[:count]
+	if count == 0 {
 		s.empty(c)
 	}
-	defer s.showMore(c, a, DeclutterDuplicates, len(s.Duplicates), true)
-	for gi, g := range s.Duplicates[:min(s.limit(DeclutterDuplicates), len(s.Duplicates))] {
-		ui.Column(c).FillWidth().Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
-			ui.Row(c).FillWidth().Padding(12, 16).Background(surfaceLow).Gap(12).Children(func() {
-				ui.Box(c).Size(32, 32).Shrink(0).Radius(8).Background(ui.Hex("#efdbff")).Center().Children(func() { declutterIcon(c, DeclutterDuplicates, ui.Hex("#7547ab"), 18) })
-				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					ui.Text(c, g.Filename).FontSize(14).Bold().SingleLine()
-					ui.Text(c, fmt.Sprintf(s.tr("dupSub"), core.FmtSize(g.SizePerCopy), len(g.Files))).FontSize(12).TextColor(outline)
-				})
+	ui.List(c.Key("declutter-duplicates-list"), nil, count).Grow(1).FillWidth().MinHeight(0).Gap(8).
+		ItemKey(func(i int) any { return fmt.Sprintf("%d-%s", i, groups[i].Filename) }).
+		Rows(func(row ui.ListRow) { s.duplicateGroup(row.Context, a, row.Index, groups[row.Index]) })
+	s.showMore(c, a, DeclutterDuplicates, len(s.Duplicates), true)
+}
+
+// duplicateGroup is one card; it is a list row so groups off screen are not
+// built on every frame.
+func (s DeclutterPage) duplicateGroup(c *ui.Context, a DeclutterPageActions, gi int, g core.DuplicateGroup) {
+	ui.Column(c).FillWidth().Shrink(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
+		ui.Row(c).FillWidth().Padding(12, 16).Background(surfaceLow).Gap(12).Children(func() {
+			ui.Box(c).Size(32, 32).Shrink(0).Radius(8).Background(ui.Hex("#efdbff")).Center().Children(func() { declutterIcon(c, DeclutterDuplicates, ui.Hex("#7547ab"), 18) })
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, g.Filename).FontSize(14).Bold().SingleLine()
+				ui.Text(c, fmt.Sprintf(s.tr("dupSub"), core.FmtSize(g.SizePerCopy), len(g.Files))).FontSize(12).TextColor(outline)
 			})
-			for fi, f := range g.Files {
-				badge := ""
-				if f.IsOriginal {
-					badge = s.tr("original")
-				} else if f.Selected {
-					badge = s.tr("duplicate")
-				}
-				s.fileRow(c, a, fmt.Sprintf("declutter-dup-%d-%d", gi, fi), f.PathDisplay, f.Path, fmt.Sprintf(s.tr("modified"), f.ModifiedAtStr), badge, "", g.SizePerCopy, f.Selected, func() { a.ToggleDuplicate(gi, fi) }, a.ToggleDuplicate != nil)
-			}
 		})
-	}
+		for fi, f := range g.Files {
+			badge := ""
+			if f.IsOriginal {
+				badge = s.tr("original")
+			} else if f.Selected {
+				badge = s.tr("duplicate")
+			}
+			s.fileRow(c, a, fmt.Sprintf("declutter-dup-%d-%d", gi, fi), f.PathDisplay, f.Path, fmt.Sprintf(s.tr("modified"), f.ModifiedAtStr), badge, "", g.SizePerCopy, f.Selected, func() { a.ToggleDuplicate(gi, fi) }, a.ToggleDuplicate != nil)
+		}
+	})
 }
 
 func (s DeclutterPage) overview(c *ui.Context, a DeclutterPageActions) {

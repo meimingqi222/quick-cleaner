@@ -110,12 +110,14 @@ func (s DeclutterPage) button(c *ui.Context, key, label string, action func(), e
 
 func (s DeclutterPage) RenderContent(c *ui.Context, a DeclutterPageActions) {
 	ui.Column(c.Key("declutter-page")).FillWidth().Grow(1).MinHeight(0).Gap(0).Children(func() {
-		ui.Scroll(c.Key(fmt.Sprintf("declutter-scroll-%d", s.Tab))).Grow(1).FillWidth().MinHeight(0).Padding(20).Gap(16).Children(func() {
-			if s.Tab == DeclutterOverview {
+		if s.Tab == DeclutterOverview {
+			ui.Scroll(c.Key("declutter-scroll-overview")).Grow(1).FillWidth().MinHeight(0).Padding(20).Gap(16).Children(func() {
 				s.overview(c, a)
-				return
-			}
-			ui.Row(c).FillWidth().Gap(8).Children(func() {
+			})
+			return
+		}
+		ui.Column(c.Key(fmt.Sprintf("declutter-body-%d", s.Tab))).FillWidth().Grow(1).MinHeight(0).Padding(20).Gap(16).Children(func() {
+			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 				s.button(c, "back", s.tr("back"), func() { a.SetTab(DeclutterOverview) }, a.SetTab != nil)
 				ui.Box(c).Grow(1)
 				for _, tab := range []DeclutterTab{DeclutterSimilarPhotos, DeclutterDuplicates, DeclutterLargeFiles, DeclutterDownloads} {
@@ -137,9 +139,25 @@ func (s DeclutterPage) RenderContent(c *ui.Context, a DeclutterPageActions) {
 				s.photos(c, a)
 			}
 		})
-		if s.Tab != DeclutterOverview && !s.Cleaning {
+		if !s.Cleaning {
 			s.actionBar(c, a)
 		}
+	})
+}
+
+// listBox is the bordered viewport shared by the declutter tabs. The header row
+// stays fixed above a virtual list; building every row on every frame is what
+// made large result sets scroll slowly.
+func (s DeclutterPage) listBox(c *ui.Context, key string, count int, rows func(ui.ListRow), header func()) {
+	ui.Column(c.Key(key)).FillWidth().Grow(1).MinHeight(0).Radius(12).Border(1, outlineVariant.Alpha(.4)).Clip().Gap(0).Children(func() {
+		if header != nil {
+			header()
+		}
+		if count == 0 {
+			s.empty(c)
+			return
+		}
+		ui.List(c.Key(key+"-list"), nil, count).Grow(1).FillWidth().MinHeight(0).Gap(0).Rows(rows)
 	})
 }
 

@@ -84,6 +84,28 @@ func TestDevEnvMasterDetailAndSelectionIsolation(t *testing.T) {
 	}
 }
 
+// A large package inventory must build only the rows on screen; the old
+// scroll rebuilt every package each frame.
+func TestDevEnvPackageListVirtualizesLargeInventory(t *testing.T) {
+	s := devEnvFixture()
+	s.Packages["python"] = nil
+	for i := 0; i < 2000; i++ {
+		s.Packages["python"] = append(s.Packages["python"], core.DevAssetItem{
+			ID:     fmt.Sprintf("pkg-%04d", i),
+			Kind:   core.DevAssetKind{Type: core.DevPipPackage, Name: fmt.Sprintf("pkg-%04d", i)},
+			Path:   fmt.Sprintf("/example/python/site-packages/pkg-%04d", i),
+			Source: core.AssetTool,
+		})
+	}
+	tt := devEnvTester(&s, DevEnvPageActions{})
+	if tt.HasText("pkg-1999") {
+		t.Fatal("offscreen package row constructed instead of virtualized")
+	}
+	if !tt.HasText("pkg-0000") {
+		t.Fatalf("first package row missing: %v", tt.Texts())
+	}
+}
+
 func TestDevEnvSearchFiltersAndPackageLoadStates(t *testing.T) {
 	s := devEnvFixture()
 	a := DevEnvPageActions{SetSearch: func(q string) { s.Search = q }, SetFilter: func(f DevEnvFilter) { s.Filter = f }}

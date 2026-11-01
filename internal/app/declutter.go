@@ -252,32 +252,94 @@ func (r *Root) requestDeclutterClean(tab view.DeclutterTab) {
 }
 
 // pruneDeclutter drops the entries this clean really moved, keeping everything else so
-// the list still shows what failed and the user can retry. Mirrors
-// prune_cleaned_declutter_items in src/ui/actions/declutter.rs.
+// the list still shows what failed and the user can retry. The disk check runs off
+// the UI thread: thousands of selected files each cost a stat after a batch clean.
 func (r *Root) pruneDeclutter(tab view.DeclutterTab, report core.CleanReport) {
-	failed := make([]string, 0, len(report.Failed)+len(report.Manual))
+	failed := make(map[string]bool, len(report.Failed)+len(report.Manual))
 	for _, f := range report.Failed {
-		failed = append(failed, f.Path)
+		failed[f.Path] = true
 	}
 	for _, f := range report.Manual {
-		failed = append(failed, f.Path)
+		failed[f.Path] = true
 	}
-	gone := func(path string, selected bool) bool { return declutterItemIsGone(path, selected, failed) }
+	paths := r.declutterSelectedPaths(tab, failed)
+	check := func(ctx context.Context) map[string]bool {
+		gone := make(map[string]bool, len(paths))
+		for _, path := range paths {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if _, err := os.Stat(path); err != nil {
+				gone[path] = true
+			}
+		}
+		return gone
+	}
+	if len(paths) == 0 {
+		r.applyDeclutterPrune(tab, nil, failed)
+		return
+	}
+	if !r.start(false, nil, func(ctx context.Context) func() {
+		gone := check(ctx)
+		return func() { r.applyDeclutterPrune(tab, gone, failed) }
+	}) {
+		r.applyDeclutterPrune(tab, check(r.ctx), failed)
+	}
+}
+
+// declutterSelectedPaths lists the rows a clean touched: selected and not
+// reported failed. All three conditions of the prune matter: an unselected row
+// was never touched, a failed row is still on disk, and a row reported OK may
+// still be there (a delete that lied about success). Only these need a stat.
+func (r *Root) declutterSelectedPaths(tab view.DeclutterTab, failed map[string]bool) []string {
+	var paths []string
+	add := func(path string, selected bool) {
+		if selected && !failed[path] {
+			paths = append(paths, path)
+		}
+	}
+	switch tab {
+	case view.DeclutterDownloads:
+		for _, i := range r.declutter.Downloads {
+			add(i.Path, i.Selected)
+		}
+	case view.DeclutterLargeFiles:
+		for _, i := range r.declutter.LargeFiles {
+			add(i.Path, i.Selected)
+		}
+	case view.DeclutterDuplicates:
+		for _, g := range r.declutter.Duplicates {
+			for _, i := range g.Files {
+				add(i.Path, i.Selected)
+			}
+		}
+	case view.DeclutterSimilarPhotos:
+		for _, g := range r.declutter.Photos {
+			for _, i := range g.Photos {
+				add(i.Path, i.Selected)
+			}
+		}
+	}
+	return paths
+}
+
+func (r *Root) applyDeclutterPrune(tab view.DeclutterTab, gone, failed map[string]bool) {
+	isGone := func(path string, selected bool) bool { return selected && !failed[path] && gone[path] }
 	switch tab {
 	case view.DeclutterDownloads:
 		r.declutter.Downloads = slices.DeleteFunc(r.declutter.Downloads, func(i core.DownloadItem) bool {
-			return gone(i.Path, i.Selected)
+			return isGone(i.Path, i.Selected)
 		})
 	case view.DeclutterLargeFiles:
 		r.declutter.LargeFiles = slices.DeleteFunc(r.declutter.LargeFiles, func(i core.LargeFileItem) bool {
-			return gone(i.Path, i.Selected)
+			return isGone(i.Path, i.Selected)
 		})
 		r.filterLarge()
 	case view.DeclutterDuplicates:
 		kept := r.declutter.Duplicates[:0]
 		for _, g := range r.declutter.Duplicates {
 			g.Files = slices.DeleteFunc(g.Files, func(f core.DuplicateFileItem) bool {
-				return gone(f.Path, f.Selected)
+				return isGone(f.Path, f.Selected)
 			})
 			if len(g.Files) >= 2 {
 				kept = append(kept, g)
@@ -288,7 +350,7 @@ func (r *Root) pruneDeclutter(tab view.DeclutterTab, report core.CleanReport) {
 		kept := r.declutter.Photos[:0]
 		for _, g := range r.declutter.Photos {
 			g.Photos = slices.DeleteFunc(g.Photos, func(p core.PhotoItem) bool {
-				return gone(p.Path, p.Selected)
+				return isGone(p.Path, p.Selected)
 			})
 			if len(g.Photos) >= 2 {
 				kept = append(kept, g)
@@ -298,16 +360,4 @@ func (r *Root) pruneDeclutter(tab view.DeclutterTab, report core.CleanReport) {
 		// Group indices moved, so expanded rows would point at the wrong group.
 		r.declutter.ExpandedPhotoGroups = nil
 	}
-}
-
-// declutterItemIsGone reports whether a row may leave the list. All three conditions
-// matter: a row that was not selected was never touched, a row the report failed is
-// still on disk, and a row reported OK may still be there (a delete that lied about
-// success). Trusting the report alone would hide files that remain.
-func declutterItemIsGone(path string, selected bool, failed []string) bool {
-	if !selected || slices.Contains(failed, path) {
-		return false
-	}
-	_, err := os.Stat(path)
-	return err != nil
 }

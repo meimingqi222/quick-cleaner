@@ -42,29 +42,15 @@ func (s AppsPage) residualReview(c *ui.Context, a AppsPageActions, t appsPageCop
 					break
 				}
 			}
-			ui.Scroll(c.Key("apps-residual-list")).FillWidth().MaxHeight(280).MinHeight(50).Shrink(1).Gap(4).Padding(8).Radius(12).Border(1, outlineVariant.Alpha(.5)).Children(func() {
-				if len(s.Residuals) == 0 {
-					ui.Text(c, t.residualEmpty).FontSize(14).TextColor(muted).Padding(20)
-				}
-				for _, item := range s.Residuals {
-					ui.Row(c.Key("apps-residual-"+item.ID)).FillWidth().Padding(8, 12).Gap(8).Children(func() {
-						selected := item.Selected
-						check := ui.Checkbox(c.Key("apps-residual-check-"+item.ID), &selected, "").Label(item.Path).Disabled(s.busy() || item.Manual || a.SetResidualSelected == nil)
-						if check.Changed() && a.SetResidualSelected != nil {
-							a.SetResidualSelected(item.ID, selected)
-						}
-						fg, bg := caution, cautionContainer
-						if item.Confidence == core.Certain {
-							fg, bg = primary, primaryFixed
-						}
-						ui.Text(c, item.Confidence.LabelLang(s.Language)).Shrink(0).FontSize(12).Padding(1, 8).Radius(6).TextColor(fg).Background(bg)
-						ui.Text(c, item.Source.LabelLang(s.Language)).Shrink(0).FontSize(12).TextColor(outline)
-						ui.Text(c, (core.ResidualKind{Type: item.Kind}).KindLabelLang(s.Language)).Shrink(0).FontSize(12).TextColor(outline)
-						ui.Text(c, item.Path).Grow(1).MinWidth(0).FontSize(12).TextColor(text)
-						ui.Text(c, item.Size).Shrink(0).FontSize(12).TextColor(outline)
-					})
-				}
-			})
+			if len(s.Residuals) == 0 {
+				ui.Text(c, t.residualEmpty).FontSize(14).TextColor(muted).Padding(20)
+			} else {
+				// The residual list can be long after an orphan scan; build only
+				// the rows in this fixed-height viewport.
+				height := float32(min(280, max(50, len(s.Residuals)*44)))
+				ui.List(c.Key("apps-residual-list"), nil, len(s.Residuals)).FillWidth().Height(height).Shrink(0).Padding(8).Gap(4).Radius(12).Border(1, outlineVariant.Alpha(.5)).
+					Rows(func(row ui.ListRow) { s.residualRow(row.Context, a, t, s.Residuals[row.Index]) })
+			}
 			// 常驻说明不是警告：它每个面板都有、内容固定，用橙色 caution 画出来
 			// 就变成一条要用户处理的提示。放在列表下方用灰字小字，真正的失败
 			// 提示（s.Notice）和占用横幅仍然保持警示样式。
@@ -77,6 +63,25 @@ func (s AppsPage) residualReview(c *ui.Context, a AppsPageActions, t appsPageCop
 	if modal.Dismissed() && a.CloseResiduals != nil {
 		a.CloseResiduals()
 	}
+}
+
+func (s AppsPage) residualRow(c *ui.Context, a AppsPageActions, t appsPageCopy, item AppsPageResidual) {
+	ui.Row(c.Key("apps-residual-"+item.ID)).FillWidth().Padding(8, 12).Gap(8).Children(func() {
+		selected := item.Selected
+		check := ui.Checkbox(c.Key("apps-residual-check-"+item.ID), &selected, "").Label(item.Path).Disabled(s.busy() || item.Manual || a.SetResidualSelected == nil)
+		if check.Changed() && a.SetResidualSelected != nil {
+			a.SetResidualSelected(item.ID, selected)
+		}
+		fg, bg := caution, cautionContainer
+		if item.Confidence == core.Certain {
+			fg, bg = primary, primaryFixed
+		}
+		ui.Text(c, item.Confidence.LabelLang(s.Language)).Shrink(0).FontSize(12).Padding(1, 8).Radius(6).TextColor(fg).Background(bg)
+		ui.Text(c, item.Source.LabelLang(s.Language)).Shrink(0).FontSize(12).TextColor(outline)
+		ui.Text(c, (core.ResidualKind{Type: item.Kind}).KindLabelLang(s.Language)).Shrink(0).FontSize(12).TextColor(outline)
+		ui.Text(c, item.Path).Grow(1).MinWidth(0).FontSize(12).TextColor(text)
+		ui.Text(c, item.Size).Shrink(0).FontSize(12).TextColor(outline)
+	})
 }
 
 // occupancyBanner restates scan-time process and launchd evidence. It does not

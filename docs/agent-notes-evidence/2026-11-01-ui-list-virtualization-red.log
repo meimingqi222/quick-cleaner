@@ -1,0 +1,20 @@
+--- FAIL: TestDeclutterListsVirtualizeLargeResultSets (0.20s)
+    declutter_page_test.go:287: offscreen download row constructed instead of virtualized
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.487s
+FAIL
+--- FAIL: TestDevEnvPackageListVirtualizesLargeInventory (0.19s)
+    dev_env_page_test.go:102: offscreen package row constructed instead of virtualized
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.474s
+FAIL
+--- FAIL: TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming (0.03s)
+    root_test.go:243: confirmation appeared before targets were resolved
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.305s
+FAIL
+--- FAIL: TestPruneDeclutterKeepsFailedRows (5.02s)
+    declutter_prune_test.go:50: worker did not publish
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	5.324s
+FAIL

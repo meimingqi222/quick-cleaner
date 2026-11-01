@@ -224,6 +224,30 @@ func TestDiskProtectionCoverageAndInheritedExclusion(t *testing.T) {
 	}
 }
 
+// Splitting selected folders around exclusions walks the filesystem; doing it
+// on the click froze the window before the confirmation could appear.
+func TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming(t *testing.T) {
+	r, q := testRoot(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), []core.TreeSnapshotEntry{{Path: dir, IsDir: true}, {Path: target, IsDir: true}})
+	r.disk.Loaded = true
+	r.rebuildDisk()
+	r.diskSelected.Toggle(target, 10)
+	r.rebuildDisk()
+	r.requestSelectedDiskDelete()
+	if r.confirming {
+		t.Fatal("confirmation appeared before targets were resolved")
+	}
+	dispatchNext(t, q)
+	if !r.confirming {
+		t.Fatal("resolved targets never reached confirmation")
+	}
+}
+
 func TestSearchDebounceLatestGenerationAndClear(t *testing.T) {
 	r, q := testRoot(t)
 	dir := t.TempDir()

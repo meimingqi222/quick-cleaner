@@ -275,6 +275,33 @@ func TestDeclutterDisplayCapsDoNotTruncateSelectedSummary(t *testing.T) {
 	}
 }
 
+// Rows beyond the viewport must not be built: the whole page used to rebuild
+// every visible result on each frame, which made large folders scroll slowly.
+func TestDeclutterListsVirtualizeLargeResultSets(t *testing.T) {
+	s := DeclutterPage{Language: English, Tab: DeclutterDownloads, Shown: map[DeclutterTab]int{DeclutterDownloads: 2000}}
+	for i := 0; i < 2000; i++ {
+		s.Downloads = append(s.Downloads, core.DownloadItem{Filename: fmt.Sprintf("download-%04d", i), Path: fmt.Sprintf("/downloads/%04d", i), Size: 1000})
+	}
+	tt := declutterTester(&s, DeclutterPageActions{})
+	if tt.HasText("download-1999") {
+		t.Fatal("offscreen download row constructed instead of virtualized")
+	}
+	if !tt.HasText("download-0000") {
+		t.Fatalf("first download row missing: %v", tt.Texts())
+	}
+
+	s.Tab = DeclutterDuplicates
+	s.Duplicates = nil
+	s.Shown = map[DeclutterTab]int{DeclutterDuplicates: 500}
+	for i := 0; i < 500; i++ {
+		s.Duplicates = append(s.Duplicates, core.DuplicateGroup{Filename: fmt.Sprintf("group-%04d", i), SizePerCopy: 1000, Files: []core.DuplicateFileItem{{Path: fmt.Sprintf("/a/%04d", i), PathDisplay: fmt.Sprintf("/a/%04d", i)}}})
+	}
+	tt = declutterTester(&s, DeclutterPageActions{})
+	if tt.HasText("group-0499") {
+		t.Fatal("offscreen duplicate group constructed instead of virtualized")
+	}
+}
+
 // Rust hid everything past the first page; every entry must stay reachable
 // for review.
 func TestDeclutterListsShowMoreInsteadOfHidingTheRest(t *testing.T) {

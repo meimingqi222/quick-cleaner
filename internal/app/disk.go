@@ -220,11 +220,15 @@ func (r *Root) diskActions() view.DiskPageActions {
 			if r.busy() {
 				return
 			}
+			paths := make([]string, 0, len(r.disk.Rows))
+			sizes := make([]uint64, 0, len(r.disk.Rows))
 			for _, row := range r.disk.Rows {
 				if row.CanSelect {
-					r.diskSelected.Set(row.Path, row.Node.Size, on)
+					paths = append(paths, row.Path)
+					sizes = append(sizes, row.Node.Size)
 				}
 			}
+			r.diskSelected.SetMany(paths, sizes, on)
 			r.rebuildDisk()
 		}, ClearSelection: func() {
 			if !r.busy() {
@@ -236,9 +240,7 @@ func (r *Root) diskActions() view.DiskPageActions {
 			if row.CanDelete {
 				r.requestDiskPathDelete(row)
 			}
-		}, RequestDeleteSelected: func() {
-			r.requestDiskDelete(r.diskSelected.ResolveTargets())
-		},
+		}, RequestDeleteSelected: r.requestSelectedDiskDelete,
 		SetRecycleBin: func(on bool) {
 			if !r.busy() {
 				r.settings.DeleteToRecycleBin = on
@@ -283,6 +285,21 @@ func (r *Root) requestDiskPathDelete(row view.DiskPageRow) {
 	r.ask(r.tr("确认永久删除", "Confirm permanent deletion"), body+"\n\n"+detail, func() {
 		r.requestDiskDelete([]string{path})
 	})
+}
+
+// requestSelectedDiskDelete resolves exclusions into removable paths off the UI
+// thread: a directory being split around an excluded child is walked recursively,
+// which on a large folder froze the window before the confirmation appeared.
+func (r *Root) requestSelectedDiskDelete() {
+	if r.busy() || r.diskSelected.IsEmpty() {
+		return
+	}
+	if !r.start(false, nil, func(context.Context) func() {
+		paths := r.diskSelected.ResolveTargets()
+		return func() { r.requestDiskDelete(paths) }
+	}) {
+		r.requestDiskDelete(r.diskSelected.ResolveTargets())
+	}
 }
 
 func (r *Root) requestDiskDelete(paths []string) {
