@@ -1,0 +1,5 @@
+--- FAIL: TestCaptureDiskTargetsSeparatesGoneFromUnfreezable (0.00s)
+    root_test.go:507: existing unfreezable path was not refused: targets=[] vanished=[C:\Users\MEIMIN~1\AppData\Local\Temp\TestCaptureDiskTargetsSeparatesGoneFromUnfreezable2258161017\001\gone] failed=""
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.251s
+FAIL

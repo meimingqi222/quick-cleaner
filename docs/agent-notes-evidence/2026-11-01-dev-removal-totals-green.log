@@ -1,0 +1,2 @@
+--- PASS: TestDevRemovalKeepsTotalsAndParentInStep (0.00s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.249s

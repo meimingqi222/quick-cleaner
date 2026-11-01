@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -233,5 +234,48 @@ func TestSimilarPhotosUndecodableBurstUsesCompleteLinkage(t *testing.T) {
 	groups := ScanSimilarPhotos(context.Background(), s, []string{root}, nil)
 	if len(groups) != 1 || len(groups[0].Photos) != 2 || groups[0].Photos[0].Filename != "IMG_0001.heic" || groups[0].Photos[1].Filename != "IMG_0002.heic" || !groups[0].Photos[0].IsBestShot {
 		t.Fatalf("burst must require every member within 10s, same directory and name evidence: %+v", groups)
+	}
+}
+
+// Above 2 MiB the reference hashes only sample five 16 KiB regions, so files
+// that differ elsewhere collide. They are candidates, not duplicates: every
+// copy that would be pre-selected for Trash must match byte for byte.
+func TestDuplicateScanVerifiesFullContentAboveTwoMiB(t *testing.T) {
+	s, err := CurrentRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 4 << 20
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte((i*73 + 19) % 251)
+	}
+	unsampled := 128 << 10 // between the regions at 0 and size/4
+	old := time.Unix(1600000000, 0)
+
+	root := t.TempDir()
+	writeDeclutterFile(t, root, "one.bin", data, old)
+	changed := bytes.Clone(data)
+	changed[unsampled] ^= 0xff
+	writeDeclutterFile(t, root, "two.bin", changed, old.Add(time.Hour))
+	if groups := ScanDuplicateFiles(context.Background(), s, []string{root}, nil); len(groups) != 0 {
+		t.Fatalf("files differing outside the samples were grouped: %d groups, %d bytes pre-selected", len(groups), groups[0].CleanableSize())
+	}
+
+	writeDeclutterFile(t, root, "copy.bin", data, old.Add(2*time.Hour))
+	groups := ScanDuplicateFiles(context.Background(), s, []string{root}, nil)
+	if len(groups) != 1 || len(groups[0].Files) != 2 || groups[0].Files[0].Path != filepath.Join(root, "one.bin") || groups[0].Files[1].Path != filepath.Join(root, "copy.bin") {
+		t.Fatalf("verified copies not grouped alone: %+v", groups)
+	}
+	if !strings.HasPrefix(groups[0].ID, "dup-"+strconv.Itoa(size)+"-") || strings.Count(groups[0].ID, "-") != 2 {
+		t.Fatalf("an unsplit group must keep the reference ID shape: %s", groups[0].ID)
+	}
+
+	// One sampled match holding two real duplicate sets yields two groups
+	// with distinct IDs (the list keys rows by group).
+	writeDeclutterFile(t, root, "two-copy.bin", changed, old.Add(3*time.Hour))
+	groups = ScanDuplicateFiles(context.Background(), s, []string{root}, nil)
+	if len(groups) != 2 || groups[0].ID == groups[1].ID || len(groups[0].Files) != 2 || len(groups[1].Files) != 2 {
+		t.Fatalf("split sets: %+v", groups)
 	}
 }

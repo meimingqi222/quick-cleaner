@@ -1,0 +1,12 @@
+--- PASS: TestDiskSelectionChildSelectedMatchesAncestorWalk (0.00s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.222s
+    root_test.go:549: step 0 rebuilt every row for a selection change
+--- FAIL: TestDiskSelectionActionsRefreshRowsWithoutRebuilding (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.269s
+FAIL
+--- FAIL: TestDiskSelectionChildSelectedMatchesAncestorWalk (0.00s)
+    disk_selection_test.go:165: C:\Users\MEIMIN~1\AppData\Local\Temp\TestDiskSelectionChildSelectedMatchesAncestorWalk1398968463\001\a\x: ChildSelected=true IsSelected=false
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.230s
+FAIL

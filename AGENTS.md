@@ -7,7 +7,7 @@ QuickCleaner 是 Windows / macOS 磁盘清理工具，使用 Go + MyGo 编写。
 - 只维护 Go 版本。原 Rust + GPUI 参照树（`src/`、`examples/`、Cargo 与 Rust CI）已于 2026-11-01 删除；需要查旧行为时从该日期之前的 git 历史里看，不要恢复或重新引入 Rust 代码。
 - 保留既有界面和交互，不做无关的重新设计。原生平台验收仍在进行中，现状见 [`GO_MIGRATION.md`](GO_MIGRATION.md)。
 
-更完整的现状和模块图见 [`docs/HANDOFF.md`](docs/HANDOFF.md)，需求见 [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)。
+更完整的现状和模块图见 [`docs/HANDOFF.md`](docs/HANDOFF.md)，能力清单见 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)。
 
 `docs/` 默认不进库，需要长期维护的文档要在 `.gitignore` 里逐个放行。临时调查、审查和 spike 结论放进 `docs/temp/`，只保留在本地。
 

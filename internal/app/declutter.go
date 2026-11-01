@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"time"
@@ -73,7 +74,7 @@ func (r *Root) scanDeclutter() {
 			r.declutter.Downloads = downloads
 			r.declutter.LargeFiles = large
 			r.declutter.Duplicates = duplicates
-			r.declutter.Photos = photos
+			r.setDeclutterPhotos(photos)
 			r.declutter.Thumbnails = thumbnails
 			r.declutter.ScanElapsedSecs = &elapsed
 			r.declutterAuthority = authority
@@ -235,6 +236,28 @@ func (r *Root) requestDeclutterClean(tab view.DeclutterTab) {
 	if r.busy() || !r.declutter.Scanned {
 		return
 	}
+	// Duplicates are identical: selecting every copy leaves no copy of the data.
+	if tab == view.DeclutterDuplicates {
+		for _, g := range r.declutter.Duplicates {
+			if len(g.Files) > 0 && !slices.ContainsFunc(g.Files, func(f core.DuplicateFileItem) bool { return !f.Selected }) {
+				r.message(fmt.Sprintf("「%s」的所有副本都被勾选了，至少保留一份；未清理。", g.Filename), fmt.Sprintf("Every copy of \"%s\" is selected; keep at least one. Nothing was cleaned.", g.Filename))
+				return
+			}
+		}
+	}
+	// Similar photos differ, so removing a whole group can be deliberate; say so.
+	warning := ""
+	if tab == view.DeclutterSimilarPhotos {
+		whole := 0
+		for _, g := range r.declutter.Photos {
+			if len(g.Photos) > 0 && !slices.ContainsFunc(g.Photos, func(p core.PhotoItem) bool { return !p.Selected }) {
+				whole++
+			}
+		}
+		if whole > 0 {
+			warning = r.tr(fmt.Sprintf("注意：有 %d 组相似照片被整组勾选，清理后这些组不会留下任何一张。", whole), fmt.Sprintf("Note: %d similar-photo groups are selected as an entire group; no photo of those groups will remain.", whole))
+		}
+	}
 	paths := r.declutterPaths(tab)
 	var targets []core.ArbitraryTarget
 	for _, path := range paths {
@@ -248,7 +271,7 @@ func (r *Root) requestDeclutterClean(tab view.DeclutterTab) {
 	// Frozen authority is never recreated at acceptance, even if a file was replaced.
 	// Rust prunes only what really left the disk; a rescan would re-list failed items as
 	// if they were fresh results, which is what made a failed clean reappear once.
-	r.requestArbitraryClean("declutter", targets, func(report core.CleanReport) { r.pruneDeclutter(tab, report) })
+	r.requestArbitraryClean("declutter", targets, 0, warning, func(report core.CleanReport) { r.pruneDeclutter(tab, report) })
 }
 
 // pruneDeclutter drops the entries this clean really moved, keeping everything else so
@@ -358,6 +381,15 @@ func (r *Root) applyDeclutterPrune(tab view.DeclutterTab, gone, failed map[strin
 		}
 		r.declutter.Photos = kept
 		// Group indices moved, so expanded rows would point at the wrong group.
-		r.declutter.ExpandedPhotoGroups = nil
+		// Group indices shift after a prune; an empty map, never nil, so the next
+		// expand click can write to it.
+		r.declutter.ExpandedPhotoGroups = map[int]bool{}
 	}
+}
+
+// setDeclutterPhotos replaces the photo groups. Expanded state is keyed by
+// group index, so it cannot survive a new result set.
+func (r *Root) setDeclutterPhotos(groups []core.PhotoGroup) {
+	r.declutter.Photos = groups
+	r.declutter.ExpandedPhotoGroups = map[int]bool{}
 }

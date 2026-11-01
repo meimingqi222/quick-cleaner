@@ -1,0 +1,11 @@
+=== RUN   TestDuplicateScanVerifiesFullContentAboveTwoMiB
+    declutter_test.go:262: files differing outside the samples were grouped: 1 groups, 4194304 bytes pre-selected
+--- FAIL: TestDuplicateScanVerifiesFullContentAboveTwoMiB (0.02s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.259s
+FAIL
+--- FAIL: TestDuplicateScanVerifiesFullContentAboveTwoMiB (0.07s)
+    declutter_test.go:279: split sets: [{ID:dup-4194304-4683529880252777456 Filename:one.bin Category:{zh:其它文件 en:Others} SizePerCopy:4194304 Files:[{PathDisplay:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\one.bin Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\one.bin ModifiedAtStr:2020-09-13 ModifiedAtSecs:1600000000 IsOriginal:true Selected:false} {PathDisplay:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\copy.bin Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\copy.bin ModifiedAtStr:2020-09-13 ModifiedAtSecs:1600007200 IsOriginal:false Selected:true}]} {ID:dup-4194304-4683529880252777456 Filename:two.bin Category:{zh:其它文件 en:Others} SizePerCopy:4194304 Files:[{PathDisplay:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\two.bin Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\two.bin ModifiedAtStr:2020-09-13 ModifiedAtSecs:1600003600 IsOriginal:true Selected:false} {PathDisplay:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\two-copy.bin Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestDuplicateScanVerifiesFullContentAboveTwoMiB1931335095\001\two-copy.bin ModifiedAtStr:2020-09-13 ModifiedAtSecs:1600010800 IsOriginal:false Selected:true}]}]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.294s
+FAIL

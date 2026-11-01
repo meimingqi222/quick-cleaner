@@ -183,3 +183,17 @@ func (s *DiskSelectionState) ResolveTargets() []string {
 	sort.Strings(out)
 	return out
 }
+
+// ChildSelected answers IsSelected for a path whose parent's state is already
+// known, checking only the path's own entry instead of walking every ancestor.
+// The caller must pass the state of filepath.Dir(path).
+func (s *DiskSelectionState) ChildSelected(path string, parentSelected bool) bool {
+	path = filepath.Clean(path)
+	if _, ok := s.excluded[path]; ok {
+		return false
+	}
+	if _, ok := s.selected[path]; ok {
+		return true
+	}
+	return parentSelected
+}

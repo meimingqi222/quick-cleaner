@@ -1,0 +1,4 @@
+--- PASS: TestDuplicateScanMatchesRustGroupIdentityAndKeepsOldestCopy (0.03s)
+--- PASS: TestDuplicateScanTwoMiBBoundaryMatchesRust (0.04s)
+--- PASS: TestDuplicateScanVerifiesFullContentAboveTwoMiB (0.06s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.360s

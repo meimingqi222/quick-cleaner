@@ -367,6 +367,7 @@ func (r *Root) scanDev() {
 		return
 	}
 	r.dev.Scanning = true
+	r.devGeneration++ // a pending re-measure would overwrite the fresh scan
 	r.message("正在扫描开发环境…", "Scanning developer environments…")
 	r.start(false, nil, func(ctx context.Context) func() {
 		result := core.DiscoverDevAssets()
@@ -581,13 +582,106 @@ func (r *Root) dropRemovedDevAssets(items []core.DevAssetItem, outcomes []core.R
 	if len(gone) == 0 {
 		return
 	}
+	// No rescan follows, so the totals must follow the rows. The scan total
+	// counts each unique file once; a removed item takes away its exclusive
+	// bytes, while hard-linked files shared with other assets stay on disk.
+	var removed uint64
+	for _, item := range r.dev.Assets {
+		if gone[item.ID] {
+			removed += item.Size.ExclusiveReclaimableBytes
+		}
+	}
 	r.dev.Assets = slices.DeleteFunc(r.dev.Assets, func(i core.DevAssetItem) bool { return gone[i.ID] })
 	for id, packages := range r.dev.Packages {
+		var shrink core.AssetStorageSize
+		n := 0
+		for _, p := range packages {
+			if gone[p.ID] {
+				shrink.LogicalBytes += p.Size.LogicalBytes
+				shrink.ExclusiveReclaimableBytes += p.Size.ExclusiveReclaimableBytes
+				shrink.FileCount += p.Size.FileCount
+				n++
+			}
+		}
 		r.dev.Packages[id] = slices.DeleteFunc(packages, func(i core.DevAssetItem) bool { return gone[i.ID] })
+		if n == 0 {
+			continue
+		}
+		// A package lives inside its environment, already counted in the total.
+		for i := range r.dev.Assets {
+			parent := &r.dev.Assets[i]
+			if parent.ID != id {
+				continue
+			}
+			removed += shrink.ExclusiveReclaimableBytes
+			parent.Size.LogicalBytes = satSub(parent.Size.LogicalBytes, shrink.LogicalBytes)
+			parent.Size.ExclusiveReclaimableBytes = satSub(parent.Size.ExclusiveReclaimableBytes, shrink.ExclusiveReclaimableBytes)
+			parent.Size.FileCount = satSub(parent.Size.FileCount, shrink.FileCount)
+			if parent.Kind.PackageCount != nil {
+				count := max(*parent.Kind.PackageCount-n, 0)
+				parent.Kind.PackageCount = &count // fresh pointer: the old one may be shared
+			}
+		}
+	}
+	r.dev.TotalLogical = satSub(r.dev.TotalLogical, removed)
+	// Same formula as the scan: exclusive bytes of every removable asset.
+	r.dev.TotalReclaimable = 0
+	for _, item := range r.dev.Assets {
+		if core.CanRemoveDevAsset(item) {
+			r.dev.TotalReclaimable += item.Size.ExclusiveReclaimableBytes
+		}
 	}
 	if gone[r.dev.ActiveID] {
 		r.dev.ActiveID = ""
 	}
+	r.remeasureDev()
+}
+
+// remeasureDev re-reads the storage of the remaining assets in the background.
+// The bookkeeping above is an estimate: a removed directory takes along
+// hard-linked files no other measured asset shares, and files it shared with
+// a remaining asset become that asset's exclusive bytes. Only a re-read knows.
+// It is not a busy job, so the page stays usable; a newer scan or removal, or
+// a changed asset list, discards the result.
+func (r *Root) remeasureDev() {
+	r.devGeneration++
+	gen := r.devGeneration
+	ids := make([]string, len(r.dev.Assets))
+	dirs := make([]string, len(r.dev.Assets))
+	for i, item := range r.dev.Assets {
+		ids[i], dirs[i] = item.ID, item.Path
+	}
+	measure := r.measureDevStorage
+	go func() {
+		total, sizes := measure(dirs)
+		r.publish(func() {
+			if gen != r.devGeneration || len(sizes) != len(ids) || len(r.dev.Assets) != len(ids) {
+				return
+			}
+			for i := range ids {
+				if r.dev.Assets[i].ID != ids[i] {
+					return
+				}
+			}
+			for i := range r.dev.Assets {
+				r.dev.Assets[i].Size = sizes[i]
+			}
+			r.dev.TotalLogical = total.LogicalBytes
+			r.dev.TotalReclaimable = 0
+			for _, item := range r.dev.Assets {
+				if core.CanRemoveDevAsset(item) {
+					r.dev.TotalReclaimable += item.Size.ExclusiveReclaimableBytes
+				}
+			}
+		})
+	}()
+}
+
+func satSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
 }
 
 func (r *Root) requestDevRemoval(selected map[string]bool) {

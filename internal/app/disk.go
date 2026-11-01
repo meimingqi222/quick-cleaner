@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -159,27 +162,14 @@ func (r *Root) rebuildDisk() {
 	} else {
 		nodes = t.Children(r.currentNode)
 	}
-	r.disk.Rows = nil
-	r.disk.SelectedCount = r.diskSelected.Len()
-	r.disk.SelectedSize = r.diskSelected.TotalSize()
-	picked, selectable := 0, 0
+	r.disk.Rows = make([]view.DiskPageRow, 0, len(nodes))
 	for _, n := range nodes {
 		path := t.PathOf(n.Idx)
 		protected := core.IsProtected(path) || core.IsWhitelisted(path) || core.HasWhitelistEntryUnder(path)
 		allowed := !protected && n.Idx != t.Root() && t.CoversSubtree(path)
-		row := view.DiskPageRow{Node: n, Path: path, Protected: protected, Selected: r.diskSelected.IsSelected(path), CanSelect: allowed, CanDelete: allowed, CanEnter: n.IsDir}
-		if allowed {
-			selectable++
-			if row.Selected {
-				picked++
-			}
-		}
-		r.disk.Rows = append(r.disk.Rows, row)
+		r.disk.Rows = append(r.disk.Rows, view.DiskPageRow{Node: n, Path: path, Protected: protected, CanSelect: allowed, CanDelete: allowed, CanEnter: n.IsDir})
 	}
-	r.disk.CanSelectView = selectable > 0
-	r.disk.HeaderSelected = selectable > 0 && picked == selectable
-	r.disk.HeaderMixed = picked > 0 && picked < selectable
-	r.disk.CanRequestDelete = r.disk.SelectedCount > 0
+	r.refreshDiskSelection()
 }
 
 func (r *Root) diskActions() view.DiskPageActions {
@@ -215,7 +205,7 @@ func (r *Root) diskActions() view.DiskPageActions {
 				return
 			}
 			r.diskSelected.Toggle(row.Path, row.Node.Size)
-			r.rebuildDisk()
+			r.refreshDiskSelection()
 		}, SetViewSelected: func(on bool) {
 			if r.busy() {
 				return
@@ -229,11 +219,11 @@ func (r *Root) diskActions() view.DiskPageActions {
 				}
 			}
 			r.diskSelected.SetMany(paths, sizes, on)
-			r.rebuildDisk()
+			r.refreshDiskSelection()
 		}, ClearSelection: func() {
 			if !r.busy() {
 				r.diskSelected.Clear()
-				r.rebuildDisk()
+				r.refreshDiskSelection()
 			}
 		},
 		RequestDelete: func(row view.DiskPageRow) {
@@ -294,51 +284,164 @@ func (r *Root) requestSelectedDiskDelete() {
 	if r.busy() || r.diskSelected.IsEmpty() {
 		return
 	}
-	if !r.start(false, nil, func(context.Context) func() {
+	r.start(false, nil, func(ctx context.Context) func() {
 		paths := r.diskSelected.ResolveTargets()
-		return func() { r.requestDiskDelete(paths) }
-	}) {
-		r.requestDiskDelete(r.diskSelected.ResolveTargets())
+		targets, gone, failed := captureDiskTargets(ctx, paths)
+		return func() { r.requestDiskTargets(paths, targets, gone, failed) }
+	})
+}
+
+// captureDiskTargets freezes the identity of every path still on disk. A path
+// confirmed missing has nothing to delete and is returned in gone; the index
+// lags the disk, so a select-all in a churning folder like Temp always has a
+// few. A path that exists but cannot be frozen is returned in failed: unknown
+// identity refuses the whole batch, it is never skipped like a missing path.
+func captureDiskTargets(ctx context.Context, paths []string) (targets []core.ArbitraryTarget, gone []string, failed string) {
+	return captureDiskTargetsUsing(ctx, paths, core.CaptureArbitraryTarget)
+}
+
+func captureDiskTargetsUsing(ctx context.Context, paths []string, capture func(string) core.ArbitraryTarget) (targets []core.ArbitraryTarget, gone []string, failed string) {
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return nil, nil, path
+		}
+		target := capture(path)
+		if target.Identity != nil {
+			targets = append(targets, target)
+			continue
+		}
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			gone = append(gone, path)
+			continue
+		}
+		return nil, nil, path
 	}
+	return targets, gone, ""
 }
 
 func (r *Root) requestDiskDelete(paths []string) {
+	targets, gone, failed := captureDiskTargets(context.Background(), paths)
+	r.requestDiskTargets(paths, targets, gone, failed)
+}
+
+func (r *Root) requestDiskTargets(paths []string, targets []core.ArbitraryTarget, gone []string, failed string) {
 	if r.job != nil || r.tree == nil || !r.disk.Loaded {
 		return
 	}
-	var targets []core.ArbitraryTarget
-	for _, path := range paths {
+	if failed != "" {
+		r.message(fmt.Sprintf("无法冻结目标身份（%s）；未删除。", failed), fmt.Sprintf("Target identity could not be frozen (%s); nothing was deleted.", failed))
+		return
+	}
+	// Size only what will be deleted: the selection total also counts rows
+	// already gone from disk.
+	var size uint64
+	for _, target := range targets {
+		path := target.Path
 		id, ok := r.tree.FindNodeByPath(path)
 		if !ok || id == r.tree.Root() || !r.tree.CoversSubtree(path) || core.IsProtected(path) || core.IsWhitelisted(path) || core.HasWhitelistEntryUnder(path) {
 			r.message("所选路径受保护或索引覆盖未知；未删除。", "Selected path is protected or index coverage is unknown; nothing was deleted.")
 			return
 		}
-		target := core.CaptureArbitraryTarget(path)
-		if target.Identity == nil {
-			r.message("无法冻结目标身份；未删除。", "Target identity could not be frozen; nothing was deleted.")
-			return
-		}
-		targets = append(targets, target)
+		size += r.tree.SizeOf(id)
 	}
-	r.requestArbitraryClean("disk", targets, func(core.CleanReport) { r.pruneDiskPaths(paths) })
+	if len(targets) == 0 {
+		if len(gone) > 0 {
+			r.pruneDiskPaths(gone)
+			r.message(fmt.Sprintf("所选 %d 项已不在磁盘上，已从列表移除。", len(gone)), fmt.Sprintf("%d selected items are no longer on disk and were removed from the list.", len(gone)))
+		}
+		return
+	}
+	r.requestArbitraryClean("disk", targets, size, "", func(core.CleanReport) { r.pruneDiskPaths(paths) })
 }
 
 // pruneDiskPaths removes the deleted paths from the in-memory index instead
 // of rescanning the volume: ancestors lose their sizes, the search index
 // (the same tree) stays consistent, and the position keeps the deepest
 // surviving ancestor—matching the Rust reference's prune_deleted_from_mft.
+// Which paths are really gone is checked on a worker: a select-all delete in
+// a large folder costs one stat per row.
+//
+// The file-search goroutine walks this same tree. Cancelling it only signals,
+// so the worker waits for it to exit, and new searches are held until the
+// edit is applied; otherwise reader and writer race on the tree slots.
+// Free space is re-read from the system: a path that left for the Trash still
+// occupies the volume, so pruned sizes say nothing about free space.
 func (r *Root) pruneDiskPaths(paths []string) {
-	t := r.tree
-	if t == nil {
+	if r.tree == nil || len(paths) == 0 {
 		return
 	}
-	// The file-search goroutine traverses the same tree; stop it before
-	// mutating. Its generation bump discards whatever it was about to say.
+	reader := r.holdSearch()
+	volume, space := r.disk.Volume, r.volumeSpace
+	// A mutation job: even when cancelled its finish runs, so the confirmed
+	// part is applied and searches are released.
+	started := r.start(true, nil, func(ctx context.Context) func() {
+		if reader != nil {
+			<-reader
+		}
+		gone := make([]string, 0, len(paths))
+		for _, path := range paths {
+			if ctx.Err() != nil {
+				break
+			}
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				gone = append(gone, path)
+			}
+		}
+		total, free, ok := space(volume)
+		return func() {
+			r.applyDiskPrune(gone)
+			if ok {
+				r.setVolumeSpace(volume, total, free)
+			}
+			r.releaseSearch()
+		}
+	})
+	if !started {
+		r.releaseSearch()
+	}
+}
+
+// holdSearch stops the running search and keeps new ones from starting until
+// releaseSearch. It returns a channel closed when the stopped search exits.
+func (r *Root) holdSearch() <-chan struct{} {
+	reader := r.searchDone
 	if r.searchCancel != nil {
 		r.searchCancel()
 		r.searchCancel = nil
-		r.searchGeneration++
+	}
+	r.searchDone = nil
+	r.searchGeneration++
+	r.searchHeld = true
+	return reader
+}
+
+func (r *Root) releaseSearch() {
+	r.searchHeld = false
+	if r.search.Query != "" {
+		r.setSearchQuery(r.search.Query)
+	} else {
 		r.search.Searching = false
+	}
+}
+
+func (r *Root) setVolumeSpace(volume core.VolumeID, total, free uint64) {
+	space := &view.DiskPageSpace{Total: total, Free: free}
+	for i := range r.disk.Volumes {
+		if r.disk.Volumes[i].ID == volume {
+			r.disk.Volumes[i].Space = space
+		}
+	}
+	if r.disk.Volume == volume {
+		r.disk.Space = space
+	}
+}
+
+// applyDiskPrune removes paths already confirmed gone from disk. Callers go
+// through pruneDiskPaths, which has already stopped every tree reader.
+func (r *Root) applyDiskPrune(gone []string) {
+	t := r.tree
+	if t == nil {
+		return
 	}
 	// Record the position's ancestor chain while every node is valid:
 	// ParentOf may refuse an already-removed slot.
@@ -351,13 +454,8 @@ func (r *Root) pruneDiskPaths(paths []string) {
 		}
 		id = p
 	}
-	var freed uint64
-	for _, path := range paths {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			continue // failed or skipped: still on disk, keep the node
-		}
+	for _, path := range gone {
 		if idx, ok := t.FindNodeByPath(path); ok && idx != t.Root() {
-			freed += t.SizeOf(idx)
 			t.RemoveSubtreeInplace(idx)
 		}
 	}
@@ -370,19 +468,18 @@ func (r *Root) pruneDiskPaths(paths []string) {
 	if !t.Valid(r.currentNode) {
 		r.currentNode = t.Root()
 	}
-	if r.disk.Space != nil {
-		r.disk.Space.Free += freed
-	}
 	r.diskSelected.Clear()
 	r.rebuildDisk()
 }
 
-func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarget, finish func(core.CleanReport)) {
+func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarget, size uint64, warning string, finish func(core.CleanReport)) {
 	if len(targets) == 0 || r.job != nil {
 		return
 	}
+	// Declutter always promises Trash ("restorable"), as the Rust reference
+	// did; only the disk lens follows the delete-to-recycle-bin setting.
 	disposal := core.Permanent
-	if r.settings.DeleteToRecycleBin {
+	if r.settings.DeleteToRecycleBin || action == "declutter" {
 		disposal = core.RecycleBin
 	}
 	paths := make([]string, len(targets))
@@ -391,12 +488,15 @@ func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarg
 	}
 	titleZh, titleEn := "确认永久删除选中项", "Confirm permanent deletion"
 	detail := r.tr(
-		fmt.Sprintf("将永久删除 %d 项，释放约 %s 磁盘空间。", len(targets), core.FmtSize(r.disk.SelectedSize)),
-		fmt.Sprintf("%d items will be permanently deleted, freeing about %s.", len(targets), core.FmtSize(r.disk.SelectedSize)),
+		fmt.Sprintf("将永久删除 %d 项，释放约 %s 磁盘空间。", len(targets), core.FmtSize(size)),
+		fmt.Sprintf("%d items will be permanently deleted, freeing about %s.", len(targets), core.FmtSize(size)),
 	) + "\n\n" + disposalDetail(r, disposal == core.RecycleBin) + "\n" + r.tr("请确认它不是正在使用的程序或数据；被占用或受保护的条目会跳过并如实报告。", "Make sure this is not data of a program that is currently running; protected or in-use items are skipped and reported.") + confirmScope(r, paths)
 	if action == "declutter" {
 		titleZh, titleEn = "确认移入废纸篓", "Confirm move to Trash"
 		detail = r.tr(fmt.Sprintf("将把 %d 项移入废纸篓。", len(targets)), fmt.Sprintf("%d items will be moved to the Trash.", len(targets))) + "\n\n" + r.tr("移入废纸篓不释放磁盘空间；需要真正释放时再清空废纸篓。移走的条目可从废纸篓恢复。", "Moving to the Trash does not free disk space; empty the Trash to reclaim it. Moved items can be restored from the Trash.") + confirmScope(r, paths)
+	}
+	if warning != "" {
+		detail = warning + "\n\n" + detail
 	}
 	r.ask(r.tr(titleZh, titleEn), detail, func() {
 		p := core.NewCleanProgress(0, 0)
@@ -413,7 +513,7 @@ func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarg
 			r.message(fmt.Sprintf("正在把 %d 项移入废纸篓...", len(paths)), fmt.Sprintf("Moving %d items to Trash...", len(paths)))
 		}
 		r.start(true, p, func(context.Context) func() {
-			report := core.CleanArbitraryItems(targets, disposal, p)
+			report := r.cleanArbitrary(targets, disposal, p)
 			return func() {
 				r.disk.Cleaning = false
 				r.declutter.Cleaning = false
@@ -466,6 +566,12 @@ func (r *Root) setSearchQuery(q string) {
 	gen := r.searchGeneration
 	if r.searchCancel != nil {
 		r.searchCancel()
+		r.searchCancel = nil
+	}
+	if r.searchHeld {
+		// A prune is editing the tree; releaseSearch reruns this query.
+		r.search.Searching = q != ""
+		return
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
 	r.searchCancel = cancel
@@ -486,7 +592,19 @@ func (r *Root) setSearchQuery(q string) {
 	if len(trees) == 0 || q == "" {
 		return
 	}
+	// Cancelling the previous search does not stop it at once. Its done channel
+	// is chained into this one, so searchDone closing means every earlier
+	// reader has left the tree too; pruneDiskPaths waits on that alone.
+	previous := r.searchDone
+	done := make(chan struct{})
+	r.searchDone = done
 	go func() {
+		defer func() {
+			if previous != nil {
+				<-previous
+			}
+			close(done)
+		}()
 		timer := time.NewTimer(120 * time.Millisecond)
 		defer timer.Stop()
 		select {
@@ -606,4 +724,38 @@ func (r *Root) searchActions() view.SearchPageActions {
 		}
 		r.sortSearch()
 	}, Open: r.open, Reveal: r.reveal}
+}
+
+// refreshDiskSelection updates only the selection state of the current rows.
+// A checkbox click cannot change a row's protection, whitelist or coverage, so
+// it must not re-run those per-row checks (about 50 ms on a 7400-entry folder).
+// Rows of one folder share a parent: its state is resolved once and each row
+// checks only its own entry.
+func (r *Root) refreshDiskSelection() {
+	parent, parentSelected := "", false
+	if r.tree != nil && r.disk.Tab != view.DiskFiles {
+		parent = filepath.Clean(r.disk.CurrentPath)
+		parentSelected = r.diskSelected.IsSelected(parent)
+	}
+	r.disk.SelectedCount = r.diskSelected.Len()
+	r.disk.SelectedSize = r.diskSelected.TotalSize()
+	picked, selectable := 0, 0
+	for i := range r.disk.Rows {
+		row := &r.disk.Rows[i]
+		if parent != "" && filepath.Dir(row.Path) == parent {
+			row.Selected = r.diskSelected.ChildSelected(row.Path, parentSelected)
+		} else {
+			row.Selected = r.diskSelected.IsSelected(row.Path)
+		}
+		if row.CanSelect {
+			selectable++
+			if row.Selected {
+				picked++
+			}
+		}
+	}
+	r.disk.CanSelectView = selectable > 0
+	r.disk.HeaderSelected = selectable > 0 && picked == selectable
+	r.disk.HeaderMixed = picked > 0 && picked < selectable
+	r.disk.CanRequestDelete = r.disk.SelectedCount > 0
 }

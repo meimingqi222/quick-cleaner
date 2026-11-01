@@ -124,8 +124,10 @@ are compared without regenerating expected baselines.
   checkout. Windows elevation remains a startup relaunch, not a clickable
   title badge.
 - **Image algorithms:** native icon/image codecs and triangle filtering are
-  not claimed byte-identical. Duplicate detection intentionally preserves Rust's
-  five-region sampling above 2 MiB, not full-file equality. Stable Go candidate
+  not claimed byte-identical. Duplicate detection keeps Rust's two hashes and
+  group IDs, but above 2 MiB (where Rust samples only five regions) Go confirms
+  full-file equality before grouping; a sampled match that splits gets a `-N`
+  ID suffix. This deliberately departs from Rust. Stable Go candidate
   order can change ambiguous/capped photo grouping relative to Rust HashMap
   iteration. Native decoder/ARM64 arithmetic parity remains unverified.
 - **Packaging:** `.github/workflows/release.yml` builds Go with

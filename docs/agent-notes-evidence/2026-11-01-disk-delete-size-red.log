@@ -1,0 +1,11 @@
+--- FAIL: TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk (0.01s)
+    root_test.go:282: confirmation size counts vanished rows: 将永久删除 1 项，释放约 1.0 MB 磁盘空间。
+
+        删除方式：永久删除，不进入回收站，删除后无法恢复。请确认没有重要数据。
+        请确认它不是正在使用的程序或数据；被占用或受保护的条目会跳过并如实报告。
+
+        范围：
+        C:\Users\MEIMIN~1\AppData\Local\Temp\TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk1659778259\001\kept.tmp
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.254s
+FAIL

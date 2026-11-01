@@ -1,0 +1,4 @@
+--- PASS: TestDiskSelectionChildSelectedMatchesAncestorWalk (0.00s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.245s
+--- PASS: TestDiskSelectionActionsRefreshRowsWithoutRebuilding (0.00s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.240s

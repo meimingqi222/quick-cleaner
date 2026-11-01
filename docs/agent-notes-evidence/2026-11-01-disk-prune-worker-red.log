@@ -1,0 +1,5 @@
+--- FAIL: TestDiskDeletePrunesTreeAndKeepsPosition (0.00s)
+    disk_prune_test.go:47: index pruned on the calling thread before the worker reported
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.245s
+FAIL

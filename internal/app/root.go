@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"runtime/debug"
@@ -19,7 +20,7 @@ import (
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
-const Version = "0.0.22"
+const Version = "0.0.23"
 
 type diskOwner interface {
 	Load(context.Context, core.VolumeID) (*core.ScanResult, error)
@@ -67,6 +68,12 @@ type Root struct {
 	residualApp           *core.InstalledApp
 	residualAuthority     func(context.Context, core.InstalledApp, []core.ResidualItem) bool
 	uninstallApp          func(core.InstalledApp) error
+	cleanArbitrary        func([]core.ArbitraryTarget, core.Disposal, *core.CleanProgress) core.CleanReport
+	volumeSpace           func(core.VolumeID) (total, free uint64, ok bool)
+	searchDone            chan struct{}
+	searchHeld            bool
+	measureDevStorage     func([]string) (core.AssetStorageSize, []core.AssetStorageSize)
+	devGeneration         uint64
 	scanAppResiduals      func(context.Context, core.InstalledApp) (core.ResidualScanResult, error)
 	orphanScan            func(context.Context) (*core.ResidualScanResult, error)
 	bundleStillInstalled  func(context.Context, string) (bool, bool)
@@ -132,6 +139,9 @@ func NewRoot(settings core.Settings, post func(func()), invalidate func()) *Root
 	r.trashSeen = map[string]bool{}
 	r.residualAuthority = appResidualsAllowed
 	r.uninstallApp = uninstallApp
+	r.cleanArbitrary = core.CleanArbitraryItems
+	r.volumeSpace = platform.GetVolumeSpace
+	r.measureDevStorage = core.MeasureBatchStorage
 	r.runningOwnerBusy = core.RunningOwnerBusy
 	r.findRunningApps = core.FindRunningApps
 	r.closeApps = func(apps []core.RunningApp, cancelled func() bool) []core.Text {
@@ -170,11 +180,19 @@ func (r *Root) changed() {
 	}
 }
 func (r *Root) message(zh, en string) { r.dashboard.StatusText = r.tr(zh, en); r.changed() }
+
+// failure reports an error in the status line. A cancellation is the user's
+// own request, so it gets localized wording instead of Go's "context canceled".
 func (r *Root) failure(err error) {
-	if err != nil {
-		r.dashboard.StatusText = err.Error()
-		r.changed()
+	if err == nil {
+		return
 	}
+	if errors.Is(err, context.Canceled) {
+		r.message("已取消。", "Cancelled.")
+		return
+	}
+	r.dashboard.StatusText = err.Error()
+	r.changed()
 }
 func (r *Root) unavailable() {
 	r.message("此操作尚未接入；未执行任何更改。", "This operation is not integrated yet; no changes were made.")
@@ -251,6 +269,8 @@ func (r *Root) clearScanFlags() {
 	r.dev.Scanning, r.dev.LoadingSite = false, ""
 	r.disk.Scanning, r.search.Indexing = false, false
 	r.declutter.Scanning = false
+	// A prune that panicked never reaches releaseSearch.
+	r.searchHeld = false
 }
 
 func (r *Root) Cancel() {

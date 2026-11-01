@@ -1,0 +1,6 @@
+=== RUN   TestDeclutterCleanAlwaysUsesTrashWhileDiskLensFollowsSetting
+    declutter_safety_test.go:141: disposals = [permanent permanent], want [RecycleBin Permanent] (declutter, then disk lens with the setting off)
+--- FAIL: TestDeclutterCleanAlwaysUsesTrashWhileDiskLensFollowsSetting (0.01s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.240s
+FAIL

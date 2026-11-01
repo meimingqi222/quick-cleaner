@@ -1,0 +1,18 @@
+=== RUN   TestDevRemovalKeepsTotalsAndParentInStep
+    declutter_safety_test.go:168: total logical = 350, want 262
+--- FAIL: TestDevRemovalKeepsTotalsAndParentInStep (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.281s
+FAIL
+== RED: no background re-measure
+--- FAIL: TestDevRemovalKeepsTotalsAndParentInStep (5.00s)
+    declutter_safety_test.go:190: worker did not publish
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	5.260s
+FAIL
+== RED: generation ignored
+--- FAIL: TestDevRemovalKeepsTotalsAndParentInStep (0.00s)
+    declutter_safety_test.go:206: stale measurement overwrote newer state
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.258s
+FAIL

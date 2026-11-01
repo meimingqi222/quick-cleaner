@@ -1,0 +1,4 @@
+--- PASS: TestDiskDeletePrunesTreeAndKeepsPosition (0.01s)
+--- PASS: TestDiskPruneWaitsForSearchReaderAndHoldsNewSearches (0.10s)
+--- PASS: TestDiskPruneTakesFreeSpaceFromSystemNotFromPrunedSizes (0.00s)
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.371s

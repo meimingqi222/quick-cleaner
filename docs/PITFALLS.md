@@ -1550,3 +1550,73 @@ Note: `2026-11-01-ui-list-virtualization.md`
 - **禁止回退**：不能把这些大列表退回 `ui.Scroll` 全量构建；不能把 `os.Stat` 或目录递归放回主线程（与 P77 一致）；不能把 `MergeDiscovered` 的重叠判定改回双层 `atOrUnder` 扫描；不能放宽「勾选 + 未失败 + 确实不在」三条摘除条件。
 - **测试**：`TestDeclutterListsVirtualizeLargeResultSets`、`TestDevEnvPackageListVirtualizesLargeInventory`、`TestPruneDeclutterKeepsFailedRows`、`TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming`、`TestMergeDiscoveredOverlapCoversBothDirectionsAtPathBoundaries`，红绿证据见 Note。
 
+## P129 磁盘透镜批量删除：已消失的行跳过，未知身份仍整批拒绝
+
+Note: `2026-11-01-disk-delete-vanished-rows.md`
+
+- **症状**：在 Temp 目录全选后删除，提示「无法冻结目标身份；未删除。」，一项都没删。
+- **根因**：索引落后于磁盘，高频变动目录里总有扫描后已被删除的行；`requestDiskDelete` 只要有一项拿不到身份就整批返回。逐项冻结身份和删除后的逐项 stat 剪枝都在主线程上执行；确认框的释放大小还把已消失项算了进去。
+- **防护**：`captureDiskTargets` 在 worker 里逐项冻结；只有 `Lstat` 确认 `ErrNotExist` 的路径进 `gone`（不授权删除，只从索引移除），存在但拿不到身份的路径整批拒绝。释放大小只累加真实目标；`pruneDiskPaths` 在 worker 里 stat，主线程 `applyDiskPrune` 只改内存索引。
+- **禁止回退**：不能把「拿不到身份」一律当成可跳过（与 P37 一致：未知身份 fail closed）；不能为了能删掉而去掉身份或改成无身份删除；不能把逐项身份冻结或剪枝 stat 放回主线程；确认框大小不能改回选中总量。
+- **测试**：`TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk`、`TestCaptureDiskTargetsSeparatesGoneFromUnfreezable`、`TestDiskDeletePrunesTreeAndKeepsPosition`，红绿证据见 Note。
+
+## P130 整理页分组：展开状态不能置 nil，重复文件不能整组删除，取消不能显示 context canceled
+
+Note: `2026-11-01-declutter-group-safety-and-cancel.md`
+
+- **症状**：相似照片清理后点「展开」整页崩溃；重复文件可以把所有副本一起移入废纸篓；取消扫描后状态栏显示英文 `context canceled`。
+- **根因**：剪枝把 `ExpandedPhotoGroups` 置 nil，`TogglePhotoGroup` 写 nil map；清理入口不检查分组是否全选；`failure` 原样输出 `err.Error()`。
+- **防护**：展开状态重置为空 map，重扫经 `setDeclutterPhotos`；`requestDeclutterClean` 拒绝全选的重复文件组，相似照片整组勾选在确认框警告；`failure` 对 `context.Canceled` 显示本地化「已取消。」。
+- **禁止回退**：不能把 `ExpandedPhotoGroups` 再置为 nil；不能去掉重复文件整组拒绝或改成只警告；不能让取消重新显示原始错误串。
+- **测试**：`TestPhotoGroupExpandWorksAfterPruneAndRescan`、`TestDuplicateCleanRefusesGroupWithEveryCopySelected`、`TestPhotoCleanWarnsWhenWholeGroupSelected`、`TestCancelledReadOnlyJobShowsLocalizedStatus`，红绿证据见 Note。
+
+## P131 磁盘透镜的勾选动作只刷新选择状态，不能重建全部行
+
+Note: `2026-11-01-disk-selection-refresh.md`
+
+- **症状**：7400 项的目录里每点一次复选框约 55 ms，全选约 60 ms，连续点击发黏。
+- **根因**：勾选后调用 `rebuildDisk`，对每一行重跑保护、白名单、覆盖检查和祖先遍历，而勾选不会改变这些结果。
+- **防护**：单击勾选、全选和清空走 `refreshDiskSelection`，只更新 `Selected`、计数和表头；同目录行用 `ChildSelected` 共享父目录状态。
+- **禁止回退**：不能让选择动作重新调用 `rebuildDisk`；不能让 `ChildSelected` 跳过排除项检查（必须与 `IsSelected` 逐节点一致）。
+- **测试**：`TestDiskSelectionActionsRefreshRowsWithoutRebuilding`、`TestDiskSelectionChildSelectedMatchesAncestorWalk`，红绿证据见 Note。
+
+## P132 冗余整理必须固定移入废纸篓
+
+Note: `2026-11-01-declutter-trash-and-verified-duplicates.md`
+
+- **症状**：冗余整理确认框和结果都说「移入废纸篓，可恢复」，文件却被永久删除。
+- **根因**：`requestArbitraryClean` 对所有调用方读取全局 `DeleteToRecycleBin`，默认关闭；Rust 参照对整理固定用 `RecycleBin`。
+- **防护**：`action == "declutter"` 时处置固定为 `RecycleBin`；磁盘透镜仍跟随设置。
+- **禁止回退**：不能让冗余整理重新跟随全局设置；测试不能为了「看到释放字节」改成真实执行。
+- **测试**：`TestDeclutterCleanAlwaysUsesTrashWhileDiskLensFollowsSetting`，红绿证据见 Note。
+
+## P133 大于 2 MiB 的重复文件必须全文校验后才能分组预选
+
+Note: `2026-11-01-declutter-trash-and-verified-duplicates.md`
+
+- **症状**：两个只差一个字节的 4 MiB 文件被当作重复，其中一个默认勾选待清理。
+- **根因**：参照哈希在 2 MiB 以上只采样五个 16 KiB 区域。
+- **防护**：采样哈希只做候选；超过 2 MiB 的候选组按全文 SHA-256 拆分，只保留完全相同的集合；拆分时组 ID 加 `-N`。
+- **禁止回退**：不能去掉全文校验，或把「读不完整」的文件放进重复组；未拆分的组 ID 必须保持参照格式。
+- **测试**：`TestDuplicateScanVerifiesFullContentAboveTwoMiB`、`TestDuplicateScanTwoMiBBoundaryMatchesRust`，红绿证据见 Note。
+
+## P134 剪枝改树前必须等搜索读者退出；可用空间只能从系统读取
+
+Note: `2026-11-01-disk-prune-search-reader-and-space.md`
+
+- **症状**：race 检测报告剪枝与文件搜索并发读写同一棵树；移入回收站后可用空间凭空增加。
+- **根因**：剪枝只发取消信号就原地改树，搜索不受 `busy()` 限制；剪枝把消失节点的大小加到可用空间。
+- **防护**：`pruneDiskPaths` 先 `holdSearch`，worker 等读者退出，新搜索暂停到 `releaseSearch`；每轮搜索把上一轮的完成通道串进自己的退出，等最新一轮即等全部旧读者；剪枝是 mutation 任务，取消也会收尾；可用空间由 worker 调 `volumeSpace` 读取，失败保持原值。
+- **禁止回退**：不能在 UI 线程等待搜索；不能跳过等待或暂停直接改树；不能让新搜索直接覆盖 `searchDone` 而不串联上一轮；不能再按摘除体积推算可用空间；不能绕过 `pruneDiskPaths` 直接调用 `applyDiskPrune`。
+- **测试**：`TestDiskPruneWaitsForSearchReaderAndHoldsNewSearches`、`TestDiskPruneWaitsForEveryEarlierSearchReader`、`TestDiskPruneTakesFreeSpaceFromSystemNotFromPrunedSizes`，红绿证据见 Note。
+
+## P135 开发环境移除后总量与父环境必须跟着变，并在后台重新测量
+
+Note: `2026-11-01-dev-removal-totals.md`
+
+- **症状**：移除开发环境或包后，逻辑容量、可释放容量、父环境大小与包数仍显示旧值。
+- **根因**：移除后刻意不重扫，`dropRemovedDevAssets` 只删行。
+- **防护**：立即按独占字节扣减并更新父环境；随后 `remeasureDev` 后台重新测量剩余资产，代次或资产列表变化时丢弃结果。
+- **禁止回退**：不能只删行不改统计；不能把立即记账当成精确值而去掉后台测量；后台测量不能变成 busy 任务或覆盖更新的扫描结果。
+- **测试**：`TestDevRemovalKeepsTotalsAndParentInStep`，红绿证据见 Note。
+

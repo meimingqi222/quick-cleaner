@@ -144,3 +144,25 @@ func TestDiskSelectionDeepResolveAndReinclusion(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Rows of one folder share a parent, so the disk lens resolves the parent once
+// and asks each child only about its own entry. That shortcut must agree with
+// the full ancestor walk for every node, across nested exclusions.
+func TestDiskSelectionChildSelectedMatchesAncestorWalk(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	x := filepath.Join(a, "x")
+	y := filepath.Join(x, "y")
+	z := filepath.Join(y, "z")
+	s := NewDiskSelectionState()
+	s.Toggle(a, 100)
+	s.Toggle(x, 50)
+	s.Toggle(z, 10)
+	nodes := []string{root, a, x, y, z, filepath.Join(z, "leaf"), filepath.Join(y, "sibling"), filepath.Join(a, "other"), filepath.Join(root, "outside")}
+	for _, node := range nodes {
+		parent := filepath.Dir(node)
+		if got, want := s.ChildSelected(node, s.IsSelected(parent)), s.IsSelected(node); got != want {
+			t.Fatalf("%s: ChildSelected=%v IsSelected=%v", node, got, want)
+		}
+	}
+}

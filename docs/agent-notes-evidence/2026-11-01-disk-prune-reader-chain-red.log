@@ -1,0 +1,6 @@
+=== RUN   TestDiskPruneWaitsForEveryEarlierSearchReader
+    disk_prune_test.go:177: prune was applied while the earlier search A was still running
+--- FAIL: TestDiskPruneWaitsForEveryEarlierSearchReader (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.235s
+FAIL

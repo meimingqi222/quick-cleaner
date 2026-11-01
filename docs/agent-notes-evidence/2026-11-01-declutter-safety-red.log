@@ -1,0 +1,21 @@
+=== RUN   TestPhotoGroupExpandWorksAfterPruneAndRescan
+    declutter_safety_test.go:23: expand after prune panicked: assignment to entry in nil map
+--- FAIL: TestPhotoGroupExpandWorksAfterPruneAndRescan (0.00s)
+=== RUN   TestDuplicateCleanRefusesGroupWithEveryCopySelected
+    declutter_safety_test.go:64: every copy of a duplicate group reached the delete confirmation
+--- FAIL: TestDuplicateCleanRefusesGroupWithEveryCopySelected (0.01s)
+=== RUN   TestPhotoCleanWarnsWhenWholeGroupSelected
+    declutter_safety_test.go:88: confirmation does not warn about the whole group: 将把 2 项移入废纸篓。
+
+        移入废纸篓不释放磁盘空间；需要真正释放时再清空废纸篓。移走的条目可从废纸篓恢复。
+
+        范围：
+        C:\Users\MEIMIN~1\AppData\Local\Temp\TestPhotoCleanWarnsWhenWholeGroupSelected3634081884\001\IMG_1.jpg
+        C:\Users\MEIMIN~1\AppData\Local\Temp\TestPhotoCleanWarnsWhenWholeGroupSelected3634081884\001\IMG_2.jpg
+--- FAIL: TestPhotoCleanWarnsWhenWholeGroupSelected (0.01s)
+=== RUN   TestCancelledReadOnlyJobShowsLocalizedStatus
+    declutter_safety_test.go:111: status = "context canceled", want "已取消。"
+--- FAIL: TestCancelledReadOnlyJobShowsLocalizedStatus (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.294s
+FAIL

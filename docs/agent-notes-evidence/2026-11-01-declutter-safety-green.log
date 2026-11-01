@@ -1,0 +1,10 @@
+=== RUN   TestPhotoGroupExpandWorksAfterPruneAndRescan
+--- PASS: TestPhotoGroupExpandWorksAfterPruneAndRescan (0.00s)
+=== RUN   TestDuplicateCleanRefusesGroupWithEveryCopySelected
+--- PASS: TestDuplicateCleanRefusesGroupWithEveryCopySelected (0.01s)
+=== RUN   TestPhotoCleanWarnsWhenWholeGroupSelected
+--- PASS: TestPhotoCleanWarnsWhenWholeGroupSelected (0.01s)
+=== RUN   TestCancelledReadOnlyJobShowsLocalizedStatus
+--- PASS: TestCancelledReadOnlyJobShowsLocalizedStatus (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.284s

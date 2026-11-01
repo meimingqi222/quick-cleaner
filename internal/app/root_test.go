@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,7 +146,7 @@ func TestCleanupCancellationDoesNotDeleteAndReplacementIsRetained(t *testing.T) 
 	if frozen.Identity == nil {
 		t.Fatal("fixture identity missing")
 	}
-	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func(core.CleanReport) {})
+	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, 0, "", func(core.CleanReport) {})
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("request mutated path before confirmation", err)
 	}
@@ -159,7 +162,7 @@ func TestCleanupCancellationDoesNotDeleteAndReplacementIsRetained(t *testing.T) 
 	}
 	var successes uint
 	r.record = func(_ string, _ []string, ok, _, _ uint, _ uint64) { successes = ok }
-	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, func(core.CleanReport) {})
+	r.requestArbitraryClean("test", []core.ArbitraryTarget{frozen}, 0, "", func(core.CleanReport) {})
 	r.resolveConfirmation(r.confirmation.ID, true)
 	dispatchNext(t, q)
 	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
@@ -245,6 +248,51 @@ func TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming(t *testing.T)
 	dispatchNext(t, q)
 	if !r.confirming {
 		t.Fatal("resolved targets never reached confirmation")
+	}
+}
+
+// A select-all in a churning folder (Temp) always includes rows whose files
+// vanished after the scan. One vanished row used to fail identity capture and
+// refuse the whole batch; it has nothing to delete, so only the rows still on
+// disk need a frozen identity.
+func TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk(t *testing.T) {
+	r, q := testRoot(t)
+	dir := t.TempDir()
+	kept, gone := filepath.Join(dir, "kept.tmp"), filepath.Join(dir, "gone.tmp")
+	for _, p := range []string{kept, gone} {
+		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const keptSize, goneSize = 4 << 10, 1 << 20
+	r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), []core.TreeSnapshotEntry{{Path: dir, IsDir: true}, {Path: kept, Size: keptSize}, {Path: gone, Size: goneSize}})
+	r.disk.Loaded = true
+	r.rebuildDisk()
+	r.diskSelected.SetMany([]string{kept, gone}, []uint64{keptSize, goneSize}, true)
+	r.rebuildDisk()
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	r.requestSelectedDiskDelete()
+	dispatchNext(t, q)
+	if !r.confirming {
+		t.Fatalf("a vanished row refused the batch: %q", r.dashboard.StatusText)
+	}
+	// The estimate counts only what will be deleted, not the vanished row.
+	if detail := r.confirmation.Detail.Get(r.settings.Language); !strings.Contains(detail, core.FmtSize(keptSize)) || strings.Contains(detail, core.FmtSize(keptSize+goneSize)) {
+		t.Fatalf("confirmation size counts vanished rows: %s", detail)
+	}
+	r.resolveConfirmation(r.confirmation.ID, true)
+	for r.job != nil {
+		dispatchNext(t, q)
+	}
+	if _, err := os.Lstat(kept); !os.IsNotExist(err) {
+		t.Fatalf("surviving selected row was not deleted: %v", err)
+	}
+	for _, p := range []string{kept, gone} {
+		if _, ok := r.tree.FindNodeByPath(p); ok {
+			t.Fatalf("%s stayed in the index", p)
+		}
 	}
 }
 
@@ -446,4 +494,71 @@ func TestNavigateToJunkTriggersFirstScan(t *testing.T) {
 		t.Fatal("navigating to junk did not trigger first scan")
 	}
 	r.Cancel()
+}
+
+// A row that exists but cannot be frozen still refuses the whole batch:
+// skipping only applies to rows confirmed gone, never to unknown identity.
+func TestCaptureDiskTargetsSeparatesGoneFromUnfreezable(t *testing.T) {
+	dir := t.TempDir()
+	kept, gone := filepath.Join(dir, "kept"), filepath.Join(dir, "gone")
+	if err := os.WriteFile(kept, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	targets, vanished, failed := captureDiskTargets(context.Background(), []string{kept, gone})
+	if failed != "" || len(targets) != 1 || targets[0].Path != kept || targets[0].Identity == nil || !slices.Equal(vanished, []string{gone}) {
+		t.Fatalf("targets=%+v vanished=%v failed=%q", targets, vanished, failed)
+	}
+	unfreezable := func(path string) core.ArbitraryTarget { return core.ArbitraryTarget{Path: path} }
+	targets, vanished, failed = captureDiskTargetsUsing(context.Background(), []string{gone, kept}, unfreezable)
+	if failed != kept || targets != nil || vanished != nil {
+		t.Fatalf("existing unfreezable path was not refused: targets=%+v vanished=%v failed=%q", targets, vanished, failed)
+	}
+}
+
+// A checkbox click changes selection only. Rebuilding every row re-ran the
+// protection, whitelist and coverage checks: about 50 ms per click on a
+// 7400-entry folder. Selection actions refresh the existing rows instead, and
+// the result must equal a full rebuild.
+func TestDiskSelectionActionsRefreshRowsWithoutRebuilding(t *testing.T) {
+	r, _ := testRoot(t)
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	entries := []core.TreeSnapshotEntry{{Path: dir, IsDir: true}, {Path: sub, IsDir: true}}
+	for i := 0; i < 4; i++ {
+		entries = append(entries, core.TreeSnapshotEntry{Path: filepath.Join(sub, fmt.Sprintf("f%d", i)), Size: uint64(i + 1)})
+	}
+	r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), entries)
+	r.disk.Loaded = true
+	id, _ := r.tree.FindNodeByPath(sub)
+	r.currentNode = id
+	r.rebuildDisk()
+	a := r.diskActions()
+	sentinel := r.disk.Rows[3].Path
+	steps := []func(){
+		func() { a.ToggleSelected(r.disk.Rows[1]) },
+		func() { a.SetViewSelected(true) },
+		func() { a.ToggleSelected(r.disk.Rows[2]) },
+		func() { a.SetViewSelected(false) },
+		func() { a.ToggleSelected(r.disk.Rows[0]) },
+		a.ClearSelection,
+	}
+	for i, step := range steps {
+		r.disk.Rows[3].Protected = true // only a full rebuild would reset this
+		step()
+		if !r.disk.Rows[3].Protected || r.disk.Rows[3].Path != sentinel {
+			t.Fatalf("step %d rebuilt every row for a selection change", i)
+		}
+		got := r.disk
+		r.disk.Rows = slices.Clone(got.Rows)
+		r.rebuildDisk()
+		want := r.disk
+		for j := range want.Rows {
+			if got.Rows[j].Selected != want.Rows[j].Selected {
+				t.Fatalf("step %d row %d selected=%v, full rebuild says %v", i, j, got.Rows[j].Selected, want.Rows[j].Selected)
+			}
+		}
+		if got.SelectedCount != want.SelectedCount || got.SelectedSize != want.SelectedSize || got.HeaderSelected != want.HeaderSelected || got.HeaderMixed != want.HeaderMixed || got.CanRequestDelete != want.CanRequestDelete {
+			t.Fatalf("step %d summary %+v, full rebuild %+v", i, []any{got.SelectedCount, got.SelectedSize, got.HeaderSelected, got.HeaderMixed, got.CanRequestDelete}, []any{want.SelectedCount, want.SelectedSize, want.HeaderSelected, want.HeaderMixed, want.CanRequestDelete})
+		}
+	}
 }

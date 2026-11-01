@@ -1,0 +1,10 @@
+=== RUN   TestDiskDeletePrunesTreeAndKeepsPosition
+--- PASS: TestDiskDeletePrunesTreeAndKeepsPosition (0.00s)
+=== RUN   TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming
+--- PASS: TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming (0.00s)
+=== RUN   TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk
+--- PASS: TestSelectedDiskDeleteSkipsRowsAlreadyGoneFromDisk (0.01s)
+=== RUN   TestCaptureDiskTargetsSeparatesGoneFromUnfreezable
+--- PASS: TestCaptureDiskTargetsSeparatesGoneFromUnfreezable (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.270s

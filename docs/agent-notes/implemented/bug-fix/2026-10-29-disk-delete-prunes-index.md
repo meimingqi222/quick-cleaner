@@ -2,6 +2,10 @@
 
 Status: implemented
 
+> 2026-11-01 更新：「free 回填摘除体积」与「容忍并发读到过期 slot」两点已被
+> `2026-11-01-disk-prune-search-reader-and-space.md` 取代：剪枝前等待搜索读者退出，
+> 可用空间改为从系统读取。
+
 ## Problem
 
 用户反馈磁盘透镜删任何一个文件都会全量重新加载，之前所在的路径也
