@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// appShortcutEntryBudget bounds one shortcut walk. A variable only so tests can
+// reach the cap without creating thousands of files.
+var appShortcutEntryBudget = 4000
+
 // A shortcut is launch evidence only. Its parent directory and any arguments
 // provide no uninstall or recursive deletion authority.
 type ShortcutAppEvidence struct{ Shortcut, Target string }
@@ -30,7 +34,7 @@ func readAppShortcuts(ctx context.Context, roots []string, read func(string) (st
 				return nil
 			}
 			seen++
-			if seen > 4000 {
+			if seen > appShortcutEntryBudget {
 				return fs.SkipAll
 			}
 			depth := strings.Count(rel, string(filepath.Separator)) + 1

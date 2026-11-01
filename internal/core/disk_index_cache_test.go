@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -249,12 +250,31 @@ func TestDiskIndexCacheRejectsBaseCorruption(t *testing.T) {
 			}
 		})
 	}
+	// Every truncation goes through the decoder in memory; a file write plus Load
+	// per byte took seconds. Boundary lengths still go through the full Load path.
 	for n := 0; n < len(good); n++ {
+		if _, e := decodeDiskIndex(good[:n], v); e == nil {
+			t.Fatalf("truncation %d decoded", n)
+		}
+	}
+	for _, n := range truncationSamples(len(good)) {
 		diskCacheWrite(t, base, good[:n])
 		if _, e := c.Load(v); e == nil {
 			t.Fatalf("truncation %d accepted", n)
 		}
 	}
+}
+
+// truncationSamples picks file-level truncation lengths: empty, around the
+// fixed 128-byte header, the middle, and one byte short.
+func truncationSamples(size int) []int {
+	var out []int
+	for _, n := range []int{0, 1, 127, 128, 129, size / 2, size - 1} {
+		if n >= 0 && n < size && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func TestDiskIndexCacheRejectedDeltaDoesNotMutateBase(t *testing.T) {
@@ -309,7 +329,16 @@ func TestDiskIndexCacheRejectedDeltaDoesNotMutateBase(t *testing.T) {
 			check(t, b)
 		})
 	}
+	decodedBase, err := decodeDiskIndex(baseBytes, v)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for n := 0; n < len(good); n++ {
+		if _, _, e := decodeDiskIndexDelta(good[:n], decodedBase); e == nil {
+			t.Fatalf("delta truncation %d decoded", n)
+		}
+	}
+	for _, n := range truncationSamples(len(good)) {
 		check(t, good[:n])
 	}
 	diskCacheWrite(t, delta, good)

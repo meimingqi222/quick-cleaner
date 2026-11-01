@@ -18,6 +18,8 @@ func TestCLIConsoleAndGUISubsystemKeepPipesAndExitCodes(t *testing.T) {
 	}
 	for _, subsystem := range []string{"console", "gui"} {
 		t.Run(subsystem, func(t *testing.T) {
+			// Each subtest links its own binary; linking dominates, so overlap them.
+			t.Parallel()
 			ctx, stop := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer stop()
 			exe := filepath.Join(t.TempDir(), "quick-cleaner.exe")

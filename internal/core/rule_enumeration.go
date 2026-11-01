@@ -9,6 +9,11 @@ import (
 	"sort"
 )
 
+// ruleChildBudget caps one directory's inventory; past it the whole inventory
+// is refused rather than partially granted. A variable only so tests can reach
+// the cap without creating thousands of files.
+var ruleChildBudget = 4096
+
 type ruleChild struct {
 	path, name string
 	directory  bool
@@ -108,7 +113,7 @@ func (e *ruleEnumeration) children(anchor, path string) ([]ruleChild, bool) {
 		for _, entry := range batch {
 			count++
 			e.entries++
-			if count > 4096 || e.entries > 16384 {
+			if count > ruleChildBudget || e.entries > 16384 {
 				return nil, false
 			}
 			child := filepath.Join(path, entry.Name())

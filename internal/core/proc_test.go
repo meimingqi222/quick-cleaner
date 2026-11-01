@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,11 +34,14 @@ func TestProcHelper(t *testing.T) {
 			fmt.Fprintln(os.Stderr, strings.Repeat("y", 100))
 		}
 	case "leaf":
-		if err := os.WriteFile(filepath.Join(args[1], "ready"), []byte("yes"), 0600); err != nil {
+		// Rename so the parent never sees a half-written PID.
+		tmp := filepath.Join(args[1], "ready.tmp")
+		if os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())), 0600) != nil || os.Rename(tmp, filepath.Join(args[1], "ready")) != nil {
 			os.Exit(20)
 		}
-		time.Sleep(4 * time.Second)
-		_ = os.WriteFile(filepath.Join(args[1], "finished"), []byte("bad"), 0600)
+		// Far longer than any check window, so a leaf that escaped cleanup can
+		// never pass the test by exiting on its own.
+		time.Sleep(60 * time.Second)
 	case "parent", "exit-parent", "finish-parent":
 		cmd := exec.Command(os.Args[0], "-test.run=^TestProcHelper$", "--", "--qc-proc", "leaf", args[1])
 		if args[0] != "finish-parent" {
@@ -81,25 +85,37 @@ func TestProcResults(t *testing.T) {
 }
 
 func TestProcTreeDeadline(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"parent", "exit-parent", "finish-parent"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			start := time.Now()
 			r, ok := RunWithTimeout(os.Args[0], helperArgs(mode, dir), 2*time.Second)
 			elapsed := time.Since(start)
-			if _, err := os.Stat(filepath.Join(dir, "ready")); err != nil {
-				t.Fatalf("descendant did not start: %v (result=%+v ok=%v)", err, r, ok)
-			}
+			pid := readLeafPID(t, dir)
 			if ok != (mode == "finish-parent") {
-				t.Fatalf("unexpected transport result: %v", ok)
+				t.Fatalf("unexpected transport result: %v (result=%+v)", ok, r)
 			}
 			if elapsed >= 3*time.Second {
 				t.Fatalf("deadline exceeded: %s", elapsed)
 			}
-			time.Sleep(4 * time.Second)
-			if _, err := os.Stat(filepath.Join(dir, "finished")); !os.IsNotExist(err) {
-				t.Fatal("descendant survived command cleanup")
+			if !waitProcessGone(pid, 3*time.Second) {
+				t.Fatalf("descendant %d survived command cleanup", pid)
 			}
 		})
 	}
+}
+
+func readLeafPID(t *testing.T, dir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "ready"))
+	if err != nil {
+		t.Fatalf("descendant did not start: %v", err)
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err != nil || pid <= 0 {
+		t.Fatalf("descendant pid %q: %v", data, err)
+	}
+	return pid
 }

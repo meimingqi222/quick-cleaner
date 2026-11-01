@@ -177,13 +177,26 @@ func TestDirectoryInventoryBudgetNeverAuthorizesPartialChildren(t *testing.T) {
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 4097; i++ {
+	if ruleChildBudget != 4096 {
+		t.Fatalf("default child budget = %d, want 4096", ruleChildBudget)
+	}
+	// Reach the cap with a handful of files; 4097 real files cost seconds on Windows.
+	defer func(old int) { ruleChildBudget = old }(ruleChildBudget)
+	ruleChildBudget = 8
+	for i := 0; i < ruleChildBudget; i++ {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("entry-%04d", i)), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s := &RuleSnapshot{Bundle: RuleBundle{Schema: RuleSchema, Sequence: 1, Rules: []RuleDefinition{{ID: "fixture", Version: 1, Platform: "all", Directories: []DirectoryRule{{ID: "children", Root: "home", Paths: []string{"cache"}, Select: Selection{Kind: "children"}, Category: "UserCache", Operation: "file", Disposal: Permanent, Recommended: true}}}}}}
-	if targets := RuleDirectoryTargets(s, map[string]string{"home": root}, "macos"); len(targets) != 0 {
+	home := map[string]string{"home": root}
+	if targets := RuleDirectoryTargets(s, home, "macos"); len(targets) != ruleChildBudget {
+		t.Fatalf("inventory at the budget granted %d children, want %d", len(targets), ruleChildBudget)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "entry-over"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if targets := RuleDirectoryTargets(s, home, "macos"); len(targets) != 0 {
 		t.Fatalf("partial inventory authorized %d children", len(targets))
 	}
 }

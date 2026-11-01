@@ -29,13 +29,19 @@ func TestAppShortcutEvidenceLimits(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatal("cancelled discovery leaked partial inventory")
 	}
+	if appShortcutEntryBudget != 4000 {
+		t.Fatalf("default entry budget = %d, want 4000", appShortcutEntryBudget)
+	}
+	// Reach the cap with a handful of files; 4001 real files cost seconds on Windows.
+	defer func(old int) { appShortcutEntryBudget = old }(appShortcutEntryBudget)
+	appShortcutEntryBudget = 8
 	bounded := t.TempDir()
-	for i := range 4001 {
+	for i := range appShortcutEntryBudget + 1 {
 		if err := os.WriteFile(filepath.Join(bounded, fmt.Sprintf("%04d.lnk", i)), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := readAppShortcuts(context.Background(), []string{bounded}, read); len(got) != 4000 {
+	if got := readAppShortcuts(context.Background(), []string{bounded}, read); len(got) != appShortcutEntryBudget {
 		t.Fatalf("entry budget=%d", len(got))
 	}
 }
