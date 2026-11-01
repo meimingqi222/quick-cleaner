@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Snapshots retain the toolchain and Cargo caches; never install on wake.
-# shellcheck source=/dev/null
-source "$HOME/.cargo/env"
-cargo +stable --version
-echo '[orb resume] Rust cache restored. Native application checks require macOS or Windows.'
+# Snapshots retain the Go toolchain and module cache; never install on wake.
+export PATH="$HOME/.local/go/bin:$PATH"
+go version
+echo '[orb resume] Go toolchain restored. Native application checks require macOS or Windows.'

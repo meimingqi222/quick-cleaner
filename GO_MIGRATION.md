@@ -2,18 +2,20 @@
 
 ## Delivery state
 
-The repository now contains a Go product entry point, core/platform ports and
-MyGo pages. This is no longer only a dashboard prototype. **Full Rust feature,
-visual and performance parity is not established.** The Rust source remains the
-behavior reference; the release workflow now builds the Go product. Published
-asset names and archive layouts are unchanged, so installed Rust and Go
-updaters both accept the Go packages. This does not authorize deleting the
-reference.
+Go + MyGo is the only maintained implementation. The Rust + GPUI reference
+tree (`src/`, `examples/`, Cargo and its CI) was deleted on 2026-11-01 at the
+owner's decision; recover it from git history before that date if a past
+behavior needs checking. Regression notes still cite its tests as the history
+they were written against (see the `--retired-prefix` set in
+`.github/workflows/agent-notes.yml`). The release
+workflow builds the Go product. Published asset names and archive layouts are
+unchanged, so installed Rust-era and Go updaters both accept the Go packages.
 
-Preserve the existing product, not a redesign: navigation, layout, colors,
-icons, copy, themes, localization, selection and confirmation behavior come
-from `src/ui/` and the existing assets. Native menus and platform font rendering
-are not claimed pixel-identical to GPUI.
+The Go port preserved the existing product rather than redesigning it:
+navigation, layout, colors, icons, copy, themes, localization, selection and
+confirmation behavior came from the former `src/ui/` and the existing assets.
+Native menus and platform font rendering are not claimed pixel-identical to
+GPUI. Native acceptance gates below are still open.
 
 ## Build and run
 
@@ -138,9 +140,9 @@ are compared without regenerating expected baselines.
   checksum code. A notarized bundle and an end-to-end update on real
   machines have not been run.
 
-Do not call this a complete Rust replacement while these gates remain. Do not
-claim improved build speed from comparing a partial port with the full product;
-no controlled before/after comparison has been established.
+Do not call the Go product natively accepted while these gates remain. Do not
+claim improved build speed over the Rust build; no controlled before/after
+comparison was established before it was removed.
 
 ## Verification scope
 

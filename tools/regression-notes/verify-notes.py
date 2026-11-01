@@ -523,8 +523,13 @@ def check_verification(path, ver, repo_root, strict, opts, bare_index,
             f"somewhere durable (e.g. a `<notes>-evidence/` sibling of the "
             f"notes tree) or record the natural-red source inline")
 
+    # A target under a --retired-prefix names code that was deliberately
+    # deleted (e.g. a retired reference implementation). The note keeps it as
+    # history; its absence is expected, so it is neither an error nor a warning.
+    retired = tuple(getattr(opts, "retired_prefix", None) or ())
     missing = [t for t in targets
-               if not (repo_root / t).exists() and t not in proved_tokens]
+               if not (repo_root / t).exists() and t not in proved_tokens
+               and not t.replace("\\", "/").startswith(retired)]
     if missing:
         msg = f"{path}: verification target(s) not found: {', '.join(missing)}"
         if strict:
@@ -1063,6 +1068,16 @@ def main(argv=None):
         "--strict-anchors",
         action="store_true",
         help="make a `path::anchor` whose anchor is missing from that file an error",
+    )
+    ap.add_argument(
+        "--retired-prefix",
+        action="append",
+        default=[],
+        metavar="PATH/",
+        help=(
+            "repo-relative prefix of deliberately deleted code (repeatable); "
+            "verification targets under it are kept as history, not required to exist"
+        ),
     )
     ap.add_argument(
         "--no-name-heuristic",

@@ -1,10 +1,9 @@
-# Rust 构建产物。Rust 源仍是 Go 移植的行为参照，cargo 检查照旧在 CI 跑，不能因为发布改走 Go 就删掉。
+# Rust 参照树已于 2026-11-01 删除；旧 checkout 里可能残留 /target，继续忽略。
 /target
 /dist
 .amp/portals/
 *.pdb
 *.ilk
-*.rs.bk
 
 # Go 构建产物。`go build ./...` 会把 main 包的可执行文件落在 cwd，打包脚本的输出统一进 /dist。
 /quick-cleaner
@@ -30,9 +29,6 @@ coverage/
 /docs/temp/
 !/docs/PITFALLS.md
 !/docs/CLI.md
-!/docs/UI_MIGRATION.md
-!/docs/UI_POPOVER.md
-!/docs/UI_COMPONENTS.md
 !/docs/ui-baselines/
 !/docs/agent-notes/
 !/docs/compose/

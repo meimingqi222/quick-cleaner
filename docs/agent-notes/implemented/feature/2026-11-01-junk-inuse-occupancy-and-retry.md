@@ -144,7 +144,7 @@ Status: implemented
 - `internal/core/cleaner_leaf_windows_test.go::TestFailParentPrefersRealErrorsOverSkips`
 - `internal/core/cleaner_leaf_windows_test.go::TestTreeTargetsKeepWholeTargetOccupancyGate`
 - `internal/cli/cli_test.go::TestJunkSelectionRequiresFreshExactEligibleTarget`
-- `internal/core/cleaner_test.go::TestSplitFailuresKeepsRealErrorsInMixedTargets`
+- `internal/core/inuse_test.go::TestSplitFailuresKeepsRealErrorsInMixedTargets`
 - `internal/ui/junk_test.go::TestJunkPageSelectionAndIndependentActions`
 
 Proved:
