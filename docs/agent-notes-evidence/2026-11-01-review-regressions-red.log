@@ -1,0 +1,32 @@
+=== RUN   TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=132 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=136 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=85 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=65 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=166 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=181 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=112 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=81 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=168 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=169 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=114 known=true; want 0, true
+    occupancy_windows_test.go:35: unlocked hardlinks: locks=101 known=true; want 0, true
+    occupancy_windows_test.go:55: released hardlinks: locks=114 known=true; want 0, true
+--- FAIL: TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks (0.67s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.622s
+=== RUN   TestTargetFailInfoPreservesMixedFailures
+    cleaner_targets_test.go:35: [in_use in_use access_denied]: got {Path:/fixture/cache FailedLeaves:3 SkippedLeaves:0 Reason:in_use}; want total=3 skipped=2 reason=access_denied
+    cleaner_targets_test.go:35: [access_denied in_use in_use]: got {Path:/fixture/cache FailedLeaves:3 SkippedLeaves:0 Reason:in_use}; want total=3 skipped=2 reason=access_denied
+    cleaner_targets_test.go:35: [unverified changed unverified]: got {Path:/fixture/cache FailedLeaves:3 SkippedLeaves:0 Reason:unverified}; want total=3 skipped=2 reason=changed
+    cleaner_targets_test.go:35: [in_use unverified other]: got {Path:/fixture/cache FailedLeaves:3 SkippedLeaves:0 Reason:in_use}; want total=3 skipped=2 reason=other
+    cleaner_targets_test.go:35: [in_use unverified in_use]: got {Path:/fixture/cache FailedLeaves:3 SkippedLeaves:0 Reason:in_use}; want total=3 skipped=3 reason=in_use
+--- FAIL: TestTargetFailInfoPreservesMixedFailures (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.175s
+=== RUN   TestJunkMixedLeafFailuresKeepErrorAndExactHistory
+    junk_test.go:24: history failed=3 skipped=0; want 1, 2
+--- FAIL: TestJunkMixedLeafFailuresKeepErrorAndExactHistory (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.167s
+FAIL

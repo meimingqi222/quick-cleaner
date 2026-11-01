@@ -58,9 +58,10 @@ func main() {
 	case "junk":
 		junk := junkFixture(s, *details)
 		junkActions := appui.JunkPageActions{
-			ToggleExpanded:      func(id core.CategoryID) { junk.Expanded[id] = !junk.Expanded[id] },
-			ToggleExclusions:    func() { junk.ShowExclusions = !junk.ShowExclusions },
-			ToggleFailedDetails: func() { junk.ShowFailedDetails = !junk.ShowFailedDetails },
+			ToggleExpanded:       func(id core.CategoryID) { junk.Expanded[id] = !junk.Expanded[id] },
+			ToggleExclusions:     func() { junk.ShowExclusions = !junk.ShowExclusions },
+			ToggleFailedDetails:  func() { junk.ShowFailedDetails = !junk.ShowFailedDetails },
+			ToggleSkippedDetails: func() { junk.ShowSkippedDetails = !junk.ShowSkippedDetails },
 		}
 		view = func(c *ui.Context) {
 			junk.Language = s.Language

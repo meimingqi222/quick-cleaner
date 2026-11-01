@@ -1,0 +1,9 @@
+--- FAIL: TestTreeCancellationStillWritesJSON (0.00s)
+    cli_test.go:95: invalid JSON: : unexpected end of JSON input
+--- FAIL: TestOutputErrorsAreFailures (0.00s)
+    cli_test.go:126: []: output failure returned 0
+    cli_test.go:126: [junk]: output failure returned 0
+    cli_test.go:126: [junk categories --json]: output failure returned 0
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/cli	0.850s
+FAIL

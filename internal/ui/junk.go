@@ -26,11 +26,21 @@ type JunkPage struct {
 	Expanded                                 map[core.CategoryID]bool
 	ReleaseEligible                          map[string]bool
 	Exclusions                               []string
-	ShowExclusions, ShowFailedDetails        bool
-	FailedDetails                            []string
+	ShowExclusions                           bool
+	ShowFailedDetails, ShowSkippedDetails    bool
+	FailedDetails, SkippedDetails            []JunkDetail
 	RecommendedSelected                      bool
 	Scroll                                   ui.ScrollState
 	lists                                    map[core.CategoryID]*ui.ListState
+}
+
+// JunkDetail is one residual row. Release is true only when the controller has
+// independently verified that the ordinary cache-release authority still covers
+// this path; the view never infers it from the text.
+type JunkDetail struct {
+	Text    string
+	Path    string
+	Release bool
 }
 
 type JunkPageActions struct {
@@ -41,7 +51,9 @@ type JunkPageActions struct {
 	Select                                 func(JunkSelection)
 	ToggleExclusions                       func()
 	Exclude, RemoveExclusion, ReleaseCache func(string)
+	RetryRelease                           func(string)
 	ToggleFailedDetails                    func()
+	ToggleSkippedDetails                   func()
 	RequestClean                           func()
 }
 
@@ -77,7 +89,7 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 						size := "—"
 						var total uint64
 						for _, category := range s.Categories {
-							total += category.TotalSize
+							total += category.CleanableSize()
 						}
 						if s.Scanned {
 							size = core.FmtSize(total)
@@ -96,7 +108,7 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 				if s.ShowExclusions {
 					s.exclusions(c, actions)
 				}
-				if len(s.FailedDetails) > 0 {
+				if len(s.FailedDetails) > 0 || len(s.SkippedDetails) > 0 {
 					s.failures(c, actions)
 				}
 				if s.Scanning {
@@ -133,16 +145,20 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 	case "danger":
 		fg, bg = junkError, junkErrorContainer
 	}
-	var picked uint
+	var picked, available uint
 	for _, item := range category.Items {
+		if !item.CleanupAvailable() {
+			continue
+		}
+		available++
 		if s.Selected[item.Path] {
 			picked++
 		}
 	}
 	ui.Column(c).FillWidth().Gap(0).Radius(12).Clip().Background(card).Border(1, outlineVariant.Alpha(.4)).Children(func() {
 		ui.Row(c).Padding(10, 16).Gap(12).Children(func() {
-			check := ui.ButtonBase(c.Key("category-check")).Padding(0).Cursor(ui.CursorPointer)
-			check.Children(func() { junkCheck(c, core.CheckFromCounts(picked, uint(len(category.Items)))) })
+			check := ui.ButtonBase(c.Key("category-check")).Padding(0).Disabled(available == 0 || s.busy()).Cursor(ui.CursorPointer)
+			check.Children(func() { junkCheck(c, core.CheckFromCounts(picked, available)) })
 			if check.Clicked() && actions.ToggleCategory != nil {
 				actions.ToggleCategory(id)
 			}
@@ -161,14 +177,15 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 					})
 					ui.Text(c, copy[1].Get(s.Language)).FontSize(12).TextColor(muted)
 				})
-				size := core.FmtSize(category.TotalSize)
+				cleanable := category.CleanableSize()
+				size := core.FmtSize(cleanable)
 				if s.Discovering && id.IsDiscovered() {
 					size = t.discovering
-				} else if category.Partial && category.TotalSize > 0 {
+				} else if category.Partial && cleanable > 0 {
 					size = "≥ " + size
 				}
 				color := fg
-				if category.TotalSize == 0 {
+				if cleanable == 0 {
 					color = outline
 				}
 				ui.Text(c, size).Shrink(0).FontSize(14).Bold().TextColor(color)
@@ -202,11 +219,11 @@ func (s *JunkPage) category(c *ui.Context, category core.CategorySummary, action
 func (s *JunkPage) item(c *ui.Context, item core.ScanItem, actions JunkPageActions) {
 	t := junkStrings(s.Language)
 	ui.Row(c).Height(50).FillWidth().Padding(8, 16).Gap(12).BorderWidth(0, 0, 1, 0).BorderColor(outlineVariant.Alpha(.25)).Children(func() {
-		row := ui.ButtonBase(c.Key("toggle")).Grow(1).MinWidth(0).FillHeight().Padding(0).Gap(12).Justify(ui.Start).Cursor(ui.CursorPointer)
+		row := ui.ButtonBase(c.Key("toggle")).Grow(1).MinWidth(0).FillHeight().Padding(0).Gap(12).Justify(ui.Start).Disabled(!item.CleanupAvailable() || s.busy()).Cursor(ui.CursorPointer)
 		interactiveRow(row, ui.Transparent, surfaceLow)
 		row.Children(func() {
 			check := core.Off
-			if s.Selected[item.Path] {
+			if s.Selected[item.Path] && item.CleanupAvailable() {
 				check = core.On
 			}
 			junkCheck(c, check)
@@ -221,7 +238,7 @@ func (s *JunkPage) item(c *ui.Context, item core.ScanItem, actions JunkPageActio
 						junkBadge(c, label, junkError, junkErrorContainer)
 					} else if item.Busy != nil {
 						if label, app, ok := item.Busy.Badge(); ok {
-							fg, bg := junkError, junkErrorContainer
+							fg, bg := outline, surfaceLow
 							if app {
 								fg, bg = caution, cautionContainer
 							}
@@ -274,28 +291,53 @@ func (s *JunkPage) exclusions(c *ui.Context, actions JunkPageActions) {
 
 func (s *JunkPage) failures(c *ui.Context, actions JunkPageActions) {
 	t := junkStrings(s.Language)
-	heading := fmt.Sprintf(t.failed, len(s.FailedDetails))
-	toggle := t.showDetails
-	if s.ShowFailedDetails {
-		toggle = t.hideDetails
+	if len(s.FailedDetails) > 0 {
+		s.detailPanel(c, t, fmt.Sprintf(t.failed, len(s.FailedDetails)), t.showDetails, t.hideDetails, s.ShowFailedDetails, s.FailedDetails, "failed-details", actions.ToggleFailedDetails, actions.RetryRelease, true)
 	}
-	// A tint, not a slab: the heading carries the alarm, and the details stay
+	if len(s.SkippedDetails) > 0 {
+		s.detailPanel(c, t, fmt.Sprintf(t.skipped, len(s.SkippedDetails)), t.showSkipped, t.hideSkipped, s.ShowSkippedDetails, s.SkippedDetails, "skipped-details", actions.ToggleSkippedDetails, actions.RetryRelease, false)
+	}
+}
+
+func (s *JunkPage) detailPanel(c *ui.Context, t junkCopy, heading, show, hide string, open bool, details []JunkDetail, key string, toggle func(), retry func(string), alert bool) {
+	dot, bg, border, fg := outline, surfaceLow, outlineVariant.Alpha(.5), muted
+	if alert {
+		dot, bg, border, fg = junkError, junkErrorContainer.Alpha(.35), junkError.Alpha(.22), junkError
+	}
+	toggleLabel := show
+	if open {
+		toggleLabel = hide
+	}
+	// A tint, not a slab: the heading carries the state, and the details stay
 	// readable in body text.
-	ui.Column(c).FillWidth().Padding(14, 16).Gap(8).Radius(12).Background(junkErrorContainer.Alpha(.35)).Border(1, junkError.Alpha(.22)).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			ui.Box(c).Size(8, 8).Shrink(0).Radius(999).Background(junkError)
-			ui.Text(c, heading).Grow(1).MinWidth(0).FontSize(14).Bold().TextColor(junkError)
-			if junkButton(c.Key("failed-details"), toggle, true, false) && actions.ToggleFailedDetails != nil {
-				actions.ToggleFailedDetails()
+	ui.Column(c.Key(key+"-panel")).FillWidth().Padding(14, 16).Gap(8).Radius(12).Background(bg).Border(1, border).Children(func() {
+		ui.Row(c.Key(key + "-head")).FillWidth().Gap(8).Children(func() {
+			ui.Box(c).Size(8, 8).Shrink(0).Radius(999).Background(dot)
+			ui.Text(c, heading).Grow(1).MinWidth(0).FontSize(14).Bold().TextColor(fg)
+			if junkButton(c.Key(key), toggleLabel, true, false) && toggle != nil {
+				toggle()
 			}
 		})
-		if s.ShowFailedDetails {
-			ui.Column(c.Key("failed-list")).FillWidth().Padding(8, 10).Gap(4).Radius(8).Background(card).Transition(disclosure).Children(func() {
-				for _, detail := range s.FailedDetails[:min(20, len(s.FailedDetails))] {
-					ui.Text(c, core.Truncate(detail, 120)).FontSize(12).TextColor(text)
-				}
-			})
+		if !open {
+			return
 		}
+		ui.Column(c.Key(key+"-list")).FillWidth().Padding(8, 10).Gap(4).Radius(8).Background(card).Transition(disclosure).Children(func() {
+			const limit = 40
+			shown := details[:min(limit, len(details))]
+			for i, detail := range shown {
+				ui.Row(c.Key(fmt.Sprint(key, "-", i))).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, core.Truncate(detail.Text, 140)).Grow(1).MinWidth(0).FontSize(12).TextColor(text)
+					if detail.Release && detail.Path != "" && !s.Cleaning {
+						if junkButton(c.Key(fmt.Sprint(key, "-retry-", i)), t.retry, true, false) && retry != nil {
+							retry(detail.Path)
+						}
+					}
+				})
+			}
+			if omitted := len(details) - len(shown); omitted > 0 {
+				ui.Text(c, fmt.Sprintf(t.more, omitted)).FontSize(12).TextColor(muted)
+			}
+		})
 	})
 }
 
@@ -323,6 +365,9 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 	var size uint64
 	for _, category := range s.Categories {
 		for _, item := range category.Items {
+			if !item.CleanupAvailable() {
+				continue
+			}
 			total++
 			if s.Selected[item.Path] {
 				picked++

@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"slices"
 
 	"github.com/meimingqi222/quick-cleaner/internal/app"
+	"github.com/meimingqi222/quick-cleaner/internal/cli"
 	"github.com/meimingqi222/quick-cleaner/internal/core"
 	"github.com/meimingqi222/quick-cleaner/internal/platform"
 )
@@ -19,8 +22,8 @@ func main() {
 			panic(rec)
 		}
 	}()
-	// Windows detaches the startup console in init. --version attaches there
-	// and must not detach again.
+	// Console commands preserve their parent handles in Windows init; GUI
+	// startup may already have relaunched without a console.
 	os.Exit(run(os.Args[1:]))
 }
 
@@ -50,6 +53,14 @@ product:
 	if slices.Contains(args, "--fanhelper") || slices.Contains(args, "--fanhelper-install") {
 		fmt.Fprintln(os.Stderr, "helper mode requires exactly one argument")
 		return 2
+	}
+	if len(args) > 0 && (args[0] == "cli" || args[0] == "--help" || args[0] == "-h") {
+		if args[0] == "cli" {
+			args = args[1:]
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return cli.Run(ctx, args, os.Stdout, os.Stderr)
 	}
 	if runtime.GOOS == "windows" {
 		// Resolve the original foreground account before the elevation adapter

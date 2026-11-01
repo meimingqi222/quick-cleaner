@@ -21,44 +21,46 @@ func ioFailReason(err error) FailReason {
 	return FailOther
 }
 
-func removeWithReadonlyRetry(path string) error {
-	err := os.Remove(path)
+func removeWithReadonlyRetry(path string, remove func(string) error) error {
+	err := remove(path)
 	if err == nil {
 		return nil
 	}
 	if md, statErr := os.Lstat(path); statErr == nil && !ruleEvidenceLink(md) && md.Mode().Perm()&0200 == 0 {
 		_ = os.Chmod(path, md.Mode().Perm()|0200)
 	}
-	return os.Remove(path)
+	return remove(path)
 }
 
 // Access recovery is local to the failed object and its unprotected parent;
 // a nonempty directory never authorizes recursively rewriting its ACLs.
-func removeForcing(path string) error {
-	err := removeWithReadonlyRetry(path)
+func removeForcing(path string, remove func(string) error) error {
+	err := removeWithReadonlyRetry(path, remove)
 	if err == nil || !errors.Is(err, os.ErrPermission) {
 		return err
 	}
 	_ = platform.ForceDeleteAccess(path)
-	if retry := removeWithReadonlyRetry(path); retry == nil {
+	if retry := removeWithReadonlyRetry(path, remove); retry == nil {
 		return nil
 	}
 	parent := filepath.Dir(path)
 	if parent != path && !IsProtected(parent) {
 		_ = platform.ForceDeleteAccess(parent)
-		if retry := removeWithReadonlyRetry(path); retry == nil {
+		if retry := removeWithReadonlyRetry(path, remove); retry == nil {
 			return nil
 		}
 	}
 	return err
 }
 
+// Regular files go through the exclusive delete: on Windows that is the
+// per-leaf occupancy gate which lets a target clean around locked files.
 func cleanFile(path string, size uint64, p *CleanProgress) CleanResult {
 	if p.Cancelled() || IsProtected(path) {
 		return CleanSkipped
 	}
 	p.Note(path)
-	if err := removeForcing(path); err != nil {
+	if err := removeForcing(path, platform.RemoveFileExclusive); err != nil {
 		return p.fail(path, ioFailReason(err))
 	}
 	p.Files.Add(1)
@@ -106,7 +108,7 @@ func cleanEntryBindings(dir string, parent TargetIdentity, hasParent bool, child
 	return checked
 }
 
-func cleanFileFamilies(files []cleanEntry, p *CleanProgress) uint {
+func cleanFileFamilies(files []cleanEntry, p *CleanProgress) []string {
 	groups := make(map[string][]cleanEntry)
 	for _, f := range files {
 		key, ok := SQLiteFamilyKey(filepath.Base(f.path))
@@ -115,7 +117,7 @@ func cleanFileFamilies(files []cleanEntry, p *CleanProgress) uint {
 		}
 		groups[key] = append(groups[key], f)
 	}
-	var failed uint
+	var failed []string
 	for _, members := range groups {
 		sort.SliceStable(members, func(i, j int) bool {
 			return IsSQLiteCompanionName(filepath.Base(members[i].path)) && !IsSQLiteCompanionName(filepath.Base(members[j].path))
@@ -133,21 +135,24 @@ func cleanFileFamilies(files []cleanEntry, p *CleanProgress) uint {
 		if hasCompanion && hasMain && IsLiveDatabase(mainPath) {
 			for _, f := range members {
 				p.fail(f.path, FailInUse)
-				failed++
+				failed = append(failed, f.path)
 			}
 			continue
 		}
-		companionFailed := false
+		var companionFailures []string
 		for _, f := range members {
 			companion := IsSQLiteCompanionName(filepath.Base(f.path))
-			if !companion && companionFailed {
-				failed++
+			if !companion && len(companionFailures) > 0 {
+				// The main file is kept because its companion is; it inherits
+				// that companion's skip-or-error class.
+				p.failParent(f.path, companionFailures)
+				failed = append(failed, f.path)
 				continue
 			}
 			if cleanFile(f.path, f.size, p) == CleanFailed {
-				failed++
+				failed = append(failed, f.path)
 				if companion {
-					companionFailed = true
+					companionFailures = append(companionFailures, f.path)
 				}
 			}
 		}
@@ -182,11 +187,11 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 	}
 	checked := cleanEntryBindings(path, parent, hasParent, children)
 	var files, dirs []cleanEntry
-	var failed uint
+	var failed []string
 	for i, c := range children {
 		if !checked[i] {
 			p.fail(c.path, FailChanged)
-			failed++
+			failed = append(failed, c.path)
 			continue
 		}
 		if c.dir || c.link {
@@ -195,20 +200,22 @@ func DeleteTree(path string, p *CleanProgress) CleanResult {
 			files = append(files, c)
 		}
 	}
-	failed += cleanFileFamilies(files, p)
+	failed = append(failed, cleanFileFamilies(files, p)...)
 	for _, d := range dirs {
 		if DeleteTree(d.path, p) == CleanFailed {
-			failed++
+			failed = append(failed, d.path)
 		}
 	}
 	if p.Cancelled() {
 		return CleanSkipped
 	}
-	if err := removeForcing(path); err != nil {
-		return p.fail(path, ioFailReason(err))
+	if len(failed) > 0 {
+		// A child stayed, so the directory is not empty; its class follows
+		// the children rather than the inevitable "directory not empty".
+		return p.failParent(path, failed)
 	}
-	if failed > 0 {
-		return p.fail(path, FailOther)
+	if err := removeForcing(path, os.Remove); err != nil {
+		return p.fail(path, ioFailReason(err))
 	}
 	return CleanOK
 }

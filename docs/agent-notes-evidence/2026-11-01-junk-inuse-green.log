@@ -1,0 +1,9 @@
+=== RUN   TestWindowsDirectoryProbeCoversLargeUnlockedTrees
+    occupancy_windows_test.go:29: created 4100 files in 2.2588087s
+    occupancy_windows_test.go:34: clear probe took 717.8059ms
+    occupancy_windows_test.go:49: busy probe took 832.1655ms
+--- PASS: TestWindowsDirectoryProbeCoversLargeUnlockedTrees (8.81s)
+=== RUN   TestOccupancyOwnersReportsTheLockingProcess
+--- PASS: TestOccupancyOwnersReportsTheLockingProcess (0.42s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	9.981s

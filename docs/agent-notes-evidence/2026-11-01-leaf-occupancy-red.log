@@ -1,0 +1,34 @@
+## Round A (manufactured): leafOccupancyGate forced false; RemoveFileExclusive opened with FILE_SHARE_READ|WRITE|DELETE; ApplyBusy re-clears Recommended
+$ go test ./internal/core/ -run 'TestContentsCleanupSkipsOnlyLockedLeaves|TestApplyBusyKeepsRecommendationAndSelection' -count=1 -v
+=== RUN   TestContentsCleanupSkipsOnlyLockedLeaves
+    cleaner_leaf_windows_test.go:58: unlocked leaf kept: C:\Users\MEIMIN~1\AppData\Local\Temp\TestContentsCleanupSkipsOnlyLockedLeaves552002742\001\cache\a.bin (<nil>)
+    cleaner_leaf_windows_test.go:58: unlocked leaf kept: C:\Users\MEIMIN~1\AppData\Local\Temp\TestContentsCleanupSkipsOnlyLockedLeaves552002742\001\cache\b.bin (<nil>)
+    cleaner_leaf_windows_test.go:58: unlocked leaf kept: C:\Users\MEIMIN~1\AppData\Local\Temp\TestContentsCleanupSkipsOnlyLockedLeaves552002742\001\cache\sub\d.bin (<nil>)
+    cleaner_leaf_windows_test.go:76: progress files=0 ignored=1 failed=1; want 3/1/1 (ancestors must not recount)
+--- FAIL: TestContentsCleanupSkipsOnlyLockedLeaves (0.07s)
+=== RUN   TestApplyBusyKeepsRecommendationAndSelection
+    inuse_test.go:109: occupancy changed recommendation or selection: {Plans:[] Operation:{Kind: Registration: Reference: Name: Native: Identifier:} Disposal: Rule:{snapshot:<nil> origin:<nil> id: scope: contributors:[] blocked: observation:{RuleID: RuleVersion:0 Schema:0 Sequence:0 Scope: Variables:map[] Facts:map[] Detected: ProviderKey: ProviderPolicy:<nil> VersionGuard:<nil>}} Path:/a Label:{zh:x en:x} Size:1 FileCount:0 LastModified:0 Category:UserTemp Recommended:false Busy:0x17051c3c0678 Identity:<nil>} busy=&{App:A Open:false Unknown:false}
+--- FAIL: TestApplyBusyKeepsRecommendationAndSelection (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.293s
+FAIL
+$ go test ./internal/platform/ -run TestRemoveFileExclusive -count=1 -v
+=== RUN   TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete
+    remove_windows_test.go:27: held file: err=<nil>; want sharing violation
+    testing.go:1617: TempDir RemoveAll cleanup: unlinkat C:\Users\MEIMIN~1\AppData\Local\Temp\TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete3897812290\001\held.bin: Access is denied.
+--- FAIL: TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete (1.40s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	2.350s
+FAIL
+
+## Round B (manufactured): failParent always records FailOther (old DeleteTree behavior for a dir with failed children)
+$ go test ./internal/core/ -run 'TestContentsCleanupSkipsOnlyLockedLeaves|TestFailParentPrefersRealErrorsOverSkips' -count=1 -v
+=== RUN   TestContentsCleanupSkipsOnlyLockedLeaves
+    cleaner_leaf_windows_test.go:69: locked leaf not reported as a pure skip: {Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestContentsCleanupSkipsOnlyLockedLeaves3830768579\001\cache FailedLeaves:1 SkippedLeaves:0 Reason:other}
+--- FAIL: TestContentsCleanupSkipsOnlyLockedLeaves (0.08s)
+=== RUN   TestFailParentPrefersRealErrorsOverSkips
+    cleaner_leaf_windows_test.go:89: failed=[{/d } {/e }] skipped=[]
+--- FAIL: TestFailParentPrefersRealErrorsOverSkips (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.315s
+FAIL

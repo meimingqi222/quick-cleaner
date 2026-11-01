@@ -38,10 +38,9 @@ func TestCacheReleasePublicEligibilityAndFailClosedAPI(t *testing.T) {
 		}
 	}
 	busy := base
-	busy.Recommended = false
-	busy.Busy = &core.Busy{RecommendedBeforeBusy: true, Open: true}
+	busy.Busy = &core.Busy{Open: true}
 	if !core.CacheReleaseEligible(busy) {
-		t.Fatal("busy lost original recommendation")
+		t.Fatal("an open-file badge revoked cache-release eligibility")
 	}
 	path := filepath.Join(root, "cache")
 	if err := os.Mkdir(path, 0700); err != nil {

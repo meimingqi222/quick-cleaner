@@ -31,9 +31,9 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 				{Path: "/fixture/cache", Label: core.NewText("示例缓存", "Example cache"), Size: 7, FileCount: 1234, Recommended: true, Busy: &core.Busy{App: "Example"}},
 				{Path: "/fixture/cache-two", Label: core.NewText("另一缓存", "Second cache"), Size: 12},
 			}},
-			{Category: core.DevBuild, TotalSize: 23, Partial: true},
+			{Category: core.DevBuild, TotalSize: 23, Partial: true, Items: []core.ScanItem{{Path: "/fixture/build", Size: 23}}},
 		},
-		Selected:        map[string]bool{"/fixture/cache": true, "/stale-selection": true},
+		Selected:        map[string]bool{"/fixture/cache": true, "/fixture/cache-two": true, "/stale-selection": true},
 		Expanded:        map[core.CategoryID]bool{core.UserCache: true},
 		ReleaseEligible: map[string]bool{"/fixture/cache": true},
 	}
@@ -50,7 +50,7 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) {
 		appui.Dashboard{Language: page.Language}.RenderPage(c, appui.Junk, appui.DashboardActions{}, func() { page.RenderContent(c, actions) })
 	}, 1280, 880)
-	for _, text := range []string{"Example running", "1,234 files", "Manual Select", "Partial", "≥ 23 B", "7 B", "(1 items)", "2 items"} {
+	for _, text := range []string{"Example running", "1,234 files", "Manual Select", "Partial", "≥ 23 B", "7 B", "(2 items)", "3 items"} {
 		if !tt.HasText(text) {
 			t.Fatalf("missing result/selection fact %q; texts: %v", text, tt.Texts())
 		}
@@ -71,8 +71,18 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 	if err := tt.Click("Example cache"); err != nil {
 		t.Fatal(err)
 	}
+	// An occupancy badge is information only; the row stays selectable.
 	if toggled != "/fixture/cache" {
-		t.Fatalf("selected path = %q", toggled)
+		t.Fatalf("busy row not selectable: %q", toggled)
+	}
+	if err := tt.Click("Second cache"); err != nil {
+		t.Fatal(err)
+	}
+	if toggled != "/fixture/cache-two" {
+		t.Fatalf("clear row not selectable: %q", toggled)
+	}
+	if !tt.HasText("42 B") || !tt.HasText("19 B") {
+		t.Fatalf("busy bytes dropped from totals: %v", tt.Texts())
 	}
 	for _, label := range []string{"Recommended", "Select All", "Invert", "Clear All"} {
 		if err := tt.Click(label); err != nil {
@@ -90,7 +100,7 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 	}
 	for _, state := range []string{"scanning", "cleaning", "not-scanned", "no-current-selection"} {
 		page.Scanned, page.Scanning, page.Cleaning = true, false, false
-		page.Selected["/fixture/cache"] = true
+		page.Selected["/fixture/cache-two"] = true
 		switch state {
 		case "scanning":
 			page.Scanning = true
@@ -100,6 +110,7 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 			page.Scanned = false
 		case "no-current-selection":
 			page.Selected["/fixture/cache"] = false
+			page.Selected["/fixture/cache-two"] = false
 		}
 		tt.Frame()
 		label := "Clean Now"
@@ -155,15 +166,21 @@ func TestJunkCleanBarStaysAboveTheStatusBar(t *testing.T) {
 }
 
 func TestJunkPageExclusionsFailuresAndLocalization(t *testing.T) {
-	page := appui.JunkPage{Language: appui.English, Scanned: true, Exclusions: []string{"/fixture/protected"}, FailedDetails: []string{"In use · /fixture/busy"}}
-	removed := ""
+	page := appui.JunkPage{
+		Language: appui.English, Scanned: true, Exclusions: []string{"/fixture/protected"},
+		FailedDetails:  []appui.JunkDetail{{Text: "Access denied · /fixture/denied", Path: "/fixture/denied"}},
+		SkippedDetails: []appui.JunkDetail{{Text: "In use · /fixture/busy", Path: "/fixture/busy", Release: true}},
+	}
+	removed, retried := "", ""
 	actions := appui.JunkPageActions{
-		ToggleExclusions:    func() { page.ShowExclusions = !page.ShowExclusions },
-		RemoveExclusion:     func(path string) { removed = path },
-		ToggleFailedDetails: func() { page.ShowFailedDetails = !page.ShowFailedDetails },
+		ToggleExclusions:     func() { page.ShowExclusions = !page.ShowExclusions },
+		RemoveExclusion:      func(path string) { removed = path },
+		ToggleFailedDetails:  func() { page.ShowFailedDetails = !page.ShowFailedDetails },
+		ToggleSkippedDetails: func() { page.ShowSkippedDetails = !page.ShowSkippedDetails },
+		RetryRelease:         func(path string) { retried = path },
 	}
 	tt := ui.NewTester(func(c *ui.Context) { page.RenderContent(c, actions) }, 1090, 810)
-	if tt.HasText("/fixture/protected") || tt.HasText("In use · /fixture/busy") {
+	if tt.HasText("/fixture/protected") || tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
 		t.Fatal("closed detail panels leaked their content")
 	}
 	if err := tt.Click("Exclusions (1)"); err != nil {
@@ -181,19 +198,51 @@ func TestJunkPageExclusionsFailuresAndLocalization(t *testing.T) {
 	if err := tt.Click("Show details ▾"); err != nil {
 		t.Fatal(err)
 	}
+	if !tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
+		t.Fatal("failure expansion leaked the other panel")
+	}
+	if err := tt.Click("Show skipped ▾"); err != nil {
+		t.Fatal(err)
+	}
 	if !tt.HasText("In use · /fixture/busy") {
-		t.Fatal("failure not shown on expansion")
+		t.Fatal("skipped detail not shown on expansion")
+	}
+	if err := tt.Click("Quit app and retry"); err != nil {
+		t.Fatal(err)
+	}
+	if retried != "/fixture/busy" {
+		t.Fatalf("retry path = %q", retried)
 	}
 	page.Language = appui.Chinese
 	tt.Frame()
-	if !tt.HasText("排除清单 (1)") || !tt.HasText("收起详情 ▴") || !tt.HasText("上次清理有 1 个目标仍有残留") {
+	if !tt.HasText("排除清单 (1)") || !tt.HasText("收起详情 ▴") || !tt.HasText("收起已跳过 ▴") ||
+		!tt.HasText("上次清理有 1 项未能清理") || !tt.HasText("上次清理已跳过 1 项（正在使用或无法确认）") {
 		t.Fatal("expanded panels did not translate")
 	}
 	if err := tt.Click("收起详情 ▴"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.HasText("In use · /fixture/busy") {
+	if err := tt.Click("收起已跳过 ▴"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
 		t.Fatal("closed failure detail remained visible")
+	}
+}
+
+func TestJunkSkippedDetailsCapRowsAndReportRemainder(t *testing.T) {
+	var details []appui.JunkDetail
+	for i := 0; i < 49; i++ {
+		details = append(details, appui.JunkDetail{Text: "In use · /fixture/" + strconv.Itoa(i)})
+	}
+	page := appui.JunkPage{Language: appui.English, Scanned: true, SkippedDetails: details}
+	actions := appui.JunkPageActions{ToggleSkippedDetails: func() { page.ShowSkippedDetails = !page.ShowSkippedDetails }}
+	tt := ui.NewTester(func(c *ui.Context) { page.RenderContent(c, actions) }, 1090, 1400)
+	if err := tt.Click("Show skipped ▾"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("9 more not shown") || !tt.HasText("In use · /fixture/39") || tt.HasText("In use · /fixture/40") {
+		t.Fatalf("detail cap did not report the remainder: %v", tt.Texts())
 	}
 }
 

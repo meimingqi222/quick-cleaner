@@ -1339,3 +1339,45 @@ Note: `2026-10-30-persist-quarantine.md`
 - **根因**：写入校验严格拒绝整棵树，失败后没有任何修复或重试，水位无法前进。
 - **防护**：保存因校验失败时在私有克隆上隔离坏节点（时间与计数饱和，名称不可编码的新增节点剪掉并把父目录标为未覆盖）后重试一次；已发布快照不改。回归见 Note。
 - **禁止回退**：不能放宽 v7 写入校验或静默截断名称；不能直接修改已发布给读者的树；剪掉的节点不能不标覆盖缺口，否则发现阶段会把缺失当成不存在。
+
+## P117 目录占用探测超预算只能记未知，Restart Manager 只做只读归属
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+- **症状**：智能清理后大量「被占用」行没有应用名；几万文件的 `go-build`、包管理器缓存被列成「占用状态未知」，体感像清理失败。反之若把超预算当空闲，会被同步删除仍被占用的应用数据。
+- **根因**：Windows 目录占用探测需要对文件逐个排他打开，旧预算 4096 项 / 3 秒太小；但预算不足时「没检查到锁」不等于没有锁。Restart Manager 能报进程名/服务身份，但单独用它探测 4.2k 文件约 10.7 秒，比排他打开慢一个数量级。
+- **防护**：`scanDirLocks` 批量 1024、8 路并行排他打开，预算 16384 项 / 5 秒；不可读、链接、特殊文件与超过预算仍返回已知=false；同一批里找到锁时以锁为准。共享冲突必须在排除本进程所有并发探测句柄后复核，否则硬链接会相互制造假锁；只排除同一批不够。`platform.OccupancyOwners` 只复用 Restart Manager 做**只读归属**，系统/其他用户进程标为 System，绝不授予结束或删除权限。残留面板把 InUse/Unverified 归入中性「已跳过」，只在仍满足 `CacheReleaseEligible` 且不含系统进程时提供既有缓存释放重试。
+- **禁止回退**：不能把 `len(locked)==0 && unknown` 改成 clear 或让超预算目标继续删除；不能把归属探测接到删除/结束授权；不能给非缓存释放资格的目标新增结束进程入口（P66）；不能为了「全部清干净」放宽系统进程或身份复核；不能把 Restart Manager 的耗时探测放回 UI 主线程；不能把放宽占用预算当成绕过安装归属/分类（P66 的全局工具仍必须由 core safety 排除）。
+- **测试**：`TestWindowsDirectoryProbeCoversLargeUnlockedTrees`、`TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks`、`TestOccupancyOwnersReportsTheLockingProcess`、`TestJunkDetailsSeparateSkippedInUseFromRealFailures`、`TestJunkPageExclusionsFailuresAndLocalization`、`TestCacheReleaseFailureTreatsSystemOwnersAsSkipped`。
+
+（2026-11-01 起，该探测不再在扫描阶段运行，只用于执行期仍按目标整体判断的目标，以及占用进程归属；见 P119、P120。）
+
+## P118 目标的多数失败原因不能代替叶子分类计数
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+- **症状**：同一个目标有两个占用文件与一个权限失败，清理结果却记作失败 0、跳过 3，并显示清理完成。
+- **根因**：`TargetFailInfo.Reason` 只表示一个代表原因，`FailedLeaves` 包含所有失败；按代表原因扣掉全部失败会把少数真实错误一起抹掉。
+- **防护**：core 单独统计 `SkippedLeaves`，历史只把该子集从失败转为跳过；混合目标的 `Reason` 优先选真实错误，仍显示失败详情与部分完成。
+- **禁止回退**：不能按多数原因推断所有叶子都是跳过；不能只修历史数字却让混合目标仍归入中性跳过面板；不能通过改变失败顺序让测试碰巧通过。
+- **测试**：`TestTargetFailInfoPreservesMixedFailures`、`TestJunkMixedLeafFailuresKeepErrorAndExactHistory`，红绿证据见 Note。
+
+## P119 占用只是提示，不能改变推荐、勾选或可清理量
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+- **症状**：曾在扫描阶段对每个目标逐文件排他探测，并把占用/未知项撤销推荐、禁用勾选、移出可清理量。结果：全选不再是全部；扫描结果要等探测完才出现；超过探测预算的 `node_modules`、`go-build` 等大目录几乎全被标成「无法确认安全」而无法勾选；用户进程占用也无从提示关闭应用。
+- **根因**：扫描时的占用只是一个时间点的快照，清理时会变；而当时执行期按目标整体判断，一个文件被锁就放弃整个目录，扫描阶段只是把这个缺陷提前展示。真正的损失来自执行期粒度，而不是选择。
+- **防护**：`ApplyBusy` 只挂 badge，不改 `Recommended`；`CleanupAvailable` 只看规则阻止；`CleanableSize`、全选、类别勾选、CLI `--all`/`--path` 都不看占用。Windows 扫描期 `DetectInUse` 不逐文件探测，badge 异步到达，不阻塞发布。占用在执行期按叶子处理（P120）。Explorer 只选择 thumbcache_*.db / iconcache_*.db 文件。
+- **禁止回退**：不能因占用撤销推荐、禁用行、剔除全选或缩小可清理量；不能在扫描阶段逐文件排他探测或等占用结果再发布；不能把 Unknown 当 Clear 交给执行（执行期仍各自 fail-closed）。
+- **测试**：`TestApplyBusyKeepsRecommendationAndSelection`、`TestJunkBusyItemsStayRecommendedAndSelectable`、`TestJunkLateOccupancyKeepsBadgeOnlyAndRealErrors`、`TestJunkSelectionRequiresFreshExactEligibleTarget`、`TestWindowsScanDoesNotProbeTargetFiles`、`TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles`，红绿证据见 Note。
+
+## P120 Windows 缓存清理按文件独占删除，不能退回按目标整体放弃
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+- **症状**：选中约 8.8 GB 只释放约 486 MiB。缓存目录里只要一个文件被浏览器或系统打开，整个目录都被跳过；超过探测预算的目录同样整体跳过。
+- **根因**：`CleanTargets` 先对目标做整体占用探测，Busy/Unknown 就整目标失败。另一方面，先探测再 `os.Remove` 有时间窗口，`DeleteFile` 还会删掉别人以 `FILE_SHARE_DELETE` 打开的文件。`DeleteTree` 把「子项未删」的父目录记成 `FailOther`，按文件跳过后会把普通占用变成红色失败。
+- **防护**：`platform.RemoveFileExclusive` 以共享模式 0、DELETE 权限打开再设置删除标记：打开本身就是占用检查，没有探测与删除之间的窗口，也拒绝共享删除句柄。`leafOccupancyGate` 只对 Windows 上永久处置的 `OpContents` / `OpFile` 跳过整体探测；`OpTree`（依赖树、构建目录）仍整体判断，避免运行中的项目留下半删的依赖。父目录用 `failParent` 按子项分类：全是占用/未确认则记为跳过，任一真实错误则记为失败，且不重复计数。macOS 没有共享模式，仍按目标整体判断。
+- **禁止回退**：不能把 `RemoveFileExclusive` 的共享模式放宽或改回 `os.Remove`；不能让 `OpTree` 或回收站处置走按文件模式；不能恢复「有子项失败就记 FailOther」；不能对父目录再次累加 Failed/Ignored。
+- **测试**：`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestContentsCleanupSkipsOnlyLockedLeaves`、`TestFailParentPrefersRealErrorsOverSkips`、`TestTreeTargetsKeepWholeTargetOccupancyGate`、`TestJunkLockAfterScanIsSkippedWithoutFailure`，红绿证据见 Note。

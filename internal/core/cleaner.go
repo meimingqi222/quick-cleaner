@@ -35,6 +35,8 @@ const (
 	FailOther              FailReason = "other"
 )
 
+func (r FailReason) isSkipped() bool { return r == FailInUse || r == FailUnverified }
+
 // CleanFailure distinguishes real filesystem paths from opaque native resource IDs.
 type CleanFailure struct {
 	Path string
@@ -49,9 +51,9 @@ func (f CleanFailure) Label() string {
 }
 
 type CleanSnapshot struct {
-	TotalFiles, TotalBytes, Files, Bytes, Failed uint64
-	Cancelled                                    bool
-	Current                                      string
+	TotalFiles, TotalBytes, Files, Bytes, Failed, Ignored uint64
+	Cancelled                                             bool
+	Current                                               string
 }
 
 func (s CleanSnapshot) Ratio() float64 {
@@ -65,11 +67,11 @@ func (s CleanSnapshot) Ratio() float64 {
 }
 
 type CleanProgress struct {
-	TotalFiles, TotalBytes, Files, Bytes, Failed atomic.Uint64
-	cancel                                       atomic.Bool
-	mu                                           sync.Mutex
-	current                                      string
-	reasons                                      map[string]FailReason
+	TotalFiles, TotalBytes, Files, Bytes, Failed, Ignored atomic.Uint64
+	cancel                                                atomic.Bool
+	mu                                                    sync.Mutex
+	current                                               string
+	reasons                                               map[string]FailReason
 }
 
 func NewCleanProgress(files, bytes uint64) *CleanProgress {
@@ -91,7 +93,7 @@ func (p *CleanProgress) Snapshot() CleanSnapshot {
 	p.mu.Lock()
 	current := p.current
 	p.mu.Unlock()
-	return CleanSnapshot{TotalFiles: p.TotalFiles.Load(), TotalBytes: p.TotalBytes.Load(), Files: p.Files.Load(), Bytes: p.Bytes.Load(), Failed: p.Failed.Load(), Cancelled: p.Cancelled(), Current: current}
+	return CleanSnapshot{TotalFiles: p.TotalFiles.Load(), TotalBytes: p.TotalBytes.Load(), Files: p.Files.Load(), Bytes: p.Bytes.Load(), Failed: p.Failed.Load(), Ignored: p.Ignored.Load(), Cancelled: p.Cancelled(), Current: current}
 }
 
 func (p *CleanProgress) fail(path string, reason FailReason) CleanResult {
@@ -102,13 +104,59 @@ func (p *CleanProgress) fail(path string, reason FailReason) CleanResult {
 	p.reasons[path] = reason
 	p.mu.Unlock()
 	p.Failed.Add(1)
+	// In-use and unverifiable targets were never deleted, so the docked bar
+	// reports them as skipped instead of failed.
+	if reason.isSkipped() {
+		p.Ignored.Add(1)
+	}
 	return CleanFailed
 }
 
+// failParent records a directory left behind only because of its children.
+// The leaves were already counted; counting the ancestors again would turn
+// one locked file into several failures. A single real error among the
+// children makes the directory a real failure; otherwise it stays a skip.
+func (p *CleanProgress) failParent(path string, children []string) CleanResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reasons == nil {
+		p.reasons = make(map[string]FailReason)
+	}
+	reason := FailUnverified
+	for _, child := range children {
+		r, ok := p.reasons[child]
+		if !ok || !r.isSkipped() {
+			reason = FailOther
+			break
+		}
+		if r == FailInUse {
+			reason = FailInUse
+		}
+	}
+	p.reasons[path] = reason
+	return CleanFailed
+}
+
+// SplitFailures preserves internal failure evidence while presenting ordinary
+// in-use/unverified skips separately. Classify leaves, never a target majority.
+func (p *CleanProgress) SplitFailures(failures []CleanFailure) (failed, skipped []CleanFailure) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, failure := range failures {
+		if failure.Path != "" && p.reasons[failure.Path].isSkipped() {
+			skipped = append(skipped, failure)
+		} else {
+			failed = append(failed, failure)
+		}
+	}
+	return failed, skipped
+}
+
 type TargetFailInfo struct {
-	Path         string
-	FailedLeaves uint
-	Reason       FailReason
+	Path string
+	// SkippedLeaves is the in-use/unverified subset of FailedLeaves.
+	FailedLeaves, SkippedLeaves uint
+	Reason                      FailReason
 }
 
 type RemainingLive struct {

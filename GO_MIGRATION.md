@@ -33,6 +33,11 @@ suppresses automatic Windows elevation; it is not a dry-run flag.
 Windows/macOS are the supported product targets. Linux runs the UI and
 read-only monitoring, but deliberately refuses unsupported native operations.
 
+The same binary exposes real headless Smart Clean, disk analysis and filename
+search through `quick-cleaner cli`. See [CLI usage](docs/CLI.md) for previews,
+explicit cleanup execution, JSON reports and exit codes. This entry point does
+not initialize the GUI or request elevation.
+
 For non-destructive fixture previews instead:
 
 ```sh

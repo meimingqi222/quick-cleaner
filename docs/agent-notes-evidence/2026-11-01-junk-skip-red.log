@@ -1,0 +1,11 @@
+--- FAIL: TestCleanProgressReportsInUseAndUnverifiedAsSkipped (0.00s)
+    cleaner_test.go:212: failed=3 ignored=0; want failed=3 ignored=2
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.223s
+FAIL
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.243s
+--- FAIL: TestDashboardCleanProgressSeparatesSkippedFromFailed (0.01s)
+    dashboard_test.go:108: in-use failures still reported as failed: [QuickCleaner Fast Disk & App Cleaner Overview Status Smart Clean Apps Disk Lens Declutter File Search Space Freed  Language 中文 English  Smart Clean Standard user Scanning… Deleting permanently 8 / 10 files  0 B Stop Ready]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.237s
+FAIL

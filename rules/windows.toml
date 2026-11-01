@@ -1,15 +1,17 @@
 id = "windows"
-version = 3
+version = 4
 platform = "windows"
-required = ["file"]
+required = ["file", "directory_selection"]
 
-[[entries]]
+[[directories]]
+id = "explorer-cache-databases"
 root = "local"
-path = "Microsoft/Windows/Explorer"
-zh = "缩略图/图标缓存"
-en = "Thumbnail / icon cache"
+paths = ["Microsoft/Windows/Explorer"]
+select = { kind = "files", prefixes = ["thumbcache_", "iconcache_"], suffixes = [".db"] }
+zh = "缩略图/图标缓存 · {name}"
+en = "Thumbnail / icon cache · {name}"
 category = "Thumbnails"
-operation = "contents"
+operation = "file"
 disposal = "permanent"
 recommended = true
 

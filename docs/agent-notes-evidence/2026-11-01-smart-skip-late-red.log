@@ -1,0 +1,7 @@
+--- FAIL: TestJunkLateOccupancyRemovesSelectionAndCleanableBytes (0.00s)
+    junk_test.go:66: late skip still eligible: {Plans:[] Operation:{Kind: Registration: Reference: Name: Native: Identifier:} Disposal: Rule:{snapshot:<nil> origin:<nil> id: scope: contributors:[] blocked: observation:{RuleID: RuleVersion:0 Schema:0 Sequence:0 Scope: Variables:map[] Facts:map[] Detected: ProviderKey: ProviderPolicy:<nil> VersionGuard:<nil>}} Path:/cache/busy Label:{zh: en:} Size:300 FileCount:0 LastModified:0 Category: Recommended:true Busy:<nil> Identity:<nil>}, selected=true
+    junk_test.go:66: late skip still eligible: {Plans:[] Operation:{Kind: Registration: Reference: Name: Native: Identifier:} Disposal: Rule:{snapshot:<nil> origin:<nil> id: scope: contributors:[] blocked: observation:{RuleID: RuleVersion:0 Schema:0 Sequence:0 Scope: Variables:map[] Facts:map[] Detected: ProviderKey: ProviderPolicy:<nil> VersionGuard:<nil>}} Path:/cache/unknown Label:{zh: en:} Size:500 FileCount:0 LastModified:0 Category: Recommended:true Busy:<nil> Identity:<nil>}, selected=true
+    junk_test.go:73: late skips still counted as cleanable: 900 B
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.280s
+FAIL

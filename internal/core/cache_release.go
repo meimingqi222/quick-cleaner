@@ -30,8 +30,7 @@ type CacheReleaseOutcome struct {
 
 func CacheReleaseEligible(item ScanItem) bool {
 	category := item.Category == UserCache || item.Category == BrowserCache || item.Category == Logs
-	recommended := item.Recommended || item.Busy != nil && item.Busy.RecommendedBeforeBusy
-	return category && recommended && (item.Busy == nil || !item.Busy.Unknown) && item.Operation == (Operation{Kind: OpContents}) && item.Disposal == Permanent && item.Identity != nil && len(item.Plans) != 0 && item.Rule.blocked == ""
+	return category && item.Recommended && (item.Busy == nil || !item.Busy.Unknown) && item.Operation == (Operation{Kind: OpContents}) && item.Disposal == Permanent && item.Identity != nil && len(item.Plans) != 0 && item.Rule.blocked == ""
 }
 
 func freezeCacheReleaseItem(item ScanItem) ScanItem {

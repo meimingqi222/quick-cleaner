@@ -79,30 +79,54 @@ func TestBusyBadgePolicy(t *testing.T) {
 	}
 }
 
-func TestApplyBusyDowngradesRecommended(t *testing.T) {
+func TestSplitFailuresKeepsRealErrorsInMixedTargets(t *testing.T) {
+	p := NewCleanProgress(0, 0)
+	var failures []CleanFailure
+	for i, reason := range []FailReason{FailInUse, FailAccessDenied, FailUnverified, FailChanged, FailOther} {
+		path := filepath.Join("/fixture/cache", string(rune('a'+i)))
+		p.fail(path, reason)
+		failures = append(failures, CleanFailure{Path: path})
+	}
+	failed, skipped := p.SplitFailures(failures)
+	if len(failed) != 3 || len(skipped) != 2 || failed[0] != failures[1] || skipped[1] != failures[2] {
+		t.Fatalf("wrong leaf classification: failed=%v skipped=%v", failed, skipped)
+	}
+}
+
+// Occupancy is a badge. Recommendation, selectability and cleanable bytes
+// follow the rule; locked leaves are skipped by the cleaner, not by the list.
+func TestApplyBusyKeepsRecommendationAndSelection(t *testing.T) {
 	item := func(path string) ScanItem {
 		return ScanItem{Path: path, Recommended: true, Category: UserTemp, Label: SameText("x"), Size: 1}
 	}
-	cats := []CategorySummary{{Category: UserTemp, TotalSize: 2, Items: []ScanItem{item("/a"), item("/b")}}}
-	busy := map[string]Busy{"/a": {App: "A"}}
-	if n := ApplyBusy(cats, busy); n != 1 {
+	cats := []CategorySummary{{Category: UserTemp, TotalSize: 3, Items: []ScanItem{item("/a"), item("/b"), item("/c")}}}
+	busy := map[string]Busy{"/a": {App: "A"}, "/c": {Unknown: true}}
+	if n := ApplyBusy(cats, busy); n != 2 {
 		t.Fatalf("affected = %d", n)
 	}
-	got := cats[0].Items[0]
-	if got.Busy == nil || got.Recommended || !got.Busy.RecommendedBeforeBusy || got.Busy.App != "A" {
-		t.Fatalf("downgrade = %+v busy=%+v", got, got.Busy)
+	for _, got := range cats[0].Items {
+		if !got.Recommended || !got.CleanupAvailable() {
+			t.Fatalf("occupancy changed recommendation or selection: %+v busy=%+v", got, got.Busy)
+		}
 	}
-	if ApplyBusy(cats, busy) != 1 || !cats[0].Items[0].Busy.RecommendedBeforeBusy || cats[0].Items[0].Recommended {
-		t.Fatal("second apply lost the earlier recommendation")
+	if cats[0].Items[0].Busy == nil || cats[0].Items[0].Busy.App != "A" || cats[0].Items[2].Busy == nil || !cats[0].Items[2].Busy.Unknown {
+		t.Fatal("busy badge evidence was not attached")
 	}
-	if cats[0].Items[1].Busy != nil || !cats[0].Items[1].Recommended {
+	if cats[0].Items[1].Busy != nil {
 		t.Fatal("clear item changed")
 	}
-	unknown := []CategorySummary{{Items: []ScanItem{item("/c")}}}
-	if ApplyBusy(unknown, map[string]Busy{"/c": {Unknown: true}}) != 1 || unknown[0].Items[0].Recommended || unknown[0].Items[0].Busy == nil || !unknown[0].Items[0].Busy.RecommendedBeforeBusy {
-		t.Fatal("unknown must downgrade and keep the earlier recommendation")
+	if got := cats[0].CleanableSize(); got != 3 {
+		t.Fatalf("cleanable bytes = %d; occupancy must not shrink the estimate", got)
 	}
-	if ApplyBusy(cats, map[string]Busy{"/a": {}}) != 0 {
+	if ApplyBusy(cats, map[string]Busy{"/b": {}}) != 0 {
 		t.Fatal("empty observation is not occupancy")
+	}
+}
+
+func TestApplyBusyDoesNotDisableNativeResources(t *testing.T) {
+	cats := []CategorySummary{{Items: []ScanItem{{Path: "docker://fixture", Operation: Operation{Kind: OpDocker}, Recommended: true}}}}
+	ApplyBusy(cats, map[string]Busy{"docker://fixture": {Unknown: true}})
+	if cats[0].Items[0].Busy != nil || !cats[0].Items[0].Recommended {
+		t.Fatal("filesystem occupancy disabled native operation")
 	}
 }

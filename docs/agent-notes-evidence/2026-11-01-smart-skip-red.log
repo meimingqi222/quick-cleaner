@@ -1,0 +1,26 @@
+--- FAIL: TestWindowsScanDetectsBusyAndUnknownBeforeCleanup (0.00s)
+    occupancy_windows_test.go:76: held file not marked busy at scan: map[]
+    occupancy_windows_test.go:79: unreadable evidence not marked unknown: map[]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.992s
+--- FAIL: TestApplyBusyDoesNotDisableNativeResources (0.00s)
+    inuse_test.go:114: filesystem occupancy disabled native operation
+--- FAIL: TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles (0.04s)
+    rule_directories_test.go:36: thumbnail target must be a file, got {Operation:{Kind:contents Registration: Reference: Name: Native: Identifier:} Disposal:permanent Rule:{snapshot:0x32af4b42dce0 origin:0x32af4b194000 id:windows scope:C:\Users\MEIMIN~1\AppData\Local\Temp\TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles370546553\001 contributors:[] blocked: observation:{RuleID:windows RuleVersion:3 Schema:13 Sequence:1 Scope:C:\Users\MEIMIN~1\AppData\Local\Temp\TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles370546553\001 Variables:map[] Facts:map[] Detected:Confirmed ProviderKey: ProviderPolicy:<nil> VersionGuard:<nil>}} Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles370546553\001\Microsoft\Windows\Explorer Label:{zh:缩略图/图标缓存 en:Thumbnail / icon cache} Category:Thumbnails Recommended:true SizeHint:<nil>}
+    rule_directories_test.go:42: thumbnail scope includes unrelated content: [Explorer]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.247s
+--- FAIL: TestJunkBusyItemsAreNeverSelectedOrCounted (0.00s)
+    junk_test.go:22: blocked bytes advertised as cleanable: 900 B
+    junk_test.go:26: select all picked busy items: map[/cache/busy:true /cache/clear:true /cache/unknown:true]
+    junk_test.go:34: category selection picked blocked items
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.186s
+2026/11/01 12:20:19 阶段一 scan_fixed 完成：2.0675ms，1/1 个目标命中，合计 16 B；最慢 5 个：2.0675ms 16 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkLockAfterScanIsSkippedWithoutFailure1284590724\001\cache
+2026/11/01 12:20:19 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestJunkLockAfterScanIsSkippedWithoutFailure1284590724\\001\\cache"]
+2026/11/01 12:20:19 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+--- FAIL: TestJunkLockAfterScanIsSkippedWithoutFailure (0.08s)
+    junk_windows_test.go:37: late occupancy reported as failure: &{OK:0 Skipped:0 Failed:[{Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkLockAfterScanIsSkippedWithoutFailure1284590724\001\cache ID:}] Manual:[] SkippedItems:[] Failures:[{Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkLockAfterScanIsSkippedWithoutFailure1284590724\001\cache FailedLeaves:1 SkippedLeaves:1 Reason:in_use}] Remaining:[{Path:C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkLockAfterScanIsSkippedWithoutFailure1284590724\001\cache Bytes:16 FileCount:1}] Executions:[] DeletedFiles:0 FreedBytes:0}
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/cli	0.758s
+FAIL

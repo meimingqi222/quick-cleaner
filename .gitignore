@@ -29,6 +29,7 @@ coverage/
 /docs/*
 /docs/temp/
 !/docs/PITFALLS.md
+!/docs/CLI.md
 !/docs/UI_MIGRATION.md
 !/docs/UI_POPOVER.md
 !/docs/UI_COMPONENTS.md

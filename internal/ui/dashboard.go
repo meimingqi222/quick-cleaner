@@ -134,12 +134,25 @@ func (s Dashboard) progressBar(c *ui.Context) {
 				ui.Text(c, phase).FontSize(14).Bold().TextColor(fg)
 				ui.Spacer(c)
 				ui.Text(c, counts).FontSize(12).TextColor(muted)
-				if snap.Failed > 0 {
-					label := fmt.Sprintf("失败 %s", commas(snap.Failed))
+				failed := snap.Failed
+				if snap.Ignored >= failed {
+					failed = 0
+				} else {
+					failed -= snap.Ignored
+				}
+				if failed > 0 {
+					label := fmt.Sprintf("失败 %s", commas(failed))
 					if en {
-						label = fmt.Sprintf("%s failed", commas(snap.Failed))
+						label = fmt.Sprintf("%s failed", commas(failed))
 					}
 					ui.Text(c, label).FontSize(12).TextColor(fg)
+				}
+				if snap.Ignored > 0 {
+					label := fmt.Sprintf("已跳过 %s", commas(snap.Ignored))
+					if en {
+						label = fmt.Sprintf("%s skipped", commas(snap.Ignored))
+					}
+					ui.Text(c, label).FontSize(12).TextColor(muted)
 				}
 			})
 			ui.Box(c).FillWidth().Height(8).Radius(999).Clip().Background(surfaceHighest).Children(func() {

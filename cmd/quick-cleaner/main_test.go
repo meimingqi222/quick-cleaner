@@ -24,3 +24,14 @@ func TestVersionDispatchDoesNotInitializeGUI(t *testing.T) {
 		t.Fatal("version dispatch failed")
 	}
 }
+
+func TestCLIDispatchDoesNotInitializeGUI(t *testing.T) {
+	for _, args := range [][]string{{"cli", "--help"}, {"--help"}, {"cli", "junk", "categories", "--json"}} {
+		if code := run(args); code != 0 {
+			t.Fatalf("headless dispatch %v: exit %d", args, code)
+		}
+	}
+	if code := run([]string{"cli", "unknown-command"}); code != 2 {
+		t.Fatalf("invalid CLI must return usage error, got %d", code)
+	}
+}

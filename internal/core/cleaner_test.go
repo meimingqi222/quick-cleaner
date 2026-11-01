@@ -201,3 +201,18 @@ func TestCleanerStaleDatabaseRequiresKnownVacancy(t *testing.T) {
 		t.Fatalf("stale family remains: %v", err)
 	}
 }
+
+func TestCleanProgressReportsInUseAndUnverifiedAsSkipped(t *testing.T) {
+	p := NewCleanProgress(3, 0)
+	p.fail("/fixture/busy", FailInUse)
+	p.fail("/fixture/unknown", FailUnverified)
+	p.fail("/fixture/denied", FailAccessDenied)
+	s := p.Snapshot()
+	if s.Failed != 3 || s.Ignored != 2 {
+		t.Fatalf("failed=%d ignored=%d; want failed=3 ignored=2", s.Failed, s.Ignored)
+	}
+	p.fail("/fixture/changed", FailChanged)
+	if s := p.Snapshot(); s.Failed != 4 || s.Ignored != 2 {
+		t.Fatalf("changed failure was counted as skipped: %+v", s)
+	}
+}

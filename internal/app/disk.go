@@ -397,10 +397,11 @@ func (r *Root) requestArbitraryClean(action string, targets []core.ArbitraryTarg
 		}
 		r.start(true, p, func(context.Context) func() {
 			report := core.CleanArbitraryItems(targets, disposal, p)
+			occupants := identifyCleanupOccupants(report)
 			return func() {
 				r.disk.Cleaning = false
 				r.declutter.Cleaning = false
-				r.finishCleanup(action, paths, report, p)
+				r.finishCleanup(action, paths, report, p, occupants)
 				if action == "disk" && len(paths) == 1 && !p.Cancelled() {
 					if len(report.Failed)+len(report.Manual) > 0 {
 						r.message(fmt.Sprintf("删除失败：%s（被占用或权限不足）", paths[0]), fmt.Sprintf("Failed to delete %s (in use or access denied)", paths[0]))

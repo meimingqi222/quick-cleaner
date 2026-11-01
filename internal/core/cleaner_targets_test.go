@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestTargetFailInfoPreservesMixedFailures(t *testing.T) {
+	for _, order := range [][]FailReason{
+		{FailInUse, FailInUse, FailAccessDenied},
+		{FailAccessDenied, FailInUse, FailInUse},
+		{FailUnverified, FailChanged, FailUnverified},
+		{FailInUse, FailUnverified, FailOther},
+		{FailInUse, FailUnverified, FailInUse},
+	} {
+		var failures []CleanFailure
+		reasons := map[string]FailReason{}
+		var skipped uint
+		wantReason := FailInUse
+		for i, reason := range order {
+			path := filepath.Join("/fixture/cache", string(rune('a'+i)))
+			failures = append(failures, CleanFailure{Path: path})
+			reasons[path] = reason
+			if reason == FailInUse || reason == FailUnverified {
+				skipped++
+			} else {
+				wantReason = reason
+			}
+		}
+		failures = append(failures, CleanFailure{Path: "/fixture/cache-other/denied"})
+		info := targetFailInfo("/fixture/cache", failures, reasons)
+		if info.FailedLeaves != 3 || info.SkippedLeaves != skipped || info.Reason != wantReason {
+			t.Errorf("%v: got %+v; want total=3 skipped=%d reason=%s", order, info, skipped, wantReason)
+		}
+	}
+}
+
 func TestLaunchAgentPlistPredicate(t *testing.T) {
 	home := "/var/lib/qc-home"
 	winHome := "D:" + `\fixture\a`

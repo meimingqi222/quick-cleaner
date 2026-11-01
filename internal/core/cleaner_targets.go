@@ -79,11 +79,15 @@ func MergeCleanTargets(targets []CleanTarget) []CleanTarget {
 func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 	targets := MergeCleanTargets(selected)
 	paths := make([]string, len(targets))
+	var probe []string
 	for i, t := range targets {
 		paths[i] = t.Path
+		if !leafOccupancyGate(t) {
+			probe = append(probe, t.Path)
+		}
 	}
 	log.Printf("[删除] 分类清理，共 %d 个目标：%q", len(paths), paths)
-	spot := SpotCheckInUse(paths)
+	spot := SpotCheckInUse(probe)
 	var report CleanReport
 	trashDone := false
 	for _, t := range targets {
@@ -113,7 +117,12 @@ func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 			continue
 		}
 		occupancy, known := spot[t.Path]
-		if !known {
+		switch {
+		case leafOccupancyGate(t):
+			// Every file is deleted through an exclusive open that refuses a
+			// held file; a whole-target verdict would only forfeit the rest.
+			occupancy = SpotClear
+		case !known:
 			occupancy = SpotUnknown
 		}
 		if !t.Operation.IsNativeResource() && occupancy != SpotClear {
@@ -197,22 +206,7 @@ func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 	p.mu.Unlock()
 	query := NewFSIndexEngine(nil)
 	for _, t := range targets {
-		info := TargetFailInfo{Path: t.Path}
-		counts := map[FailReason]uint{}
-		for _, failure := range report.Failed {
-			if failure.Path == "" || !atOrUnder(Norm(failure.Path), Norm(t.Path)) {
-				continue
-			}
-			info.FailedLeaves++
-			reason, ok := reasons[failure.Path]
-			if !ok {
-				reason = FailOther
-			}
-			counts[reason]++
-			if counts[reason] > counts[info.Reason] {
-				info.Reason = reason
-			}
-		}
+		info := targetFailInfo(t.Path, report.Failed, reasons)
 		if info.FailedLeaves > 0 {
 			report.FailInfo = append(report.FailInfo, info)
 		}
@@ -236,6 +230,46 @@ func CleanTargets(selected []CleanTarget, p *CleanProgress) CleanReport {
 	snapshot := p.Snapshot()
 	log.Printf("[删除] 完成：目标 ok=%d skipped=%d failed=%d；文件 %d 个 / %s，失败 %d 个", report.OK, report.Skipped, len(report.Failed), snapshot.Files, FmtSize(snapshot.Bytes), snapshot.Failed)
 	return report
+}
+
+// leafOccupancyGate reports targets whose occupancy is enforced per file by
+// platform.RemoveFileExclusive instead of a whole-target probe. Only Windows
+// has share modes. Only contents and single files qualify: a partly emptied
+// cache is still valid, while a partly deleted dependency tree (OpTree) under
+// a running project is broken, so trees keep the all-or-nothing gate.
+func leafOccupancyGate(t CleanTarget) bool {
+	return runtime.GOOS == "windows" && t.Disposal == Permanent &&
+		(t.Operation.Kind == OpContents || t.Operation.Kind == OpFile)
+}
+
+func targetFailInfo(path string, failures []CleanFailure, reasons map[string]FailReason) TargetFailInfo {
+	info := TargetFailInfo{Path: path}
+	counts := map[FailReason]uint{}
+	var errorReason FailReason
+	for _, failure := range failures {
+		if failure.Path == "" || !atOrUnder(Norm(failure.Path), Norm(path)) {
+			continue
+		}
+		info.FailedLeaves++
+		reason, ok := reasons[failure.Path]
+		if !ok {
+			reason = FailOther
+		}
+		counts[reason]++
+		if reason.isSkipped() {
+			info.SkippedLeaves++
+		} else if counts[reason] > counts[errorReason] {
+			errorReason = reason
+		}
+		if counts[reason] > counts[info.Reason] {
+			info.Reason = reason
+		}
+	}
+	// A majority of skipped leaves must not hide even one real failure.
+	if errorReason != "" {
+		info.Reason = errorReason
+	}
+	return info
 }
 
 // launchAgentPlist reports a broken-login plist. The extension match is

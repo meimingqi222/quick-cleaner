@@ -12,6 +12,37 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+func TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles(t *testing.T) {
+	local := t.TempDir()
+	root := filepath.Join(local, "Microsoft", "Windows", "Explorer")
+	if err := os.MkdirAll(filepath.Join(root, "thumbcache_directory.db"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"thumbcache_256.db", "iconcache_32.db", "desktop.ini", "unrelated.db", "thumbcache_256.db.bak"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := CurrentRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, target := range RuleTargets(snapshot, map[string]string{"local": local}, "windows") {
+		if target.Category != Thumbnails {
+			continue
+		}
+		if target.Operation.Kind != OpFile {
+			t.Errorf("thumbnail target must be a file, got %+v", target)
+		}
+		paths = append(paths, filepath.Base(target.Path))
+	}
+	sort.Strings(paths)
+	if !reflect.DeepEqual(paths, []string{"iconcache_32.db", "thumbcache_256.db"}) {
+		t.Fatalf("thumbnail scope includes unrelated content: %v", paths)
+	}
+}
+
 func TestDirectoryLayoutsMatchUnchangedRustBaseline(t *testing.T) {
 	root := t.TempDir()
 	home, parent := filepath.Join(root, "home"), filepath.Join(root, "temp")

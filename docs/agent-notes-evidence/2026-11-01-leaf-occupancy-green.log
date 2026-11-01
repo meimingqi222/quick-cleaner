@@ -1,0 +1,15 @@
+## Green after restoring every sabotage (same focused runs)
+=== RUN   TestContentsCleanupSkipsOnlyLockedLeaves
+--- PASS: TestContentsCleanupSkipsOnlyLockedLeaves (0.10s)
+=== RUN   TestFailParentPrefersRealErrorsOverSkips
+--- PASS: TestFailParentPrefersRealErrorsOverSkips (0.00s)
+=== RUN   TestTreeTargetsKeepWholeTargetOccupancyGate
+--- PASS: TestTreeTargetsKeepWholeTargetOccupancyGate (0.01s)
+=== RUN   TestApplyBusyKeepsRecommendationAndSelection
+--- PASS: TestApplyBusyKeepsRecommendationAndSelection (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.326s
+=== RUN   TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete
+--- PASS: TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.959s

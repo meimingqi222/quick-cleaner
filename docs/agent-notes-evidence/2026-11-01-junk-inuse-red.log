@@ -1,0 +1,7 @@
+=== RUN   TestWindowsDirectoryProbeCoversLargeUnlockedTrees
+    occupancy_windows_test.go:29: created 4100 files in 2.2551267s
+    occupancy_windows_test.go:32: unlocked 4100-entry tree = busy false, known false; want false, true
+--- FAIL: TestWindowsDirectoryProbeCoversLargeUnlockedTrees (7.99s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	8.727s
+FAIL

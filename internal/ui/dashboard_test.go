@@ -100,6 +100,21 @@ func TestDashboardActions(t *testing.T) {
 	}
 }
 
+func TestDashboardCleanProgressSeparatesSkippedFromFailed(t *testing.T) {
+	snap := core.CleanSnapshot{TotalFiles: 10, Files: 8, Failed: 5, Ignored: 5}
+	s := appui.Dashboard{Language: appui.English, Cleaning: true, CleanProgress: &snap}
+	tt := ui.NewTester(func(c *ui.Context) { s.RenderPage(c, appui.Junk, appui.DashboardActions{}, func() {}) }, 1280, 880)
+	if !tt.HasText("5 skipped") || tt.HasText("5 failed") {
+		t.Fatalf("in-use failures still reported as failed: %v", tt.Texts())
+	}
+	snap.Ignored = 3
+	s.Language = appui.Chinese
+	tt.Frame()
+	if !tt.HasText("已跳过 3") || !tt.HasText("失败 2") {
+		t.Fatalf("mixed progress counts: %v", tt.Texts())
+	}
+}
+
 func TestDashboardCleanProgressBar(t *testing.T) {
 	snap := core.CleanSnapshot{TotalFiles: 2000, Files: 1500, TotalBytes: 2048, Bytes: 1024, Failed: 2, Current: "/tmp/cache"}
 	stopped := 0

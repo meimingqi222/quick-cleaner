@@ -1,0 +1,12 @@
+=== RUN   TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks
+--- PASS: TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks (0.72s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	1.806s
+=== RUN   TestTargetFailInfoPreservesMixedFailures
+--- PASS: TestTargetFailInfoPreservesMixedFailures (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.181s
+=== RUN   TestJunkMixedLeafFailuresKeepErrorAndExactHistory
+--- PASS: TestJunkMixedLeafFailuresKeepErrorAndExactHistory (0.00s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.170s

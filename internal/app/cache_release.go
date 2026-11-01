@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
+	"github.com/meimingqi222/quick-cleaner/internal/platform"
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
@@ -21,7 +23,7 @@ func (r *Root) requestCacheRelease(path string) {
 				plan, err := core.PrepareCacheRelease(item)
 				return func() {
 					if err != nil {
-						r.failure(err)
+						r.cacheReleaseFailure(err)
 						return
 					}
 					r.confirmCacheRelease(plan, false)
@@ -49,14 +51,18 @@ func (r *Root) confirmCacheRelease(plan core.CacheReleasePlan, force bool) {
 		r.junk.Cleaning = true
 		r.start(true, p, func(context.Context) func() {
 			outcome, err := core.ExecuteCacheRelease(plan, force, p)
+			var occupants map[string][]platform.Occupant
+			if outcome.Cleaned != nil {
+				occupants = identifyCleanupOccupants(*outcome.Cleaned)
+			}
 			return func() {
 				r.junk.Cleaning = false
 				if err != nil {
-					r.failure(err)
+					r.cacheReleaseFailure(err)
 					return
 				}
 				if outcome.Cleaned != nil {
-					r.finishCleanup("release_cache", []string{item.Path}, *outcome.Cleaned, p)
+					r.finishCleanup("release_cache", []string{item.Path}, *outcome.Cleaned, p, occupants)
 					if !p.Cancelled() {
 						r.scanJunk()
 					}
@@ -73,4 +79,27 @@ func (r *Root) confirmCacheRelease(plan core.CacheReleasePlan, force bool) {
 		})
 	})
 	r.confirmation.Force = force
+}
+
+// cacheReleaseFailure keeps system/other-user refusals out of the raw-error
+// channel: those are expected skip states, not failures the user can fix.
+func (r *Root) cacheReleaseFailure(err error) {
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "system-or-other-user-process"),
+		strings.Contains(text, "service-or-critical-owner"),
+		strings.Contains(text, "critical-owner"),
+		strings.Contains(text, "system-process"),
+		strings.Contains(text, "background-service"),
+		strings.Contains(text, "owner-executable-changed-or-protected"),
+		strings.Contains(text, "cleaner-process-tree"):
+		r.message("系统、其他用户或受保护进程占用，无法结束；已跳过。", "A system, another user's, or a protected process holds the cache; skipped.")
+	case strings.Contains(text, "no-confirmed-cache-owners"):
+		r.message("没有确认到占用进程；请重新扫描后再试。", "No confirmed cache owner; rescan and try again.")
+	case strings.Contains(text, "owners-changed"), strings.Contains(text, "owner-identity-changed"),
+		strings.Contains(text, "owner-executable-changed"), strings.Contains(text, "owner-exited"):
+		r.message("占用进程已变化；请重新扫描后再试。", "Cache owners changed; rescan and try again.")
+	default:
+		r.failure(err)
+	}
 }

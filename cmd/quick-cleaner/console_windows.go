@@ -16,8 +16,8 @@ func init() {
 	if windowsTestBinary() {
 		return
 	}
-	// --version and the helper flags print and exit. They need the parent
-	// console. A GUI-subsystem build has none until AttachConsole.
+	// Headless commands must retain pipes and exit codes in the parent
+	// process. A GUI-subsystem build may need AttachConsole for terminal use.
 	if windowsConsoleArgs() {
 		attachParentConsole()
 		return
@@ -50,6 +50,9 @@ func windowsTestBinary() bool {
 }
 
 func windowsConsoleArgs() bool {
+	if len(os.Args) > 1 && (os.Args[1] == "cli" || os.Args[1] == "--help" || os.Args[1] == "-h") {
+		return true
+	}
 	if len(os.Args) != 2 {
 		return false
 	}

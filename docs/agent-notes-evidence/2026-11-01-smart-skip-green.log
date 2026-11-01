@@ -1,0 +1,5 @@
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	1.037s
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.224s
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	0.188s
+ok  	github.com/meimingqi222/quick-cleaner/internal/cli	1.797s
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	0.300s

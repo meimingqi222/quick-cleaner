@@ -155,7 +155,7 @@ func (r *Root) requestResidualClean() {
 		remaining, err := verifyResiduals(ctx, items)
 		return func() {
 			r.apps.Cleaning = false
-			r.finishCleanup("clean_residuals", labels, report, p)
+			r.finishCleanup("clean_residuals", labels, report, p, nil)
 			if p.Cancelled() {
 				return
 			}
