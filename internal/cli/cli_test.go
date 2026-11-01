@@ -182,6 +182,22 @@ func TestJunkSelectionRequiresFreshExactEligibleTarget(t *testing.T) {
 	}
 }
 
+func TestUnsupportedCleanupExecutionIsUsageError(t *testing.T) {
+	for _, goos := range []string{"linux", "freebsd", "plan9"} {
+		if code, err := cleanupExecutionGate(true, goos); code != ExitUsage || err == nil {
+			t.Fatalf("%s: code=%d err=%v; want usage error", goos, code, err)
+		}
+	}
+	for _, goos := range []string{"windows", "darwin"} {
+		if code, err := cleanupExecutionGate(true, goos); code != ExitOK || err != nil {
+			t.Fatalf("%s: code=%d err=%v; want supported", goos, code, err)
+		}
+	}
+	if code, err := cleanupExecutionGate(false, "linux"); code != ExitOK || err != nil {
+		t.Fatalf("dry-run on linux: code=%d err=%v", code, err)
+	}
+}
+
 // Isolate the trusted home and all settings/history writes, including Windows'
 // cached original-user context. The actual scan and cleaner are not mocked.
 func TestJunkScanPlanAndExplicitExecution(t *testing.T) {

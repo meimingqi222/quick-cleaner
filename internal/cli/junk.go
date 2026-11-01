@@ -111,6 +111,13 @@ func loadSettings() (core.Settings, error) {
 	return s, nil
 }
 
+func cleanupExecutionGate(execute bool, goos string) (int, error) {
+	if execute && goos != "windows" && goos != "darwin" {
+		return ExitUsage, errors.New("cleanup execution requires Windows or macOS")
+	}
+	return ExitOK, nil
+}
+
 func runJunk(parent context.Context, args []string, out, errOut io.Writer) (int, error) {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		_, err := fmt.Fprint(out, help)
@@ -179,8 +186,8 @@ func runJunk(parent context.Context, args []string, out, errOut io.Writer) (int,
 		}
 		o.root = root
 	}
-	if o.execute && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
-		return ExitError, errors.New("cleanup execution requires Windows or macOS")
+	if code, err := cleanupExecutionGate(o.execute, runtime.GOOS); err != nil {
+		return code, err
 	}
 	settings, err := loadSettings()
 	if err != nil {

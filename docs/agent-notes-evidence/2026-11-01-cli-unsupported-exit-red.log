@@ -1,0 +1,5 @@
+--- FAIL: TestUnsupportedCleanupExecutionIsUsageError (0.00s)
+    cli_test.go:188: linux: code=1 err=cleanup execution requires Windows or macOS; want usage error
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/cli	0.418s
+FAIL

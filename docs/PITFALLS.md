@@ -1342,92 +1342,191 @@ Note: `2026-10-30-persist-quarantine.md`
 - **防护**：保存因校验失败时在私有克隆上隔离坏节点（时间与计数饱和，名称不可编码的新增节点剪掉并把父目录标为未覆盖）后重试一次；已发布快照不改。回归见 Note。
 - **禁止回退**：不能放宽 v7 写入校验或静默截断名称；不能直接修改已发布给读者的树；剪掉的节点不能不标覆盖缺口，否则发现阶段会把缺失当成不存在。
 
-## P117 目录占用探测超预算只能记未知，Restart Manager 只做只读归属
-
-Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`、`2026-11-01-junk-streamlined-clean-ux.md`
-
-- **症状**：几万文件的 `go-build`、包管理器缓存被列成「占用状态未知」，体感像清理失败；反之若把超预算当空闲，会删掉仍被占用的整树依赖。清理后若逐行打印数十条活跃锁跳过账单并在收尾跑数秒归属查询，会造成严重交互负担。
-- **根因**：Windows 目录占用探测需要对文件逐个排他打开，旧预算 4096 项 / 3 秒太小；但预算不足时「没检查到锁」不等于没有锁。Restart Manager 能报进程名/服务身份，但单独全量探测 4.2k 文件约 10.7 秒，比排他打开慢一个数量级。
-- **防护**：`scanDirLocks` 批量 1024、8 路并行排他打开，预算 16384 项 / 5 秒；不可读、链接、特殊文件与超过预算仍返回已知=false；同一批里找到锁时以锁为准。共享冲突必须在排除本进程所有并发探测句柄后复核，否则硬链接会相互制造假锁。`platform.OccupancyOwners` 与 `platform.FindLockedCacheOwners` 只复用 Restart Manager 做**只读归属/提示**，系统/其他用户/关键进程与本程序进程树绝不授予结束权限。清理完成后不再展示逐行跳过账单，改用顶部正向成果条 `JunkCleanBanner` 汇总，仅真实错误进入默认折叠的 `FailedDetails`。
-- **禁止回退**：不能把 `len(locked)==0 && unknown` 改成 clear 或让超预算 `OpTree` 继续删除；不能把归属探测接到删除授权；不能给非缓存目标新增绕过分类的结束进程入口（P66）；不能把 Restart Manager 探测放到 UI 主线程；不能恢复清理后数十行的跳过账单面板。
-- **测试**：`TestWindowsDirectoryProbeCoversLargeUnlockedTrees`、`TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks`、`TestOccupancyOwnersReportsTheLockingProcess`、`TestJunkDetailsSeparateSkippedInUseFromRealFailures`、`TestJunkPageExclusionsFailuresAndLocalization`、`TestCacheReleaseFailureTreatsSystemOwnersAsSkipped`。
-
-## P118 目标的多数失败原因不能代替叶子分类计数
-
-Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
-
-- **症状**：同一个目标有两个占用文件与一个权限失败，清理结果却记作失败 0、跳过 3，并显示清理完成。
-- **根因**：`TargetFailInfo.Reason` 只表示一个代表原因，`FailedLeaves` 包含所有失败；按代表原因扣掉全部失败会把少数真实错误一起抹掉。
-- **防护**：core 单独统计 `SkippedLeaves`；GUI 与 CLI 历史用 `CleanProgress.SplitFailures` 对原始失败记录分类，不能求和父子目标可能重复覆盖的摘要；混合目标的 `Reason` 优先选真实错误，仍显示失败详情与部分完成。
-- **禁止回退**：不能按多数原因推断所有叶子都是跳过；不能只修历史数字却让混合目标隐藏真实错误；不能通过改变失败顺序让测试碰巧通过。
-- **测试**：`TestTargetFailInfoPreservesMixedFailures`、`TestJunkMixedLeafFailuresKeepErrorAndExactHistory`，红绿证据见 Note。
-
-## P119 占用只是提示，不能改变推荐、勾选或可清理量
-
-Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
-
-- **症状**：曾在扫描阶段对每个目标逐文件排他探测，并把占用/未知项撤销推荐、禁用勾选、移出可清理量。结果：全选不再是全部；扫描结果要等探测完才出现；超过探测预算的 `node_modules`、`go-build` 等大目录几乎全被标成「无法确认安全」而无法勾选；用户进程占用也无从提示关闭应用。
-- **根因**：扫描时的占用只是一个时间点的快照，清理时会变；而当时执行期按目标整体判断，一个文件被锁就放弃整个目录，扫描阶段只是把这个缺陷提前展示。真正的损失来自执行期粒度，而不是选择。
-- **防护**：`ApplyBusy` 只挂 badge，不改 `Recommended`；`CleanupAvailable` 只看规则阻止；`CleanableSize`、全选、类别勾选、CLI `--all`/`--path` 都不看占用。Windows 扫描期 `DetectInUse` 不逐文件探测，badge 异步到达，不阻塞发布。占用在执行期按叶子处理（P120）。Explorer 只选择 thumbcache_*.db / iconcache_*.db 文件。
-- **禁止回退**：不能因占用撤销推荐、禁用行、剔除全选或缩小可清理量；不能在扫描阶段逐文件排他探测或等占用结果再发布；不能把 Unknown 当 Clear 交给执行（执行期仍各自 fail-closed）。
-- **测试**：`TestApplyBusyKeepsRecommendationAndSelection`、`TestJunkBusyItemsStayRecommendedAndSelectable`、`TestJunkLateOccupancyKeepsBadgeOnlyAndRealErrors`、`TestJunkSelectionRequiresFreshExactEligibleTarget`、`TestWindowsScanDoesNotProbeTargetFiles`、`TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles`，红绿证据见 Note。
-
-## P120 Windows 缓存清理按文件独占删除，不能退回按目标整体放弃
-
-Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
-
-- **症状**：选中约 8.8 GB 只释放约 486 MiB。缓存目录里只要一个文件被浏览器或系统打开，整个目录都被跳过；超过探测预算的目录同样整体跳过。
-- **根因**：`CleanTargets` 先对目标做整体占用探测，Busy/Unknown 就整目标失败。另一方面，先探测再 `os.Remove` 有时间窗口，`DeleteFile` 还会删掉别人以 `FILE_SHARE_DELETE` 打开的文件。`DeleteTree` 把「子项未删」的父目录记成 `FailOther`，按文件跳过后会把普通占用变成红色失败。
-- **防护**：`platform.RemoveFileExclusive` 以共享模式 0、DELETE 权限打开再设置删除标记：打开本身就是占用检查，没有探测与删除之间的窗口，也拒绝共享删除句柄。`leafOccupancyGate` 只对 Windows 上永久处置的 `OpContents` / `OpFile` 跳过整体探测；`OpTree`（依赖树、构建目录）仍整体判断，避免运行中的项目留下半删的依赖。父目录用 `failParent` 按子项分类：全是占用/未确认则记为跳过，任一真实错误则记为失败，且不重复计数。macOS 没有共享模式，仍按目标整体判断。
-- **禁止回退**：不能把 `RemoveFileExclusive` 的共享模式放宽或改回 `os.Remove`；不能让 `OpTree` 或回收站处置走按文件模式；不能恢复「有子项失败就记 FailOther」；不能对父目录再次累加 Failed/Ignored。
-- **测试**：`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestContentsCleanupSkipsOnlyLockedLeaves`、`TestFailParentPrefersRealErrorsOverSkips`、`TestTreeTargetsKeepWholeTargetOccupancyGate`、`TestJunkLockAfterScanIsSkippedWithoutFailure`，红绿证据见 Note。
-
-## P121 智能清理无占用零弹窗开清，有运行应用占用时按应用集中询问一次
-
-Note: `2026-11-01-junk-close-owner-apps.md`、`2026-11-01-junk-streamlined-clean-ux.md`
-
-- **症状**：每次点击「立即清理」无条件弹出列满规则 ID 的技术确认框打断操作；而未写进 `browsers.toml` 的 Electron 桌面应用（Notion、Termius 等）运行时锁住缓存却不在询问列表中。
-- **根因**：常规缓存清理套用了重型删除确认框；动态缓存目标缺少百毫秒级的锁句柄首样归属探测。
-- **防护**：`FindRunningApps` 在后台 worker 上融合 `browsers.toml` 声明式进程与 `FindLockedCacheOwners`（8 路并发首锁抽样 + 合并 Restart Manager 会话，单会话含省略系统/自身锁或多应用时必须分桶复核，绝不张冠李戴）。无运行占用应用时零弹窗直接开清；检测到运行应用时弹出 `ConfirmCloseApps`（提供取消 / 跳过占用直接清理 / 关闭并清理，支持全选切换）。GUI 勾选应用先 `WM_CLOSE` 等待 4 秒，超时逐个复核身份后强制结束（持有 `Executables` 时按完整可执行路径精确匹配），未勾选或未退出应用的缓存跳过并取消勾选。CLI 默认排除，`--close-apps` 仅请求正常退出。
-- **禁止回退**：不能恢复无占用时的智能清理确认弹窗或每行退出按钮；不能去掉 `ConfirmCloseApps` 的超时结束与保存工作提示；不能在存在省略系统/自身锁时跳过多应用分桶核实而把锁误归给旁路应用；不能把 CLI 扩大成强制结束；不能列出系统/其他用户/本程序进程树。
-- **测试**：`TestOwnerProcessListsMustMatchBrowserRows`、`TestFindRunningAppsMergesDeclaredBrowsersAndLockedDesktopApps`、`TestFindLockedCacheOwnersAttributesSiblingAppAndExcludesCleanerTree`、`TestJunkCleanWithoutRunningOwnersCleansWithoutDialog`、`TestJunkCleanSkipsUncheckedRunningOwnerApps`、`TestJunkCleanSkipAndCleanButtonLeavesBusyCachesUnselected`、`TestJunkCleanQuitsCheckedOwnerAppsFirst`、`TestConfirmationListsRunningAppsAsToggles`、`TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose`。
-
-## P122 Windows 已退出的祖先 PID 不能让正常应用永远无法关闭
-
-Note: `2026-11-01-junk-close-owner-apps.md`
-
-- **症状**：勾选关闭应用，实际没有退出；请求在发送前报 `process does not exist`，原来错误被忽略。
-- **根因**：Windows 保留已退出创建者的 PID，逐 PID 查询祖先把正常缺失误当无法核验。
-- **防护**：完整 Toolhelp 快照确认祖先已不在；快照失败、目标不在、循环/过深、本程序和其后代仍拒绝。真正结束前保留精确创建时间、映像、用户和关键进程校验。
-- **禁止回退**：不能恢复逐 PID 打开所有祖先；不能将快照失败当空进程表；不能去掉目标身份或本程序后代保护。
-- **测试**：`TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree`、`TestCleanupClosesWindowlessNativeProcess`。
-
-## P123 并行独占删除必须排除自身硬链接句柄，且整轮共享并发上限
-
-Note: `2026-11-01-bounded-parallel-cleaner.md`
-
-- **症状**：大量小文件串行删除慢；简单并行后，硬链接被误报正在使用。
-- **根因**：每个孩子重复打开父目录核验，枚举后重复取元数据；并发独占句柄会相互共享冲突。
-- **防护**：Windows 递归删除整轮最多 8 路，SQLite 家族串行且作为同一任务；共享冲突通过与探测共用的全局写锁复核，等待自身句柄退出；父目录统一在删除前核验一次，子项逐个核验。Windows 目录元数据仍用 Lstat，与身份复核一致。
-- **禁止回退**：不能每层各开 8 路、持槽等子槽、未等孩子完成就删父目录；不能拆散 SQLite 家族或放宽共享模式；不能把普通文件的枚举元数据复用直接套到 Windows 目录。
-- **测试**：`TestCleanerParallelBudgetCoversNestedWorkAndDrains`、`TestRemoveFileExclusiveWaitsForOwnHardlinkProbe`、`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestCleanerRetainsNestedLiveSQLiteFamily`。
-
-## P124 部分清理目标必须按 FailInfo 区分真实错误保留与活跃锁尾巴收起
-
-Note: `2026-11-01-review-fixes.md`、`2026-11-01-junk-streamlined-clean-ux.md`
-
-- **症状**：按文件清理时 `report.Failed` 记录的是子文件路径（`cache\sub\file`），若只比对 `report.Failed` 会漏掉部分失败的父目录目标；反之若把仅剩活跃锁尾巴的缓存目录继续留在主列表并保持勾选，用户反复点击仍会撞锁。
-- **根因**：叶子路径不等同于扫描目标根路径，且真实权限错误与活跃进程锁尾巴在后续用户动作上完全不同。
-- **防护**：`applyJunkCleanResult` 依据 `report.FailInfo` 目标聚合（`core.Norm`）：含真实错误（非 `FailInUse`/`FailUnverified`）或 `Manual`/`SkippedItems` 的目标保留在主列表、按 `RemainingLive` 刷新剩余大小并取消勾选；完全成功或仅剩活跃锁尾巴的目标从当次扫描视图收起并取消勾选。
-- **禁止回退**：不能退回只查 `report.Failed` 叶子路径而丢掉真实错误父目录或跳过 `RemainingLive` 更新；不能让尝试过的失败项继续保持勾选。
-- **测试**：`TestJunkPartialLeafFailureCollapsesInUseTailAndKeepsRealError`，红绿证据见 Note。
-
-## P125 Windows 活跃缓存清理中目录 mtime 跳变、并发自删与映射映像不能误报失败
-
-Note: `2026-11-01-windows-active-cache-churn-false-failures.md`
-
-- **症状**：清理 `go-build`、`npm-cache` 或活跃日志目录时，顶部红色失败面板报出大量 `未能删除` 或 `权限不足`，并对运行中的缓存二进制空跑 `takeown`/`icacls`。
-- **根因**：① NTFS 删除子项会立即更新父目录 `mtime`，Windows `TargetIdentity.Recheck` 比较目录 `mtime` 导致自跳变拒删；② 活跃进程并发自删临时文件（`ErrNotExist`）、并发追加日志或末尾 `ERROR_DIR_NOT_EMPTY` 被记为 `FailOther`；③ 内存映射执行的 `.exe`/`.dll` 在 `SetFileInformationByHandle(FileDispositionInfo)` 阶段返回 `ERROR_ACCESS_DENIED` 而非 `ERROR_SHARING_VIOLATION`。
-- **防护**：持有 `ObjectID` 强身份的 Windows 非链接目录在 `Recheck` 中只认 `ObjectID` 不看目录 `mtime`（普通文件仍严格校验 `mtime+length`）；枚举/删除中并发消失的文件记 `CleanSkipped`，活跃变动子文件与末尾非空目录记 `FailInUse`；`RemoveFileExclusive` 对无只读位的 `ERROR_ACCESS_DENIED` 用 `isMappedImageInUse` 识别映像映射锁并归一化为 `ERROR_SHARING_VIOLATION`。
-- **禁止回退**：不能恢复对持有强身份的 Windows 目录比较 `mtime`；不能去掉普通文件的 `mtime+length` 复核或把所有 `ERROR_ACCESS_DENIED` 一律当占用（会废掉 P5 只读清理与 P6 Deny ACL 恢复）；子目录捕获身份必须用 `captureIdentityUsing` 获取完整 `ObjectID`。
-- **测试**：`TestIdentityWindowsDirectoryChurnKeepsStableIdentity`、`TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles`、`TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation`，自然红绿证据见 Note。
+## P117 目录占用探测超预算只能记未知，Restart Manager 只做只读归属
+
+
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`、`2026-11-01-junk-streamlined-clean-ux.md`
+
+
+
+- **症状**：几万文件的 `go-build`、包管理器缓存被列成「占用状态未知」，体感像清理失败；反之若把超预算当空闲，会删掉仍被占用的整树依赖。清理后若逐行打印数十条活跃锁跳过账单并在收尾跑数秒归属查询，会造成严重交互负担。
+
+- **根因**：Windows 目录占用探测需要对文件逐个排他打开，旧预算 4096 项 / 3 秒太小；但预算不足时「没检查到锁」不等于没有锁。Restart Manager 能报进程名/服务身份，但单独全量探测 4.2k 文件约 10.7 秒，比排他打开慢一个数量级。
+
+- **防护**：`scanDirLocks` 批量 1024、8 路并行排他打开，预算 16384 项 / 5 秒；不可读、链接、特殊文件与超过预算仍返回已知=false；同一批里找到锁时以锁为准。共享冲突必须在排除本进程所有并发探测句柄后复核，否则硬链接会相互制造假锁。`platform.OccupancyOwners` 与 `platform.FindLockedCacheOwners` 只复用 Restart Manager 做**只读归属/提示**，系统/其他用户/关键进程与本程序进程树绝不授予结束权限。清理完成后不再展示逐行跳过账单，改用顶部正向成果条 `JunkCleanBanner` 汇总，仅真实错误进入默认折叠的 `FailedDetails`。
+
+- **禁止回退**：不能把 `len(locked)==0 && unknown` 改成 clear 或让超预算 `OpTree` 继续删除；不能把归属探测接到删除授权；不能给非缓存目标新增绕过分类的结束进程入口（P66）；不能把 Restart Manager 探测放到 UI 主线程；不能恢复清理后数十行的跳过账单面板。
+
+- **测试**：`TestWindowsDirectoryProbeCoversLargeUnlockedTrees`、`TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks`、`TestOccupancyOwnersReportsTheLockingProcess`、`TestJunkDetailsSeparateSkippedInUseFromRealFailures`、`TestJunkPageExclusionsFailuresAndLocalization`、`TestCacheReleaseFailureTreatsSystemOwnersAsSkipped`。
+
+
+
+## P118 目标的多数失败原因不能代替叶子分类计数
+
+
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+
+
+- **症状**：同一个目标有两个占用文件与一个权限失败，清理结果却记作失败 0、跳过 3，并显示清理完成。
+
+- **根因**：`TargetFailInfo.Reason` 只表示一个代表原因，`FailedLeaves` 包含所有失败；按代表原因扣掉全部失败会把少数真实错误一起抹掉。
+
+- **防护**：core 单独统计 `SkippedLeaves`；GUI 与 CLI 历史用 `CleanProgress.SplitFailures` 对原始失败记录分类，不能求和父子目标可能重复覆盖的摘要；混合目标的 `Reason` 优先选真实错误，仍显示失败详情与部分完成。
+
+- **禁止回退**：不能按多数原因推断所有叶子都是跳过；不能只修历史数字却让混合目标隐藏真实错误；不能通过改变失败顺序让测试碰巧通过。
+
+- **测试**：`TestTargetFailInfoPreservesMixedFailures`、`TestJunkMixedLeafFailuresKeepErrorAndExactHistory`，红绿证据见 Note。
+
+
+
+## P119 占用只是提示，不能改变推荐、勾选或可清理量
+
+
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+
+
+- **症状**：曾在扫描阶段对每个目标逐文件排他探测，并把占用/未知项撤销推荐、禁用勾选、移出可清理量。结果：全选不再是全部；扫描结果要等探测完才出现；超过探测预算的 `node_modules`、`go-build` 等大目录几乎全被标成「无法确认安全」而无法勾选；用户进程占用也无从提示关闭应用。
+
+- **根因**：扫描时的占用只是一个时间点的快照，清理时会变；而当时执行期按目标整体判断，一个文件被锁就放弃整个目录，扫描阶段只是把这个缺陷提前展示。真正的损失来自执行期粒度，而不是选择。
+
+- **防护**：`ApplyBusy` 只挂 badge，不改 `Recommended`；`CleanupAvailable` 只看规则阻止；`CleanableSize`、全选、类别勾选、CLI `--all`/`--path` 都不看占用。Windows 扫描期 `DetectInUse` 不逐文件探测，badge 异步到达，不阻塞发布。占用在执行期按叶子处理（P120）。Explorer 只选择 thumbcache_*.db / iconcache_*.db 文件。
+
+- **禁止回退**：不能因占用撤销推荐、禁用行、剔除全选或缩小可清理量；不能在扫描阶段逐文件排他探测或等占用结果再发布；不能把 Unknown 当 Clear 交给执行（执行期仍各自 fail-closed）。
+
+- **测试**：`TestApplyBusyKeepsRecommendationAndSelection`、`TestJunkBusyItemsStayRecommendedAndSelectable`、`TestJunkLateOccupancyKeepsBadgeOnlyAndRealErrors`、`TestJunkSelectionRequiresFreshExactEligibleTarget`、`TestWindowsScanDoesNotProbeTargetFiles`、`TestWindowsThumbnailRulesSelectOnlyCacheDatabaseFiles`，红绿证据见 Note。
+
+
+
+## P120 Windows 缓存清理按文件独占删除，不能退回按目标整体放弃
+
+
+
+Note: `2026-11-01-junk-inuse-occupancy-and-retry.md`
+
+
+
+- **症状**：选中约 8.8 GB 只释放约 486 MiB。缓存目录里只要一个文件被浏览器或系统打开，整个目录都被跳过；超过探测预算的目录同样整体跳过。
+
+- **根因**：`CleanTargets` 先对目标做整体占用探测，Busy/Unknown 就整目标失败。另一方面，先探测再 `os.Remove` 有时间窗口，`DeleteFile` 还会删掉别人以 `FILE_SHARE_DELETE` 打开的文件。`DeleteTree` 把「子项未删」的父目录记成 `FailOther`，按文件跳过后会把普通占用变成红色失败。
+
+- **防护**：`platform.RemoveFileExclusive` 以共享模式 0、DELETE 权限打开再设置删除标记：打开本身就是占用检查，没有探测与删除之间的窗口，也拒绝共享删除句柄。`leafOccupancyGate` 只对 Windows 上永久处置的 `OpContents` / `OpFile` 跳过整体探测；`OpTree`（依赖树、构建目录）仍整体判断，避免运行中的项目留下半删的依赖。父目录用 `failParent` 按子项分类：全是占用/未确认则记为跳过，任一真实错误则记为失败，且不重复计数。macOS 没有共享模式，仍按目标整体判断。
+
+- **禁止回退**：不能把 `RemoveFileExclusive` 的共享模式放宽或改回 `os.Remove`；不能让 `OpTree` 或回收站处置走按文件模式；不能恢复「有子项失败就记 FailOther」；不能对父目录再次累加 Failed/Ignored。
+
+- **测试**：`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestContentsCleanupSkipsOnlyLockedLeaves`、`TestFailParentPrefersRealErrorsOverSkips`、`TestTreeTargetsKeepWholeTargetOccupancyGate`、`TestJunkLockAfterScanIsSkippedWithoutFailure`，红绿证据见 Note。
+
+
+
+## P121 智能清理无占用零弹窗开清，有运行应用占用时按应用集中询问一次
+
+
+
+Note: `2026-11-01-junk-close-owner-apps.md`、`2026-11-01-junk-streamlined-clean-ux.md`
+
+
+
+- **症状**：每次点击「立即清理」无条件弹出列满规则 ID 的技术确认框打断操作；而未写进 `browsers.toml` 的 Electron 桌面应用（Notion、Termius 等）运行时锁住缓存却不在询问列表中。
+
+- **根因**：常规缓存清理套用了重型删除确认框；动态缓存目标缺少百毫秒级的锁句柄首样归属探测。
+
+- **防护**：`FindRunningApps` 在后台 worker 上融合 `browsers.toml` 声明式进程与 `FindLockedCacheOwners`（8 路并发首锁抽样 + 合并 Restart Manager 会话，单会话含省略系统/自身锁或多应用时必须分桶复核，绝不张冠李戴）。无运行占用应用时零弹窗直接开清；检测到运行应用时弹出 `ConfirmCloseApps`（提供取消 / 跳过占用直接清理 / 关闭并清理，支持全选切换）。GUI 勾选应用先 `WM_CLOSE` 等待 4 秒，超时逐个复核身份后强制结束（持有 `Executables` 时按完整可执行路径精确匹配），未勾选或未退出应用的缓存跳过并取消勾选。CLI 默认排除，`--close-apps` 仅请求正常退出。
+
+- **禁止回退**：不能恢复无占用时的智能清理确认弹窗或每行退出按钮；不能去掉 `ConfirmCloseApps` 的超时结束与保存工作提示；不能在存在省略系统/自身锁时跳过多应用分桶核实而把锁误归给旁路应用；不能把 CLI 扩大成强制结束；不能列出系统/其他用户/本程序进程树。
+
+- **测试**：`TestOwnerProcessListsMustMatchBrowserRows`、`TestFindRunningAppsMergesDeclaredBrowsersAndLockedDesktopApps`、`TestFindLockedCacheOwnersAttributesSiblingAppAndExcludesCleanerTree`、`TestJunkCleanWithoutRunningOwnersCleansWithoutDialog`、`TestJunkCleanSkipsUncheckedRunningOwnerApps`、`TestJunkCleanSkipAndCleanButtonLeavesBusyCachesUnselected`、`TestJunkCleanQuitsCheckedOwnerAppsFirst`、`TestConfirmationListsRunningAppsAsToggles`、`TestExecuteJunkLeavesRunningOwnerCachesOutUnlessAskedToClose`。
+
+
+
+## P122 Windows 已退出的祖先 PID 不能让正常应用永远无法关闭
+
+
+
+Note: `2026-11-01-junk-close-owner-apps.md`
+
+
+
+- **症状**：勾选关闭应用，实际没有退出；请求在发送前报 `process does not exist`，原来错误被忽略。
+
+- **根因**：Windows 保留已退出创建者的 PID，逐 PID 查询祖先把正常缺失误当无法核验。
+
+- **防护**：完整 Toolhelp 快照确认祖先已不在；快照失败、目标不在、循环/过深、本程序和其后代仍拒绝。真正结束前保留精确创建时间、映像、用户和关键进程校验。
+
+- **禁止回退**：不能恢复逐 PID 打开所有祖先；不能将快照失败当空进程表；不能去掉目标身份或本程序后代保护。
+
+- **测试**：`TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree`、`TestCleanupClosesWindowlessNativeProcess`。
+
+
+
+## P123 并行独占删除必须排除自身硬链接句柄，且整轮共享并发上限
+
+
+
+Note: `2026-11-01-bounded-parallel-cleaner.md`
+
+
+
+- **症状**：大量小文件串行删除慢；简单并行后，硬链接被误报正在使用。
+
+- **根因**：每个孩子重复打开父目录核验，枚举后重复取元数据；并发独占句柄会相互共享冲突。
+
+- **防护**：Windows 递归删除整轮最多 8 路，SQLite 家族串行且作为同一任务；共享冲突通过与探测共用的全局写锁复核，等待自身句柄退出；父目录统一在删除前核验一次，子项逐个核验。Windows 目录元数据仍用 Lstat，与身份复核一致。
+
+- **禁止回退**：不能每层各开 8 路、持槽等子槽、未等孩子完成就删父目录；不能拆散 SQLite 家族或放宽共享模式；不能把普通文件的枚举元数据复用直接套到 Windows 目录。
+
+- **测试**：`TestCleanerParallelBudgetCoversNestedWorkAndDrains`、`TestRemoveFileExclusiveWaitsForOwnHardlinkProbe`、`TestRemoveFileExclusiveRefusesHeldFilesEvenWithShareDelete`、`TestCleanerRetainsNestedLiveSQLiteFamily`。
+
+
+
+## P124 部分清理目标必须按 FailInfo 区分真实错误保留与活跃锁尾巴收起
+
+
+
+Note: `2026-11-01-review-fixes.md`、`2026-11-01-junk-streamlined-clean-ux.md`
+
+
+
+- **症状**：按文件清理时 `report.Failed` 记录的是子文件路径（`cache\sub\file`），若只比对 `report.Failed` 会漏掉部分失败的父目录目标；反之若把仅剩活跃锁尾巴的缓存目录继续留在主列表并保持勾选，用户反复点击仍会撞锁。
+
+- **根因**：叶子路径不等同于扫描目标根路径，且真实权限错误与活跃进程锁尾巴在后续用户动作上完全不同。
+
+- **防护**：`applyJunkCleanResult` 依据 `report.FailInfo` 目标聚合（`core.Norm`）：含真实错误（非 `FailInUse`/`FailUnverified`）或 `Manual`/`SkippedItems` 的目标保留在主列表、按 `RemainingLive` 刷新剩余大小并取消勾选；完全成功或仅剩活跃锁尾巴的目标从当次扫描视图收起并取消勾选。
+
+- **禁止回退**：不能退回只查 `report.Failed` 叶子路径而丢掉真实错误父目录或跳过 `RemainingLive` 更新；不能让尝试过的失败项继续保持勾选。
+
+- **测试**：`TestJunkPartialLeafFailureCollapsesInUseTailAndKeepsRealError`，红绿证据见 Note。
+
+
+
+## P125 Windows 活跃缓存清理中目录 mtime 跳变、并发自删与映射映像不能误报失败
+
+
+
+Note: `2026-11-01-windows-active-cache-churn-false-failures.md`
+
+
+
+- **症状**：清理 `go-build`、`npm-cache` 或活跃日志目录时，顶部红色失败面板报出大量 `未能删除` 或 `权限不足`，并对运行中的缓存二进制空跑 `takeown`/`icacls`。
+
+- **根因**：① NTFS 删除子项会立即更新父目录 `mtime`，Windows `TargetIdentity.Recheck` 比较目录 `mtime` 导致自跳变拒删；② 活跃进程并发自删临时文件（`ErrNotExist`）、并发追加日志或末尾 `ERROR_DIR_NOT_EMPTY` 被记为 `FailOther`；③ 内存映射执行的 `.exe`/`.dll` 在 `SetFileInformationByHandle(FileDispositionInfo)` 阶段返回 `ERROR_ACCESS_DENIED` 而非 `ERROR_SHARING_VIOLATION`。
+
+- **防护**：持有 `ObjectID` 强身份的 Windows 非链接目录在 `Recheck` 中只认 `ObjectID` 不看目录 `mtime`（普通文件仍严格校验 `mtime+length`）；枚举/删除中并发消失的文件记 `CleanSkipped`，活跃变动子文件与末尾非空目录记 `FailInUse`；`RemoveFileExclusive` 对无只读位的 `ERROR_ACCESS_DENIED` 用 `isMappedImageInUse` 识别映像映射锁并归一化为 `ERROR_SHARING_VIOLATION`。
+
+- **禁止回退**：不能恢复对持有强身份的 Windows 目录比较 `mtime`；不能去掉普通文件的 `mtime+length` 复核或把所有 `ERROR_ACCESS_DENIED` 一律当占用（会废掉 P5 只读清理与 P6 Deny ACL 恢复）；子目录捕获身份必须用 `captureIdentityUsing` 获取完整 `ObjectID`。
+
+- **测试**：`TestIdentityWindowsDirectoryChurnKeepsStableIdentity`、`TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles`、`TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation`，自然红绿证据见 Note。
+
+## P126 不支持的清理平台必须返回用法错误 2，不能退化成运行时错误 1
+
+Note: `2026-11-01-headless-core-cli.md`
+
+- **症状**：Linux CI 上 `junk clean --execute` 返回 1，测试期望 2；脚本无法区分“参数或平台不支持”与“运行时失败”。
+- **根因**：平台判断分支直接返回 `ExitError`，与 CLI 退出码契约不一致。
+- **防护**：`cleanupExecutionGate` 对非 Windows/macOS 的 `--execute` 返回 `ExitUsage`；预览与 `scan/plan` 不受影响。
+- **禁止回退**：不能把该分支改回 `ExitError` 或 `ExitOK`；不能静默跳过执行。
+- **测试**：`TestUnsupportedCleanupExecutionIsUsageError`，红绿证据见 Note。
+

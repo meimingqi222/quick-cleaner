@@ -84,6 +84,13 @@ accounting have the documented platform differences in `docs/CLI.md`.
 - `cmd/quick-cleaner/main_test.go::TestCLIDispatchDoesNotInitializeGUI`
 - `cmd/quick-cleaner/cli_windows_test.go::TestCLIConsoleAndGUISubsystemKeepPipesAndExitCodes`
 - `internal/cli/junk_windows_test.go::TestJunkLockAfterScanIsSkippedWithoutFailure`
+- `internal/cli/cli_test.go::TestUnsupportedCleanupExecutionIsUsageError`
+
+Proved: unsupported `--execute` returned exit 1 on Linux while the CLI contract
+requires usage exit 2; see
+`docs/agent-notes-evidence/2026-11-01-cli-unsupported-exit-red.log`. After
+classifying the platform gate as `ExitUsage`, the cross-platform test passes; see
+`docs/agent-notes-evidence/2026-11-01-cli-unsupported-exit-green.log`.
 
 Proved: the initial focused run failed `TestTreeCancellationStillWritesJSON`
 with `unexpected end of JSON input`, and `TestOutputErrorsAreFailures` reported
