@@ -15,7 +15,13 @@ func (r *Root) renderDialogs(c *ui.Context) {
 	// Destructive confirmations suspend update/FDA prompts, never vice versa.
 	if r.confirming {
 		r.confirmation.Language = r.settings.Language
-		r.confirmation.Render(c, view.ConfirmationDialogActions{Accept: func(id string) { r.resolveConfirmation(id, true) }, Cancel: func(id string) { r.resolveConfirmation(id, false) }, ToggleApp: r.toggleConfirmApp})
+		r.confirmation.Render(c, view.ConfirmationDialogActions{
+			Accept:        func(id string) { r.resolveConfirmation(id, true) },
+			Cancel:        func(id string) { r.resolveConfirmation(id, false) },
+			SkipAndClean:  r.skipConfirmation,
+			ToggleApp:     r.toggleConfirmApp,
+			ToggleAllApps: r.toggleAllConfirmApps,
+		})
 		return
 	}
 	if r.permission.Open {
@@ -203,6 +209,7 @@ func (r *Root) confirmInstallOverTask() {
 		Title: core.SameText(r.tr("打断当前任务并安装更新？", "Interrupt current work and install the update?")),
 		Body:  core.SameText(r.tr("扫描或清理仍在进行。安装更新会退出应用并中断这些任务。", "A scan or clean is still running. Installing will quit the app and interrupt that work.")),
 	}
+	r.skipAndClean = nil
 	r.accept = func() {
 		if r.updates == nil {
 			return

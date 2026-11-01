@@ -1,0 +1,5 @@
+--- FAIL: TestCleanupClosesBackgroundOwnersAfterGracePeriod (0.00s)
+    app_owner_test.go:46: owners still running: [{Chrome Chrome}]
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.198s
+FAIL

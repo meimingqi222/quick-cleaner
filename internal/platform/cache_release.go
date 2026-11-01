@@ -41,22 +41,8 @@ func cacheProcessSnapshot(pid uint32) (string, string, error) {
 	if err != nil || user != ownUser {
 		return "", "", errors.New("system-or-other-user-process")
 	}
-	ancestor := p
-	for depth := 0; ; depth++ {
-		if depth >= 256 || ancestor.Pid == me.Pid {
-			return "", "", errors.New("cleaner-process-tree-or-unknown-ancestry")
-		}
-		parent, err := ancestor.Ppid()
-		if err != nil {
-			return "", "", err
-		}
-		if parent <= 1 {
-			break
-		}
-		ancestor, err = process.NewProcess(parent)
-		if err != nil {
-			return "", "", err
-		}
+	if err := cacheOutsideCleanerTree(pid); err != nil {
+		return "", "", err
 	}
 	exe, err := p.Exe()
 	if err != nil || !filepath.IsAbs(exe) {

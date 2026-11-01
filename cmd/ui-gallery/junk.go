@@ -27,14 +27,15 @@ func junkFixture(shell appui.Dashboard, details bool) *appui.JunkPage {
 		s.Categories[2].Partial = true
 	}
 	if details {
-		s.ShowExclusions, s.ShowFailedDetails, s.ShowSkippedDetails = true, true, true
+		s.ShowExclusions, s.ShowFailedDetails = true, true
 		s.Exclusions = []string{"/Users/fixture/Projects/keep"}
+		s.CleanBanner = &appui.JunkCleanBanner{
+			FreedBytes:    8_410_000_000,
+			DeletedFiles:  168563,
+			SkippedActive: true,
+		}
 		s.FailedDetails = []appui.JunkDetail{
 			{Text: core.NewText("权限不足 · 12.0 MB (8 个文件) · /Users/fixture/Library/Logs/protected", "Access denied · 12.0 MB (8 files) · /Users/fixture/Library/Logs/protected").Get(s.Language)},
-		}
-		s.SkippedDetails = []appui.JunkDetail{
-			{Text: core.NewText("「Edge」正在使用 · 24.0 MB (42 个文件) · /Users/fixture/Library/Caches/busy", "\"Edge\" is running · 24.0 MB (42 files) · /Users/fixture/Library/Caches/busy").Get(s.Language), Path: "/Users/fixture/Library/Caches/busy", Release: true},
-			{Text: core.NewText("系统、其他用户或受保护进程占用，已跳过 · 566.1 MB (222 个文件) · /Users/fixture/Library/Logs/system", "System, another user, or a protected process; skipped · 566.1 MB (222 files) · /Users/fixture/Library/Logs/system").Get(s.Language), Path: "/Users/fixture/Library/Logs/system"},
 		}
 	}
 	return s

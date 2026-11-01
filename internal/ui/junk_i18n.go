@@ -4,13 +4,14 @@ import "github.com/meimingqi222/quick-cleaner/internal/core"
 
 // Product copy is transcribed from src/ui/i18n/{categories,mod,views}.rs.
 type junkCopy struct {
-	headingSub, found, exclusions, exclusionsHint, exclusionsEmpty, remove           string
-	loadingTitle, loadingSub, empty, manual, partial, discovering                    string
-	cleanTitle, cleanSub                                                             string
-	unscannedTitle, startScan                                                        string
-	selected, items, selectedItems, clean, exclude, release, files                   string
-	failed, skipped, showDetails, hideDetails, showSkipped, hideSkipped, retry, more string
-	batch                                                                            [4]string
+	headingSub, found, exclusions, exclusionsHint, exclusionsEmpty, remove    string
+	loadingTitle, loadingSub, empty, manual, partial, discovering             string
+	cleanTitle, cleanSub                                                      string
+	unscannedTitle, startScan                                                 string
+	selected, items, selectedItems, clean, preparing, exclude, release, files string
+	bannerDone, bannerNothing, bannerSkippedSub                               string
+	failed, showDetails, hideDetails, more                                    string
+	batch                                                                     [4]string
 }
 
 func junkStrings(l Language) junkCopy {
@@ -23,8 +24,9 @@ func junkStrings(l Language) junkCopy {
 			empty: "Nothing cleanable found in this category", manual: "Manual Select", partial: "Partial", discovering: "Scanning…",
 			cleanTitle: "Your system is clean", cleanSub: "Nothing cleanable was found. Scan again later to check.",
 			unscannedTitle: "System Junk Not Scanned Yet", startScan: "Start Full Scan",
-			selected: "Selected for Cleaning", items: "%d items", selectedItems: "(%d items)", clean: "Clean Now", exclude: "Exclude", release: "Quit apps and clean", files: "%s files",
-			failed: "%d item(s) could not be cleaned", skipped: "%d item(s) skipped (in use or unverified)", showDetails: "Show details ▾", hideDetails: "Hide details ▴", showSkipped: "Show skipped ▾", hideSkipped: "Hide skipped ▴", retry: "Quit app and retry", more: "%d more not shown",
+			selected: "Selected for Cleaning", items: "%d items", selectedItems: "(%d items)", clean: "Clean Now", preparing: "Preparing…", exclude: "Exclude", release: "Quit apps and clean", files: "%s files",
+			bannerDone: "Cleanup complete — freed %s (%s files removed)", bannerNothing: "Cleanup complete — nothing additional needed removal", bannerSkippedSub: "Active cache files held by running apps were automatically skipped",
+			failed: "%d item(s) could not be cleaned", showDetails: "Show details ▾", hideDetails: "Hide details ▴", more: "%d more not shown",
 			batch: [4]string{"Recommended", "Select All", "Invert", "Clear All"},
 		}
 	}
@@ -36,8 +38,9 @@ func junkStrings(l Language) junkCopy {
 		empty: "此类别未发现可清理内容", manual: "需手动勾选", partial: "部分统计", discovering: "检索中…",
 		cleanTitle: "系统很干净", cleanSub: "没有发现可清理的内容，可以稍后再扫描一次。",
 		unscannedTitle: "尚未扫描系统冗余垃圾", startScan: "开始全面扫描",
-		selected: "已选择清理", items: "共 %d 项", selectedItems: "(%d 项)", clean: "立即清理", exclude: "排除", release: "退出应用后清理", files: "%s 个文件",
-		failed: "上次清理有 %d 项未能清理", skipped: "上次清理已跳过 %d 项（正在使用或无法确认）", showDetails: "查看详情 ▾", hideDetails: "收起详情 ▴", showSkipped: "查看已跳过 ▾", hideSkipped: "收起已跳过 ▴", retry: "退出应用后重试", more: "另有 %d 项未显示",
+		selected: "已选择清理", items: "共 %d 项", selectedItems: "(%d 项)", clean: "立即清理", preparing: "准备中…", exclude: "排除", release: "退出应用后清理", files: "%s 个文件",
+		bannerDone: "清理完成，已释放 %s（共清理 %s 个文件）", bannerNothing: "清理完成，当前所选项无需额外清理", bannerSkippedSub: "运行中应用占用的少量活跃缓存已自动跳过",
+		failed: "有 %d 项因权限或异常未能清理", showDetails: "查看详情 ▾", hideDetails: "收起详情 ▴", more: "另有 %d 项未显示",
 		batch: [4]string{"推荐选中", "全选", "反选", "清空选中"},
 	}
 }

@@ -1,0 +1,7 @@
+=== RUN   TestCleanupClosesWindowlessNativeProcess
+    app_owner_windows_test.go:52: force fixture: process does not exist
+    app_owner_windows_test.go:63: windowless process survived cleanup close: [{disposable fixture disposable fixture}]
+--- FAIL: TestCleanupClosesWindowlessNativeProcess (2.52s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	2.744s
+FAIL

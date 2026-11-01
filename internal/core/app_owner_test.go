@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,13 +14,73 @@ import (
 func stubOwners(t *testing.T, live func([]string) ([]platform.CacheOccupant, error), exit func(platform.CacheOccupant) error) {
 	t.Helper()
 	oldLive, oldExit := runningOwnerProcesses, requestAppExit
+	oldForce := forceAppExit
+	forceAppExit = func(platform.CacheOccupant) error { t.Error("unexpected force request"); return nil }
 	runningOwnerProcesses = live
 	if exit != nil {
 		requestAppExit = exit
 	} else {
 		requestAppExit = func(platform.CacheOccupant) error { t.Error("unexpected exit request"); return nil }
 	}
-	t.Cleanup(func() { runningOwnerProcesses, requestAppExit = oldLive, oldExit })
+	t.Cleanup(func() { runningOwnerProcesses, requestAppExit, forceAppExit = oldLive, oldExit, oldForce })
+}
+
+func TestCleanupClosesBackgroundOwnersAfterGracePeriod(t *testing.T) {
+	live := []platform.CacheOccupant{{PID: 10, Name: "chrome.exe", Identity: 100}, {PID: 11, Name: "chrome.exe", Identity: 101}}
+	var normal, forced []uint32
+	stubOwners(t, func([]string) ([]platform.CacheOccupant, error) { return live, nil }, func(o platform.CacheOccupant) error {
+		normal = append(normal, o.PID)
+		return nil // A background process has no window and ignores WM_CLOSE.
+	})
+	forceAppExit = func(o platform.CacheOccupant) error {
+		forced = append(forced, o.PID)
+		if o.Identity != uint64(90+o.PID) {
+			t.Fatal("force request lost process identity")
+		}
+		if len(forced) == 2 {
+			live = nil
+		}
+		return nil
+	}
+	app := RunningApp{Name: SameText("Chrome"), Processes: []string{"chrome.exe"}}
+	if still := CloseRunningAppsForCleanup([]RunningApp{app}, 0, nil); len(still) != 0 {
+		t.Fatalf("owners still running: %v", still)
+	}
+	if !slices.Equal(normal, []uint32{10, 11}) || !slices.Equal(forced, normal) {
+		t.Fatalf("normal=%v forced=%v", normal, forced)
+	}
+}
+
+func TestCancelledCleanupDoesNotCloseOwners(t *testing.T) {
+	stubOwners(t, func([]string) ([]platform.CacheOccupant, error) {
+		return []platform.CacheOccupant{{PID: 10, Name: "chrome.exe"}}, nil
+	}, nil)
+	app := RunningApp{Name: SameText("Chrome"), Processes: []string{"chrome.exe"}}
+	if still := CloseRunningAppsForCleanup([]RunningApp{app}, 0, func() bool { return true }); len(still) != 1 {
+		t.Fatalf("cancelled owner lost: %v", still)
+	}
+}
+
+func TestCleanupDoesNotForceExitedOrUnobservableOwners(t *testing.T) {
+	app := RunningApp{Name: SameText("Chrome"), Processes: []string{"chrome.exe"}}
+	t.Run("normal exit", func(t *testing.T) {
+		live := true
+		stubOwners(t, func([]string) ([]platform.CacheOccupant, error) {
+			if live {
+				return []platform.CacheOccupant{{PID: 10, Name: "chrome.exe"}}, nil
+			}
+			return nil, nil
+		}, func(platform.CacheOccupant) error { live = false; return nil })
+		if still := CloseRunningAppsForCleanup([]RunningApp{app}, 0, nil); len(still) != 0 {
+			t.Fatalf("exited owner: %v", still)
+		}
+	})
+	t.Run("unknown", func(t *testing.T) {
+		stubOwners(t, func([]string) ([]platform.CacheOccupant, error) { return nil, errors.New("unreadable") }, nil)
+		if still := CloseRunningAppsForCleanup([]RunningApp{app}, 0, nil); len(still) != 1 {
+			t.Fatalf("unknown treated as exited: %v", still)
+		}
+	})
 }
 
 func TestBundledBrowserOwnersAreDeclared(t *testing.T) {
@@ -73,6 +134,25 @@ func TestFindRunningAppsGroupsByOwnerAndSkipsIdleApps(t *testing.T) {
 	})
 	if len(apps) != 1 || apps[0].Name.Get(English) != "Chrome" || len(apps[0].Live) != 2 || apps[0].Bytes != 7 || !slices.Equal(apps[0].Paths, []string{"/c/a", "/c/b"}) {
 		t.Fatalf("running apps = %+v", apps)
+	}
+}
+
+func TestOwnerEnumerationFailureKeepsCandidatesAndStopsWaiting(t *testing.T) {
+	calls := 0
+	stubOwners(t, func([]string) ([]platform.CacheOccupant, error) {
+		calls++
+		return nil, errors.New("unreadable process list")
+	}, nil)
+	owner := &AppOwner{Name: SameText("Chrome"), Processes: []string{"chrome.exe"}}
+	apps := FindRunningApps([]ScanItem{{Path: "/cache", Owner: owner}})
+	if len(apps) != 1 || len(apps[0].Paths) != 1 {
+		t.Fatalf("unobservable owner treated as absent: %+v", apps)
+	}
+	// Cancel on the second enumeration so a broken wait cannot delay the test.
+	calls = 0
+	still := CloseRunningApps(apps, 8*time.Second, func() bool { return calls > 1 })
+	if len(still) != 1 || calls != 1 {
+		t.Fatalf("unobservable owner waited or disappeared: calls=%d still=%v", calls, still)
 	}
 }
 
@@ -139,5 +219,62 @@ func TestWindowsBrowserTargetsCarryTheirOwner(t *testing.T) {
 	}
 	if found == 0 {
 		t.Fatal("fixture produced no browser targets")
+	}
+}
+
+func TestFindRunningAppsMergesDeclaredBrowsersAndLockedDesktopApps(t *testing.T) {
+	oldLocked := lockedCacheOwners
+	t.Cleanup(func() { lockedCacheOwners = oldLocked })
+
+	stubOwners(t, func(names []string) ([]platform.CacheOccupant, error) {
+		return []platform.CacheOccupant{
+			{PID: 100, Name: "msedge.exe", Executable: `C:\Program Files\Microsoft\Edge\Application\msedge.exe`},
+			{PID: 200, Name: "Notion.exe", Executable: `C:\Users\alice\AppData\Local\Programs\Notion\Notion.exe`},
+			{PID: 201, Name: "Notion.exe", Executable: `C:\Users\alice\AppData\Local\Programs\Notion\Notion.exe`},
+			{PID: 999, Name: "Notion.exe", Executable: `D:\OtherVendor\Notion\Notion.exe`},
+		}, nil
+	}, nil)
+
+	lockedCacheOwners = func(paths []string) ([]platform.LockedTargetOwner, error) {
+		notionA := platform.CacheOccupant{PID: 200, Name: "Notion.exe", Executable: `C:\Users\alice\AppData\Local\Programs\Notion\Notion.exe`}
+		notionB := platform.CacheOccupant{PID: 201, Name: "Notion.exe", Executable: `C:\Users\alice\AppData\Local\Programs\Notion\Notion.exe`}
+		edge := platform.CacheOccupant{PID: 100, Name: "msedge.exe", Executable: `C:\Program Files\Microsoft\Edge\Application\msedge.exe`}
+		return []platform.LockedTargetOwner{
+			{Target: "/edge/cache", Display: "Microsoft Edge", Owner: edge},
+			{Target: "/notion/gpu", Display: "Notion", Owner: notionA},
+			{Target: "/notion/gpu", Display: "Notion", Owner: notionB},
+			{Target: "/notion/shader", Display: "Notion", Owner: notionA},
+		}, nil
+	}
+
+	edgeOwner := &AppOwner{Name: SameText("Microsoft Edge"), Processes: []string{"msedge.exe"}}
+	items := []ScanItem{
+		{Path: "/edge/cache", Size: 100, Disposal: Permanent, Operation: Operation{Kind: OpContents}, Owner: edgeOwner},
+		{Path: "/edge/code", Size: 50, Disposal: Permanent, Operation: Operation{Kind: OpContents}, Owner: edgeOwner},
+		{Path: "/notion/gpu", Size: 30, Disposal: Permanent, Operation: Operation{Kind: OpContents}},
+		{Path: "/notion/shader", Size: 20, Disposal: Permanent, Operation: Operation{Kind: OpContents}},
+		{Path: "/unheld/temp", Size: 40, Disposal: Permanent, Operation: Operation{Kind: OpContents}},
+	}
+
+	apps := FindRunningApps(items)
+	if len(apps) != 2 {
+		t.Fatalf("apps = %+v; want 2 merged apps (Edge + Notion)", apps)
+	}
+	if apps[0].Name.Get(English) != "Microsoft Edge" || apps[0].Bytes != 150 || len(apps[0].Paths) != 2 {
+		t.Fatalf("edge merged entry = %+v", apps[0])
+	}
+	if apps[1].Name.Get(English) != "Notion" || apps[1].Bytes != 50 || len(apps[1].Paths) != 2 || len(apps[1].Live) != 2 {
+		t.Fatalf("notion merged entry = %+v", apps[1])
+	}
+
+	// Closing Notion must target only its verified executable path, never PID 999.
+	var closedPIDs []uint32
+	requestAppExit = func(o platform.CacheOccupant) error {
+		closedPIDs = append(closedPIDs, o.PID)
+		return nil
+	}
+	_ = CloseRunningApps([]RunningApp{apps[1]}, 0, nil)
+	if slices.Contains(closedPIDs, 999) || !slices.Equal(closedPIDs, []uint32{200, 201}) {
+		t.Fatalf("executable-scoped close targeted wrong PIDs: %v", closedPIDs)
 	}
 }

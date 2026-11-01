@@ -1,6 +1,7 @@
 # Agent Note: 占用不影响勾选，Windows 缓存按文件独占删除，残留按占用性质分流
 
 Status: implemented
+Partly-superseded-by: 2026-11-01-junk-streamlined-clean-ux.md
 
 ## Problem
 
@@ -16,6 +17,10 @@ Status: implemented
   入口，成了死胡同。
 
 ## Decision
+
+后续审阅修复：GUI 历史与 CLI 同样使用 `CleanProgress.SplitFailures` 对原始
+`report.Failed` 分类，不再求和各目标的 `SkippedLeaves`。父子目标的摘要可以覆盖
+同一叶子，摘要之和会重复扣减并掩盖真实失败；不能用上限截断代替按原始记录分类。
 
 产品原则（2026-11-01 与用户确认）：默认勾选 = 规则推荐，与占用无关；全选能选中
 全部未被规则阻止的项目，且不出现明显报错；系统进程占用自动跳过；用户进程占用
@@ -50,12 +55,8 @@ Status: implemented
   `FailInUse` 目标上运行，返回进程名/PID/是否系统进程，**不参与删除或结束授权**。
   归属证据失败（超过预算、不可读、Restart Manager 报错）只表示「未识别」，绝不
   把占用改成空闲。
-- `finishCleanup` 把 `FailInUse` / `FailUnverified` 归入「已跳过」列表，使用中性
-  样式；`FailAccessDenied` / `FailChanged` / `FailOther` 仍进入红色「未能清理」。
-  系统、其他用户或受保护进程占用的行不提供结束入口。
-- 仍在 `CacheReleaseEligible` 范围内的应用占用行提供「退出应用后重试」，直接复用
-  `requestCacheRelease`：重新探测占用者、重新验证扫描期身份与计划、先请求正常退出，
-  强制结束仍需二次确认。没有为普通残留新增结束进程通道（P66）。
+- `finishCleanup` 把 `FailInUse` / `FailUnverified` 与真实错误分流；`FailAccessDenied` /
+  `FailChanged` / `FailOther` 进入红色「未能清理」。
 - 缓存释放探测返回系统进程/其他用户/关键进程占用时，不再把
   `service-or-critical-owner` 这类内部 token 原样写进状态栏，而是显示
   「系统、其他用户或受保护进程占用，无法结束；已跳过」。
@@ -67,17 +68,22 @@ Status: implemented
   读写锁：首次探测持读锁并行，遇到共享冲突后释放读锁、持写锁复核，排除本进程
   其他批次/目录的探测句柄；复核仍冲突才作为占用证据。未知错误仍是未知，真实
   应用的共享句柄仍会阻止清理。
-- 「已跳过」必须贯穿到用户可见的计数，而不只是残留面板：
+- 「已跳过」必须贯穿到用户可见的计数：
   `CleanProgress` 新增 `Ignored`，`FailInUse` / `FailUnverified` 仍保留 failed
   明细归因，但进度条显示 `失败 = Failed - Ignored`，并在 `Ignored > 0` 时单独
   显示「已跳过 N」。状态栏混合场景拆成「X 个目标未能清理 / Y 个目标正在使用或
   无法确认，已跳过」；历史记录 failed 扣除跳过叶子、skipped 加上跳过叶子。
 - `TargetFailInfo.SkippedLeaves` 单独统计全部失败叶子里的 InUse/Unverified 子集，
   历史只扣这个计数。目标内有任何真实错误时，`Reason` 选择真实错误中最多的一类；
-  仅当所有失败叶子都是跳过原因时才使用中性样式，不能按总体多数原因隐藏少数错误。
-- 残留明细上限从 20 提到 40，超过时显示「另有 N 项未显示」，避免标题计数与
-  可读行数脱节。归属归属探测的 4 秒总预算用 `select` 截止，预算耗尽后不再启动
-  新探测；Restart Manager 仍在后台 worker 上运行。
+  仅当所有失败叶子都是跳过原因时才作为跳过处理，不能按总体多数原因隐藏少数错误。
+- 失败明细上限从 20 提到 40，超过时显示「另有 N 项未显示」，避免标题计数与
+  可读行数脱节。
+
+## Superseded
+
+由 `2026-11-01-junk-streamlined-clean-ux.md` 部分取代：
+- **仍有效的核心机制**：占用仅作 badge 不改推荐/勾选、扫描期不逐文件探测、Windows 按文件独占删除（`RemoveFileExclusive` + `leafOccupancyGate`）与硬链接写锁复核、`OpTree` 整树判断、`failParent` 与 `SplitFailures` 叶子分类计数、`OccupancyOwners` 只读归属及 `cacheReleaseFailure` 系统进程提示均继续有效。
+- **已退役的界面分支**：清理收尾后的 4 秒 `identifyCleanupOccupants` 探测、`SkippedDetails` 逐行「退出应用后重试」面板以及把仅剩活跃锁尾巴的目标留在当次扫描列表的行为已移除，替换为清理前集中关闭询问与顶部正向成果条 `JunkCleanBanner`。
 
 ## Alternatives considered
 
@@ -106,9 +112,7 @@ Status: implemented
 
 ## Consequences
 
-- 小缓存被占用时显示「Edge 正在使用」之类的归属，并可直接退出应用后重试。
-- 系统服务、其他用户或受保护进程占用显示「系统、其他用户或受保护进程占用，已跳过」，
-  不再像错误。
+- 系统服务、其他用户或受保护进程占用在缓存释放链路显示「系统、其他用户或受保护进程占用，无法结束；已跳过」，不再像错误。
 - Windows 上缓存目录里被占用的文件单独跳过，其余照常删除；探测预算不再限制
   缓存内容与单文件目标。超过预算的 `OpTree` 目标（大型 `node_modules`）仍整体
   跳过，是已知限制。
@@ -121,6 +125,12 @@ Status: implemented
 
 ## Verification
 
+- `internal/app/junk_test.go::TestJunkOverlappingTargetsDoNotHideHistoryFailures`
+
+Proved: 修复前 focused 测试得到 skipped=2 failed=0，实际应为 1/1，见
+`docs/agent-notes-evidence/2026-11-01-overlap-history-red.log`；改用原始失败分类后
+同组通过，见 `docs/agent-notes-evidence/2026-11-01-overlap-history-green.log`。
+
 - `internal/platform/occupancy_windows_test.go::TestWindowsDirectoryProbeCoversLargeUnlockedTrees`
 - `internal/platform/occupancy_windows_test.go::TestOccupancyOwnersReportsTheLockingProcess`
 - `internal/app/junk_test.go::TestJunkDetailsSeparateSkippedInUseFromRealFailures`
@@ -129,7 +139,7 @@ Status: implemented
 - `internal/ui/junk_test.go::TestJunkPageExclusionsFailuresAndLocalization`
 - `internal/core/cleaner_test.go::TestCleanProgressReportsInUseAndUnverifiedAsSkipped`
 - `internal/ui/dashboard_test.go::TestDashboardCleanProgressSeparatesSkippedFromFailed`
-- `internal/ui/junk_test.go::TestJunkSkippedDetailsCapRowsAndReportRemainder`
+- `internal/ui/junk_test.go::TestJunkFailedDetailsCapRowsAndReportRemainder`
 - `internal/platform/occupancy_windows_test.go::TestWindowsProbeDoesNotMistakeHardlinksForExternalLocks`
 - `internal/core/cleaner_targets_test.go::TestTargetFailInfoPreservesMixedFailures`
 - `internal/app/junk_test.go::TestJunkMixedLeafFailuresKeepErrorAndExactHistory`
@@ -156,9 +166,8 @@ Proved:
    `docs/agent-notes-evidence/2026-11-01-junk-inuse-green.log`。
 2. `TestOccupancyOwnersReportsTheLockingProcess` 用真实子进程持有排他句柄，
    断言 Restart Manager 归属返回该 PID 且未误标为系统进程。
-3. 分类与重试路径：`TestJunkDetailsSeparateSkippedInUseFromRealFailures` 断言
-   应用占用/系统占用/未确认进入已跳过、权限失败仍进入失败；UI 测试点击
-   `Quit app and retry` 并断言回调收到原路径。
+3. 分类分流路径：`TestJunkDetailsSeparateSkippedInUseFromRealFailures` 断言
+   应用占用/系统占用/未确认不进入 `FailedDetails`、权限失败仍进入默认折叠的 `FailedDetails` 并记录精确历史计数。
 4. 进度条分流红跑：注释掉 `p.Ignored.Add(1)` 后
    `TestCleanProgressReportsInUseAndUnverifiedAsSkipped` 报
    `failed=3 ignored=0; want failed=3 ignored=2`；恢复后同 focused 绿跑。再把

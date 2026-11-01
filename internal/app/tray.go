@@ -466,7 +466,7 @@ func (r *Root) requestLeftoverClean(id string) {
 		// fresh discovery.
 		remaining, err := verifyResiduals(ctx, items)
 		return func() {
-			r.finishCleanup("clean_residuals", labels, report, p, nil)
+			r.finishCleanup("clean_residuals", labels, report, p)
 			if p.Cancelled() {
 				r.clearLeftoverCleaning(id)
 				return

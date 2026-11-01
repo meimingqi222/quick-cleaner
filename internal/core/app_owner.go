@@ -2,6 +2,8 @@ package core
 
 import (
 	"errors"
+	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,57 +58,195 @@ func validateOwnerProcesses(r *RuleDefinition) error {
 // RunningApp is one owner application with live processes this user may ask
 // to quit, plus the selected targets that belong to it.
 type RunningApp struct {
-	Name      Text
-	Processes []string
-	Live      []platform.CacheOccupant
-	Paths     []string
-	Bytes     uint64
+	Name        Text
+	Processes   []string
+	Executables []string
+	Live        []platform.CacheOccupant
+	Paths       []string
+	Bytes       uint64
 }
 
 var runningOwnerProcesses = platform.RunningAppOwners
+var lockedCacheOwners = platform.FindLockedCacheOwners
 
-// FindRunningApps groups items by owner and keeps owners with a live,
-// closable process. System, other-user and critical processes are never
-// returned; their files are simply skipped by the per-file cleaner.
+func dynamicLockProbeEligible(item ScanItem) bool {
+	return item.CleanupAvailable() && item.Disposal == Permanent &&
+		(item.Operation.Kind == OpContents || item.Operation.Kind == OpFile)
+}
+
+// FindRunningApps groups items by declared owner and by sampled active file
+// locks, returning closable same-user applications. System, other-user,
+// critical, Explorer and cleaner-tree processes are never returned; their
+// files are simply skipped by the per-file cleaner.
 func FindRunningApps(items []ScanItem) []RunningApp {
-	var order []string
-	apps := map[string]*RunningApp{}
+	var declaredOrder []string
+	declaredApps := map[string]*RunningApp{}
+	declaredPathSeen := map[string]map[string]bool{}
 	var names []string
+	sizeByPath := make(map[string]uint64, len(items))
+	var probePaths []string
+	seenProbe := make(map[string]bool, len(items))
+
 	for _, item := range items {
+		norm := Norm(item.Path)
+		sizeByPath[norm] = item.Size
+		if dynamicLockProbeEligible(item) && !seenProbe[norm] {
+			seenProbe[norm] = true
+			probePaths = append(probePaths, item.Path)
+		}
 		if item.Owner == nil || len(item.Owner.Processes) == 0 {
 			continue
 		}
 		key := item.Owner.Name.Get(English)
-		app := apps[key]
+		app := declaredApps[key]
 		if app == nil {
-			app = &RunningApp{Name: item.Owner.Name, Processes: item.Owner.Processes}
-			apps[key] = app
-			order = append(order, key)
+			app = &RunningApp{Name: item.Owner.Name, Processes: append([]string(nil), item.Owner.Processes...)}
+			declaredApps[key] = app
+			declaredPathSeen[key] = map[string]bool{}
+			declaredOrder = append(declaredOrder, key)
 			names = append(names, item.Owner.Processes...)
 		}
-		app.Paths = append(app.Paths, item.Path)
-		app.Bytes = saturatingAdd(app.Bytes, item.Size)
+		if !declaredPathSeen[key][norm] {
+			declaredPathSeen[key][norm] = true
+			app.Paths = append(app.Paths, item.Path)
+			app.Bytes = saturatingAdd(app.Bytes, item.Size)
+		}
 	}
-	if len(order) == 0 {
-		return nil
-	}
-	live, err := runningOwnerProcesses(names)
-	if err != nil {
-		return nil
-	}
-	var out []RunningApp
-	for _, key := range order {
-		app := apps[key]
-		for _, owner := range live {
-			if processNamed(owner.Name, app.Processes) {
-				app.Live = append(app.Live, owner)
+
+	var listErr error
+	if len(declaredOrder) > 0 {
+		var live []platform.CacheOccupant
+		live, listErr = runningOwnerProcesses(names)
+		for _, key := range declaredOrder {
+			app := declaredApps[key]
+			for _, owner := range live {
+				if processNamed(owner.Name, app.Processes) {
+					appendUniqueOccupant(&app.Live, owner)
+				}
 			}
 		}
-		if len(app.Live) > 0 {
+	}
+
+	var dynamicOrder []string
+	dynamicApps := map[string]*RunningApp{}
+	dynamicPathSeen := map[string]map[string]bool{}
+	if len(probePaths) > 0 {
+		if locked, err := lockedCacheOwners(probePaths); err == nil {
+			for _, hit := range locked {
+				procName := hit.Owner.Name
+				if procName == "" && hit.Owner.Executable != "" {
+					procName = filepath.Base(hit.Owner.Executable)
+				}
+				normTarget := Norm(hit.Target)
+				mergedDeclared := false
+				for _, key := range declaredOrder {
+					app := declaredApps[key]
+					if processNamed(procName, app.Processes) || (hit.Owner.Executable != "" && processNamed(filepath.Base(hit.Owner.Executable), app.Processes)) {
+						appendUniqueOccupant(&app.Live, hit.Owner)
+						if !declaredPathSeen[key][normTarget] {
+							declaredPathSeen[key][normTarget] = true
+							app.Paths = append(app.Paths, hit.Target)
+							app.Bytes = saturatingAdd(app.Bytes, sizeByPath[normTarget])
+						}
+						mergedDeclared = true
+						break
+					}
+				}
+				if mergedDeclared {
+					continue
+				}
+				dynKey := strings.ToLower(hit.Owner.Executable)
+				if dynKey == "" {
+					dynKey = strings.ToLower(hit.Display)
+				}
+				if dynKey == "" {
+					continue
+				}
+				app := dynamicApps[dynKey]
+				if app == nil {
+					display := hit.Display
+					if display == "" {
+						display = procName
+					}
+					app = &RunningApp{Name: SameText(display)}
+					if procName != "" {
+						app.Processes = []string{procName}
+					}
+					if hit.Owner.Executable != "" {
+						app.Executables = []string{hit.Owner.Executable}
+					}
+					dynamicApps[dynKey] = app
+					dynamicPathSeen[dynKey] = map[string]bool{}
+					dynamicOrder = append(dynamicOrder, dynKey)
+				}
+				appendUniqueOccupant(&app.Live, hit.Owner)
+				if !dynamicPathSeen[dynKey][normTarget] {
+					dynamicPathSeen[dynKey][normTarget] = true
+					app.Paths = append(app.Paths, hit.Target)
+					app.Bytes = saturatingAdd(app.Bytes, sizeByPath[normTarget])
+				}
+			}
+		}
+	}
+
+	var out []RunningApp
+	for _, key := range declaredOrder {
+		app := declaredApps[key]
+		// An unreadable list cannot establish that declared caches have no owner.
+		if listErr != nil || len(app.Live) > 0 {
+			out = append(out, *app)
+		}
+	}
+	for _, key := range dynamicOrder {
+		app := dynamicApps[key]
+		if len(app.Live) > 0 && len(app.Paths) > 0 {
 			out = append(out, *app)
 		}
 	}
 	return out
+}
+
+func appendUniqueOccupant(dst *[]platform.CacheOccupant, cand platform.CacheOccupant) {
+	for _, existing := range *dst {
+		if existing.PID != 0 && existing.PID == cand.PID {
+			return
+		}
+	}
+	*dst = append(*dst, cand)
+}
+
+func appMatchesOccupant(app RunningApp, owner platform.CacheOccupant) bool {
+	if len(app.Executables) > 0 && owner.Executable != "" {
+		for _, exe := range app.Executables {
+			if strings.EqualFold(exe, owner.Executable) {
+				return true
+			}
+		}
+		return false
+	}
+	name := owner.Name
+	if name == "" && owner.Executable != "" {
+		name = filepath.Base(owner.Executable)
+	}
+	return processNamed(name, app.Processes)
+}
+
+func anyAppMatches(apps []RunningApp, owner platform.CacheOccupant) bool {
+	for _, app := range apps {
+		if appMatchesOccupant(app, owner) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyLiveForApp(live []platform.CacheOccupant, app RunningApp) bool {
+	for _, owner := range live {
+		if appMatchesOccupant(app, owner) {
+			return true
+		}
+	}
+	return false
 }
 
 func processNamed(name string, names []string) bool {
@@ -152,6 +292,7 @@ func RunningOwnerBusy(targets []ScanTarget) map[string]Busy {
 }
 
 var requestAppExit = func(owner platform.CacheOccupant) error { return platform.RequestCacheOwnerExit(owner, false) }
+var forceAppExit = func(owner platform.CacheOccupant) error { return platform.RequestCacheOwnerExit(owner, true) }
 
 // CloseRunningApps asks each app to quit normally and waits up to wait for
 // its processes to go away. It never force-terminates: files an app still
@@ -159,32 +300,93 @@ var requestAppExit = func(owner platform.CacheOccupant) error { return platform.
 // processes are re-listed fresh; each exit request still re-verifies identity.
 // It returns the apps that were still running at the deadline.
 func CloseRunningApps(apps []RunningApp, wait time.Duration, cancelled func() bool) []Text {
+	return closeRunningApps(apps, wait, cancelled, false)
+}
+
+// CloseRunningAppsForCleanup requires consent to force termination in the
+// cleanup confirmation. CLI's normal-quit-only contract remains separate.
+func CloseRunningAppsForCleanup(apps []RunningApp, wait time.Duration, cancelled func() bool) []Text {
+	return closeRunningApps(apps, wait, cancelled, true)
+}
+
+func closeRunningApps(apps []RunningApp, wait time.Duration, cancelled func() bool, force bool) []Text {
 	var names []string
+	seenName := map[string]bool{}
 	for _, app := range apps {
-		names = append(names, app.Processes...)
+		for _, n := range app.Processes {
+			lower := strings.ToLower(n)
+			if !seenName[lower] {
+				seenName[lower] = true
+				names = append(names, n)
+			}
+		}
+		for _, exe := range app.Executables {
+			base := filepath.Base(exe)
+			lower := strings.ToLower(base)
+			if base != "" && !seenName[lower] {
+				seenName[lower] = true
+				names = append(names, base)
+			}
+		}
 	}
 	if len(names) == 0 {
 		return nil
 	}
-	if live, err := runningOwnerProcesses(names); err == nil {
-		for _, owner := range live {
-			// A child process without windows or one that already exited
-			// is not a failure; the deadline check below is the verdict.
-			_ = requestAppExit(owner)
-		}
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		live, err := runningOwnerProcesses(names)
+	isCancelled := func() bool { return cancelled != nil && cancelled() }
+	remaining := func(live []platform.CacheOccupant, err error) []Text {
 		var still []Text
 		for _, app := range apps {
-			// An unreadable process list is not evidence that an app quit.
-			if err != nil || anyLive(live, app.Processes) {
+			if err != nil || anyLiveForApp(live, app) {
 				still = append(still, app.Name)
 			}
 		}
-		if len(still) == 0 || !time.Now().Before(deadline) || cancelled != nil && cancelled() {
+		return still
+	}
+	if live, err := runningOwnerProcesses(names); err != nil {
+		return remaining(live, err)
+	} else {
+		for _, owner := range live {
+			if !anyAppMatches(apps, owner) {
+				continue
+			}
+			if isCancelled() {
+				return remaining(live, nil)
+			}
+			// A child process without windows or one that already exited
+			// is not a failure; the deadline check below is the verdict.
+			if err := requestAppExit(owner); err != nil {
+				log.Printf("[关闭应用] 正常退出 %s (PID %d): %v", owner.Name, owner.PID, err)
+			}
+		}
+	}
+	deadline := time.Now().Add(wait)
+	forced := false
+	for {
+		live, err := runningOwnerProcesses(names)
+		// An unreadable process list is not evidence that an app quit.
+		still := remaining(live, err)
+		if err != nil || len(still) == 0 || isCancelled() {
 			return still
+		}
+		if !time.Now().Before(deadline) {
+			if !force || forced || err != nil {
+				return still
+			}
+			for _, owner := range live {
+				if !anyAppMatches(apps, owner) {
+					continue
+				}
+				if isCancelled() {
+					return still
+				}
+				// Each request rechecks PID creation time, executable and user.
+				if err := forceAppExit(owner); err != nil {
+					log.Printf("[关闭应用] 强制结束 %s (PID %d): %v", owner.Name, owner.PID, err)
+				}
+			}
+			forced = true
+			deadline = time.Now().Add(2 * time.Second)
+			continue
 		}
 		time.Sleep(min(300*time.Millisecond, time.Until(deadline)))
 	}

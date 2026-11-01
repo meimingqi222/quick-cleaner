@@ -9,3 +9,7 @@ import "errors"
 func occupancyOwners(string) ([]Occupant, error) {
 	return nil, errors.New("occupancy-owners-unsupported")
 }
+
+func findLockedCacheOwners([]string) ([]LockedTargetOwner, error) {
+	return nil, nil
+}

@@ -15,3 +15,19 @@ type Occupant struct {
 // answer is unknown, never that the path is vacant. Callers must keep the
 // fail-closed decision they already made from the occupancy spot check.
 func OccupancyOwners(path string) ([]Occupant, error) { return occupancyOwners(path) }
+
+// LockedTargetOwner pairs a candidate cleanup target path with a verified,
+// closable same-user application process holding a lock inside it.
+type LockedTargetOwner struct {
+	Target  string
+	Display string
+	Owner   CacheOccupant
+}
+
+// FindLockedCacheOwners samples candidate cache targets within a tight latency
+// budget and resolves locking same-user applications via Restart Manager.
+// System, service, critical, Explorer, and cleaner-tree/ancestor processes are
+// omitted rather than treated as errors.
+func FindLockedCacheOwners(paths []string) ([]LockedTargetOwner, error) {
+	return findLockedCacheOwners(paths)
+}

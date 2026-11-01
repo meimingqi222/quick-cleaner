@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
-	"github.com/meimingqi222/quick-cleaner/internal/platform"
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
@@ -51,10 +50,6 @@ func (r *Root) confirmCacheRelease(plan core.CacheReleasePlan, force bool) {
 		r.junk.Cleaning = true
 		r.start(true, p, func(context.Context) func() {
 			outcome, err := core.ExecuteCacheRelease(plan, force, p)
-			var occupants map[string][]platform.Occupant
-			if outcome.Cleaned != nil {
-				occupants = identifyCleanupOccupants(*outcome.Cleaned)
-			}
 			return func() {
 				r.junk.Cleaning = false
 				if err != nil {
@@ -62,7 +57,7 @@ func (r *Root) confirmCacheRelease(plan core.CacheReleasePlan, force bool) {
 					return
 				}
 				if outcome.Cleaned != nil {
-					r.finishCleanup("release_cache", []string{item.Path}, *outcome.Cleaned, p, occupants)
+					r.finishCleanup("release_cache", []string{item.Path}, *outcome.Cleaned, p)
 					if !p.Cancelled() {
 						r.scanJunk()
 					}

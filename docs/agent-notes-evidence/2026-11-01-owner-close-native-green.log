@@ -1,0 +1,24 @@
+=== RUN   TestCleanupClosesWindowlessNativeProcess
+--- PASS: TestCleanupClosesWindowlessNativeProcess (0.27s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.520s
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/exited_launcher
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/live_ancestry
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner_child
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner_grandchild
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cycle
+=== RUN   TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/absent_owner
+--- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/exited_launcher (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/live_ancestry (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner_child (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cleaner_grandchild (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/cycle (0.00s)
+    --- PASS: TestCacheOwnerAncestryAcceptsExitedParentsButRefusesCleanerTree/absent_owner (0.00s)
+=== RUN   TestCacheReleaseWindowsExactCreationTimeRefusesSameSecondReuse
+--- PASS: TestCacheReleaseWindowsExactCreationTimeRefusesSameSecondReuse (0.02s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/platform	0.810s

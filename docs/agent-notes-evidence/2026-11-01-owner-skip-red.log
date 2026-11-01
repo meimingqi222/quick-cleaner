@@ -1,0 +1,8 @@
+2026/11/01 15:00:44 阶段一 scan_fixed 完成：2.0633ms，2/2 个目标命中，合计 8 B；最慢 5 个：2.0633ms 4 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped661362305\001\owned | 2.0633ms 4 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped661362305\002\other
+2026/11/01 15:00:44 [删除] 分类清理，共 2 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped661362305\\001\\owned" "C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped661362305\\002\\other"]
+2026/11/01 15:00:44 [删除] 完成：目标 ok=2 skipped=0 failed=0；文件 2 个 / 8 B，失败 0 个
+--- FAIL: TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped (0.20s)
+    junk_owner_test.go:59: still-running app cache changed: GetFileAttributesEx C:\Users\MEIMIN~1\AppData\Local\Temp\TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped661362305\001\owned\cache: The system cannot find the file specified.
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.490s
+FAIL

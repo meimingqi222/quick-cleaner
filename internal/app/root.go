@@ -46,6 +46,7 @@ type Root struct {
 	record                func(string, []string, uint, uint, uint, uint64)
 	confirmation          view.ConfirmationDialog
 	accept                func()
+	skipAndClean          func()
 	permission            view.PermissionDialog
 	updates               *view.UpdateController
 	update                view.UpdateSnapshot
@@ -134,7 +135,7 @@ func NewRoot(settings core.Settings, post func(func()), invalidate func()) *Root
 	r.runningOwnerBusy = core.RunningOwnerBusy
 	r.findRunningApps = core.FindRunningApps
 	r.closeApps = func(apps []core.RunningApp, cancelled func() bool) []core.Text {
-		return core.CloseRunningApps(apps, 8*time.Second, cancelled)
+		return core.CloseRunningAppsForCleanup(apps, 4*time.Second, cancelled)
 	}
 	owner, _ := newDiskOwner(ctx)
 	r.diskOwner = owner
@@ -329,6 +330,7 @@ func (r *Root) askConfirm(kind view.ConfirmationKind, title, body, detail core.T
 		Detail:   detail,
 	}
 	r.accept = accept
+	r.skipAndClean = nil
 	r.changed()
 }
 
@@ -342,9 +344,25 @@ func (r *Root) resolveConfirmation(id string, accepted bool) {
 	}
 	fn := r.accept
 	r.accept = nil
+	r.skipAndClean = nil
 	r.confirming = false
 	r.confirmation.Open = false
 	if accepted && fn != nil {
+		fn()
+	}
+	r.changed()
+}
+
+func (r *Root) skipConfirmation(id string) {
+	if r.closed || !r.confirming || id != r.confirmation.ID {
+		return
+	}
+	fn := r.skipAndClean
+	r.accept = nil
+	r.skipAndClean = nil
+	r.confirming = false
+	r.confirmation.Open = false
+	if fn != nil {
 		fn()
 	}
 	r.changed()

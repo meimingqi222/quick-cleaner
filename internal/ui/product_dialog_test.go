@@ -291,21 +291,75 @@ func TestProductDialogMissingCallbacksAndProgressBounds(t *testing.T) {
 func TestConfirmationListsRunningAppsAsToggles(t *testing.T) {
 	for _, lang := range []Language{Chinese, English} {
 		copy := productDialogStrings(lang)
-		s := ConfirmationDialog{Open: true, Language: lang, ID: "request-7", Title: core.SameText("Confirm"), Apps: []ConfirmApp{{Label: "Chrome · 7 B", Checked: true}}}
-		var toggled []string
-		a := ConfirmationDialogActions{Accept: func(string) {}, Cancel: func(string) {}, ToggleApp: func(id string, i int) { toggled = append(toggled, fmt.Sprint(id, "/", i)) }}
-		tt := ui.NewTester(func(c *ui.Context) { s.Render(c, a) }, 1280, 900)
-		for _, text := range []string{copy.appsHeading, "Chrome · 7 B", copy.appsNote} {
-			if !tt.HasText(text) {
-				t.Fatalf("%v: missing %q", lang, text)
+		warnings := []string{"超时", "结束进程", "保存"}
+		if lang == English {
+			warnings = []string{"4s", "ended", "unsaved"}
+		}
+		for _, warning := range warnings {
+			if !strings.Contains(copy.appsNote, warning) {
+				t.Fatalf("%v: close consent omits %q in %q", lang, warning, copy.appsNote)
 			}
 		}
-		productClick(t, tt, "Chrome · 7 B")
+		s := ConfirmationDialog{
+			Open: true, Language: lang, ID: "request-7", Kind: ConfirmCloseApps,
+			Title: core.NewText("发现 2 个应用正在使用缓存", "2 running apps are using caches"),
+			Body:  core.NewText("说明", "Explanation"),
+			Apps: []ConfirmApp{
+				{Name: "Chrome", Size: "7 B", Checked: true},
+				{Name: "Notion", Size: "4.6 MB", Checked: true},
+			},
+		}
+		var toggled []string
+		var toggledAll, skipped, accepted int
+		a := ConfirmationDialogActions{
+			Accept: func(id string) {
+				if id == s.ID {
+					accepted++
+				}
+			},
+			Cancel: func(string) {},
+			SkipAndClean: func(id string) {
+				if id == s.ID {
+					skipped++
+				}
+			},
+			ToggleApp: func(id string, i int) { toggled = append(toggled, fmt.Sprint(id, "/", i)) },
+			ToggleAllApps: func(id string) {
+				if id == s.ID {
+					toggledAll++
+				}
+			},
+		}
+		tt := ui.NewTester(func(c *ui.Context) { s.Render(c, a) }, 1280, 900)
+		wantPrimary := fmt.Sprintf(copy.closeAndClean, 2)
+		for _, text := range []string{copy.closeAppsListTitle, "Chrome", "7 B", "Notion", "4.6 MB", copy.clearAll, copy.appsNote, copy.skipAndClean, wantPrimary} {
+			if !tt.HasText(text) {
+				t.Fatalf("%v: missing %q; texts=%v", lang, text, tt.Texts())
+			}
+		}
+		productClick(t, tt, "Chrome")
 		if len(toggled) != 1 || toggled[0] != "request-7/0" {
 			t.Fatalf("%v: toggle = %v", lang, toggled)
 		}
 		if !s.Apps[0].Checked {
 			t.Fatal("view mutated the controller snapshot")
+		}
+		productClick(t, tt, copy.clearAll)
+		if toggledAll != 1 {
+			t.Fatalf("%v: toggleAll = %d", lang, toggledAll)
+		}
+		productClick(t, tt, copy.skipAndClean)
+		productClick(t, tt, wantPrimary)
+		if skipped != 1 || accepted != 1 {
+			t.Fatalf("%v: skipped=%d accepted=%d", lang, skipped, accepted)
+		}
+
+		// When all apps are unchecked, the primary button switches to direct clean.
+		s.Apps[0].Checked = false
+		s.Apps[1].Checked = false
+		tt.Frame()
+		if !tt.HasText(copy.selectAll) || !tt.HasText(copy.cleanWithoutClose) {
+			t.Fatalf("%v: unchecked state missing selectAll/cleanWithoutClose: %v", lang, tt.Texts())
 		}
 	}
 }

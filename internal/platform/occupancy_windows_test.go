@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -166,17 +168,99 @@ func TestOccupancyHolderHelper(t *testing.T) {
 	if locked == "" || ready == "" {
 		return
 	}
-	p, err := windows.UTF16PtrFromString(locked)
-	if err != nil {
-		t.Fatal(err)
+	var handles []windows.Handle
+	defer func() {
+		for _, h := range handles {
+			_ = windows.CloseHandle(h)
+		}
+	}()
+	for _, item := range strings.Split(locked, ";") {
+		if item == "" {
+			continue
+		}
+		p, err := windows.UTF16PtrFromString(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handles = append(handles, h)
 	}
-	h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer windows.CloseHandle(h)
 	if err := os.WriteFile(ready, []byte(fmt.Sprintf("%d", os.Getpid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(15 * time.Second)
+}
+
+func TestFindLockedCacheOwnersAttributesSiblingAppAndExcludesCleanerTree(t *testing.T) {
+	base := t.TempDir()
+	gpuDir := filepath.Join(base, "AppData", "Roaming", "Notion", "GPUCache")
+	shaderDir := filepath.Join(base, "AppData", "Roaming", "Notion", "ShaderCache")
+	selfDir := filepath.Join(base, "AppData", "Roaming", "SelfChild", "Cache")
+	clearDir := filepath.Join(base, "AppData", "Roaming", "Idle", "Cache")
+	for _, d := range []string{gpuDir, shaderDir, selfDir, clearDir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "data_0"), []byte("cache"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Direct child is inside QuickCleaner's own process tree and must be omitted.
+	childReady := filepath.Join(base, "child.ready")
+	childCmd := exec.Command(os.Args[0], "-test.run=^TestOccupancyHolderHelper$")
+	childCmd.Env = append(os.Environ(), "QC_OCC_HOLD="+filepath.Join(selfDir, "data_0"), "QC_OCC_READY="+childReady)
+	if err := childCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = childCmd.Process.Kill(); _, _ = childCmd.Process.Wait() })
+
+	// Sibling process simulates an independent user desktop application.
+	parent, err := windows.OpenProcess(windows.PROCESS_CREATE_PROCESS|windows.PROCESS_DUP_HANDLE, false, uint32(os.Getppid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(parent)
+	sibReady := filepath.Join(base, "sibling.ready")
+	sibHold := filepath.Join(gpuDir, "data_0") + ";" + filepath.Join(shaderDir, "data_0")
+	sibCmd := exec.Command(os.Args[0], "-test.run=^TestOccupancyHolderHelper$")
+	sibCmd.Env = append(os.Environ(), "QC_OCC_HOLD="+sibHold, "QC_OCC_READY="+sibReady)
+	sibCmd.SysProcAttr = &syscall.SysProcAttr{ParentProcess: syscall.Handle(parent)}
+	if err := sibCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sibCmd.Process.Kill(); _, _ = sibCmd.Process.Wait() })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for _, r := range []string{childReady, sibReady} {
+		for {
+			if _, err := os.Stat(r); err == nil {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("helper %s did not lock in time", r)
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+	}
+
+	hits, err := FindLockedCacheOwners([]string{gpuDir, shaderDir, selfDir, clearDir})
+	if err != nil {
+		t.Fatalf("FindLockedCacheOwners: %v", err)
+	}
+	seenTargets := map[string]bool{}
+	for _, h := range hits {
+		if int(h.Owner.PID) == childCmd.Process.Pid {
+			t.Fatalf("cleaner child process was offered for closure: %+v", h)
+		}
+		if int(h.Owner.PID) == sibCmd.Process.Pid {
+			seenTargets[h.Target] = true
+		}
+	}
+	if !seenTargets[gpuDir] || !seenTargets[shaderDir] || seenTargets[selfDir] || seenTargets[clearDir] {
+		t.Fatalf("unexpected target attribution: seen=%v hits=%+v", seenTargets, hits)
+	}
 }

@@ -21,28 +21,34 @@ const (
 type JunkPage struct {
 	Language                                 Language
 	Scanned, Scanning, Cleaning, Discovering bool
-	// Preparing covers the short owner-process check before the confirmation.
-	Preparing                             bool
-	Categories                            []core.CategorySummary
-	Selected                              map[string]bool
-	Expanded                              map[core.CategoryID]bool
-	ReleaseEligible                       map[string]bool
-	Exclusions                            []string
-	ShowExclusions                        bool
-	ShowFailedDetails, ShowSkippedDetails bool
-	FailedDetails, SkippedDetails         []JunkDetail
-	RecommendedSelected                   bool
-	Scroll                                ui.ScrollState
-	lists                                 map[core.CategoryID]*ui.ListState
+	// Preparing covers the short owner-process check before cleanup starts.
+	Preparing           bool
+	Categories          []core.CategorySummary
+	Selected            map[string]bool
+	Expanded            map[core.CategoryID]bool
+	ReleaseEligible     map[string]bool
+	Exclusions          []string
+	ShowExclusions      bool
+	CleanBanner         *JunkCleanBanner
+	ShowFailedDetails   bool
+	FailedDetails       []JunkDetail
+	RecommendedSelected bool
+	Scroll              ui.ScrollState
+	lists               map[core.CategoryID]*ui.ListState
 }
 
-// JunkDetail is one residual row. Release is true only when the controller has
-// independently verified that the ordinary cache-release authority still covers
-// this path; the view never infers it from the text.
+// JunkCleanBanner summarizes a completed cleanup positively without listing
+// transient active lock files row by row.
+type JunkCleanBanner struct {
+	FreedBytes    uint64
+	DeletedFiles  uint64
+	SkippedActive bool
+}
+
+// JunkDetail is one unresolved real error row (e.g. permission denied).
 type JunkDetail struct {
-	Text    string
-	Path    string
-	Release bool
+	Text string
+	Path string
 }
 
 type JunkPageActions struct {
@@ -53,9 +59,8 @@ type JunkPageActions struct {
 	Select                   func(JunkSelection)
 	ToggleExclusions         func()
 	Exclude, RemoveExclusion func(string)
-	RetryRelease             func(string)
+	DismissBanner            func()
 	ToggleFailedDetails      func()
-	ToggleSkippedDetails     func()
 	RequestClean             func()
 }
 
@@ -110,8 +115,11 @@ func (s *JunkPage) RenderContent(c *ui.Context, actions JunkPageActions) {
 				if s.ShowExclusions {
 					s.exclusions(c, actions)
 				}
-				if len(s.FailedDetails) > 0 || len(s.SkippedDetails) > 0 {
-					s.failures(c, actions)
+				if s.CleanBanner != nil && !s.Scanning && !s.Cleaning {
+					s.cleanBanner(c, actions, t)
+				}
+				if len(s.FailedDetails) > 0 {
+					s.failures(c, actions, t)
 				}
 				if s.Scanning {
 					loadingState(c, t.loadingTitle, t.loadingSub)
@@ -287,52 +295,61 @@ func (s *JunkPage) exclusions(c *ui.Context, actions JunkPageActions) {
 	})
 }
 
-func (s *JunkPage) failures(c *ui.Context, actions JunkPageActions) {
-	t := junkStrings(s.Language)
-	if len(s.FailedDetails) > 0 {
-		s.detailPanel(c, t, fmt.Sprintf(t.failed, len(s.FailedDetails)), t.showDetails, t.hideDetails, s.ShowFailedDetails, s.FailedDetails, "failed-details", actions.ToggleFailedDetails, actions.RetryRelease, true)
+func (s *JunkPage) cleanBanner(c *ui.Context, actions JunkPageActions, t junkCopy) {
+	b := s.CleanBanner
+	if b == nil {
+		return
 	}
-	if len(s.SkippedDetails) > 0 {
-		s.detailPanel(c, t, fmt.Sprintf(t.skipped, len(s.SkippedDetails)), t.showSkipped, t.hideSkipped, s.ShowSkippedDetails, s.SkippedDetails, "skipped-details", actions.ToggleSkippedDetails, actions.RetryRelease, false)
+	headline := t.bannerNothing
+	if b.FreedBytes > 0 || b.DeletedFiles > 0 {
+		headline = fmt.Sprintf(t.bannerDone, core.FmtSize(b.FreedBytes), core.Commas(b.DeletedFiles))
 	}
-}
-
-func (s *JunkPage) detailPanel(c *ui.Context, t junkCopy, heading, show, hide string, open bool, details []JunkDetail, key string, toggle func(), retry func(string), alert bool) {
-	dot, bg, border, fg := outline, surfaceLow, outlineVariant.Alpha(.5), muted
-	if alert {
-		dot, bg, border, fg = junkError, junkErrorContainer.Alpha(.35), junkError.Alpha(.22), junkError
-	}
-	toggleLabel := show
-	if open {
-		toggleLabel = hide
-	}
-	// A tint, not a slab: the heading carries the state, and the details stay
-	// readable in body text.
-	ui.Column(c.Key(key+"-panel")).FillWidth().Padding(14, 16).Gap(8).Radius(12).Background(bg).Border(1, border).Children(func() {
-		ui.Row(c.Key(key + "-head")).FillWidth().Gap(8).Children(func() {
-			ui.Box(c).Size(8, 8).Shrink(0).Radius(999).Background(dot)
-			ui.Text(c, heading).Grow(1).MinWidth(0).FontSize(14).Bold().TextColor(fg)
-			if junkButton(c.Key(key), toggleLabel, true, false) && toggle != nil {
-				toggle()
+	ui.Row(c.Key("junk-clean-banner")).FillWidth().Padding(12, 16).Gap(12).Radius(12).Background(primaryFixed.Alpha(.45)).Border(1, primary.Alpha(.25)).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Size(24, 24).Shrink(0).Radius(999).Background(primary).Center().Children(func() {
+			ui.Text(c, "✓").FontSize(13).Bold().TextColor(card)
+		})
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, headline).FontSize(14).Bold().TextColor(primary)
+			if b.SkippedActive {
+				ui.Text(c, t.bannerSkippedSub).FontSize(12).TextColor(muted)
 			}
 		})
-		if !open {
+		dismiss := ui.ButtonBase(c.Key("dismiss-clean-banner")).Size(26, 26).Shrink(0).Radius(6).Center().Disabled(actions.DismissBanner == nil).Cursor(ui.CursorPointer)
+		interactive(dismiss, ui.Transparent, primary.Alpha(.12), primary.Alpha(.2), actions.DismissBanner != nil)
+		dismiss.Children(func() { ui.Text(c, "×").FontSize(16).TextColor(muted) })
+		if dismiss.Clicked() && actions.DismissBanner != nil {
+			actions.DismissBanner()
+		}
+	})
+}
+
+func (s *JunkPage) failures(c *ui.Context, actions JunkPageActions, t junkCopy) {
+	dot, bg, border, fg := junkError, junkErrorContainer.Alpha(.35), junkError.Alpha(.22), junkError
+	toggleLabel := t.showDetails
+	if s.ShowFailedDetails {
+		toggleLabel = t.hideDetails
+	}
+	heading := fmt.Sprintf(t.failed, len(s.FailedDetails))
+	ui.Column(c.Key("failed-details-panel")).FillWidth().Padding(14, 16).Gap(8).Radius(12).Background(bg).Border(1, border).Children(func() {
+		ui.Row(c.Key("failed-details-head")).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(8, 8).Shrink(0).Radius(999).Background(dot)
+			ui.Text(c, heading).Grow(1).MinWidth(0).FontSize(14).Bold().TextColor(fg)
+			if junkButton(c.Key("failed-details"), toggleLabel, true, false) && actions.ToggleFailedDetails != nil {
+				actions.ToggleFailedDetails()
+			}
+		})
+		if !s.ShowFailedDetails {
 			return
 		}
-		ui.Column(c.Key(key+"-list")).FillWidth().Padding(8, 10).Gap(4).Radius(8).Background(card).Transition(disclosure).Children(func() {
+		ui.Column(c.Key("failed-details-list")).FillWidth().Padding(8, 10).Gap(4).Radius(8).Background(card).Transition(disclosure).Children(func() {
 			const limit = 40
-			shown := details[:min(limit, len(details))]
+			shown := s.FailedDetails[:min(limit, len(s.FailedDetails))]
 			for i, detail := range shown {
-				ui.Row(c.Key(fmt.Sprint(key, "-", i))).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c.Key(fmt.Sprint("failed-details-", i))).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, core.Truncate(detail.Text, 140)).Grow(1).MinWidth(0).FontSize(12).TextColor(text)
-					if detail.Release && detail.Path != "" && !s.Cleaning {
-						if junkButton(c.Key(fmt.Sprint(key, "-retry-", i)), t.retry, true, false) && retry != nil {
-							retry(detail.Path)
-						}
-					}
 				})
 			}
-			if omitted := len(details) - len(shown); omitted > 0 {
+			if omitted := len(s.FailedDetails) - len(shown); omitted > 0 {
 				ui.Text(c, fmt.Sprintf(t.more, omitted)).FontSize(12).TextColor(muted)
 			}
 		})
@@ -389,7 +406,7 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 				found := total > 0
 				active := [4]bool{s.RecommendedSelected && found, picked == total && found, false, picked == 0 && found}
 				for i, label := range t.batch {
-					if junkButton(c.Key(fmt.Sprint("select-", i)), label, s.Scanned && !s.Cleaning && found, active[i]) && actions.Select != nil {
+					if junkButton(c.Key(fmt.Sprint("select-", i)), label, s.Scanned && !s.Cleaning && !s.Preparing && found, active[i]) && actions.Select != nil {
 						actions.Select(JunkSelection(i))
 					}
 				}
@@ -398,8 +415,10 @@ func (s *JunkPage) cleanBar(c *ui.Context, actions JunkPageActions) {
 			label := t.clean
 			if s.Cleaning {
 				label = dashboardStrings(s.Language).cleaning
+			} else if s.Preparing {
+				label = t.preparing
 			}
-			enabled := s.Scanned && !s.Cleaning && !s.Scanning && picked > 0
+			enabled := s.Scanned && !s.Cleaning && !s.Scanning && !s.Preparing && picked > 0
 			button := ui.ButtonBase(c.Key("clean-now")).Padding(12, 20).Radius(999).Disabled(!enabled).Cursor(ui.CursorPointer)
 			interactive(button, junkError, ui.Hex("#a3161a"), ui.Hex("#8c1014"), enabled)
 			button.Children(func() { ui.Text(c, label).FontSize(14).Bold().TextColor(card) })

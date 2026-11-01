@@ -40,6 +40,9 @@ func (r *Root) scanJunk() {
 	}
 	owner := r.diskOwner
 	elevated := runtime.GOOS == "windows" && platform.IsElevated()
+	r.junk.CleanBanner = nil
+	r.junk.FailedDetails = nil
+	r.junk.ShowFailedDetails = false
 	r.junk.Scanning = true
 	r.message("正在扫描可清理内容…", "Scanning for cleanable content…")
 	r.start(false, nil, func(ctx context.Context) func() {
@@ -358,8 +361,9 @@ func (r *Root) junkActions() view.JunkPageActions {
 				}
 			}
 		}, Select: r.selectJunk,
-		ToggleExclusions: func() { r.junk.ShowExclusions = !r.junk.ShowExclusions }, ToggleFailedDetails: func() { r.junk.ShowFailedDetails = !r.junk.ShowFailedDetails },
-		ToggleSkippedDetails: func() { r.junk.ShowSkippedDetails = !r.junk.ShowSkippedDetails },
+		ToggleExclusions:    func() { r.junk.ShowExclusions = !r.junk.ShowExclusions },
+		DismissBanner:       func() { r.junk.CleanBanner = nil; r.changed() },
+		ToggleFailedDetails: func() { r.junk.ShowFailedDetails = !r.junk.ShowFailedDetails },
 		Exclude: func(path string) {
 			if r.busy() || core.IsVirtualPath(path) {
 				return
@@ -385,42 +389,8 @@ func (r *Root) junkActions() view.JunkPageActions {
 			r.junk.Exclusions = append([]string(nil), r.settings.Whitelist...)
 			r.message("已移除该排除项，此路径将在下次扫描后按普通路径处理", "Removed from exclusions — this path will be scanned again next time")
 		},
-		RetryRelease: r.requestCacheRelease, RequestClean: r.requestJunkClean,
+		RequestClean: r.requestJunkClean,
 	}
-}
-
-func planSummary(targets []core.CleanTarget) (rules []string, operations []core.OperationKind, blocked []string) {
-	seenRule := map[string]bool{}
-	seenOp := map[core.OperationKind]bool{}
-	seenBlock := map[string]bool{}
-	for _, t := range targets {
-		for _, plan := range t.Plans {
-			if plan == nil {
-				continue
-			}
-			id := plan.RuleID()
-			if id != "" && !seenRule[id] {
-				seenRule[id] = true
-				rules = append(rules, id)
-			}
-			for _, target := range plan.Targets() {
-				if target.Operation.Kind != "" && !seenOp[target.Operation.Kind] {
-					seenOp[target.Operation.Kind] = true
-					operations = append(operations, target.Operation.Kind)
-				}
-			}
-			for _, reason := range plan.Blocked() {
-				if reason != "" && !seenBlock[reason] {
-					seenBlock[reason] = true
-					blocked = append(blocked, reason)
-				}
-			}
-		}
-	}
-	slices.Sort(rules)
-	slices.Sort(blocked)
-	slices.Sort(operations)
-	return rules, operations, blocked
 }
 
 func (r *Root) requestJunkClean() {
@@ -448,9 +418,10 @@ func (r *Root) requestJunkClean() {
 		}
 		return
 	}
-	// Listing owner processes is cheap but still system I/O: keep it off the
-	// UI thread, and drop the answer if anything else started meanwhile.
+	// Listing owner processes and sampling lock handles are system I/O: keep
+	// them off the UI thread, and drop the answer if anything else started meanwhile.
 	r.junk.Preparing = true
+	r.changed()
 	gen := r.generation
 	find := r.findRunningApps
 	go func() {
@@ -460,53 +431,39 @@ func (r *Root) requestJunkClean() {
 			if gen != r.generation || r.busy() {
 				return
 			}
-			r.confirmJunkClean(items, apps)
+			if len(apps) == 0 {
+				r.runJunkClean(items, nil, false)
+				return
+			}
+			r.confirmCloseOwnerApps(items, apps)
 		})
 	}()
 }
 
-// confirmJunkClean shows one confirmation. Running owner apps appear in it as
-// checked boxes: checked apps are asked to quit before cleaning, unchecked
-// apps' items are left out of this run.
-func (r *Root) confirmJunkClean(items []core.ScanItem, apps []core.RunningApp) {
-	var bytes uint64
-	var targets []core.CleanTarget
-	for _, item := range items {
-		targets = append(targets, item.CleanTarget())
-		bytes += item.Size
-	}
-	body := r.tr(
-		fmt.Sprintf("将删除 %d 项，共 %s。", len(targets), core.FmtSize(bytes)),
-		fmt.Sprintf("%d items will be deleted, %s in total.", len(targets), core.FmtSize(bytes)),
+// confirmCloseOwnerApps asks only when running applications hold selected caches.
+// Checked apps are asked to quit before cleaning; unchecked apps stay open and
+// their items remain unselected in the list.
+func (r *Root) confirmCloseOwnerApps(items []core.ScanItem, apps []core.RunningApp) {
+	title := core.NewText(
+		fmt.Sprintf("发现 %d 个应用正在使用缓存", len(apps)),
+		fmt.Sprintf("%d running apps are using caches", len(apps)),
 	)
-	detail := r.tr(
-		"缓存、临时文件和构建产物会永久删除；损坏登录项和旧版 IDE 数据会移入废纸篓。",
-		"Caches, temporary files, and build artifacts are permanently deleted; broken login items and old IDE data are moved to Trash.",
+	body := core.NewText(
+		"关闭勾选的应用可彻底释放其缓存；未勾选的应用将保持运行并自动跳过其锁定的文件。",
+		"Closing checked apps frees their caches completely; unchecked apps stay open and their locked files are skipped.",
 	)
-	rules, operations, blocked := planSummary(targets)
-	if len(rules) > 0 {
-		detail += "\n\n" + r.tr("计划规则："+strings.Join(rules, ", "), "Planned rules: "+strings.Join(rules, ", "))
-	}
-	if len(operations) > 0 {
-		var names []string
-		for _, op := range operations {
-			names = append(names, op.Label(r.settings.Language))
-		}
-		detail += "\n\n" + r.tr("操作："+strings.Join(names, ", "), "Operations: "+strings.Join(names, ", "))
-	}
-	if len(blocked) > 0 {
-		detail += "\n\n" + r.tr(
-			fmt.Sprintf("%d 项被阻止，不会执行：%s", len(blocked), strings.Join(blocked, "; ")),
-			fmt.Sprintf("%d items are blocked and will not run: %s", len(blocked), strings.Join(blocked, "; ")),
-		)
-	}
-	detail += "\n\n" + body
-	r.ask(r.tr("确认清理选中项", "Confirm cleanup"), detail, func() {
-		r.runJunkClean(items, apps)
+	r.askConfirm(view.ConfirmCloseApps, title, body, core.Text{}, func() {
+		r.runJunkClean(items, apps, false)
 	})
+	r.skipAndClean = func() {
+		r.runJunkClean(items, apps, true)
+	}
 	for _, app := range apps {
-		label := fmt.Sprintf("%s · %s", app.Name.Get(r.settings.Language), core.FmtSize(app.Bytes))
-		r.confirmation.Apps = append(r.confirmation.Apps, view.ConfirmApp{Label: label, Checked: true})
+		r.confirmation.Apps = append(r.confirmation.Apps, view.ConfirmApp{
+			Name:    app.Name.Get(r.settings.Language),
+			Size:    core.FmtSize(app.Bytes),
+			Checked: true,
+		})
 	}
 }
 
@@ -518,21 +475,45 @@ func (r *Root) toggleConfirmApp(id string, index int) {
 	r.changed()
 }
 
-func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp) {
-	// resolveConfirmation closes the dialog but keeps its last snapshot, so
-	// the boxes the user left checked are still readable here.
+func (r *Root) toggleAllConfirmApps(id string) {
+	if !r.confirming || id != r.confirmation.ID || len(r.confirmation.Apps) == 0 {
+		return
+	}
+	all := true
+	for _, app := range r.confirmation.Apps {
+		if !app.Checked {
+			all = false
+			break
+		}
+	}
+	for i := range r.confirmation.Apps {
+		r.confirmation.Apps[i].Checked = !all
+	}
+	r.changed()
+}
+
+func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp, skipAllApps bool) {
+	// resolveConfirmation/skipConfirmation closes the dialog while keeping its
+	// last snapshot, so the boxes the user left checked are still readable here.
 	var closing []core.RunningApp
 	skipped := map[string]bool{}
+	skippedBusy := map[string]core.Busy{}
 	var skippedNames []string
 	for i, app := range apps {
-		if i < len(r.confirmation.Apps) && r.confirmation.Apps[i].Checked {
+		if !skipAllApps && i < len(r.confirmation.Apps) && r.confirmation.Apps[i].Checked {
 			closing = append(closing, app)
 			continue
 		}
-		skippedNames = append(skippedNames, app.Name.Get(r.settings.Language))
+		appName := app.Name.Get(r.settings.Language)
+		skippedNames = append(skippedNames, appName)
 		for _, path := range app.Paths {
 			skipped[path] = true
+			delete(r.junk.Selected, path)
+			skippedBusy[path] = core.Busy{App: appName}
 		}
+	}
+	if len(skippedBusy) > 0 {
+		core.ApplyBusy(r.junk.Categories, skippedBusy)
 	}
 	var targets []core.CleanTarget
 	var paths []string
@@ -556,26 +537,69 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp) {
 		)
 	}
 	if len(targets) == 0 {
+		r.junkSummary()
+		r.junk.CleanBanner = &view.JunkCleanBanner{SkippedActive: len(skippedNames) > 0}
 		r.dashboard.StatusText = appNote()
 		r.changed()
 		return
 	}
+	r.junk.CleanBanner = nil
+	r.junk.FailedDetails = nil
+	r.junk.ShowFailedDetails = false
 	p := core.NewCleanProgress(files, bytes)
 	r.junk.Cleaning = true
 	r.message(fmt.Sprintf("正在清理 %d 项…", len(paths)), fmt.Sprintf("Cleaning %d items…", len(paths)))
+	if len(closing) > 0 {
+		r.message("正在关闭勾选的应用，完成后开始清理…", "Closing selected apps before cleanup…")
+	}
 	closeApps := r.closeApps
 	r.start(true, p, func(context.Context) func() {
 		var stillRunning []core.Text
 		if len(closing) > 0 {
 			stillRunning = closeApps(closing, p.Cancelled)
 		}
-		report := core.CleanTargets(targets, p)
-		occupants := identifyCleanupOccupants(report)
+		leftOut := map[string]bool{}
+		for _, app := range closing {
+			for _, name := range stillRunning {
+				if name.Get(core.English) == app.Name.Get(core.English) {
+					for _, path := range app.Paths {
+						leftOut[path] = true
+					}
+				}
+			}
+		}
+		var ready []core.CleanTarget
+		var readyPaths []string
+		var report core.CleanReport
+		for _, target := range targets {
+			if leftOut[target.Path] {
+				report.Record(target.Path, core.CleanSkipped)
+			} else {
+				ready = append(ready, target)
+				readyPaths = append(readyPaths, target.Path)
+			}
+		}
+		if len(closing) > 0 {
+			r.publish(func() {
+				if len(stillRunning) > 0 {
+					r.message("部分应用仍未退出，已跳过其缓存；正在清理其余项目…", "Some apps are still running; their caches were skipped. Cleaning other items…")
+				} else {
+					r.message("应用已退出，正在清理…", "Apps have exited. Cleaning…")
+				}
+			})
+		}
+		report.Merge(core.CleanTargets(ready, p))
 		return func() {
 			r.junk.Cleaning = false
 			// Cancellation leaves unattempted targets in the snapshot. Do not
 			// infer success from their absence in the failure list.
-			r.finishCleanup("clean", paths, report, p, occupants)
+			r.finishCleanup("clean", paths, report, p)
+			if r.junk.CleanBanner != nil && (len(skippedNames) > 0 || len(stillRunning) > 0) {
+				r.junk.CleanBanner.SkippedActive = true
+			}
+			for path := range leftOut {
+				delete(r.junk.Selected, path)
+			}
 			var notes []string
 			if note := appNote(); note != "" {
 				notes = append(notes, note)
@@ -586,8 +610,8 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp) {
 					names = append(names, name.Get(r.settings.Language))
 				}
 				notes = append(notes, r.tr(
-					fmt.Sprintf("「%s」未在 8 秒内退出，仍被占用的文件已跳过", strings.Join(names, "」、「")),
-					fmt.Sprintf("%s did not quit within 8 s; files it still holds were skipped", strings.Join(names, ", ")),
+					fmt.Sprintf("「%s」强制结束后仍未确认退出，其缓存本次已跳过", strings.Join(names, "」、「")),
+					fmt.Sprintf("%s could not be confirmed stopped after force termination; its caches were skipped", strings.Join(names, ", ")),
 				))
 			}
 			if len(notes) > 0 {
@@ -599,38 +623,65 @@ func (r *Root) runJunkClean(items []core.ScanItem, apps []core.RunningApp) {
 				r.junkSummary()
 				return
 			}
-			r.applyJunkCleanResult(paths, report)
+			r.applyJunkCleanResult(readyPaths, report)
 			r.junkSummary()
 		}
 	})
 }
 
 func (r *Root) applyJunkCleanResult(attempted []string, report core.CleanReport) {
-	busy := map[string]core.Busy{}
+	attemptedSet := make(map[string]bool, len(attempted))
+	for _, path := range attempted {
+		attemptedSet[core.Norm(path)] = true
+	}
+	hasInfo := map[string]bool{}
+	keepTargets := map[string]bool{}
 	for _, info := range report.FailInfo {
-		switch info.Reason {
-		case core.FailInUse:
-			busy[info.Path] = core.Busy{Open: true}
-		case core.FailUnverified:
-			busy[info.Path] = core.Busy{Unknown: true}
+		norm := core.Norm(info.Path)
+		hasInfo[norm] = true
+		if info.Reason != core.FailInUse && info.Reason != core.FailUnverified {
+			keepTargets[norm] = true
 		}
 	}
-	failed := map[string]bool{}
-	for _, item := range append(append(append([]core.CleanFailure{}, report.Failed...), report.SkippedItems...), report.Manual...) {
-		if item.Path != "" {
-			failed[core.Norm(item.Path)] = true
+	markMatchingTarget := func(failurePath string, onlyWithoutInfo bool) {
+		if failurePath == "" {
+			return
 		}
+		normFail := core.Norm(failurePath)
+		for targetNorm := range attemptedSet {
+			if onlyWithoutInfo && hasInfo[targetNorm] {
+				continue
+			}
+			if core.AtOrUnder(normFail, targetNorm) {
+				keepTargets[targetNorm] = true
+			}
+		}
+	}
+	for _, f := range append(append([]core.CleanFailure{}, report.Manual...), report.SkippedItems...) {
+		markMatchingTarget(f.Path, false)
+	}
+	if len(report.FailInfo) == 0 {
+		for _, f := range report.Failed {
+			markMatchingTarget(f.Path, true)
+		}
+	}
+	liveByTarget := make(map[string]core.RemainingLive, len(report.RemainingLive))
+	for _, live := range report.RemainingLive {
+		liveByTarget[core.Norm(live.Path)] = live
 	}
 	for i := range r.junk.Categories {
 		cat := &r.junk.Categories[i]
 		kept := cat.Items[:0]
 		for _, item := range cat.Items {
-			if slices.Contains(attempted, item.Path) && !failed[core.Norm(item.Path)] {
+			norm := core.Norm(item.Path)
+			if attemptedSet[norm] {
 				delete(r.junk.Selected, item.Path)
-				continue
-			}
-			for _, live := range report.RemainingLive {
-				if core.Norm(live.Path) == core.Norm(item.Path) {
+				// Targets that succeeded or left only active lock-file tails are
+				// collapsed out of the current scan view; only real errors stay.
+				if !keepTargets[norm] {
+					continue
+				}
+				if live, ok := liveByTarget[norm]; ok {
 					item.Size = live.Bytes
 					item.FileCount = live.FileCount
 				}
@@ -644,51 +695,51 @@ func (r *Root) applyJunkCleanResult(attempted []string, report core.CleanReport)
 		}
 		cat.TotalSize = total
 	}
-	core.ApplyBusy(r.junk.Categories, busy)
 }
 
-func (r *Root) finishCleanup(action string, paths []string, report core.CleanReport, p *core.CleanProgress, occupants map[string][]platform.Occupant) {
+func (r *Root) finishCleanup(action string, paths []string, report core.CleanReport, p *core.CleanProgress) {
 	snapshot := p.Snapshot()
 	r.freed += snapshot.Bytes
 	r.dashboard.Freed = core.FmtSize(r.freed)
 	r.dashboard.FreedAny = r.freed > 0
-	r.junk.FailedDetails, r.junk.SkippedDetails = nil, nil
+	r.junk.FailedDetails = nil
+	r.junk.ShowFailedDetails = false
 	live := map[string]core.RemainingLive{}
 	for _, item := range report.RemainingLive {
-		live[item.Path] = item
+		live[core.Norm(item.Path)] = item
 	}
 	skippedTargets := 0
 	for _, info := range report.FailInfo {
-		remain := live[info.Path]
-		owners := occupants[info.Path]
-		if len(owners) == 0 {
-			owners = occupants[core.Norm(info.Path)]
-		}
-		detail, skipped := r.junkDetail(info, remain, owners)
-		if skipped {
+		if info.Reason == core.FailInUse || info.Reason == core.FailUnverified {
 			skippedTargets++
-			r.junk.SkippedDetails = append(r.junk.SkippedDetails, detail)
-		} else {
-			r.junk.FailedDetails = append(r.junk.FailedDetails, detail)
+			continue
 		}
+		r.junk.FailedDetails = append(r.junk.FailedDetails, r.junkFailedDetail(info, live[core.Norm(info.Path)]))
+	}
+	for _, f := range report.Manual {
+		r.junk.FailedDetails = append(r.junk.FailedDetails, view.JunkDetail{Text: f.Label(), Path: f.Path})
 	}
 	if len(report.FailInfo) == 0 {
-		for _, f := range append(append([]core.CleanFailure{}, report.Failed...), report.Manual...) {
-			r.junk.FailedDetails = append(r.junk.FailedDetails, view.JunkDetail{Text: f.Label()})
+		for _, f := range report.Failed {
+			r.junk.FailedDetails = append(r.junk.FailedDetails, view.JunkDetail{Text: f.Label(), Path: f.Path})
 		}
 	}
 	unresolved := len(report.Failed) + len(report.Manual) + len(report.SkippedItems)
-	skippedLeaves := uint(0)
-	for _, info := range report.FailInfo {
-		skippedLeaves += info.SkippedLeaves
+	// Target summaries overlap for parent/child selections; classify each
+	// original failure once, just as the CLI does.
+	failed, skipped := p.SplitFailures(report.Failed)
+	r.record(action, paths, report.OK, report.Skipped+uint(len(skipped)), uint(len(failed)+len(report.Manual)), snapshot.Bytes)
+	if action == "clean" && !snapshot.Cancelled {
+		deleted := snapshot.Files
+		if deleted == 0 && report.OK > 0 {
+			deleted = uint64(report.OK)
+		}
+		r.junk.CleanBanner = &view.JunkCleanBanner{
+			FreedBytes:    snapshot.Bytes,
+			DeletedFiles:  deleted,
+			SkippedActive: skippedTargets > 0 || len(skipped) > 0,
+		}
 	}
-	failedCount := uint(len(report.Failed) + len(report.Manual))
-	if skippedLeaves < failedCount {
-		failedCount -= skippedLeaves
-	} else {
-		failedCount = 0
-	}
-	r.record(action, paths, report.OK, report.Skipped+skippedLeaves, failedCount, snapshot.Bytes)
 	failedTargets := len(report.FailInfo) - skippedTargets
 	switch {
 	case unresolved > 0 && skippedTargets > 0 && failedTargets == 0 && len(report.Manual) == 0 && len(report.SkippedItems) == 0:
@@ -733,81 +784,12 @@ func (r *Root) finishCleanup(action string, paths []string, report core.CleanRep
 	}
 }
 
-// A target is neutral only when all its failed leaves are in-use/unverified.
-// The core summary prioritizes real errors in mixed targets.
-func (r *Root) junkDetail(info core.TargetFailInfo, remain core.RemainingLive, owners []platform.Occupant) (view.JunkDetail, bool) {
+func (r *Root) junkFailedDetail(info core.TargetFailInfo, remain core.RemainingLive) view.JunkDetail {
 	zhLabel := failReason(core.Chinese, info.Reason)
 	enLabel := failReason(core.English, info.Reason)
-	system := false
-	switch info.Reason {
-	case core.FailInUse:
-		zhLabel, enLabel, system = r.occupancyLabel(info.Path, owners)
-	case core.FailUnverified:
-		zhLabel = "无法确认占用或清理授权，已跳过"
-		enLabel = "Occupancy or cleanup authority unverified; skipped"
-	}
-	skipped := info.Reason == core.FailInUse || info.Reason == core.FailUnverified
 	zhText := fmt.Sprintf("%s · %s（%d 个文件） · %s", zhLabel, core.FmtSize(remain.Bytes), remain.FileCount, info.Path)
 	enText := fmt.Sprintf("%s · %s (%d files) · %s", enLabel, core.FmtSize(remain.Bytes), remain.FileCount, info.Path)
-	release := info.Reason == core.FailInUse && !system && r.junk.ReleaseEligible[info.Path]
-	return view.JunkDetail{Text: r.tr(zhText, enText), Path: info.Path, Release: release}, skipped
-}
-
-func (r *Root) occupancyLabel(path string, owners []platform.Occupant) (zh, en string, system bool) {
-	if len(owners) == 0 {
-		if app := r.junkBusyApp(path); app != "" {
-			return app + " 正在使用", app + " is running", false
-		}
-		return "被占用（未能识别应用）", "In use (app not identified)", false
-	}
-	var names []string
-	anySystem, onlySystem := false, true
-	seen := map[string]bool{}
-	for _, owner := range owners {
-		if owner.System {
-			anySystem = true
-			continue
-		}
-		onlySystem = false
-		if owner.Name == "" || seen[owner.Name] {
-			continue
-		}
-		seen[owner.Name] = true
-		names = append(names, owner.Name)
-	}
-	if onlySystem {
-		return "系统、其他用户或受保护进程占用，已跳过", "System, another user, or a protected process; skipped", true
-	}
-	if len(names) > 3 {
-		zh = "「" + strings.Join(names[:3], "」、「") + "」等应用正在使用"
-		en = "\"" + strings.Join(names[:3], "\", \"") + "\" and others are running"
-	} else if len(names) > 0 {
-		verb := "is running"
-		if len(names) > 1 {
-			verb = "are running"
-		}
-		zh = "「" + strings.Join(names, "」、「") + "」正在使用"
-		en = "\"" + strings.Join(names, "\", \"") + "\" " + verb
-	}
-	if len(names) == 0 {
-		zh, en = "被占用（未能识别应用）", "In use (app not identified)"
-	}
-	if anySystem {
-		zh += "（另有系统进程占用）"
-		en += " (plus a system process)"
-	}
-	return zh, en, anySystem
-}
-
-func (r *Root) junkBusyApp(path string) string {
-	for _, category := range r.junk.Categories {
-		for _, item := range category.Items {
-			if item.Path == path && item.Busy != nil && item.Busy.App != "" {
-				return item.Busy.App
-			}
-		}
-	}
-	return ""
+	return view.JunkDetail{Text: r.tr(zhText, enText), Path: info.Path}
 }
 
 func failReason(lang core.Language, reason core.FailReason) string {

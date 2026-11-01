@@ -1,0 +1,51 @@
+?   	github.com/meimingqi222/quick-cleaner/assets	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/cmd/quick-cleaner	10.176s
+?   	github.com/meimingqi222/quick-cleaner/cmd/ui-gallery	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/internal/app	4.659s
+ok  	github.com/meimingqi222/quick-cleaner/internal/cli	6.381s
+2026/11/01 15:21:23 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestCacheReleaseOrdinaryCleanerRechecksDisposableContents515304412\\001\\cache"]
+2026/11/01 15:21:23 [删除] 完成：目标 ok=1 skipped=0 failed=0；文件 1 个 / 20 B，失败 0 个
+2026/11/01 15:21:24 阶段一 scan_fixed 完成：4.1435ms，1/1 个目标命中，合计 44 B；最慢 5 个：4.1435ms 44 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestContentsCleanupSkipsOnlyLockedLeaves4081884532\001\cache
+2026/11/01 15:21:24 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestContentsCleanupSkipsOnlyLockedLeaves4081884532\\001\\cache"]
+2026/11/01 15:21:24 [删除] 完成：目标 ok=2 skipped=0 failed=1；文件 3 个 / 33 B，失败 1 个
+2026/11/01 15:21:24 阶段一 scan_fixed 完成：3.2018ms，1/1 个目标命中，合计 22 B；最慢 5 个：3.2018ms 22 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestTreeTargetsKeepWholeTargetOccupancyGate473582348\001\tree
+2026/11/01 15:21:24 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestTreeTargetsKeepWholeTargetOccupancyGate473582348\\001\\tree"]
+2026/11/01 15:21:24 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+2026/11/01 15:21:24 阶段一 scan_fixed 完成：4.5333ms，1/1 个目标命中，合计 5 B；最慢 5 个：4.5333ms 5 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles554620006\001\go-build
+--- FAIL: TestCleanTargetsSurvivesDirectoryChurnAndVanishedFiles (0.04s)
+    cleaner_parallel_windows_test.go:100: vanished file result=2 failed=1; want CleanSkipped with 0 failures
+2026/11/01 15:21:24 阶段一 scan_fixed 完成：3.6467ms，1/1 个目标命中，合计 9 B；最慢 5 个：3.6467ms 9 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestSelectedScanTargetsCannotChangeDisposalOrIdentity872793945\001\cache
+2026/11/01 15:21:24 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestSelectedScanTargetsCannotChangeDisposalOrIdentity872793945\\001\\cache"]
+2026/11/01 15:21:24 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+2026/11/01 15:21:24 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestSelectedScanTargetsCannotChangeDisposalOrIdentity872793945\\001\\cache"]
+2026/11/01 15:21:24 [删除] 完成：目标 ok=0 skipped=0 failed=1；文件 0 个 / 0 B，失败 1 个
+2026/11/01 15:21:24 [删除] 分类清理，共 1 个目标：["C:\\Users\\MEIMIN~1\\AppData\\Local\\Temp\\TestSelectedScanTargetsCannotChangeDisposalOrIdentity872793945\\001\\cache"]
+2026/11/01 15:21:24 [删除] 完成：目标 ok=0 skipped=0 failed=0；文件 0 个 / 0 B，失败 0 个
+2026/11/01 15:21:37 [disk index] phase=background-persist duration=0s incremental=true delta=false compacted=false event=2 error=invalid disk index: entry 5 exceeds v7 representation: parent=1 mtime=5 files=0 name_bytes=8 utf8=false
+2026/11/01 15:21:37 [disk index] phase=background-persist-quarantine nodes=2 duration=18ms compacted=false error=<nil>
+--- FAIL: TestIdentityWindowsDirectoryChurnKeepsStableIdentity (0.01s)
+    identity_windows_test.go:79: directory churn invalidated stable Windows directory identity
+2026/11/01 15:21:38 阶段一 scan_fixed 完成：2.5081ms，1/1 个目标命中，合计 414 KB；最慢 5 个：2.5081ms 414 KB C:\Users\meimingqi222\.quickcleaner-test-project-4126950976\code\proj\node_modules
+2026/11/01 15:21:38 发现索引通道：卷 C:\Users\meimingqi222\.quickcleaner-test-project-4126950976，耗时 19ms
+2026/11/01 15:21:38 发现实时回退：1 个候选根，跳过已覆盖分支，耗时 17ms
+2026/11/01 15:21:38 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 20ms
+2026/11/01 15:21:38 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 24ms
+2026/11/01 15:21:38 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 20ms
+2026/11/01 15:21:38 阶段二 scan_discovered 预算耗尽（0s），结果按「部分统计」上报
+2026/11/01 15:21:38 发现索引通道：卷 C:\Users\meimingqi222\.quickcleaner-test-project-617170065，耗时 14ms
+2026/11/01 15:21:38 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 20ms
+2026/11/01 15:22:23 阶段一 scan_fixed 完成：4.7701ms，2/2 个目标命中，合计 8 B；最慢 5 个：4.7701ms 4 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestFilesystemTargetsShareFrozenRulesAndKeepCaptureIdentity490461493\001\Library\Caches\fixture-cache-0 | 4.7701ms 4 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestFilesystemTargetsShareFrozenRulesAndKeepCaptureIdentity490461493\001\Library\Caches\fixture-cache-1
+2026/11/01 15:22:23 阶段一 scan_fixed 完成：3.1269ms，2/3 个目标命中，合计 12 KB；最慢 5 个：3.1269ms 11 B C:\Users\MEIMIN~1\AppData\Local\Temp\TestFixedScanFreezesAuthorityAndPreservesDisplayPolicy3561918265\001\cache | 520.8µs 12 KB docker://image/sha256:fixture
+2026/11/01 15:22:23 阶段一 scan_fixed 完成：0s，0/1 个目标命中，合计 0 B；最慢 5 个：
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	79.249s
+--- FAIL: TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation (0.95s)
+    remove_windows_test.go:124: mapped running executable: err=remove C:\Users\MEIMIN~1\AppData\Local\Temp\TestRemoveFileExclusiveClassifiesMappedImageAsSharingViolation1177382870\001\cached-runner.exe: Access is denied.; want sharing violation (errno 32)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	25.456s
+ok  	github.com/meimingqi222/quick-cleaner/internal/ui	52.096s
+?   	github.com/meimingqi222/quick-cleaner/rules	[no test files]
+?   	github.com/meimingqi222/quick-cleaner/tmp/repro	[no test files]
+ok  	github.com/meimingqi222/quick-cleaner/tools/indexbench	2.061s
+ok  	github.com/meimingqi222/quick-cleaner/tools/winres	1.358s
+FAIL

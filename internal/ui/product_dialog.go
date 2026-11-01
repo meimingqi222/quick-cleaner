@@ -20,6 +20,7 @@ const (
 	ConfirmEndProcess
 	ConfirmInstallHelper
 	ConfirmInstallUpdate
+	ConfirmCloseApps
 )
 
 // ConfirmationDialog carries presentation only. ID identifies the controller's
@@ -32,19 +33,22 @@ type ConfirmationDialog struct {
 	Title, Body, Detail                  core.Text
 	AppData, Force, Busy, AcceptDisabled bool
 	// Apps lists running owner applications the cleanup would ask to quit.
-	// Label is controller-localized; the view only toggles Checked via actions.
+	// Name and Size are controller-localized; the view only toggles Checked via actions.
 	Apps []ConfirmApp
 }
 
 type ConfirmApp struct {
-	Label   string
+	Name    string
+	Size    string
 	Checked bool
 }
 
 type ConfirmationDialogActions struct {
-	Cancel    func(id string)
-	Accept    func(id string)
-	ToggleApp func(id string, index int)
+	Cancel        func(id string)
+	Accept        func(id string)
+	SkipAndClean  func(id string)
+	ToggleApp     func(id string, index int)
+	ToggleAllApps func(id string)
 }
 
 // productDialogFrame uses MyGo's documented custom modal primitive rather than
@@ -95,6 +99,10 @@ func (s ConfirmationDialog) Render(c *ui.Context, a ConfirmationDialogActions) {
 	if !s.Open {
 		return
 	}
+	if s.Kind == ConfirmCloseApps {
+		s.renderCloseApps(c, a)
+		return
+	}
 	t := productDialogStrings(s.Language)
 	label, neutral := t.delete, false
 	switch s.Kind {
@@ -127,32 +135,23 @@ func (s ConfirmationDialog) Render(c *ui.Context, a ConfirmationDialogActions) {
 			})
 			ui.Text(c, s.Title.Get(s.Language)).FontSize(18).Bold()
 		})
-		ui.Text(c, s.Body.Get(s.Language)).FontSize(14).TextColor(text)
-		detailColor := ui.Hex("#ba1a1a")
-		if neutral {
-			detailColor = outline
+		if body := s.Body.Get(s.Language); body != "" {
+			ui.Text(c, body).FontSize(14).TextColor(text)
 		}
-		detail := func() { ui.Text(c, s.Detail.Get(s.Language)).FontSize(12).TextColor(detailColor) }
-		if s.Kind == ConfirmReleaseCache {
-			ui.Scroll(c.Key("product-confirm-detail")).FillWidth().MaxHeight(260).Shrink(1).Children(detail)
-		} else {
-			detail()
+		if detailStr := s.Detail.Get(s.Language); detailStr != "" {
+			detailColor := muted
+			if neutral {
+				detailColor = outline
+			}
+			detail := func() { ui.Text(c, detailStr).FontSize(12).TextColor(detailColor) }
+			if s.Kind == ConfirmReleaseCache {
+				ui.Scroll(c.Key("product-confirm-detail")).FillWidth().MaxHeight(260).Shrink(1).Children(detail)
+			} else {
+				detail()
+			}
 		}
 		if s.AppData {
 			ui.Text(c, t.warning).FontSize(12).Padding(8, 12).Radius(6).Background(ui.Hex("#ffdad6")).TextColor(ui.Hex("#ba1a1a")).Border(1, ui.Hex("#ba1a1a"))
-		}
-		if len(s.Apps) > 0 {
-			ui.Column(c.Key("confirm-apps")).FillWidth().Gap(6).Padding(10, 12).Radius(8).Background(surfaceLow).Children(func() {
-				ui.Text(c, t.appsHeading).FontSize(12).Bold().TextColor(text)
-				for i, app := range s.Apps {
-					checked := app.Checked
-					box := ui.Checkbox(c.Key(fmt.Sprint("confirm-app-", i)), &checked, app.Label).FontSize(12).Disabled(s.Busy || a.ToggleApp == nil)
-					if box.Changed() && !s.Busy && a.ToggleApp != nil {
-						a.ToggleApp(s.ID, i)
-					}
-				}
-				ui.Text(c, t.appsNote).FontSize(12).TextColor(muted)
-			})
 		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Padding(8, 0, 0, 0).Children(func() {
 			var cancel, accept func()
@@ -164,6 +163,82 @@ func (s ConfirmationDialog) Render(c *ui.Context, a ConfirmationDialogActions) {
 			}
 			productDialogButton(c, "confirm-cancel", t.cancel, s.Busy, false, false, cancel)
 			productDialogButton(c, "confirm-accept", label, s.Busy || s.AcceptDisabled, s.Kind == ConfirmInstallHelper || s.Kind == ConfirmInstallUpdate, s.Kind != ConfirmInstallHelper && s.Kind != ConfirmInstallUpdate, accept)
+		})
+	})
+}
+
+func (s ConfirmationDialog) renderCloseApps(c *ui.Context, a ConfirmationDialogActions) {
+	t := productDialogStrings(s.Language)
+	checkedCount := 0
+	for _, app := range s.Apps {
+		if app.Checked {
+			checkedCount++
+		}
+	}
+	allChecked := len(s.Apps) > 0 && checkedCount == len(s.Apps)
+	primaryLabel := t.cleanWithoutClose
+	if checkedCount > 0 {
+		primaryLabel = fmt.Sprintf(t.closeAndClean, checkedCount)
+	}
+
+	productDialogFrame(c, "product-confirm", s.Title.Get(s.Language), 480, 24, 14, func() {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(40, 40).Shrink(0).Radius(12).Border(1, caution.Alpha(.35)).Background(cautionContainer).Center().Children(func() {
+				icon(c, Apps, caution, 20)
+			})
+			ui.Text(c, s.Title.Get(s.Language)).FontSize(18).Bold()
+		})
+		if body := s.Body.Get(s.Language); body != "" {
+			ui.Text(c, body).FontSize(13).FixedLineHeight(18).TextColor(muted)
+		}
+		if len(s.Apps) > 0 {
+			ui.Column(c.Key("confirm-apps")).FillWidth().Gap(8).Padding(12, 14).Radius(10).Background(surfaceLow).Border(1, outlineVariant.Alpha(.45)).Children(func() {
+				ui.Row(c).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+					ui.Text(c, t.closeAppsListTitle).FontSize(12).Bold().TextColor(text)
+					toggleLabel := t.selectAll
+					if allChecked {
+						toggleLabel = t.clearAll
+					}
+					btn := ui.ButtonBase(c.Key("confirm-apps-toggle-all")).Padding(2, 8).Radius(6).Disabled(s.Busy || a.ToggleAllApps == nil).Cursor(ui.CursorPointer)
+					interactive(btn, ui.Transparent, surfaceHigh, surfaceHighest, !s.Busy && a.ToggleAllApps != nil)
+					btn.Children(func() { ui.Text(c, toggleLabel).FontSize(12).TextColor(primary) })
+					if btn.Clicked() && !s.Busy && a.ToggleAllApps != nil {
+						a.ToggleAllApps(s.ID)
+					}
+				})
+				ui.Scroll(c.Key("confirm-apps-scroll")).FillWidth().MaxHeight(220).Shrink(1).Children(func() {
+					ui.Column(c).FillWidth().Gap(6).Children(func() {
+						for i, app := range s.Apps {
+							ui.Row(c.Key(fmt.Sprint("confirm-app-row-", i))).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).Padding(2, 0).Gap(12).Children(func() {
+								checked := app.Checked
+								box := ui.Checkbox(c.Key(fmt.Sprint("confirm-app-", i)), &checked, app.Name).FontSize(13).Disabled(s.Busy || a.ToggleApp == nil)
+								if box.Changed() && !s.Busy && a.ToggleApp != nil {
+									a.ToggleApp(s.ID, i)
+								}
+								if app.Size != "" {
+									ui.Text(c, app.Size).FontSize(12).TextColor(muted).Shrink(0)
+								}
+							})
+						}
+					})
+				})
+			})
+		}
+		ui.Text(c, t.appsNote).FontSize(12).FixedLineHeight(17).TextColor(muted)
+		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Padding(4, 0, 0, 0).Children(func() {
+			var cancel, skip, accept func()
+			if a.Cancel != nil {
+				cancel = func() { a.Cancel(s.ID) }
+			}
+			if a.SkipAndClean != nil {
+				skip = func() { a.SkipAndClean(s.ID) }
+			}
+			if a.Accept != nil {
+				accept = func() { a.Accept(s.ID) }
+			}
+			productDialogButton(c, "confirm-cancel", t.cancel, s.Busy, false, false, cancel)
+			productDialogButton(c, "confirm-skip-clean", t.skipAndClean, s.Busy || s.AcceptDisabled, false, false, skip)
+			productDialogButton(c, "confirm-accept", primaryLabel, s.Busy || s.AcceptDisabled, true, false, accept)
 		})
 	})
 }

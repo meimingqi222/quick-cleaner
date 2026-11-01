@@ -95,14 +95,16 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 	if requests != 1 {
 		t.Fatal("clean must request confirmation")
 	}
-	for _, state := range []string{"scanning", "cleaning", "not-scanned", "no-current-selection"} {
-		page.Scanned, page.Scanning, page.Cleaning = true, false, false
+	for _, state := range []string{"scanning", "cleaning", "preparing", "not-scanned", "no-current-selection"} {
+		page.Scanned, page.Scanning, page.Cleaning, page.Preparing = true, false, false, false
 		page.Selected["/fixture/cache-two"] = true
 		switch state {
 		case "scanning":
 			page.Scanning = true
 		case "cleaning":
 			page.Cleaning = true
+		case "preparing":
+			page.Preparing = true
 		case "not-scanned":
 			page.Scanned = false
 		case "no-current-selection":
@@ -113,6 +115,8 @@ func TestJunkPageSelectionAndIndependentActions(t *testing.T) {
 		label := "Clean Now"
 		if page.Cleaning {
 			label = "Cleaning…"
+		} else if page.Preparing {
+			label = "Preparing…"
 		}
 		if err := tt.Click(label); err != nil {
 			t.Fatal(err)
@@ -165,20 +169,24 @@ func TestJunkCleanBarStaysAboveTheStatusBar(t *testing.T) {
 func TestJunkPageExclusionsFailuresAndLocalization(t *testing.T) {
 	page := appui.JunkPage{
 		Language: appui.English, Scanned: true, Exclusions: []string{"/fixture/protected"},
-		FailedDetails:  []appui.JunkDetail{{Text: "Access denied · /fixture/denied", Path: "/fixture/denied"}},
-		SkippedDetails: []appui.JunkDetail{{Text: "In use · /fixture/busy", Path: "/fixture/busy", Release: true}},
+		CleanBanner:   &appui.JunkCleanBanner{FreedBytes: 1024, DeletedFiles: 12, SkippedActive: true},
+		FailedDetails: []appui.JunkDetail{{Text: "Access denied · /fixture/denied", Path: "/fixture/denied"}},
 	}
-	removed, retried := "", ""
+	removed := ""
+	dismissed := 0
 	actions := appui.JunkPageActions{
-		ToggleExclusions:     func() { page.ShowExclusions = !page.ShowExclusions },
-		RemoveExclusion:      func(path string) { removed = path },
-		ToggleFailedDetails:  func() { page.ShowFailedDetails = !page.ShowFailedDetails },
-		ToggleSkippedDetails: func() { page.ShowSkippedDetails = !page.ShowSkippedDetails },
-		RetryRelease:         func(path string) { retried = path },
+		ToggleExclusions:    func() { page.ShowExclusions = !page.ShowExclusions },
+		RemoveExclusion:     func(path string) { removed = path },
+		DismissBanner:       func() { dismissed++; page.CleanBanner = nil },
+		ToggleFailedDetails: func() { page.ShowFailedDetails = !page.ShowFailedDetails },
 	}
 	tt := ui.NewTester(func(c *ui.Context) { page.RenderContent(c, actions) }, 1090, 810)
-	if tt.HasText("/fixture/protected") || tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
+	if tt.HasText("/fixture/protected") || tt.HasText("Access denied · /fixture/denied") {
 		t.Fatal("closed detail panels leaked their content")
+	}
+	if !tt.HasText("Cleanup complete — freed 1 KB (12 files removed)") ||
+		!tt.HasText("Active cache files held by running apps were automatically skipped") {
+		t.Fatalf("clean banner missing: %v", tt.Texts())
 	}
 	if err := tt.Click("Exclusions (1)"); err != nil {
 		t.Fatal(err)
@@ -195,50 +203,44 @@ func TestJunkPageExclusionsFailuresAndLocalization(t *testing.T) {
 	if err := tt.Click("Show details ▾"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
-		t.Fatal("failure expansion leaked the other panel")
-	}
-	if err := tt.Click("Show skipped ▾"); err != nil {
-		t.Fatal(err)
-	}
-	if !tt.HasText("In use · /fixture/busy") {
-		t.Fatal("skipped detail not shown on expansion")
-	}
-	if err := tt.Click("Quit app and retry"); err != nil {
-		t.Fatal(err)
-	}
-	if retried != "/fixture/busy" {
-		t.Fatalf("retry path = %q", retried)
+	if !tt.HasText("Access denied · /fixture/denied") {
+		t.Fatal("failure detail not shown on expansion")
 	}
 	page.Language = appui.Chinese
 	tt.Frame()
-	if !tt.HasText("排除清单 (1)") || !tt.HasText("收起详情 ▴") || !tt.HasText("收起已跳过 ▴") ||
-		!tt.HasText("上次清理有 1 项未能清理") || !tt.HasText("上次清理已跳过 1 项（正在使用或无法确认）") {
-		t.Fatal("expanded panels did not translate")
+	if !tt.HasText("排除清单 (1)") || !tt.HasText("收起详情 ▴") ||
+		!tt.HasText("有 1 项因权限或异常未能清理") ||
+		!tt.HasText("清理完成，已释放 1 KB（共清理 12 个文件）") ||
+		!tt.HasText("运行中应用占用的少量活跃缓存已自动跳过") {
+		t.Fatalf("expanded panels or banner did not translate: %v", tt.Texts())
+	}
+	if err := tt.Click("×"); err != nil {
+		t.Fatal(err)
+	}
+	if dismissed != 1 {
+		t.Fatalf("dismiss banner = %d", dismissed)
 	}
 	if err := tt.Click("收起详情 ▴"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("收起已跳过 ▴"); err != nil {
-		t.Fatal(err)
-	}
-	if tt.HasText("Access denied · /fixture/denied") || tt.HasText("In use · /fixture/busy") {
-		t.Fatal("closed failure detail remained visible")
+	tt.Frame()
+	if tt.HasText("Access denied · /fixture/denied") || tt.HasText("清理完成，已释放 1 KB（共清理 12 个文件）") {
+		t.Fatal("closed failure detail or dismissed banner remained visible")
 	}
 }
 
-func TestJunkSkippedDetailsCapRowsAndReportRemainder(t *testing.T) {
+func TestJunkFailedDetailsCapRowsAndReportRemainder(t *testing.T) {
 	var details []appui.JunkDetail
 	for i := 0; i < 49; i++ {
-		details = append(details, appui.JunkDetail{Text: "In use · /fixture/" + strconv.Itoa(i)})
+		details = append(details, appui.JunkDetail{Text: "Access denied · /fixture/" + strconv.Itoa(i)})
 	}
-	page := appui.JunkPage{Language: appui.English, Scanned: true, SkippedDetails: details}
-	actions := appui.JunkPageActions{ToggleSkippedDetails: func() { page.ShowSkippedDetails = !page.ShowSkippedDetails }}
+	page := appui.JunkPage{Language: appui.English, Scanned: true, FailedDetails: details}
+	actions := appui.JunkPageActions{ToggleFailedDetails: func() { page.ShowFailedDetails = !page.ShowFailedDetails }}
 	tt := ui.NewTester(func(c *ui.Context) { page.RenderContent(c, actions) }, 1090, 1400)
-	if err := tt.Click("Show skipped ▾"); err != nil {
+	if err := tt.Click("Show details ▾"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("9 more not shown") || !tt.HasText("In use · /fixture/39") || tt.HasText("In use · /fixture/40") {
+	if !tt.HasText("9 more not shown") || !tt.HasText("Access denied · /fixture/39") || tt.HasText("Access denied · /fixture/40") {
 		t.Fatalf("detail cap did not report the remainder: %v", tt.Texts())
 	}
 }

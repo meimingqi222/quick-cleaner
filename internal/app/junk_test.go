@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/meimingqi222/quick-cleaner/internal/core"
-	"github.com/meimingqi222/quick-cleaner/internal/platform"
 	view "github.com/meimingqi222/quick-cleaner/internal/ui"
 )
 
@@ -57,26 +56,53 @@ func TestJunkLateOccupancyKeepsBadgeOnlyAndRealErrors(t *testing.T) {
 			{Path: "/cache/unknown", Reason: core.FailUnverified, FailedLeaves: 1, SkippedLeaves: 1},
 			{Path: "/cache/denied", Reason: core.FailAccessDenied, FailedLeaves: 1},
 		},
-		RemainingLive: []core.RemainingLive{{Path: "/cache/busy", Bytes: 300}, {Path: "/cache/unknown", Bytes: 500}, {Path: "/cache/denied", Bytes: 100}},
+		RemainingLive: []core.RemainingLive{{Path: "/cache/busy", Bytes: 300}, {Path: "/cache/unknown", Bytes: 500}, {Path: "/cache/denied", Bytes: 75, FileCount: 3}},
 	}
 	r.applyJunkCleanResult([]string{"/cache/busy", "/cache/unknown", "/cache/denied"}, report)
 	r.junkSummary()
-	for _, item := range r.junk.Categories[0].Items {
-		if item.Path == "/cache/denied" {
-			if item.Busy != nil {
-				t.Error("real access error reclassified as occupancy")
-			}
-			continue
-		}
-		if !item.CleanupAvailable() || !item.Recommended {
-			t.Errorf("late occupancy changed eligibility: %+v", item)
-		}
-		if item.Busy == nil {
-			t.Errorf("late occupancy badge missing on %s", item.Path)
-		}
+	items := r.junk.Categories[0].Items
+	if len(items) != 1 || items[0].Path != "/cache/denied" {
+		t.Fatalf("expected active-skip targets collapsed and real error retained, got %+v", items)
 	}
-	if r.dashboard.Cleanable != core.FmtSize(900) {
+	if items[0].Busy != nil {
+		t.Error("real access error reclassified as occupancy")
+	}
+	if items[0].Size != 75 || items[0].FileCount != 3 {
+		t.Errorf("remaining live size not refreshed on error item: %+v", items[0])
+	}
+	if r.junk.Selected["/cache/denied"] {
+		t.Error("failed target remained selected after cleanup")
+	}
+	if r.dashboard.Cleanable != core.FmtSize(75) {
 		t.Errorf("remaining estimate = %s", r.dashboard.Cleanable)
+	}
+}
+
+// Invalid operations record unverified failures without granting deletion.
+func skippedProgress(paths ...string) *core.CleanProgress {
+	p := core.NewCleanProgress(0, 0)
+	var targets []core.CleanTarget
+	for _, path := range paths {
+		targets = append(targets, core.CleanTarget{Path: path})
+	}
+	core.CleanTargets(targets, p)
+	return p
+}
+
+func TestJunkOverlappingTargetsDoNotHideHistoryFailures(t *testing.T) {
+	r, _ := testRoot(t)
+	var skipped, failed uint
+	r.record = func(_ string, _ []string, _, s, f uint, _ uint64) { skipped, failed = s, f }
+	report := core.CleanReport{
+		Failed: []core.CleanFailure{{Path: "/cache/sub/locked"}, {Path: "/cache/denied"}},
+		FailInfo: []core.TargetFailInfo{
+			{Path: "/cache", Reason: core.FailAccessDenied, FailedLeaves: 2, SkippedLeaves: 1},
+			{Path: "/cache/sub", Reason: core.FailInUse, FailedLeaves: 1, SkippedLeaves: 1},
+		},
+	}
+	r.finishCleanup("clean", nil, report, skippedProgress("/cache/sub/locked"))
+	if skipped != 1 || failed != 1 {
+		t.Fatalf("overlapping targets changed history: skipped=%d failed=%d; want 1/1", skipped, failed)
 	}
 }
 
@@ -91,12 +117,15 @@ func TestJunkMixedLeafFailuresKeepErrorAndExactHistory(t *testing.T) {
 		Failed:   []core.CleanFailure{{Path: "/cache/busy1"}, {Path: "/cache/busy2"}, {Path: "/cache/denied"}},
 		FailInfo: []core.TargetFailInfo{{Path: "/cache", Reason: core.FailAccessDenied, FailedLeaves: 3, SkippedLeaves: 2}},
 	}
-	r.finishCleanup("clean", nil, report, core.NewCleanProgress(0, 0), nil)
+	r.finishCleanup("clean", nil, report, skippedProgress("/cache/busy1", "/cache/busy2"))
 	if failed != 1 || skipped != 2 {
 		t.Errorf("history failed=%d skipped=%d; want 1, 2", failed, skipped)
 	}
-	if len(r.junk.FailedDetails) != 1 || len(r.junk.SkippedDetails) != 0 || !strings.Contains(r.junk.FailedDetails[0].Text, "access denied") {
-		t.Errorf("mixed target lost its failure: failed=%v skipped=%v", r.junk.FailedDetails, r.junk.SkippedDetails)
+	if len(r.junk.FailedDetails) != 1 || r.junk.ShowFailedDetails || !strings.Contains(r.junk.FailedDetails[0].Text, "access denied") {
+		t.Errorf("mixed target lost its collapsed failure: show=%v failed=%v", r.junk.ShowFailedDetails, r.junk.FailedDetails)
+	}
+	if r.junk.CleanBanner == nil || !r.junk.CleanBanner.SkippedActive {
+		t.Errorf("expected CleanBanner with SkippedActive, got %+v", r.junk.CleanBanner)
 	}
 	if !strings.Contains(r.dashboard.StatusText, "partially complete") {
 		t.Errorf("mixed target reported as clean: %q", r.dashboard.StatusText)
@@ -110,7 +139,6 @@ func TestJunkDetailsSeparateSkippedInUseFromRealFailures(t *testing.T) {
 	r.record = func(_ string, _ []string, _, skipped, failed uint, _ uint64) {
 		recordedSkipped, recordedFailed = skipped, failed
 	}
-	r.junk.ReleaseEligible = map[string]bool{"/fixture/cache": true, "/fixture/system": true}
 	report := core.CleanReport{
 		FailInfo: []core.TargetFailInfo{
 			{Path: "/fixture/cache", Reason: core.FailInUse, FailedLeaves: 1, SkippedLeaves: 1},
@@ -128,32 +156,16 @@ func TestJunkDetailsSeparateSkippedInUseFromRealFailures(t *testing.T) {
 			{Path: "/fixture/denied", Bytes: 400, FileCount: 5},
 		},
 	}
-	owners := map[string][]platform.Occupant{
-		"/fixture/cache":  {{PID: 42, Name: "Edge"}},
-		"/fixture/system": {{PID: 4, Name: "svchost.exe", System: true}},
-	}
-	r.finishCleanup("clean", nil, report, core.NewCleanProgress(0, 0), owners)
+	r.finishCleanup("clean", nil, report, skippedProgress("/fixture/cache", "/fixture/system", "/fixture/huge"))
 
-	if len(r.junk.SkippedDetails) != 3 || len(r.junk.FailedDetails) != 1 {
-		t.Fatalf("skipped=%d failed=%d", len(r.junk.SkippedDetails), len(r.junk.FailedDetails))
-	}
-	if text := r.junk.SkippedDetails[0].Text; !strings.Contains(text, "Edge") || !strings.Contains(text, "/fixture/cache") {
-		t.Fatalf("app attribution missing: %q", text)
-	}
-	if !r.junk.SkippedDetails[0].Release {
-		t.Fatal("identified user app did not keep its retry entry")
-	}
-	if text := r.junk.SkippedDetails[1].Text; !strings.Contains(text, "System, another user, or a protected process") {
-		t.Fatalf("system owner not explained: %q", text)
-	}
-	if r.junk.SkippedDetails[1].Release {
-		t.Fatal("system owner acquired a termination retry")
-	}
-	if text := r.junk.SkippedDetails[2].Text; !strings.Contains(text, "cleanup authority unverified") {
-		t.Fatalf("unverified target not explained: %q", text)
+	if len(r.junk.FailedDetails) != 1 || r.junk.ShowFailedDetails {
+		t.Fatalf("failed=%d show=%v", len(r.junk.FailedDetails), r.junk.ShowFailedDetails)
 	}
 	if text := r.junk.FailedDetails[0].Text; !strings.Contains(text, "access denied") || !strings.Contains(text, "/fixture/denied") {
 		t.Fatalf("real failure lost its alarm copy: %q", text)
+	}
+	if r.junk.CleanBanner == nil || !r.junk.CleanBanner.SkippedActive {
+		t.Fatalf("clean banner missing active-skip note: %+v", r.junk.CleanBanner)
 	}
 	if !strings.Contains(r.dashboard.StatusText, "partially complete") ||
 		!strings.Contains(r.dashboard.StatusText, "1 target(s) could not be cleaned") ||
@@ -173,11 +185,47 @@ func TestJunkOnlyInUseTargetsReportSkippedNotFailed(t *testing.T) {
 		Failed:        []core.CleanFailure{{Path: "/fixture/busy"}},
 		RemainingLive: []core.RemainingLive{{Path: "/fixture/busy", Bytes: 100, FileCount: 2}},
 	}
-	r.finishCleanup("clean", nil, report, core.NewCleanProgress(0, 0), nil)
-	if len(r.junk.FailedDetails) != 0 || len(r.junk.SkippedDetails) != 1 {
-		t.Fatalf("in-use target classified as failure: failed=%d skipped=%d", len(r.junk.FailedDetails), len(r.junk.SkippedDetails))
+	r.finishCleanup("clean", nil, report, core.NewCleanProgress(0, 0))
+	if len(r.junk.FailedDetails) != 0 {
+		t.Fatalf("in-use target classified as failure: failed=%d", len(r.junk.FailedDetails))
+	}
+	if r.junk.CleanBanner == nil || !r.junk.CleanBanner.SkippedActive {
+		t.Fatalf("clean banner missing skipped-active note: %+v", r.junk.CleanBanner)
 	}
 	if !strings.Contains(r.dashboard.StatusText, "in use; skipped") || strings.Contains(r.dashboard.StatusText, "partially complete") {
 		t.Fatalf("in-use-only status = %q", r.dashboard.StatusText)
+	}
+}
+
+func TestJunkPartialLeafFailureCollapsesInUseTailAndKeepsRealError(t *testing.T) {
+	r, _ := testRoot(t)
+	inUseTail, denied, done := "/fixture/cache", "/fixture/denied", "/fixture/done"
+	r.junk.Categories = []core.CategorySummary{{Category: core.UserCache, Items: []core.ScanItem{
+		{Path: inUseTail, Size: 100, FileCount: 10},
+		{Path: denied, Size: 80, FileCount: 4},
+		{Path: done, Size: 20, FileCount: 2},
+	}}}
+	r.junk.Selected = map[string]bool{inUseTail: true, denied: true, done: true}
+	report := core.CleanReport{
+		FailInfo: []core.TargetFailInfo{
+			{Path: inUseTail, Reason: core.FailInUse, FailedLeaves: 1, SkippedLeaves: 1},
+			{Path: denied, Reason: core.FailAccessDenied, FailedLeaves: 1},
+		},
+		Failed: []core.CleanFailure{{Path: inUseTail + "/sub/locked.bin"}, {Path: denied + "/secret.dat"}},
+		RemainingLive: []core.RemainingLive{
+			{Path: inUseTail, Bytes: 9, FileCount: 1},
+			{Path: denied, Bytes: 12, FileCount: 1},
+		},
+	}
+	r.applyJunkCleanResult([]string{inUseTail, denied, done}, report)
+	items := r.junk.Categories[0].Items
+	if len(items) != 1 || items[0].Path != denied {
+		t.Fatalf("expected only real error retained, got %+v", items)
+	}
+	if items[0].Size != 12 || items[0].FileCount != 1 {
+		t.Fatalf("remaining size not refreshed: size=%d files=%d", items[0].Size, items[0].FileCount)
+	}
+	if len(r.junk.Selected) != 0 {
+		t.Fatalf("attempted targets must be deselected after cleanup: %v", r.junk.Selected)
 	}
 }
