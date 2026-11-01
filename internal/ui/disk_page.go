@@ -208,18 +208,18 @@ func (s DiskPage) browser(c *ui.Context, a DiskPageActions) {
 			ui.Text(c, t.size).Width(90).Shrink(0).FontSize(12).Bold().TextColor(outline)
 			ui.Text(c, t.action).Width(40).Shrink(0).FontSize(12).TextColor(outline)
 		})
-		ui.Scroll(c.Key(fmt.Sprintf("disk-rows-%s-%d-%s", s.Volume.Mount, s.Tab, s.CurrentPath))).Grow(1).FillWidth().MinHeight(0).Gap(0).Children(func() {
-			if len(s.Rows) == 0 {
-				label := t.empty
-				if s.Tab == DiskFiles {
-					label = t.noFiles
-				}
-				ui.Text(c, label).Padding(24).FontSize(14).TextColor(outline)
+		if len(s.Rows) == 0 {
+			label := t.empty
+			if s.Tab == DiskFiles {
+				label = t.noFiles
 			}
-			for _, row := range s.Rows {
-				s.row(c, a, row)
-			}
-		})
+			ui.Text(c, label).Padding(24).FontSize(14).TextColor(outline)
+		} else {
+			ui.List(c.Key(fmt.Sprintf("disk-rows-%s-%d-%s", s.Volume.Mount, s.Tab, s.CurrentPath)), nil, len(s.Rows)).
+				Grow(1).FillWidth().MinHeight(0).Gap(0).
+				ItemKey(func(i int) any { return s.Rows[i].Node.Idx }).
+				Rows(func(row ui.ListRow) { s.row(row.Context, a, s.Rows[row.Index]) })
+		}
 	})
 }
 

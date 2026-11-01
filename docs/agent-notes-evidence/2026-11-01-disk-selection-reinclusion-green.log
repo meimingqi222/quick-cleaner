@@ -1,0 +1,10 @@
+=== RUN   TestDiskSelectionInheritanceAndAccounting
+--- PASS: TestDiskSelectionInheritanceAndAccounting (0.00s)
+=== RUN   TestDiskSelectionSetManyMatchesIndividualSets
+--- PASS: TestDiskSelectionSetManyMatchesIndividualSets (0.00s)
+=== RUN   TestDiskSelectionSetManyKeepsReinclusionUnderExclusion
+--- PASS: TestDiskSelectionSetManyKeepsReinclusionUnderExclusion (0.00s)
+=== RUN   TestDiskSelectionDeepResolveAndReinclusion
+--- PASS: TestDiskSelectionDeepResolveAndReinclusion (0.01s)
+PASS
+ok  	github.com/meimingqi222/quick-cleaner/internal/core	0.209s

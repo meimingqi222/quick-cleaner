@@ -44,6 +44,77 @@ func TestDiskSelectionInheritanceAndAccounting(t *testing.T) {
 	}
 }
 
+func TestDiskSelectionSetManyMatchesIndividualSets(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	paths := []string{
+		filepath.Join(parent, "a"),
+		filepath.Join(parent, "b"),
+		filepath.Join(root, "c"),
+	}
+	sizes := []uint64{10, 20, 30}
+	batch, single := NewDiskSelectionState(), NewDiskSelectionState()
+	batch.SetMany(paths, sizes, true)
+	for i, path := range paths {
+		single.Set(path, sizes[i], true)
+	}
+	assertSameSelection(t, batch, single)
+
+	batch.SetMany(paths[:2], sizes[:2], false)
+	for i, path := range paths[:2] {
+		single.Set(path, sizes[i], false)
+	}
+	assertSameSelection(t, batch, single)
+
+	batch.Toggle(parent, 100)
+	single.Toggle(parent, 100)
+	batch.SetMany([]string{filepath.Join(parent, "a")}, []uint64{10}, false)
+	single.Set(filepath.Join(parent, "a"), 10, false)
+	assertSameSelection(t, batch, single)
+}
+
+// A selection under an excluded folder is an explicit re-inclusion, not a
+// redundant child of the selected ancestor. A batch select elsewhere, or a
+// batch select of a higher ancestor, must not drop it.
+func TestDiskSelectionSetManyKeepsReinclusionUnderExclusion(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	x := filepath.Join(a, "x")
+	y := filepath.Join(x, "y")
+	z := filepath.Join(y, "z")
+	other := filepath.Join(root, "other")
+	setup := func() *DiskSelectionState {
+		s := NewDiskSelectionState()
+		s.Toggle(x, 50)
+		s.Toggle(y, 20)
+		s.Toggle(z, 10)
+		return s
+	}
+
+	batch, single := setup(), setup()
+	batch.SetMany([]string{other}, []uint64{1}, true)
+	single.Set(other, 1, true)
+	assertSameSelection(t, batch, single)
+	if !batch.IsSelected(z) {
+		t.Fatal("unrelated batch select dropped a re-included path")
+	}
+
+	batch, single = setup(), setup()
+	batch.SetMany([]string{a}, []uint64{100}, true)
+	single.Set(a, 100, true)
+	assertSameSelection(t, batch, single)
+	if !batch.IsSelected(z) || batch.IsSelected(y) {
+		t.Fatal("selecting an ancestor changed the nearest explicit choice below it")
+	}
+}
+
+func assertSameSelection(t *testing.T, a, b *DiskSelectionState) {
+	t.Helper()
+	if !reflect.DeepEqual(a.SelectedRoots(), b.SelectedRoots()) || a.TotalSize() != b.TotalSize() || a.Len() != b.Len() {
+		t.Fatalf("batch=%v/%d/%d individual=%v/%d/%d", a.SelectedRoots(), a.Len(), a.TotalSize(), b.SelectedRoots(), b.Len(), b.TotalSize())
+	}
+}
+
 func TestDiskSelectionDeepResolveAndReinclusion(t *testing.T) {
 	root := t.TempDir()
 	keep := filepath.Join(root, "branch", "deep", "keep")

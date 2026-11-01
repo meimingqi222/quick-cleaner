@@ -78,6 +78,54 @@ func (s *DiskSelectionState) Set(path string, size uint64, on bool) {
 		s.Toggle(path, size)
 	}
 }
+
+// SetMany applies one selection state to a batch of sibling rows. It updates
+// the maps once instead of re-scanning every selected descendant per row, so
+// select-all stays linear on folders with thousands of entries.
+func (s *DiskSelectionState) SetMany(paths []string, sizes []uint64, on bool) {
+	if len(paths) == 0 || len(paths) != len(sizes) {
+		return
+	}
+	if s.selected == nil {
+		s.selected = make(map[string]uint64)
+		s.excluded = make(map[string]uint64)
+	}
+	for i, path := range paths {
+		path = filepath.Clean(path)
+		if on {
+			delete(s.excluded, path)
+			if s.IsSelected(path) {
+				continue
+			}
+			s.selected[path] = sizes[i]
+			continue
+		}
+		if _, ok := s.selected[path]; ok {
+			delete(s.selected, path)
+			continue
+		}
+		// A selected ancestor still covers this row; exclude it explicitly.
+		if s.IsSelected(path) {
+			s.excluded[path] = sizes[i]
+		}
+	}
+	// Same rule as Toggle: a selection under an excluded folder is an explicit
+	// re-inclusion and survives; only selections the ancestor already covers go.
+	for p, sz := range s.selected {
+		if !s.hasSelectedAncestor(p) {
+			continue
+		}
+		delete(s.selected, p)
+		if !s.IsSelected(p) {
+			s.selected[p] = sz
+		}
+	}
+	for p := range s.excluded {
+		if !s.hasSelectedAncestor(p) {
+			delete(s.excluded, p)
+		}
+	}
+}
 func (s *DiskSelectionState) Clear()        { clear(s.selected); clear(s.excluded) }
 func (s *DiskSelectionState) Len() int      { return len(s.selected) }
 func (s *DiskSelectionState) IsEmpty() bool { return s.Len() == 0 }

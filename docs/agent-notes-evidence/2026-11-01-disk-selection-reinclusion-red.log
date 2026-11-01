@@ -1,0 +1,8 @@
+=== RUN   TestDiskSelectionSetManyMatchesIndividualSets
+--- PASS: TestDiskSelectionSetManyMatchesIndividualSets (0.00s)
+=== RUN   TestDiskSelectionSetManyKeepsReinclusionUnderExclusion
+    disk_selection_test.go:97: batch=[<fixture>\a\x <fixture>\other]/2/31 individual=[<fixture>\a\x <fixture>\a\x\y\z <fixture>\other]/3/41
+--- FAIL: TestDiskSelectionSetManyKeepsReinclusionUnderExclusion (0.00s)
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.245s
+FAIL

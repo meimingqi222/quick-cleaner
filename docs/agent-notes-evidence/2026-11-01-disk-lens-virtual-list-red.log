@@ -1,0 +1,5 @@
+--- FAIL: TestDiskPageVirtualizesLargeFolderRows (0.14s)
+    disk_page_test.go:51: offscreen row constructed instead of virtualized
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/ui	0.412s
+FAIL

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image/png"
 	"math"
 	"os"
@@ -30,6 +31,28 @@ func diskPageTester(s *DiskPage, a DiskPageActions) *ui.Tester {
 	return ui.NewTester(func(c *ui.Context) {
 		Dashboard{Language: s.Language}.RenderPage(c, Disk, DashboardActions{}, func() { s.RenderContent(c, a) })
 	}, 1440, 900)
+}
+
+func TestDiskPageVirtualizesLargeFolderRows(t *testing.T) {
+	s := diskPageFixture()
+	s.Rows = nil
+	for i := 0; i < 2000; i++ {
+		s.Rows = append(s.Rows, DiskPageRow{
+			Node:      core.Node{Idx: uint32(i + 1), Name: fmt.Sprintf("file-%04d", i), Size: 1},
+			Path:      fmt.Sprintf("/file-%04d", i),
+			CanSelect: true,
+			CanDelete: true,
+		})
+	}
+	s.SelectedCount, s.SelectedSize = 0, 0
+	s.HeaderMixed, s.HeaderSelected, s.CanRequestDelete = false, false, false
+	tt := diskPageTester(&s, DiskPageActions{})
+	if tt.HasText("file-1999") {
+		t.Fatal("offscreen row constructed instead of virtualized")
+	}
+	if !tt.HasText("file-0000") {
+		t.Fatalf("first row missing: %v", tt.Texts())
+	}
 }
 
 func TestDiskPageEventsAreControllerRequests(t *testing.T) {

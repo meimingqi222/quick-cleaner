@@ -1530,3 +1530,12 @@ Note: `2026-11-01-headless-core-cli.md`
 - **禁止回退**：不能把该分支改回 `ExitError` 或 `ExitOK`；不能静默跳过执行。
 - **测试**：`TestUnsupportedCleanupExecutionIsUsageError`，红绿证据见 Note。
 
+## P127 磁盘透镜的大目录必须虚拟化，全选必须批量更新选择
+
+Note: `2026-11-01-disk-lens-virtual-list.md`
+
+- **症状**：进入含 2643 项的缓存目录后，滚动明显掉帧；点表头全选要卡几秒才显示选中。
+- **根因**：`ui.Scroll` 每帧构建全部 `s.Rows` 的复选框/按钮/tooltip；`DiskSelectionState.Set` 每选一行都扫描全部已选项清理父子覆盖，全选是 O(n²)。
+- **防护**：行列表用 `ui.List` 只构建视口行，行 key 用 `Node.Idx`；全选收集当前视图可选行后调用 `SetMany`，批量更新后统一清理祖先覆盖与无主排除项。
+- **禁止回退**：不能把磁盘行列表退回 `ui.Scroll` 全量遍历；不能让 `SetViewSelected` 退回逐行 `Set`；不能为性能改变“最近显式选择优先”的父子覆盖语义——`SetMany` 收尾不能把“有已选祖先”的选择项一律删掉，排除项之下的重新勾选必须保留。
+- **测试**：`TestDiskPageVirtualizesLargeFolderRows`、`TestDiskSelectionSetManyMatchesIndividualSets`、`TestDiskSelectionSetManyKeepsReinclusionUnderExclusion`，红绿证据见 Note。
