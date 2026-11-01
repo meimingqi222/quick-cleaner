@@ -29,8 +29,8 @@ via `ScanItem.CleanTarget`; serialized diagnostics cannot recreate execution
 authority. `internal/cli/junk_execute.go` calls the existing verified cleaner
 and records real outcomes. Persisted exclusions must parse successfully.
 
-Only rule-blocked items are unselectable (even with an exact `--path` or
-`--all`) and contribute to `skipped_count`. Occupancy is a badge and never
+Rule-blocked items are unselectable. An explicit `--path` naming one returns
+a usage error; bulk selection skips it and contributes to `skipped_count`. Occupancy is a badge and never
 changes selection; see `2026-11-01-junk-inuse-occupancy-and-retry.md`.
 Unknown paths still return usage errors. Execution-time
 occupancy is classified per leaf by `CleanProgress.SplitFailures` in

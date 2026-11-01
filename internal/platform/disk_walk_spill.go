@@ -66,8 +66,13 @@ func reclaimStaleMacWalkSpillNow() {
 		}
 	}
 	if reclaimed > 0 {
-		fmt.Printf("回收死进程溢写文件 %d 个，释放 %.1f MB\n", reclaimed, float64(bytes)/1024/1024)
+		logReclaimedMacWalkSpill(reclaimed, bytes)
 	}
+}
+
+// Diagnostics must never share stdout with machine-readable CLI reports.
+func logReclaimedMacWalkSpill(reclaimed, bytes int64) {
+	fmt.Fprintf(os.Stderr, "回收死进程溢写文件 %d 个，释放 %.1f MB\n", reclaimed, float64(bytes)/1024/1024)
 }
 
 func parseMacWalkSpillPID(name string) (int, bool) {

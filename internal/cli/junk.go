@@ -364,6 +364,9 @@ func selectJunk(items []core.ScanItem, o junkOptions) ([]bool, error) {
 			continue
 		}
 		if !item.CleanupAvailable() {
+			if explicit {
+				return nil, fmt.Errorf("path is blocked from cleanup: %s", item.Path)
+			}
 			continue
 		}
 		selected[i] = true

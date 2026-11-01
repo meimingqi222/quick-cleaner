@@ -177,6 +177,9 @@ func TestJunkSelectionRequiresFreshExactEligibleTarget(t *testing.T) {
 	if err != nil || selected[4] {
 		t.Fatalf("select all picked a rule-blocked item: %v %v", selected, err)
 	}
+	if _, err := selectJunk(items, junkOptions{paths: stringsFlag{items[4].Path}}); err == nil {
+		t.Fatal("explicit rule-blocked path was reported as selected")
+	}
 }
 
 // Isolate the trusted home and all settings/history writes, including Windows'

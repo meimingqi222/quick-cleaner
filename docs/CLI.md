@@ -23,7 +23,8 @@ quick-cleaner cli junk clean --root 'D:\code\demo' --path 'D:\code\demo\node_mod
 quick-cleaner cli junk clean --recommended --execute --json
 ```
 
-`--path` 可重复，必须精确命中本次扫描发现的目标，不能指定任意文件或目标中的子路径。
+`--path` 可重复，必须精确命中本次扫描发现的目标，不能指定任意文件或目标中的子路径；
+显式路径命中被规则阻止的目标时返回错误，不会当作已选中。
 `--recommended` 选推荐且未被规则阻止的目标；`--all` 选全部未被规则阻止的目标，
 包括非推荐项。三种选择方式互斥。未指定时，预览使用推荐项。
 

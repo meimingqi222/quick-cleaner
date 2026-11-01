@@ -1,0 +1,15 @@
+--- FAIL: TestMacWalkSpillReclaimLogUsesStderr (0.00s)
+    disk_walk_spill_output_test.go:40: stdout polluted by spill diagnostics: "回收死进程溢写文件 2 个，释放 3.0 MB\n"
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	0.991s
+FAIL
+--- FAIL: TestJunkPartialLeafFailureKeepsTargetAndUpdatesRemainingSize (0.00s)
+    junk_test.go:201: partially failed target disappeared: []
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	1.167s
+FAIL
+--- FAIL: TestJunkSelectionRequiresFreshExactEligibleTarget (0.03s)
+    cli_test.go:181: explicit rule-blocked path was reported as selected
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/cli	1.418s
+FAIL
