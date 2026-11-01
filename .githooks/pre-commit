@@ -12,11 +12,39 @@ if [ -n "$staged_go" ]; then
     fi
 fi
 
-# Windows 上 python3 可能只是 WindowsApps 的占位程序：选第一个真能运行的解释器。
-PY=""
-for candidate in python3 python "py -3"; do
-    if $candidate -c "" >/dev/null 2>&1; then PY="$candidate"; break; fi
-done
+# Windows 的 WindowsApps 执行别名（含商店版 Python）从 Git Bash 启动会永久挂起，
+# 连 kill -9 都停不掉，所以不能靠「试跑 + 超时」探测，只能事先跳过。
+# QC_PYTHON 可显式指定解释器。
+find_python() {
+    if [ -n "$QC_PYTHON" ]; then
+        echo "$QC_PYTHON"
+        return
+    fi
+    for name in python3 python; do
+        old_ifs=$IFS
+        IFS=:
+        for dir in $PATH; do
+            IFS=$old_ifs
+            case "$dir" in
+                *[Ww]indows[Aa]pps*) continue ;;
+            esac
+            for exe in "$dir/$name" "$dir/$name.exe"; do
+                if [ -f "$exe" ] && [ -x "$exe" ] && "$exe" -c "" >/dev/null 2>&1; then
+                    echo "$exe"
+                    return
+                fi
+            done
+        done
+        IFS=$old_ifs
+    done
+    if command -v py >/dev/null 2>&1 && py -3 -c "" >/dev/null 2>&1; then
+        echo "py -3"
+    fi
+}
+PY=$(find_python)
+run_py() {
+    if [ "$PY" = "py -3" ]; then py -3 "$@"; else "$PY" "$@"; fi
+}
 if [ -z "$PY" ]; then
     echo "pre-commit：找不到可用的 Python，跳过 note 检查" >&2
     exit 0
@@ -26,7 +54,7 @@ fi
 VN=tools/regression-notes/verify-notes.py
 staged=$(git diff --cached --name-only --diff-filter=ACMR | tr '\n' ' ')
 if [ -f "$VN" ] && [ -n "$staged" ]; then
-    out=$($PY "$VN" --notes-dir docs/agent-notes --for-path $staged 2>/dev/null)
+    out=$(run_py "$VN" --notes-dir docs/agent-notes --for-path $staged 2>/dev/null)
     case "$out" in
         *"note(s) cite"*) ;;
         *) out="" ;;
@@ -36,5 +64,5 @@ if [ -f "$VN" ] && [ -n "$staged" ]; then
         echo "$out" | grep -v "note(s) cite" | grep . >&2
     fi
 fi
-$PY -X utf8 scripts/check-pitfall-notes.py || exit 1
+run_py -X utf8 scripts/check-pitfall-notes.py || exit 1
 exit 0

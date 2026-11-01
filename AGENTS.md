@@ -27,6 +27,8 @@ go run ./cmd/quick-cleaner --no-elevate
 
 扫描性能可直接用 `go run ./tools/indexbench -mode refresh -product-discovery -rounds 2` 测量（macOS），无需启动 GUI；默认使用临时缓存副本，覆盖完整发现规划，并分开报告前台返回与后台保存等待时间。缓存解析/单树发现微基准用 `go run ./tools/indexbench`。参数及 CPU profile 用法见 [`tools/indexbench/README.md`](tools/indexbench/README.md)。
 
+Windows 的 Git Bash 里，PATH 上的 `python`/`python3` 若解析到 `WindowsApps` 执行别名（商店版 Python），启动后会永久挂起且 `kill -9` 无效；文中 `python` 命令请换成非 WindowsApps 的解释器（`command -v -a` 查看），pre-commit 会自动跳过这类别名，也可用 `QC_PYTHON` 指定。
+
 仓库带 `.githooks/pre-commit`（暂存 Go 文件的 gofmt 检查、agent-notes 反查提醒、PITFALLS 指针校验），clone 后可执行 `git config core.hooksPath .githooks` 启用；提交时以实际 hook 输出为准。
 
 ## Commit 前必做：核对立项 pitfalls
