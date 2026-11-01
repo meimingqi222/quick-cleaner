@@ -349,7 +349,7 @@ func testJunkLifecycle(t *testing.T) {
 			t.Fatalf("execution history: %v", err)
 		}
 	} else {
-		invoke(t, ctx, ExitError, "junk", "clean", "--root", root, "--path", target, "--execute", "--json")
+		invoke(t, ctx, ExitUsage, "junk", "clean", "--root", root, "--path", target, "--execute", "--json")
 		if _, err := os.Stat(cache); err != nil {
 			t.Fatal("unsupported execution mutated files")
 		}

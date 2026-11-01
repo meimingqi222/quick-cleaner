@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,9 @@ import (
 )
 
 func TestJunkCleanKeepsCachesWhenOwnerCannotBeStopped(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("real cleanup requires Windows or macOS")
+	}
 	r, q := testRoot(t)
 	r.settings.Language = core.English
 	rules, err := core.CurrentRules()
