@@ -1,0 +1,24 @@
+check (windows-latest)	Run go test -race ./...	﻿2026-11-01T14:05:44.6439953Z ##[group]Run go test -race ./...
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:44.6440253Z [36;1mgo test -race ./...[0m
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:44.6497277Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:44.6497563Z env:
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:44.6497718Z   GOTOOLCHAIN: local
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:44.6497885Z ##[endgroup]
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:05:45.2397989Z ?   	github.com/meimingqi222/quick-cleaner/assets	[no test files]
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:03.1297626Z ok  	github.com/meimingqi222/quick-cleaner/cmd/quick-cleaner	5.112s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:03.1301537Z ?   	github.com/meimingqi222/quick-cleaner/cmd/ui-gallery	[no test files]
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:05.3775215Z ok  	github.com/meimingqi222/quick-cleaner/internal/app	5.226s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:05.3778394Z ok  	github.com/meimingqi222/quick-cleaner/internal/cli	3.615s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:35.8178085Z ok  	github.com/meimingqi222/quick-cleaner/internal/core	24.541s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:06:35.8178799Z ok  	github.com/meimingqi222/quick-cleaner/internal/platform	16.891s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3192212Z ok  	github.com/meimingqi222/quick-cleaner/internal/ui	56.488s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3192909Z ?   	github.com/meimingqi222/quick-cleaner/rules	[no test files]
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3193568Z --- FAIL: TestCacheModeRunsRepeatedLoadsWithoutChangingSource (0.08s)
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3196404Z     main_test.go:45: round result: {Round:1 Mode:cache Load:{Milliseconds:0 AllocatedMiB:0.0171966552734375} Discover:{Milliseconds:0 AllocatedMiB:0} PersistWait:{Milliseconds:0 AllocatedMiB:0} Verify:{Milliseconds:0 AllocatedMiB:0} Files:1 Dirs:1 Items:0 Fingerprint:}
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3198945Z 2026/11/01 14:06:05 发现索引通道：卷 C:\Users\runneradmin\.qc-bench-live-602159520，耗时 24ms
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3199767Z 2026/11/01 14:06:05 发现实时回退：2 个候选根，跳过已覆盖分支，耗时 30ms
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3199994Z FAIL
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3200236Z FAIL	github.com/meimingqi222/quick-cleaner/tools/indexbench	0.275s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3200602Z ok  	github.com/meimingqi222/quick-cleaner/tools/winres	1.041s
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.3200847Z FAIL
+check (windows-latest)	Run go test -race ./...	2026-11-01T14:07:01.4801397Z ##[error]Process completed with exit code 1.

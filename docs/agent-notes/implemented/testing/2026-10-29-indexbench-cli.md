@@ -14,6 +14,9 @@ GUI 日志原先将索引加载排除在阶段零计时外，发现阶段的定�
 
 产品 owner 日志细分缓存读取、事件回放、子树扫描、克隆、数组重建、持久化、回退原因与压实后重载。命令说明在 `tools/indexbench/README.md`。
 
+耗时允许为零：Windows 上极小的已缓存加载可以在一个时钟 tick 内完成。测试检查耗时非负，
+并继续逐轮验证文件/目录数量与源缓存字节不变；不通过人为 sleep 或伪造最小耗时保证正数。
+
 ## Alternatives considered
 
 - 只调用 `DiscoverBuildArtifacts`：可定位纯发现成本，但会漏掉本轮的权限回退和重复压实。
@@ -31,3 +34,8 @@ cache 模式每轮重新解析缓存；refresh 仅支持 macOS，第二轮通过
 - `tools/indexbench/main_test.go::TestProductDiscoveryIncludesUncoveredLiveBranch`
 
 本轮完整 refresh 实测首轮 load/discover 3.80/4.47 秒，发现和复核后等待后台保存 15.20 秒；第二轮 0.94/4.13 秒，剩余等待小于 1 ms。两轮 8355 项，指纹与固定缓存发现对照一致。事件源随系统变化，不将不同 replay 的 load 数字当成严格 A/B；记录见 `docs/agent-notes-evidence/2026-10-29-product-refresh-after.jsonl` 与对应 `.log`。
+
+Proved: Windows CI run 41314374937 在文件/目录计数正确时因 `Load.Milliseconds:0` 误报失败，
+见 `docs/agent-notes-evidence/2026-11-01-indexbench-zero-duration-red.log`。
+允许零值后，同一回归连续 20 次 race 测试通过，见
+`docs/agent-notes-evidence/2026-11-01-indexbench-zero-duration-green.log`。

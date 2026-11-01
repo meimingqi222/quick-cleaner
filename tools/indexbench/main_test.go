@@ -41,7 +41,8 @@ func TestCacheModeRunsRepeatedLoadsWithoutChangingSource(t *testing.T) {
 		if err = decoder.Decode(&entry); err != nil {
 			t.Fatal(err)
 		}
-		if entry.Round != i || entry.Mode != "cache" || entry.Files != 1 || entry.Dirs != 1 || entry.Load.Milliseconds <= 0 {
+		// A tiny cached load may finish within one Windows clock tick.
+		if entry.Round != i || entry.Mode != "cache" || entry.Files != 1 || entry.Dirs != 1 || entry.Load.Milliseconds < 0 {
 			t.Fatalf("round result: %+v", entry)
 		}
 	}
