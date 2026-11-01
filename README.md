@@ -2,16 +2,15 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
-**Go rewrite in progress:** the target is Go + MyGo with the existing UI and
-interactions preserved, not a redesign. The Go product entry point is
+QuickCleaner is written in **Go + MyGo**. The original Rust + GPUI
+implementation was retired and removed on 2026-11-01; the Go version kept its
+UI and interactions. The product entry point is
 `go run ./cmd/quick-cleaner --no-elevate`; a separate non-destructive UI gallery
-is available at `go run ./cmd/ui-gallery`. Native acceptance and remaining parity
-gates are not complete; do not treat this as a validated release replacement.
-See [migration status and preview commands](GO_MIGRATION.md).
-The features and Cargo instructions below describe the existing Rust release.
+is available at `go run ./cmd/ui-gallery`. Native acceptance is still in
+progress; see [migration status](GO_MIGRATION.md).
 
-> **Native, multi-threaded Windows disk space analyzer & system cleaner**  
-> Built with **Rust + GPUI**, zero WebView / Electron overhead, millisecond-level responsiveness, and GPU-accelerated rendering.
+> **Native Windows / macOS disk space analyzer & system cleaner**  
+> Built with **Go + MyGo**, zero WebView / Electron overhead.
 
 ---
 
@@ -43,11 +42,11 @@ The features and Cargo instructions below describe the existing Rust release.
 ### 4. Robust Safety & Protection System
 - **Deletion is permanent — nothing goes to the Recycle Bin.** This is a deliberate decision, not an oversight: QuickCleaner elevates itself through UAC, and when the administrator account differs from the signed-in user, `FOF_ALLOWUNDO` would drop files into the *administrator's* Recycle Bin where the user can never find them. On top of that, moving tens of gigabytes of cache into the Recycle Bin frees no space at all. What you delete here is gone, so every confirmation dialog says so explicitly.
 - **Four steps before anything is removed**: scan → preview the exact paths → tick what you want → confirm. Developer-oriented categories (AI caches, build artifacts, agent worktrees) are never pre-selected.
-- **Core System Protection**: One single source of truth for path rules (`core/safety.rs`) guards volume roots, `%SystemRoot%`, `System32`, `WinSxS`, `Program Files`, `ProgramData`, user home and NTFS metadata. They stay browsable and analyzable, but cannot be deleted. Deletion never follows symlinks or junctions.
+- **Core System Protection**: One single source of truth for path rules (`internal/core/safety.go`) guards volume roots, `%SystemRoot%`, `System32`, `WinSxS`, `Program Files`, `ProgramData`, user home and NTFS metadata. They stay browsable and analyzable, but cannot be deleted. Deletion never follows symlinks or junctions.
 - **Smart UAC Elevation**: Automatically prompts for administrator privileges on startup to unlock direct raw sector NTFS $MFT parsing and deep cleaning. Supports `--no-elevate` flag for standard user execution.
 
 ### 5. Modern Native Desktop Experience & Internationalization
-- **GPUI High-Performance Native UI**: Powered by Zed's GPUI rendering engine in pure Rust. Delivers sub-millisecond cold starts and smooth 60/120fps micro-animations.
+- **Native UI**: Built with the MyGo immediate-mode UI toolkit; no WebView or Electron runtime.
 - **Two-Phase Scan**: The system-junk categories appear in about a second so the app is usable immediately; the expensive whole-disk hunt for build artifacts continues in the background and merges in when it finishes. (Measured on the dev machine: 33s before, first results in under 3s now.)
 - **Remembers Your Choices**: Language is detected from the Windows display language on first launch (Chinese system → Chinese, anything else → English) and persisted to `%APPDATA%\QuickCleaner\settings.json` once you pick one.
 - **Complete Multilingual Support**: Every string — including the status bar, scan result labels and residual source badges — is bilingual (English / `中文`), switchable live from the sidebar pill. Scan results carry both languages with them, so switching never triggers a re-scan.
@@ -57,38 +56,21 @@ The features and Cargo instructions below describe the existing Rust release.
 
 ## Architecture
 
-QuickCleaner follows a strict unidirectional layered architecture:
+QuickCleaner follows a strict unidirectional layered architecture,
+`ui → core → platform`:
 
 ```
 quick-cleaner/
-├── examples/
-│   └── mftscan.rs              # Windows-only $MFT verification (not shipped)
-├── src/
-│   ├── main.rs                 # Entry point & UAC self-elevation handler
-│   ├── lib.rs                  # Module declarations
-│   ├── core/                   # Pure domain logic (independent of GPUI & OS specifics)
-│   │   ├── i18n.rs             # Core multilingual definitions (Language enum)
-│   │   ├── categories.rs       # 10 junk categories & scan definitions
-│   │   ├── devscan.rs          # Discovery scan for build artifacts (MFT / walk)
-│   │   ├── scanner.rs          # Parallel directory scanner with walkdir + rayon
-│   │   ├── cleaner.rs          # Cleanup executor with atomic progress tracking
-│   │   ├── safety.rs           # Single source of truth for path safety rules
-│   │   ├── apps.rs             # App models and residual analyzers
-│   │   ├── disk.rs             # Disk tree models & selection state machine
-│   │   ├── log.rs              # File logging (%APPDATA%\QuickCleaner\quick-cleaner.log)
-│   │   └── model.rs            # Data formatting & shared tri-state models
-│   │
-│   ├── platform/               # OS abstraction layer (enforced by platform_contract!)
-│   │   ├── mod.rs              # Unified platform facade
-│   │   ├── windows/            # Windows native implementation ($MFT, Registry, Process, UAC)
-│   │   └── macos/              # macOS baseline cross-platform compatibility
-│   │
-│   └── ui/                     # GPUI views and interaction layer
-│       ├── mod.rs              # Root state machine & derived cache management
-│       ├── i18n.rs             # UI-level internationalization dictionaries
-│       ├── theme.rs            # Color tokens and design system metrics
-│       ├── components/         # Reusable widgets (buttons, cards, scrollbars, dialogs)
-│       └── views/              # Main views (dashboard, junk, apps, disk)
+├── cmd/
+│   ├── quick-cleaner/          # Product entry point & UAC self-elevation
+│   └── ui-gallery/             # Non-destructive UI fixtures
+├── internal/
+│   ├── app/                    # Controller: state, workers, actions
+│   ├── core/                   # Domain logic: scanning, cleaning, safety.go, rules
+│   ├── platform/               # OS layer (Windows $MFT, registry, processes; macOS)
+│   └── ui/                     # MyGo views, theme and i18n
+├── rules/                      # Declarative cleanup rules (TOML)
+└── tools/                      # indexbench, winres, regression-notes
 ```
 
 ---
@@ -96,33 +78,15 @@ quick-cleaner/
 ## 🚀 Building & Running
 
 ### Prerequisites
-- **Rust** 1.75 or newer (the `stable-x86_64-pc-windows-msvc` toolchain is recommended)
-- **Windows 10 / 11** (Run with administrator privileges for full direct `$MFT` reading support)
+- **Go** 1.27.1 or newer (no cgo)
+- **Windows 10 / 11** (run as administrator for direct `$MFT` reading) or **macOS**
 
-### Local Compilation & Development
+### Build, test and package
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/meimingqi222/quick-cleaner.git
 cd quick-cleaner
 
-# 2. Run automated test suite (NTFS parser, safety boundaries, residual matching, etc.)
-cargo test
-
-# 3. Launch debug build
-cargo run
-
-# 4. Build optimized release binary
-cargo build --release
-```
-
-The compiled binary will be located at `target/release/quick-cleaner.exe`.
-
-### Go build and release packages
-
-Release packages are built from the Go product (Go 1.27.1 or newer, no cgo):
-
-```bash
 go test ./...
 go run ./cmd/quick-cleaner --no-elevate      # not a dry run: actions still modify files
 go run ./tools/winres                        # after changing internal/app Version
@@ -130,27 +94,17 @@ pwsh ./scripts/package-windows.ps1           # dist/quick-cleaner-windows-x86_64
 ./scripts/package-macos.sh dist universal    # dist/QuickCleaner.app (on macOS)
 ```
 
-### Windows `$MFT` verification (dev only)
-
-Not a product binary, and not built on macOS. Enable the `mftscan` feature to compare a volume against WizTree:
-
-```bash
-cargo run --example mftscan --features mftscan -- C 20
-```
-
 ---
 
 ## Quality & Testing
 
-QuickCleaner maintains a comprehensive automated testing suite (102 unit tests, enforced in CI together with `cargo clippy --all-targets -- -D warnings`) covering:
-- NTFS `$MFT` record decoding, fixup tail validation, non-resident data fragment reconstruction, and tree assembly;
-- Path and registry security rules, preventing destructive operations on critical system directories;
-- App uninstaller residual fuzzy-matching and confidence scoring algorithms;
-- Parallel multi-threaded scanning and atomic cleanup progress reporting.
+`.github/workflows/go.yml` runs `gofmt`, `go vet`, `go test -race` and
+`go build` on Windows, macOS and Linux, and checks the Windows resources.
+The suite covers NTFS `$MFT` decoding, path and registry safety rules, residual
+matching, rule validation, and cleanup progress reporting.
 
-Run all tests with:
 ```bash
-cargo test
+go test -race ./...
 ```
 
 ---

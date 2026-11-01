@@ -4,7 +4,10 @@ Screenshots are manual evidence, not automatic visual assertions. Missing eviden
 remains pending. The pre-migration screenshot set was not captured, so gallery
 images cannot prove that every migrated page retained its original appearance.
 
-Fixture: `cargo run --example ui-gallery --features ui-gallery`; add `--en`,
+These screenshots were captured from the former Rust + GPUI build (removed on
+2026-11-01) and now serve as the visual reference for the Go port. The Go
+fixture is `go run ./cmd/ui-gallery` (see GO_MIGRATION.md). The original
+fixture was `cargo run --example ui-gallery --features ui-gallery`, with `--en`,
 `--menu` or `--dialog`. No settings writes, scans, cleanup or uninstall actions.
 Real-page fixtures read existing settings/platform metadata when constructing Root,
 then replace displayed data with empty or synthetic state; product startup tasks

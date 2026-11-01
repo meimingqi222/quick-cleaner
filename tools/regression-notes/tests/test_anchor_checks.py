@@ -88,5 +88,22 @@ class TestListedAnchors(AnchorCheckCase):
             0)
 
 
+class TestRetiredAnchors(AnchorCheckCase):
+    """The Rust tree was deleted; `--dump-anchors` still lists its anchors."""
+
+    def test_retired_anchor_is_history_but_live_go_anchor_still_checked(self):
+        self.anchors.write_text(
+            "src/core/cleaner.rs::old_rust_test\n"
+            "internal/core/gone_test.go::TestGone\n", encoding="utf-8")
+        result = CHECKER_MODULE.main(
+            [str(self.anchors), "--retired-prefix", "src/"], root=self.root)
+        self.assertEqual(result, 1, "a missing Go anchor must still fail")
+        self.anchors.write_text("src/core/cleaner.rs::old_rust_test\n", encoding="utf-8")
+        self.assertEqual(
+            CHECKER_MODULE.main(
+                [str(self.anchors), "--retired-prefix", "src/"], root=self.root),
+            0)
+
+
 if __name__ == "__main__":
     unittest.main()

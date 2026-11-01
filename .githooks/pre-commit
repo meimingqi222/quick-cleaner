@@ -1,32 +1,40 @@
 #!/bin/sh
-# 提交前自动格式化；有改动时阻止提交，提示重新 stage。
-# Windows GUI 工具可能用精简环境拉起 git，补一下 rustup 的默认路径。
-PATH="$HOME/.cargo/bin:$PATH"
-if ! cargo fmt --check; then
-    cargo fmt
-    echo "cargo fmt 已修改文件，请 git add 后重新提交" >&2
-    exit 1
+# 提交前检查：暂存的 Go 文件必须已 gofmt；PITFALLS 的 Note 指针必须有效。
+# 有问题时阻止提交，修好后重新 stage。
+
+staged_go=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -n "$staged_go" ]; then
+    unformatted=$(gofmt -l $staged_go)
+    if [ -n "$unformatted" ]; then
+        echo "以下 Go 文件未 gofmt，请执行 gofmt -w 后重新 stage：" >&2
+        echo "$unformatted" >&2
+        exit 1
+    fi
+fi
+
+# Windows 上 python3 可能只是 WindowsApps 的占位程序：选第一个真能运行的解释器。
+PY=""
+for candidate in python3 python "py -3"; do
+    if $candidate -c "" >/dev/null 2>&1; then PY="$candidate"; break; fi
+done
+if [ -z "$PY" ]; then
+    echo "pre-commit：找不到可用的 Python，跳过 note 检查" >&2
+    exit 0
 fi
 
 # 反查提醒（不阻断）：暂存文件若有 note 锁定，打印出来提醒先读。
 VN=tools/regression-notes/verify-notes.py
-if [ -f "$VN" ]; then
-    if command -v python3 >/dev/null 2>&1; then PY="python3"; else PY="py -3"; fi
-    staged=$(git diff --cached --name-only --diff-filter=ACMR | tr '\n' ' ')
-    if [ -n "$staged" ]; then
-        out=$($PY "$VN" --notes-dir docs/agent-notes --for-path $staged 2>/dev/null)
-        case "$out" in
-            *"note(s) cite"*) ;;
-            *) out="" ;;
-        esac
-        if [ -n "$out" ] && ! echo "$out" | grep -q "^0 note(s)"; then
-            echo "== 以下暂存文件被回归 note 锁定，提交前确认已读 ==" >&2
-            echo "$out" | grep -v "note(s) cite" | grep . >&2
-        fi
+staged=$(git diff --cached --name-only --diff-filter=ACMR | tr '\n' ' ')
+if [ -f "$VN" ] && [ -n "$staged" ]; then
+    out=$($PY "$VN" --notes-dir docs/agent-notes --for-path $staged 2>/dev/null)
+    case "$out" in
+        *"note(s) cite"*) ;;
+        *) out="" ;;
+    esac
+    if [ -n "$out" ] && ! echo "$out" | grep -q "^0 note(s)"; then
+        echo "== 以下暂存文件被回归 note 锁定，提交前确认已读 ==" >&2
+        echo "$out" | grep -v "note(s) cite" | grep . >&2
     fi
 fi
-if command -v python3 >/dev/null 2>&1; then PY="python3"; else PY="py -3"; fi
-$PY -X utf8 scripts/check-ui-localization.py || exit 1
-$PY -X utf8 scripts/check-ui-components.py || exit 1
-$PY -X utf8 -m unittest discover -s scripts -p 'test_ui_*.py' || exit 1
+$PY -X utf8 scripts/check-pitfall-notes.py || exit 1
 exit 0

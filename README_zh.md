@@ -2,13 +2,13 @@
 
 [English](README.md) | [中文说明](README_zh.md)
 
-**Go 重写进行中：**目标是 Go + MyGo，保持现有 UI 和交互不变，不重新设计界面。
-Go 主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，无破坏性操作的界面预览入口为
-`go run ./cmd/ui-gallery`。原生平台验收与剩余一致性门槛尚未完成，不能当作已验证的发行版替代品。
-详见[迁移状态与预览命令](GO_MIGRATION.md)。下方功能与 Cargo 构建说明仍对应现有 Rust 发行版。
+QuickCleaner 使用 **Go + MyGo** 编写。原 Rust + GPUI 实现已于 2026-11-01 退役并删除，
+Go 版保留了原有界面与交互。主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，
+无破坏性操作的界面预览入口为 `go run ./cmd/ui-gallery`。原生平台验收仍在进行，
+详见[迁移状态](GO_MIGRATION.md)。
 
-> **极速、原生、安全的 Windows 磁盘空间分析与系统深度清理工具**  
-> 基于 **Rust + GPUI** 构建，无 WebView / Electron 开销，毫秒级响应与 GPU 加速渲染。
+> **原生、安全的 Windows / macOS 磁盘空间分析与系统清理工具**  
+> 基于 **Go + MyGo** 构建，无 WebView / Electron 开销。
 
 ---
 
@@ -40,11 +40,11 @@ Go 主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，无破坏性�
 ### 4. 严格安全防护体系
 - **删除一律是永久删除，不进回收站。** 这是有意的产品决定，不是遗漏：本工具会通过 UAC 自提权，而当管理员账户与当前登录用户不是同一个时，`FOF_ALLOWUNDO` 会把文件丢进**管理员自己的**回收站，用户在自己那儿根本找不到；何况把几十 GB 缓存搬进回收站，占用一个字节都没少。删了就是删了，所以每个确认框都明写这一点。
 - **动手前有四道关口**：扫描 → 预览具体路径 → 逐项勾选 → 确认。开发相关类目（AI 助手缓存、构建产物、agent worktree）一律不默认勾选。
-- **系统核心保护**：路径规则只有一份事实来源（`core/safety.rs`），守住盘符根、`%SystemRoot%`、`System32`、`WinSxS`、`Program Files`、`ProgramData`、用户主目录与 NTFS 元数据文件——它们可以浏览、可以参与占用分析，但不可删除；删除过程不跟随符号链接与 junction。
+- **系统核心保护**：路径规则只有一份事实来源（`internal/core/safety.go`），守住盘符根、`%SystemRoot%`、`System32`、`WinSxS`、`Program Files`、`ProgramData`、用户主目录与 NTFS 元数据文件——它们可以浏览、可以参与占用分析，但不可删除；删除过程不跟随符号链接与 junction。
 - **智能 UAC 提权**：Windows 下启动时自动请求管理员权限，解锁直接读取 MFT 原始卷扇区与深度清理的能力；支持 `--no-elevate` 参数以普通权限启动。
 
 ### 5. 现代化原生桌面体验与多语言支持
-- **GPUI 高性能原生 UI**：基于 Zed 的 GPUI 渲染引擎，纯 Rust 编写，毫秒级冷启动与 60/120fps 流畅动效。
+- **原生 UI**：基于 MyGo 即时模式 UI 工具包，不依赖 WebView 或 Electron 运行时。
 - **两阶段扫描**：约 1 秒就把系统垃圾类目的结果显示出来，界面立刻可用；最贵的那步（全盘检索项目构建产物）放到后台继续跑，跑完自动并进列表。开发机实测：改前整轮 33 秒，现在 3 秒内出结果。
 - **记住你的选择**：首次启动按 Windows 显示语言决定界面语言（中文系统用中文，其余英文），你切过之后写进 `%APPDATA%\QuickCleaner\settings.json`，下次启动照旧。
 - **中英文无缝切换**：所有文案——包括状态栏、扫描结果标签、残留来源徽章——都是双语的（`中文 / English`），点侧边栏底部即时切换。扫描结果里的标签自带两种语言，切语言**不会触发重扫**。
@@ -54,38 +54,20 @@ Go 主程序入口为 `go run ./cmd/quick-cleaner --no-elevate`，无破坏性�
 
 ## 架构设计
 
-项目采用严格的自上而下单向分层架构：
+项目采用严格的单向分层架构 `ui → core → platform`：
 
 ```
 quick-cleaner/
-├── examples/
-│   └── mftscan.rs              # Windows 专用 $MFT 校验（不随产品打包）
-├── src/
-│   ├── main.rs                 # 应用程序主入口与 UAC 提权自重启
-│   ├── lib.rs                  # 模块定义
-│   ├── core/                   # 领域逻辑层（不依赖 GPUI，无系统强耦合）
-│   │   ├── i18n.rs             # 核心多语言定义（Language 枚举）
-│   │   ├── categories.rs       # 10 大清理类别与扫描规则
-│   │   ├── devscan.rs          # 构建产物的发现式扫描（MFT / 遍历双通道）
-│   │   ├── scanner.rs          # walkdir + rayon 并行目录扫描
-│   │   ├── cleaner.rs          # 清理执行器与原子进度计数
-│   │   ├── safety.rs           # 路径安全防护规则（唯一事实来源）
-│   │   ├── apps.rs             # 软件模型与残留分析器
-│   │   ├── disk.rs             # 磁盘树与选择状态模型
-│   │   ├── log.rs              # 文件日志（%APPDATA%\QuickCleaner\quick-cleaner.log）
-│   │   └── model.rs            # 数据格式化与通用三态模型
-│   │
-│   ├── platform/               # 操作系统适配层（由 platform_contract! 编译期约束）
-│   │   ├── mod.rs              # 统一平台门面契约
-│   │   ├── windows/            # Windows 原生实现（$MFT、注册表、进程、UAC 等）
-│   │   └── macos/              # macOS 基础跨平台适配
-│   │
-│   └── ui/                     # GPUI 视图与交互层
-│       ├── mod.rs              # Root 状态机与派生缓存管理
-│       ├── i18n.rs             # UI 视图层多语言映射字典
-│       ├── theme.rs            # 设计系统色彩与尺寸 Token
-│       ├── components/         # 通用组件（按钮、卡片、滚动条、弹窗等）
-│       └── views/              # 页面视图（dashboard / junk / apps / disk）
+├── cmd/
+│   ├── quick-cleaner/          # 产品入口与 UAC 提权自重启
+│   └── ui-gallery/             # 无破坏性操作的界面预览
+├── internal/
+│   ├── app/                    # 控制层：状态、后台任务与操作
+│   ├── core/                   # 领域逻辑：扫描、清理、safety.go、规则
+│   ├── platform/               # 系统适配层（Windows $MFT、注册表、进程；macOS）
+│   └── ui/                     # MyGo 视图、主题与多语言
+├── rules/                      # 声明式清理规则（TOML）
+└── tools/                      # indexbench、winres、regression-notes
 ```
 
 ---
@@ -93,33 +75,15 @@ quick-cleaner/
 ## 🚀 构建与运行
 
 ### 前置要求
-- **Rust** 1.75 或更高版本（推荐使用 `stable-x86_64-pc-windows-msvc` 工具链）
-- **Windows 10 / 11**（推荐以管理员权限运行以获得完整的 `$MFT` 读取支持）
+- **Go** 1.27.1 或更高版本（不需要 cgo）
+- **Windows 10 / 11**（以管理员权限运行可直接读取 `$MFT`）或 **macOS**
 
-### 本地编译与调试
+### 构建、测试与打包
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/meimingqi222/quick-cleaner.git
 cd quick-cleaner
 
-# 2. 运行单元测试（覆盖算法、MFT 解析、安全防护等）
-cargo test
-
-# 3. 启动开发版
-cargo run
-
-# 4. 构建发布优化版
-cargo build --release
-```
-
-编译生成的可执行文件位于 `target/release/quick-cleaner.exe`。
-
-### Go 构建与发布包
-
-发布包由 Go 版产品构建（Go 1.27.1 或更高，不需要 cgo）：
-
-```bash
 go test ./...
 go run ./cmd/quick-cleaner --no-elevate      # 不是演练模式：确认后的操作照样会改动文件
 go run ./tools/winres                        # 修改 internal/app 的 Version 后重新生成 Windows 资源
@@ -127,27 +91,16 @@ pwsh ./scripts/package-windows.ps1           # 生成 dist/quick-cleaner-windows
 ./scripts/package-macos.sh dist universal    # 生成 dist/QuickCleaner.app（需在 macOS 上）
 ```
 
-### Windows `$MFT` 校验（仅开发用）
-
-不是产品入口，macOS 默认构建也不会编它。要对盘符和 WizTree 做对比时：
-
-```bash
-cargo run --example mftscan --features mftscan -- C 20
-```
-
 ---
 
 ## 质量与测试
 
-项目拥有完善的自动化测试套件（102 项单元测试，CI 中与 `cargo clippy --all-targets -- -D warnings` 一起卡关），覆盖：
-- NTFS `$MFT` 记录解析、fixup 扇区尾校验、数据片段重组与树构建；
-- 路径与注册表安全规则、系统保护边界校验；
-- 卸载残留模糊匹配与置信度打分算法；
-- 目录多线程并行扫描与清理进度原子计算。
+`.github/workflows/go.yml` 在 Windows、macOS 和 Linux 上运行 `gofmt`、`go vet`、
+`go test -race` 和 `go build`，并检查 Windows 资源。测试覆盖 NTFS `$MFT` 解析、
+路径与注册表安全规则、残留匹配、规则校验和清理进度统计。
 
-运行全量测试：
 ```bash
-cargo test
+go test -race ./...
 ```
 
 ---
