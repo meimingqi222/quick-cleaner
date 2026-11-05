@@ -1620,3 +1620,13 @@ Note: `2026-11-01-dev-removal-totals.md`
 - **禁止回退**：不能只删行不改统计；不能把立即记账当成精确值而去掉后台测量；后台测量不能变成 busy 任务或覆盖更新的扫描结果。
 - **测试**：`TestDevRemovalKeepsTotalsAndParentInStep`，红绿证据见 Note。
 
+## P136 磁盘透镜全盘大文件不能展示系统保护项；walk 不能跨进 APFS 辅助卷
+
+Note: `2026-11-05-disk-lens-system-volumes.md`
+
+- **症状**：全盘大文件榜被 Preboot、swap、sleepimage 占满，全是「系统保护项目」；`/Volumes/Recovery/...` 甚至带删除按钮。
+- **根因**：根卷 walk 只跳过 `/System/Volumes/Data` 和伪根，Preboot/VM 和 `/Volumes` 下的其它挂载被收进 Macintosh HD 树。大文件榜没有 macOS 对等的 `hiddenNTFSMetadata`，保护判断只关删除。`/Volumes/Recovery` 不在 `macPrefixes` 里。
+- **防护**：walk 跳过 `/System/Volumes` 整棵和 `/Volumes` 挂载目录；刷新用 `DiskWalkIgnoredPath(path, mount)`（根卷忽略 `/Volumes/*`，外接盘仍索引自己的内容）。`LargestFiles` 在 top-N 堆内按文件名和打标目录的 parent 上溯跳过，不能先取 200 再滤，也不能对每个候选调用 `IsProtected`/`PathOf`。darwin 把 `/Volumes/{recovery,preboot,update,vm}` 标保护。目录树仍显示 `/System` 和 sleepimage。
+- **禁止回退**：不能为了「空间诚实」把保护文件重新放进全盘大文件；不能在堆外过滤 top-N；不能把 `IsProtected`（含 worktree `Lstat`）放回大文件热路径；不能按 `/Volumes/` 前缀无条件忽略（会打掉外接盘索引）；不能从索引里砍掉整个 `/System` 或 `/private/var/vm` 来代替大文件过滤。
+- **测试**：`TestDiskWalkMirrorPruningAndDatalessCoverage`、`TestDiskWalkHelperVolumesAndMountsSkipped`、`TestLargestFilesSkipsProtectedWithoutStarvingTheList`、`TestLargestFilesHidesWhitelistSubtreeNotLocalSystemName`、`TestLargestFilesHidesMacPrefixSubtrees`、`TestMacSafetyPolicy`、`TestRebuildDiskLargestFilesOmitsProtected`，红绿证据见 Note。
+

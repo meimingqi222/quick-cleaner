@@ -52,6 +52,7 @@ func beneath(s string, list []string) bool {
 
 var driveExact = []string{`\program files`, `\program files (x86)`, `\programdata`, `\users`}
 var macPrefixes = []string{`\system`, `\library`, `\applications`, `\bin`, `\sbin`, `\usr`, `\private\etc`, `\private\var\db`, `\private\var\root`, `\private\var\vm`, `\private\var\protected`}
+var macMountedRoles = []string{"recovery", "preboot", "update", "vm"}
 var homeExact = []string{"", `\desktop`, `\documents`, `\downloads`, `\pictures`, `\videos`, `\music`}
 var profileExact = []string{`\appdata`, `\appdata\local`, `\appdata\locallow`, `\appdata\roaming`}
 
@@ -100,6 +101,15 @@ func asciiLower(s string) string {
 		return r
 	}, s)
 }
+
+func macMountedHelperVolume(n string) bool {
+	rest, ok := strings.CutPrefix(n, `\volumes\`)
+	if !ok || rest == "" {
+		return false
+	}
+	name, _, _ := strings.Cut(rest, `\`)
+	return member(name, macMountedRoles)
+}
 func IsNTFSMetaName(name string) bool {
 	name = asciiLower(name)
 	return strings.HasPrefix(name, "$mft") || strings.HasPrefix(name, "dumpstack.log") || member(name, []string{"$logfile", "$volume", "$attrdef", "$bitmap", "$boot", "$badclus", "$secure", "$upcase", "$extend", "pagefile.sys", "hiberfil.sys", "swapfile.sys", "system volume information"})
@@ -120,7 +130,7 @@ func (p safetyPolicy) protected(path string, contents bool) bool {
 	if len(n) <= 3 || IsWhitelisted(path) {
 		return true
 	}
-	if p.goos == "darwin" && (beneath(n, macPrefixes) || (p.home != "" && member(n, []string{p.home, p.home + `\library`, p.home + `\library\application support`}))) {
+	if p.goos == "darwin" && (beneath(n, macPrefixes) || macMountedHelperVolume(n) || (p.home != "" && member(n, []string{p.home, p.home + `\library`, p.home + `\library\application support`}))) {
 		return true
 	}
 	if IsNTFSMetaName(n[strings.LastIndex(n, `\`)+1:]) {

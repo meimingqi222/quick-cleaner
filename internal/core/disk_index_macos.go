@@ -353,7 +353,7 @@ func refreshMacDiskIndex(ctx context.Context, original ScanResult, changes *plat
 			return ScanResult{}, err
 		}
 		path = platform.CanonicalFSEventPath(path)
-		if path == mount || !pathWithin(path, mount) {
+		if path == mount || !pathWithin(path, mount) || platform.DiskWalkIgnoredPath(path, mount) {
 			continue
 		}
 		info, err := os.Lstat(path)

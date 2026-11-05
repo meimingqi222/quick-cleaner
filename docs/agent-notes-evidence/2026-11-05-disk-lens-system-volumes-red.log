@@ -1,0 +1,19 @@
+--- FAIL: TestDiskWalkMirrorPruningAndDatalessCoverage (0.00s)
+    disk_walk_test.go:127: APFS helper volumes not skipped: {entries:[{Parent:0 Name:VM IsDir:true IsRegular:false Used:true Size:0 Mtime:0 SizeKnown:true Flags:0 AttributeError:0} {Parent:0 Name:Preboot IsDir:true IsRegular:false Used:true Size:0 Mtime:0 SizeKnown:true Flags:0 AttributeError:0} {Parent:0 Name:Update IsDir:true IsRegular:false Used:true Size:0 Mtime:0 SizeKnown:true Flags:0 AttributeError:0}] subdirs:[{pos:0 path:/System/Volumes/VM reason:} {pos:1 path:/System/Volumes/Preboot reason:} {pos:2 path:/System/Volumes/Update reason:}] parentMeta:false dirs:3 files:0 others:0 allocated:0 mirrors:1 reason: err:<nil> fallback:false}
+--- FAIL: TestDiskWalkHelperVolumesAndMountsSkipped (0.00s)
+    disk_walk_test.go:475: //Volumes not skipped: {entries:[{Parent:0 Name:Volumes IsDir:true IsRegular:false Used:true Size:0 Mtime:0 SizeKnown:true Flags:0 AttributeError:0}] subdirs:[{pos:0 path:/Volumes reason:}] parentMeta:false dirs:1 files:0 others:0 allocated:0 mirrors:0 reason: err:<nil> fallback:false}
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/platform	1.299s
+--- FAIL: TestLargestFilesSkipsProtectedWithoutStarvingTheList (0.00s)
+    disk_tree_test.go:272: largest files=[{Idx:1 Name:pagefile.sys IsDir:false Size:10000 FileCount:1 OwnSize:10000} {Idx:2 Name:hiberfil.sys IsDir:false Size:9000 FileCount:1 OwnSize:9000}], want user files rather than pagefile/hiberfil
+--- FAIL: TestMacSafetyPolicy (0.00s)
+    safety_test.go:58: /Volumes/Recovery
+    safety_test.go:58: /Volumes/Recovery/60312/usr/standalone
+    safety_test.go:58: /Volumes/Preboot/boot
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/core	0.441s
+--- FAIL: TestRebuildDiskLargestFilesOmitsProtected (0.00s)
+    root_test.go:246: largest-files rows=[{Node:{Idx:2 Name:pagefile.sys IsDir:false Size:9999 FileCount:1 OwnSize:9999} Path:/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/TestRebuildDiskLargestFilesOmitsProtected1135200478/001/pagefile.sys Protected:true Selected:false CanSelect:false CanDelete:false CanEnter:false} {Node:{Idx:1 Name:movie.mp4 IsDir:false Size:100 FileCount:1 OwnSize:100} Path:/var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/TestRebuildDiskLargestFilesOmitsProtected1135200478/001/movie.mp4 Protected:false Selected:false CanSelect:true CanDelete:true CanEnter:false}], want only /var/folders/tl/74__pctd5f381mbyq6cc2pdh0000gn/T/TestRebuildDiskLargestFilesOmitsProtected1135200478/001/movie.mp4
+FAIL
+FAIL	github.com/meimingqi222/quick-cleaner/internal/app	0.446s
+FAIL

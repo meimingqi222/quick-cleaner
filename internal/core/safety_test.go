@@ -48,8 +48,13 @@ func TestMacSafetyPolicy(t *testing.T) {
 			t.Error(path)
 		}
 	}
-	for _, path := range []string{"/Users/Alice/Library/Caches", "/Users/Alice/Library/Application Support/Vendor", "/private/var/folders/x", "/LibraryExtra/x"} {
+	for _, path := range []string{"/Users/Alice/Library/Caches", "/Users/Alice/Library/Application Support/Vendor", "/private/var/folders/x", "/LibraryExtra/x", "/Volumes/Backup/photo.jpg"} {
 		if p.protected(path, false) {
+			t.Error(path)
+		}
+	}
+	for _, path := range []string{"/Volumes/Recovery", "/Volumes/Recovery/60312/usr/standalone", "/Volumes/Preboot/boot", "/private/var/vm/sleepimage"} {
+		if !p.protected(path, false) {
 			t.Error(path)
 		}
 	}

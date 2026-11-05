@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -255,5 +256,69 @@ func TestHeapAggregatesRollUpOncePerEdge(t *testing.T) {
 	// that walk was O(files × depth) and most of the MFT tree time.
 	if tree.ancestorStamp != nil {
 		t.Fatal("aggregation walked per-file ancestor chains")
+	}
+}
+
+func TestLargestFilesSkipsProtectedWithoutStarvingTheList(t *testing.T) {
+	root := t.TempDir()
+	tree := NewSizeTree(VolumeFromMountPoint(root), []TreeIndexEntry{
+		{0, root, true, 0, true, 0},
+		{0, "pagefile.sys", false, 10000, true, 0},
+		{0, "hiberfil.sys", false, 9000, true, 0},
+		{0, "movie.mp4", false, 100, true, 0},
+		{0, "archive.zip", false, 200, true, 0},
+	})
+	got := tree.LargestFiles(2)
+	if len(got) != 2 || got[0].Name != "archive.zip" || got[1].Name != "movie.mp4" {
+		t.Fatalf("largest files=%+v, want user files rather than pagefile/hiberfil", got)
+	}
+	var sawPagefile bool
+	for _, n := range tree.Children(0) {
+		if n.Name == "pagefile.sys" {
+			sawPagefile = true
+		}
+	}
+	if !sawPagefile {
+		t.Fatal("directory tree hid protected file")
+	}
+}
+
+func TestLargestFilesHidesWhitelistSubtreeNotLocalSystemName(t *testing.T) {
+	prev := CurrentWhitelist()
+	t.Cleanup(func() { ReloadWhitelist(prev) })
+	ReloadWhitelist(nil)
+	root := t.TempDir()
+	secret := filepath.Join(root, "secret")
+	if _, ok := AddWhitelist(secret); !ok {
+		t.Fatal("whitelist")
+	}
+	tree := NewSizeTree(VolumeFromMountPoint(root), []TreeIndexEntry{
+		{0, root, true, 0, true, 0},
+		{0, "secret", true, 0, true, 0},
+		{1, "huge.bin", false, 10000, true, 0},
+		{0, "System", true, 0, true, 0},
+		{3, "local.bin", false, 5000, true, 0},
+		{0, "movie.mp4", false, 100, true, 0},
+	})
+	got := tree.LargestFiles(3)
+	if len(got) != 2 || got[0].Name != "local.bin" || got[1].Name != "movie.mp4" {
+		t.Fatalf("largest files=%+v, want local System file and movie, not whitelist subtree", got)
+	}
+}
+
+func TestLargestFilesHidesMacPrefixSubtrees(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macPrefixes are darwin policy")
+	}
+	tree := NewSizeTree(VolumeFromMountPoint("/"), []TreeIndexEntry{
+		{Name: "/", IsDir: true, Used: true},
+		{Parent: 0, Name: "System", IsDir: true, Used: true},
+		{Parent: 1, Name: "huge.bin", Size: 10000, Used: true},
+		{Parent: 0, Name: "Users", IsDir: true, Used: true},
+		{Parent: 3, Name: "movie.mp4", Size: 100, Used: true},
+	})
+	got := tree.LargestFiles(2)
+	if len(got) != 1 || got[0].Name != "movie.mp4" {
+		t.Fatalf("largest files=%+v, want movie only", got)
 	}
 }

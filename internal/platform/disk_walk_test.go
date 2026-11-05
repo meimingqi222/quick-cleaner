@@ -117,20 +117,29 @@ func diskWalkTestItem(name string, dir bool) diskWalkItem {
 func diskWalkTestState() *diskWalkState { return &diskWalkState{slots: make(chan struct{}, 8)} }
 
 func TestDiskWalkMirrorPruningAndDatalessCoverage(t *testing.T) {
+	prepared := diskWalkPrepare("/System/Volumes", 0, diskWalkBatch{items: []diskWalkItem{
+		diskWalkTestItem("Data", true),
+		diskWalkTestItem("VM", true),
+		diskWalkTestItem("Preboot", true),
+		diskWalkTestItem("Update", true),
+	}})
+	if prepared.mirrors != 4 || len(prepared.subdirs) != 0 || len(prepared.entries) != 0 {
+		t.Fatalf("APFS helper volumes not skipped: %+v", prepared)
+	}
 	enum := func(_ context.Context, path string, _ time.Duration) diskWalkBatch {
-		if path == "/System/Volumes" {
+		if path == "/fixture" {
 			cloud := diskWalkTestItem("cloud", true)
 			cloud.Flags = diskWalkDataless
-			return diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("Data", true), diskWalkTestItem("VM", true), cloud}}
+			return diskWalkBatch{items: []diskWalkItem{cloud, diskWalkTestItem("keep", true)}}
 		}
-		if path == "/System/Volumes/VM" {
-			return diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("swap", false)}}
+		if path == "/fixture/keep" {
+			return diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("present", false)}}
 		}
 		t.Errorf("unexpected enumeration %s", path)
 		return diskWalkBatch{}
 	}
-	r, err := diskWalkAcquire(context.Background(), VolumeID{Mount: "/System/Volumes"}, nil, enum, diskWalkTestState(), 8, time.Second, time.Second)
-	if err != nil || len(r.Entries) != 4 || r.Entries[3].Parent != 1 || r.Entries[3].Name != "swap" || r.Counts.ExcludedMirrors != 1 || r.Counts.SkippedDataless != 1 || len(r.Incomplete) != 1 || r.Incomplete[0].Index != 2 {
+	r, err := diskWalkAcquire(context.Background(), VolumeID{Mount: "/fixture"}, nil, enum, diskWalkTestState(), 8, time.Second, time.Second)
+	if err != nil || len(r.Entries) != 4 || r.Entries[3].Name != "present" || r.Counts.SkippedDataless != 1 || len(r.Incomplete) != 1 || r.Incomplete[0].Index != 1 {
 		t.Fatalf("%+v %v", r, err)
 	}
 	if r.Counts.AllocatedBytes != 4096 || r.Counts.Files != 1 {
@@ -381,5 +390,43 @@ func TestDiskWalkBatchAllocatesRecordsOnce(t *testing.T) {
 	}
 	if parsed[0].Name != "owned-name" || parsed[records-1].Name != "owned-name" {
 		t.Fatal("parsed names still alias the native buffer")
+	}
+}
+
+func TestDiskWalkPseudoRootsSkipped(t *testing.T) {
+	for _, name := range []string{"dev", "net", "home", "automount", "Network"} {
+		prepared := diskWalkPrepare("/", 0, diskWalkBatch{items: []diskWalkItem{diskWalkTestItem(name, true)}})
+		if prepared.mirrors != 1 || len(prepared.subdirs) != 0 || len(prepared.entries) != 0 {
+			t.Fatalf("/%s not skipped: %+v", name, prepared)
+		}
+	}
+	prepared := diskWalkPrepare("/usr", 0, diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("dev", true)}})
+	if len(prepared.subdirs) != 1 {
+		t.Fatal("/usr/dev must not be filtered")
+	}
+}
+
+func TestDiskWalkHelperVolumesAndMountsSkipped(t *testing.T) {
+	for _, dir := range []string{"/", "/System"} {
+		prepared := diskWalkPrepare(dir, 0, diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("Volumes", true)}})
+		if prepared.mirrors != 1 || len(prepared.subdirs) != 0 || len(prepared.entries) != 0 {
+			t.Fatalf("%s/Volumes not skipped: %+v", dir, prepared)
+		}
+	}
+	prepared := diskWalkPrepare("/Users", 0, diskWalkBatch{items: []diskWalkItem{diskWalkTestItem("Volumes", true)}})
+	if prepared.mirrors != 0 || len(prepared.subdirs) != 1 {
+		t.Fatalf("user Volumes directory skipped: %+v", prepared)
+	}
+	if !DiskWalkIgnoredPath("/System/Volumes/VM/swapfile1", "/") || !DiskWalkIgnoredPath("/Volumes/Recovery/boot.efi", "/") {
+		t.Fatal("root-volume helper paths must be ignored during refresh")
+	}
+	if DiskWalkIgnoredPath("/Users/a/movie.mp4", "/") {
+		t.Fatal("user path ignored")
+	}
+	if DiskWalkIgnoredPath("/Volumes/Backup/photo.jpg", "/Volumes/Backup") {
+		t.Fatal("external volume contents ignored")
+	}
+	if !DiskWalkIgnoredPath("/Volumes/Recovery/boot.efi", "/Volumes/Backup") {
+		t.Fatal("Recovery mount leaked into another volume's index")
 	}
 }

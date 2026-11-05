@@ -4,11 +4,65 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
 
 const diskWalkMirror = "/System/Volumes/Data"
+
+// diskWalkSkipDir excludes other APFS roles and the /Volumes mount folder from this volume's tree.
+func diskWalkSkipDir(path string) bool {
+	if diskWalkPseudoRoots[path] || path == "/Volumes" {
+		return true
+	}
+	return path == "/System/Volumes" || strings.HasPrefix(path, "/System/Volumes/")
+}
+
+func diskWalkMountedRole(name string) bool {
+	switch name {
+	case "Preboot", "VM", "Update", "Recovery", "iSCPreboot", "Hardware", "xART":
+		return true
+	default:
+		return false
+	}
+}
+
+// DiskWalkIgnoredPath reports paths that must not enter this volume's index on
+// a full walk or an incremental refresh. mount is the volume being indexed:
+// walking / must not ingest /Volumes/*, but an external disk mounted there
+// still indexes its own contents.
+func DiskWalkIgnoredPath(path, mount string) bool {
+	if diskWalkSkipDir(path) {
+		return true
+	}
+	for root := range diskWalkPseudoRoots {
+		if strings.HasPrefix(path, root+"/") {
+			return true
+		}
+	}
+	if strings.HasPrefix(path, "/System/Volumes/") {
+		return true
+	}
+	if (mount == "/" || mount == "") && strings.HasPrefix(path, "/Volumes/") {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(path, "/Volumes/"); ok {
+		name, _, _ := strings.Cut(rest, "/")
+		return diskWalkMountedRole(name)
+	}
+	return false
+}
+
+// Pseudo-filesystem roots are skipped on a root-volume walk: devfs/autofs
+// nodes hold no disk blocks and enumerate kernel objects, not user data.
+var diskWalkPseudoRoots = map[string]bool{
+	"/dev":       true,
+	"/net":       true,
+	"/home":      true,
+	"/automount": true,
+	"/Network":   true,
+}
 
 type diskWalkBatch struct {
 	items    []diskWalkItem
@@ -70,7 +124,7 @@ func diskWalkPrepare(dir string, parent uint64, batch diskWalkBatch) diskWalkPre
 		e.Used = true
 		if e.IsDir {
 			path := diskWalkJoinPath(dir, e.Name)
-			if path == diskWalkMirror {
+			if diskWalkSkipDir(path) {
 				p.mirrors++
 				continue
 			}

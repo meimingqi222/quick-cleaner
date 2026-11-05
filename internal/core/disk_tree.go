@@ -1031,11 +1031,87 @@ func (h sizeHeap) Less(i, j int) bool {
 func (h sizeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *sizeHeap) Push(x any)   { *h = append(*h, x.(sizedNode)) }
 func (h *sizeHeap) Pop() any     { a := *h; x := a[len(a)-1]; *h = a[:len(a)-1]; return x }
+
+func normToNativePath(n string) string {
+	s := strings.ReplaceAll(n, `\`, "/")
+	if s == "" {
+		return string(filepath.Separator)
+	}
+	if len(s) >= 2 && s[1] == ':' {
+		return filepath.FromSlash(s)
+	}
+	if !strings.HasPrefix(s, "/") {
+		s = "/" + s
+	}
+	return filepath.FromSlash(s)
+}
+
+// largestFileHiddenDirs is the subtree-hidden set for the large-files list:
+// prefix-protected directories and whitelist roots, not exact-protected folders
+// like Desktop. The heap walks parent indexes; it must not PathOf or IsProtected.
+func (t *SizeTree) largestFileHiddenDirs() map[uint32]bool {
+	dirs := map[uint32]bool{}
+	mark := func(path string) {
+		if idx, ok := t.FindNodeByPath(path); ok {
+			dirs[idx] = true
+		}
+	}
+	p := defaultPolicy()
+	if p.goos == "darwin" {
+		for _, prefix := range macPrefixes {
+			mark(normToNativePath(prefix))
+		}
+		for _, role := range macMountedRoles {
+			mark("/Volumes/" + role)
+		}
+	}
+	if p.goos == "windows" && p.windows != "" {
+		win := normToNativePath(p.windows)
+		for _, sub := range []string{"System32", "SysWOW64", "WinSxS", "Boot", "Fonts", "Servicing"} {
+			mark(filepath.Join(win, sub))
+		}
+	}
+	if p.goos == "windows" {
+		mount := t.volume.Mount
+		for _, name := range []string{"System Volume Information", "$Windows.~BT", "Recovery"} {
+			mark(filepath.Join(mount, name))
+		}
+	}
+	for _, path := range CurrentWhitelist() {
+		mark(path)
+	}
+	return dirs
+}
+
+func (t *SizeTree) underHiddenLargestDir(idx uint32, dirs map[uint32]bool) bool {
+	if len(dirs) == 0 {
+		return false
+	}
+	for depth := 0; depth <= 256 && t.Valid(idx); depth++ {
+		if dirs[idx] {
+			return true
+		}
+		if idx == 0 {
+			return false
+		}
+		next := t.slot(idx).Parent
+		if next == idx {
+			return false
+		}
+		idx = next
+	}
+	return false
+}
+
 func (t *SizeTree) topNodes(ctx context.Context, n int, filesOnly bool) []sizedNode {
 	if n <= 0 {
 		return nil
 	}
 	h := sizeHeap{}
+	var hidden map[uint32]bool
+	if filesOnly {
+		hidden = t.largestFileHiddenDirs()
+	}
 	for i := 0; i < t.nodeCount(); i++ {
 		e := t.slot(uint32(i))
 		if i%4096 == 0 && ctx.Err() != nil {
@@ -1044,7 +1120,13 @@ func (t *SizeTree) topNodes(ctx context.Context, n int, filesOnly bool) []sizedN
 		if !e.Used || (filesOnly && (e.IsDir || e.Size == 0)) || t.hiddenNTFSMetadata(uint32(i)) {
 			continue
 		}
+		if filesOnly && IsNTFSMetaName(e.Name) {
+			continue
+		}
 		if len(h) == n && e.Size <= h[0].size {
+			continue
+		}
+		if filesOnly && t.underHiddenLargestDir(uint32(i), hidden) {
 			continue
 		}
 		heap.Push(&h, sizedNode{e.Size, uint32(i)})

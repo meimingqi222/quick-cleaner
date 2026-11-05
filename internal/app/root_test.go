@@ -229,6 +229,24 @@ func TestDiskProtectionCoverageAndInheritedExclusion(t *testing.T) {
 
 // Splitting selected folders around exclusions walks the filesystem; doing it
 // on the click froze the window before the confirmation could appear.
+func TestRebuildDiskLargestFilesOmitsProtected(t *testing.T) {
+	r, _ := testRoot(t)
+	dir := t.TempDir()
+	movie := filepath.Join(dir, "movie.mp4")
+	page := filepath.Join(dir, "pagefile.sys")
+	r.tree = core.SizeTreeFromSnapshot(core.VolumeFromMountPoint(dir), []core.TreeSnapshotEntry{
+		{Path: dir, IsDir: true},
+		{Path: movie, Size: 100},
+		{Path: page, Size: 9999},
+	})
+	r.disk.Loaded = true
+	r.disk.Tab = view.DiskFiles
+	r.rebuildDisk()
+	if len(r.disk.Rows) != 1 || r.disk.Rows[0].Path != movie {
+		t.Fatalf("largest-files rows=%+v, want only %s", r.disk.Rows, movie)
+	}
+}
+
 func TestSelectedDiskDeleteResolvesTargetsOnWorkerBeforeConfirming(t *testing.T) {
 	r, q := testRoot(t)
 	dir := t.TempDir()
